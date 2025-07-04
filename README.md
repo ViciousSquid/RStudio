@@ -5,8 +5,14 @@ Requires `pyqt5` and `pygame`
 Game creation tools made in Python
 
 * Custom implementation of an OpenGL renderer via PyGame
+* Engine and editor are tightly integrated
 * Parses raw GLSL
-* WYSIWYG mouse-based editor interface
+* WYSIWYG mouse-based interface
 * Fully modular and open source (MIT License)
   
-### * Work in Progress
+### Roadmap:
+* OBJ model support
+* Human-readable scripting language and parser
+* Support for multiple genres of game
+
+
