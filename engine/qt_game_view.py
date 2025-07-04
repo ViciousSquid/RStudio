@@ -1,209 +1,217 @@
 import time
 import math
-from PyQt5.QtWidgets import QOpenGLWidget, QMenu
-from PyQt5.QtCore import Qt, QTimer, QPoint
+from PyQt5.QtWidgets import QOpenGLWidget
+from PyQt5.QtCore import Qt, QTimer
 from OpenGL.GL import *
-from OpenGL.GLU import *
+from OpenGL.GL.shaders import compileProgram, compileShader
+import numpy as np
 from engine.camera import Camera
+
+# --- Helper functions for matrix math ---
+
+def perspective_projection(fov, aspect, near, far):
+    f = 1.0 / np.tan(np.radians(fov) / 2)
+    # Creates a row-major perspective matrix
+    return np.array([
+        [f / aspect, 0, 0, 0],
+        [0, f, 0, 0],
+        [0, 0, (far + near) / (near - far), (2 * far * near) / (near - far)],
+        [0, 0, -1, 0]
+    ], dtype=np.float32)
+
+# --- Shader Code ---
+
+vertex_shader = """
+#version 330
+layout(location = 0) in vec3 a_position;
+uniform mat4 projection;
+uniform mat4 view;
+uniform mat4 model;
+void main() {
+    gl_Position = projection * view * model * vec4(a_position, 1.0);
+}
+"""
+
+fragment_shader_solid = """
+#version 330
+uniform vec3 color;
+out vec4 out_color;
+void main() {
+    out_color = vec4(color, 1.0);
+}
+"""
 
 class QtGameView(QOpenGLWidget):
     def __init__(self, editor):
-        super().__init__()
+        super().__init__(editor)
         self.editor = editor
+        self.brush_display_mode = "Wireframe"
+        self.last_time = time.time()
         self.camera = Camera()
-        self.setFocusPolicy(Qt.StrongFocus)
+        self.camera.pos = [0.0, 150.0, 400.0]
 
-        self.last_mouse_pos = None
-        self.left_mouse_pressed = False
-        self.middle_mouse_pressed = False
-        self.right_mouse_pressed = False
+        # Rendering resources
+        self.shader_brush = None
+        self.shader_grid = None
+        self.vbo_cube, self.ebo_wire, self.ebo_solid = None, None, None
+        self.solid_indices_count = 0
+        self.vbo_grid, self.grid_indices_count = None, 0
 
-        self.edit_mode = 'select'  # Modes: 'select', 'resize'
-        self.resize_axis = None
-        self.resize_handle_size = 0.1
-
-        self.last_frame_time = time.time()
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.game_loop)
-        self.timer.start(16)  # Target ~60 FPS
+        timer = QTimer(self)
+        timer.setInterval(16)
+        timer.timeout.connect(self.update_loop)
+        timer.start()
 
     def initializeGL(self):
-        glClearColor(0.2, 0.2, 0.2, 1.0)
+        glClearColor(0.1, 0.1, 0.15, 1.0)
         glEnable(GL_DEPTH_TEST)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
-    def resizeGL(self, w, h):
-        glViewport(0, 0, w, h)
+        try:
+            self.shader_brush = compileProgram(compileShader(vertex_shader, GL_VERTEX_SHADER), compileShader(fragment_shader_solid, GL_FRAGMENT_SHADER))
+            self.shader_grid = compileProgram(compileShader(vertex_shader, GL_VERTEX_SHADER), compileShader(fragment_shader_solid, GL_FRAGMENT_SHADER))
+        except Exception as e:
+            print(f"Shader Error: {e}")
+            return
+
+        self.create_cube_buffers()
+        self.create_grid_buffers()
+
+    def create_cube_buffers(self):
+        vertices = np.array([ # Centered cube vertices
+            -0.5, -0.5, -0.5,  0.5, -0.5, -0.5,  0.5,  0.5, -0.5, -0.5,  0.5, -0.5,
+            -0.5, -0.5,  0.5,  0.5, -0.5,  0.5,  0.5,  0.5,  0.5, -0.5,  0.5,  0.5
+        ], dtype=np.float32)
+        indices_wire = np.array([0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7], dtype=np.uint32)
+        indices_solid = np.array([0,2,1, 0,3,2, 4,5,6, 4,6,7, 0,1,5, 0,5,4, 2,3,7, 2,7,6, 1,2,6, 1,6,5, 0,7,3, 0,4,7], dtype=np.uint32)
+        self.solid_indices_count = len(indices_solid)
+
+        self.vbo_cube = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, self.vbo_cube)
+        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+
+        self.ebo_wire = glGenBuffers(1)
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.ebo_wire)
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices_wire.nbytes, indices_wire, GL_STATIC_DRAW)
+
+        self.ebo_solid = glGenBuffers(1)
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.ebo_solid)
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices_solid.nbytes, indices_solid, GL_STATIC_DRAW)
+
+    def create_grid_buffers(self):
+        grid_size = 2048
+        step = 64
+        lines = []
+        for i in range(-grid_size, grid_size + 1, step):
+            lines.extend([[-grid_size, 0, i], [grid_size, 0, i]])
+            lines.extend([[i, 0, -grid_size], [i, 0, grid_size]])
+        
+        grid_vertices = np.array(lines, dtype=np.float32)
+        self.grid_indices_count = len(grid_vertices)
+
+        self.vbo_grid = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, self.vbo_grid)
+        glBufferData(GL_ARRAY_BUFFER, grid_vertices.nbytes, grid_vertices, GL_STATIC_DRAW)
 
     def paintGL(self):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        glMatrixMode(GL_PROJECTION)
-        glLoadIdentity()
-        # Use max(1, self.height()) to avoid division by zero
-        gluPerspective(45, self.width() / max(1, self.height()), 0.1, 10000.0)
+        
+        # Get matrices
         glMatrixMode(GL_MODELVIEW)
         glLoadIdentity()
         self.camera.apply()
+        view_matrix = glGetFloatv(GL_MODELVIEW_MATRIX)
+        projection_matrix = perspective_projection(45.0, self.width() / self.height(), 0.1, 10000.0)
 
-        self.draw_grid()
-        self.draw_brushes()
+        # Draw Grid
+        self.draw_grid(view_matrix, projection_matrix)
+        
+        # Draw Brushes
+        self.draw_brushes(view_matrix, projection_matrix)
 
-        if self.edit_mode == 'resize' and self.editor.selected_brush_index != -1:
-            self.render_resize_gizmos()
+    def draw_grid(self, view, projection):
+        glUseProgram(self.shader_grid)
+        # Set uniforms
+        glUniformMatrix4fv(glGetUniformLocation(self.shader_grid, "projection"), 1, GL_TRUE, projection)
+        glUniformMatrix4fv(glGetUniformLocation(self.shader_grid, "view"), 1, GL_FALSE, view)
+        glUniformMatrix4fv(glGetUniformLocation(self.shader_grid, "model"), 1, GL_FALSE, np.identity(4, dtype=np.float32))
+        glUniform3f(glGetUniformLocation(self.shader_grid, "color"), 0.2, 0.2, 0.2)
 
-    def game_loop(self):
-        current_time = time.time()
-        delta_time = current_time - self.last_frame_time
-        self.last_frame_time = current_time
+        # Bind and draw
+        glBindBuffer(GL_ARRAY_BUFFER, self.vbo_grid)
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, None)
+        glEnableVertexAttribArray(0)
+        glDrawArrays(GL_LINES, 0, self.grid_indices_count)
 
-        self.update_camera_movement(delta_time)
+    def draw_brushes(self, view, projection):
+        glUseProgram(self.shader_brush)
+        
+        # Set view/projection uniforms (these are the same for all brushes)
+        glUniformMatrix4fv(glGetUniformLocation(self.shader_brush, "projection"), 1, GL_TRUE, projection)
+        glUniformMatrix4fv(glGetUniformLocation(self.shader_brush, "view"), 1, GL_FALSE, view)
+        model_loc = glGetUniformLocation(self.shader_brush, "model")
+        color_loc = glGetUniformLocation(self.shader_brush, "color")
+
+        # Bind cube vertex data
+        glBindBuffer(GL_ARRAY_BUFFER, self.vbo_cube)
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, None)
+        glEnableVertexAttribArray(0)
+
+        # Select solid or wireframe drawing mode
+        if self.brush_display_mode == "Wireframe":
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.ebo_wire)
+        else: # Solid or Textured
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.ebo_solid)
+
+        # Loop through and draw each brush
+        for i, brush in enumerate(self.editor.brushes):
+            pos, size = np.array(brush['pos']), np.array(brush['size'])
+            
+            # Create model matrix (translate and scale) - this is row-major
+            model_matrix = np.identity(4, dtype=np.float32)
+            model_matrix[0,0], model_matrix[1,1], model_matrix[2,2] = size[0], size[1], size[2]
+            model_matrix[3,0], model_matrix[3,1], model_matrix[3,2] = pos[0], pos[1], pos[2]
+            
+            # Set model-specific uniforms
+            glUniformMatrix4fv(model_loc, 1, GL_TRUE, model_matrix) # Use GL_TRUE because model_matrix is row-major
+            
+            color = [0.8, 0.2, 0.2] if i == self.editor.selected_brush_index else ([0.2, 0.2, 0.8] if brush.get('operation') == 'subtract' else [0.8, 0.8, 0.8])
+            glUniform3fv(color_loc, 1, color)
+            
+            # Draw call
+            if self.brush_display_mode == "Wireframe":
+                glDrawElements(GL_LINES, 24, GL_UNSIGNED_INT, None)
+            else:
+                glDrawElements(GL_TRIANGLES, self.solid_indices_count, GL_UNSIGNED_INT, None)
+        
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL) # Reset to default
+
+    def update_loop(self):
+        self.last_time = time.time()
+        self.handle_input(time.time() - self.last_time)
         self.update()
 
-    def update_camera_movement(self, delta_time):
-        speed = 500.0 * delta_time
-        look_speed = 90.0 * delta_time
-
-        if Qt.Key_W in self.editor.keys_pressed: self.camera.move_forward(speed)
-        if Qt.Key_S in self.editor.keys_pressed: self.camera.move_forward(-speed)
-        if Qt.Key_A in self.editor.keys_pressed: self.camera.strafe(-speed)
-        if Qt.Key_D in self.editor.keys_pressed: self.camera.strafe(speed)
-        if Qt.Key_Space in self.editor.keys_pressed: self.camera.move_up(speed)
-        if Qt.Key_C in self.editor.keys_pressed: self.camera.move_up(-speed)
-        if Qt.Key_Up in self.editor.keys_pressed: self.camera.pitch += look_speed
-        if Qt.Key_Down in self.editor.keys_pressed: self.camera.pitch -= look_speed
-        if Qt.Key_Left in self.editor.keys_pressed: self.camera.yaw -= look_speed
-        if Qt.Key_Right in self.editor.keys_pressed: self.camera.yaw += look_speed
-
-    def draw_grid(self):
-        glBegin(GL_LINES)
-        glColor3f(0.5, 0.5, 0.5)
-        for i in range(-50, 51):
-            glVertex3f(i * 10, 0, -500)
-            glVertex3f(i * 10, 0, 500)
-            glVertex3f(-500, 0, i * 10)
-            glVertex3f(500, 0, i * 10)
-        glEnd()
-
-    def draw_cube(self, pos, size):
-        x, y, z = pos
-        sx, sy, sz = size
-        vertices = [
-            [x - sx / 2, y - sy / 2, z - sz / 2], [x + sx / 2, y - sy / 2, z - sz / 2],
-            [x + sx / 2, y + sy / 2, z - sz / 2], [x - sx / 2, y + sy / 2, z - sz / 2],
-            [x - sx / 2, y - sy / 2, z + sz / 2], [x + sx / 2, y - sy / 2, z + sz / 2],
-            [x + sx / 2, y + sy / 2, z + sz / 2], [x - sx / 2, y + sy / 2, z + sz / 2]
-        ]
-        edges = [
-            (0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6),
-            (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)
-        ]
-        glBegin(GL_LINES)
-        for edge in edges:
-            for vertex in edge:
-                glVertex3fv(vertices[vertex])
-        glEnd()
-
-    def draw_brushes(self):
-        for i, brush in enumerate(self.editor.brushes):
-            if i == self.editor.selected_brush_index:
-                glColor3f(1, 1, 0)  # Yellow for selected
-            else:
-                glColor3f(1, 1, 1)  # White for others
-            self.draw_cube(brush['pos'], brush['size'])
-
-    def render_resize_gizmos(self):
-        brush = self.editor.brushes[self.editor.selected_brush_index]
-        pos = brush['pos']
-        size = brush['size']
+    def handle_input(self, delta_time):
+        keys = self.editor.keys_pressed
+        move_speed = 300.0 * delta_time # Increased speed
         
-        # X, Y, Z handles
-        handles = {
-            'x': ([pos[0] + size[0] / 2, pos[1], pos[2]], [1, 0, 0]),
-            'y': ([pos[0], pos[1] + size[1] / 2, pos[2]], [0, 1, 0]),
-            'z': ([pos[0], pos[1], pos[2] + size[2] / 2], [0, 0, 1]),
-        }
+        if Qt.Key_W in keys: self.camera.move_forward(move_speed)
+        if Qt.Key_S in keys: self.camera.move_forward(-move_speed)
+        if Qt.Key_A in keys: self.camera.strafe(-move_speed)
+        if Qt.Key_D in keys: self.camera.strafe(move_speed)
+        if Qt.Key_Space in keys: self.camera.move_up(move_speed)
+        if Qt.Key_Shift in keys: self.camera.move_up(-move_speed)
         
-        glDisable(GL_DEPTH_TEST)
-        for axis, (h_pos, color) in handles.items():
-            glColor3fv(color)
-            glPushMatrix()
-            glTranslatef(h_pos[0], h_pos[1], h_pos[2])
-            # A simple cube for the handle
-            self.draw_cube([0,0,0], [self.resize_handle_size*20, self.resize_handle_size*20, self.resize_handle_size*20])
-            glPopMatrix()
-        glEnable(GL_DEPTH_TEST)
+        dx, dy = 0, 0
+        rotate_speed = 2.0 # Adjusted for direct rotation
 
-    def mousePressEvent(self, event):
-        self.last_mouse_pos = event.pos()
-        if event.button() == Qt.LeftButton:
-            self.left_mouse_pressed = True
-            if self.edit_mode == 'resize':
-                self.resize_axis = self.check_resize_gizmo_collision(event.pos())
+        if Qt.Key_Left in keys: dx = -rotate_speed
+        if Qt.Key_Right in keys: dx = rotate_speed
+        if Qt.Key_Up in keys: dy = -rotate_speed 
+        if Qt.Key_Down in keys: dy = rotate_speed
 
-        elif event.button() == Qt.MiddleButton:
-            self.middle_mouse_pressed = True
-        elif event.button() == Qt.RightButton:
-            self.right_mouse_pressed = True
-            self.show_context_menu(event.pos())
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.left_mouse_pressed = False
-            self.resize_axis = None
-        elif event.button() == Qt.MiddleButton:
-            self.middle_mouse_pressed = False
-        elif event.button() == Qt.RightButton:
-            self.right_mouse_pressed = False
-
-    def mouseMoveEvent(self, event):
-        if self.last_mouse_pos is None:
-            self.last_mouse_pos = event.pos()
-            return
-            
-        delta = event.pos() - self.last_mouse_pos
-
-        if self.left_mouse_pressed and self.edit_mode == 'resize' and self.resize_axis:
-            self.resize_brush(delta)
-        elif self.middle_mouse_pressed:
-            self.camera.pan(delta.x(), delta.y())
-        elif self.right_mouse_pressed:
-            self.camera.rotate(delta.x(), delta.y())
-            
-        self.last_mouse_pos = event.pos()
-
-    def show_context_menu(self, pos):
-        menu = QMenu(self)
-        
-        select_action = menu.addAction("Select Mode")
-        resize_action = menu.addAction("Resize Mode")
-        
-        action = menu.exec_(self.mapToGlobal(pos))
-        
-        if action == select_action:
-            self.edit_mode = 'select'
-        elif action == resize_action:
-            self.edit_mode = 'resize'
-
-    def check_resize_gizmo_collision(self, pos):
-        # This is a simplified implementation. A more robust solution
-        # would use ray casting to check for intersection.
-        # For now, we'll just return a default axis for demonstration.
-        return 'x' # Defaulting to X-axis for now
-
-    def resize_brush(self, delta):
-        if self.editor.selected_brush_index == -1 or self.resize_axis is None:
-            return
-
-        brush = self.editor.brushes[self.editor.selected_brush_index]
-        
-        # A simple scaling based on mouse movement
-        scale_factor = 0.1
-        
-        if self.resize_axis == 'x':
-            brush['size'][0] += delta.x() * scale_factor
-        elif self.resize_axis == 'y':
-            brush['size'][1] += delta.y() * scale_factor
-        elif self.resize_axis == 'z':
-            # Need to map 2D mouse movement to depth change
-            brush['size'][2] += delta.y() * scale_factor
-        
-        self.editor.update_views()
+        if dx != 0 or dy != 0:
+            self.camera.rotate(dx, dy)
