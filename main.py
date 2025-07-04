@@ -1,16 +1,10 @@
-# main.py
 import sys
 from PyQt5.QtWidgets import QApplication
-from editor_window import MainWindow
+from editor_window import EditorWindow
 
-def main():
-    """
-    Main function to run the PyQt5 Level Editor.
-    """
+if __name__ == '__main__':
     app = QApplication(sys.argv)
-    editor = MainWindow()
-    editor.show()
+    window = EditorWindow()
+    # This now correctly calls showMaximized()
+    window.showMaximized()
     sys.exit(app.exec_())
-
-if __name__ == "__main__":
-    main()
