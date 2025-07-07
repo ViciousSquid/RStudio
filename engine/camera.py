@@ -1,55 +1,72 @@
-# engine/camera.py
 import math
-from OpenGL.GL import *
+import numpy as np
 
 class Camera:
     def __init__(self):
-        self.pos = [0, 5, 20]
-        self.yaw = -90.0  # Rotation around the Y-axis
-        self.pitch = 0.0  # Rotation around the X-axis
+        self.pos = [0.0, 0.0, 0.0]
+        self.yaw = -90.0  # Looking down the negative Z-axis
+        self.pitch = 0.0
 
-    def apply(self):
-        """Applies the camera transformations to the OpenGL matrix stack."""
-        glRotatef(self.pitch, 1, 0, 0)
-        glRotatef(self.yaw, 0, 1, 0)
-        glTranslatef(-self.pos[0], -self.pos[1], -self.pos[2])
+    def get_view_matrix(self):
+        """Calculates the view matrix for the camera's current position and orientation."""
+        yaw_rad = np.radians(self.yaw)
+        pitch_rad = np.radians(self.pitch)
 
-    def move_forward(self, distance):
-        """Moves the camera forward or backward along its direction."""
-        rad_yaw = math.radians(self.yaw)
-        self.pos[0] += distance * math.cos(rad_yaw)
-        self.pos[2] += distance * math.sin(rad_yaw)
+        # Calculate the front vector
+        front = np.array([
+            np.cos(yaw_rad) * np.cos(pitch_rad),
+            np.sin(pitch_rad),
+            np.sin(yaw_rad) * np.cos(pitch_rad)
+        ])
+        front = front / np.linalg.norm(front)
 
-    def strafe(self, distance):
-        """Moves the camera left or right relative to its direction."""
-        rad_yaw = math.radians(self.yaw)
-        self.pos[0] += distance * math.sin(rad_yaw)
-        self.pos[2] -= distance * math.cos(rad_yaw)
+        # Calculate right and up vectors
+        world_up = np.array([0.0, 1.0, 0.0])
+        right = np.cross(front, world_up)
+        right = right / np.linalg.norm(right)
+        
+        up = np.cross(right, front)
+        up = up / np.linalg.norm(up)
 
-    def move_up(self, distance):
-        """Moves the camera directly up or down."""
-        self.pos[1] += distance
+        # Create the look-at matrix
+        target = self.pos + front
+        
+        # Manual implementation of a look-at matrix
+        cam_pos = np.array(self.pos)
+        z_axis = (cam_pos - target) / np.linalg.norm(cam_pos - target)
+        x_axis = np.cross(world_up, z_axis) / np.linalg.norm(np.cross(world_up, z_axis))
+        y_axis = np.cross(z_axis, x_axis)
 
-    def rotate(self, dx, dy):
-        """Rotates the camera's view based on mouse movement."""
-        sensitivity = 0.1
+        translation = np.identity(4)
+        translation[0, 3] = -cam_pos[0]
+        translation[1, 3] = -cam_pos[1]
+        translation[2, 3] = -cam_pos[2]
+
+        rotation = np.identity(4)
+        rotation[0, 0:3] = x_axis
+        rotation[1, 0:3] = y_axis
+        rotation[2, 0:3] = z_axis
+        
+        return (rotation @ translation).astype(np.float32)
+
+    def rotate(self, dx, dy, sensitivity=0.1):
+        """Rotates the camera based on mouse movement."""
         self.yaw += dx * sensitivity
         self.pitch -= dy * sensitivity
+        self.pitch = max(-89.0, min(89.0, self.pitch))
 
-        # Clamp pitch to avoid flipping
-        if self.pitch > 89.0:
-            self.pitch = 89.0
-        if self.pitch < -89.0:
-            self.pitch = -89.0
-
-    def pan(self, dx, dy):
-        """Pans the camera left/right and up/down."""
-        pan_speed = 0.05
+    def move_forward(self, speed):
+        """Moves the camera along its front vector."""
         rad_yaw = math.radians(self.yaw)
-        
-        # Pan right/left
-        self.pos[0] -= dx * pan_speed * math.sin(rad_yaw)
-        self.pos[2] += dx * pan_speed * math.cos(rad_yaw)
-        
-        # Pan up/down
-        self.pos[1] += dy * pan_speed
+        self.pos[0] += math.cos(rad_yaw) * speed
+        self.pos[2] += math.sin(rad_yaw) * speed
+
+    def strafe(self, speed):
+        """Moves the camera along its right vector."""
+        rad_yaw = math.radians(self.yaw)
+        self.pos[0] += math.sin(rad_yaw) * speed
+        self.pos[2] -= math.cos(rad_yaw) * speed
+
+    def move_up(self, speed):
+        """Moves the camera along the world's up vector."""
+        self.pos[1] += speed
