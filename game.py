@@ -14,7 +14,7 @@ class GameWindow(QMainWindow):
         # The GameWindow needs attributes that the QtGameView expects.
         self.brushes = []
         self.things = []
-        self.selected_object = None 
+        self.selected_object = None
         self.keys_pressed = set() # Add the missing attribute
 
         # The game view will be the main widget
@@ -49,7 +49,7 @@ class GameWindow(QMainWindow):
         self.brushes = level_data.get('brushes', [])
         
         self.things = []
-        player_start_pos = [0, 50, 0] 
+        player_start_pos = [0, 50, 0]
         for thing_data in level_data.get('things', []):
             name = thing_data.get('name')
             pos = thing_data.get('pos', [0,0,0])
