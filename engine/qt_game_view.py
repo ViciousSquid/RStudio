@@ -147,7 +147,7 @@ class QtGameView(QOpenGLWidget):
             -0.5,-0.5,-0.5, 0,-1,0,  0.5,-0.5,-0.5, 0,-1,0,  0.5,-0.5,0.5, 0,-1,0,   0.5,-0.5,0.5, 0,-1,0, -0.5,-0.5,0.5, 0,-1,0,  -0.5,-0.5,-0.5, 0,-1,0,
             -0.5,0.5,-0.5, 0,1,0,    0.5,0.5,-0.5, 0,1,0,    0.5,0.5,0.5, 0,1,0,     0.5,0.5,0.5, 0,1,0,  -0.5,0.5,0.5, 0,1,0,   -0.5,0.5,-0.5, 0,1,0
         ], dtype=np.float32)
-        
+
         # Data for a simple wireframe cube
         simple_vertices = np.array([-0.5,-0.5,-0.5, 0.5,-0.5,-0.5, 0.5,0.5,-0.5, -0.5,0.5,-0.5, -0.5,-0.5,0.5, 0.5,-0.5,0.5, 0.5,0.5,0.5, -0.5,0.5,0.5], dtype=np.float32)
         wire_indices = np.array([0,1,1,2,2,3,3,0, 4,5,5,6,6,7,7,4, 0,4,1,5,2,6,3,7], dtype=np.uint32)
@@ -174,7 +174,7 @@ class QtGameView(QOpenGLWidget):
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, wire_indices.nbytes, wire_indices, GL_STATIC_DRAW)
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, None)
         glEnableVertexAttribArray(0)
-        
+
         glBindVertexArray(0)
 
 
@@ -187,10 +187,10 @@ class QtGameView(QOpenGLWidget):
 
         grid_vertices = np.array(lines, dtype=np.float32)
         self.grid_indices_count = len(grid_vertices)
-        
+
         if not hasattr(self, 'vao_grid'):
             self.vao_grid = glGenVertexArrays(1)
-        
+
         glBindVertexArray(self.vao_grid)
         if not hasattr(self, 'vbo_grid'):
             self.vbo_grid = glGenBuffers(1)
@@ -223,7 +223,7 @@ class QtGameView(QOpenGLWidget):
         # Ensure pixmaps are loaded by creating dummy instances if needed
         if Light.pixmap is None: Light(pos=[0,0,0])
         if PlayerStart.pixmap is None: PlayerStart(pos=[0,0,0])
-        
+
         self.light_texture = self.load_texture_from_qpixmap(Light.pixmap)
         self.player_texture = self.load_texture_from_qpixmap(PlayerStart.pixmap)
         self.textures_loaded = True
@@ -232,9 +232,9 @@ class QtGameView(QOpenGLWidget):
         if pixmap is None or pixmap.isNull():
             print("Failed to load texture: pixmap is null.")
             return 0
-        
+
         image = pixmap.toImage().convertToFormat(QImage.Format_RGBA8888)
-        
+
         tex_id = glGenTextures(1)
         glBindTexture(GL_TEXTURE_2D, tex_id)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
@@ -250,7 +250,7 @@ class QtGameView(QOpenGLWidget):
             self.load_textures()
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        
+
         if self.height() == 0:
             return
 
@@ -267,7 +267,7 @@ class QtGameView(QOpenGLWidget):
         glUniformMatrix4fv(glGetUniformLocation(self.shader_simple, "view"), 1, GL_TRUE, view)
         glUniformMatrix4fv(glGetUniformLocation(self.shader_simple, "model"), 1, GL_TRUE, np.identity(4, dtype=np.float32))
         glUniform3f(glGetUniformLocation(self.shader_simple, "color"), 0.2, 0.2, 0.2)
-        
+
         if hasattr(self, 'vao_grid'):
             glBindVertexArray(self.vao_grid)
             glDrawArrays(GL_LINES, 0, self.grid_indices_count)
@@ -343,7 +343,7 @@ class QtGameView(QOpenGLWidget):
                 color = thing.get_color()
             elif isinstance(thing, PlayerStart):
                 glBindTexture(GL_TEXTURE_2D, self.player_texture)
-                color = [1.0, 1.0, 1.0] 
+                color = [1.0, 1.0, 1.0]
             else:
                 continue
 
@@ -351,7 +351,7 @@ class QtGameView(QOpenGLWidget):
             final_color = [c * 1.5 for c in color] if thing == self.editor.selected_object else color
             glUniform3fv(glGetUniformLocation(self.shader_sprite, "color"), 1, final_color)
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, None)
-            
+
         glBindVertexArray(0)
 
 
@@ -420,13 +420,13 @@ class QtGameView(QOpenGLWidget):
     def get_object_at_screen_pos(self, x, y):
         height = self.height()
         if height == 0: return None, float('inf')
-        
+
         ndc_x = (2.0 * x) / self.width() - 1.0
         ndc_y = 1.0 - (2.0 * y) / height
-        
+
         proj_matrix = perspective_projection(45.0, self.width()/height, 0.1, 10000.0)
         view_matrix = self.camera.get_view_matrix()
-        
+
         try:
             inv_proj = np.linalg.inv(proj_matrix)
             inv_view = np.linalg.inv(view_matrix)
@@ -437,16 +437,16 @@ class QtGameView(QOpenGLWidget):
         eye_coords = inv_proj @ clip_coords
         eye_coords = np.array([eye_coords[0], eye_coords[1], -1.0, 0.0])
         world_coords = inv_view @ eye_coords
-        
+
         ray_dir = np.array([world_coords[0], world_coords[1], world_coords[2]])
         ray_dir = ray_dir / np.linalg.norm(ray_dir)
         ray_origin = self.camera.pos
 
         closest_obj = None
         min_dist = float('inf')
-        
+
         all_objects = self.editor.brushes + self.editor.things
-        
+
         for obj in all_objects:
             if isinstance(obj, dict): # Brush
                 pos, size = obj['pos'], obj['size']
@@ -459,16 +459,16 @@ class QtGameView(QOpenGLWidget):
             if dist is not None and dist < min_dist:
                 min_dist = dist
                 closest_obj = obj
-                
+
         return closest_obj, min_dist
 
     def ray_intersect_aabb(self, ray_origin, ray_dir, box_center, box_size):
         box_min = box_center - box_size / 2
         box_max = box_center + box_size / 2
-        
+
         with np.errstate(divide='ignore'):
             inv_dir = 1.0 / ray_dir
-        
+
         tmin = (box_min - ray_origin) * inv_dir
         tmax = (box_max - ray_origin) * inv_dir
 
@@ -477,5 +477,5 @@ class QtGameView(QOpenGLWidget):
 
         if t_exit < t_enter or t_exit < 0:
             return None
-        
+
         return t_enter if t_enter > 0 else t_exit
