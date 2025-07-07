@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from editor.view_2d import View2D
 from engine.qt_game_view import QtGameView
+from editor.things import Light 
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -28,12 +29,18 @@ class MainWindow(QMainWindow):
 
         self.brushes = []
         self.selected_brush_index = -1
+        self.selected_object = None 
         self.keys_pressed = set()
         self.cs_subtract_mode = False
 
         self.undo_stack = []
         self.redo_stack = []
         self.save_state()
+
+        self.things = [] 
+        # For now, if you want a default light:
+        # self.things.append(Light([0, 0, 0], 100, [1.0, 1.0, 1.0]))
+
 
         # Main container widget and layout
         self.central_widget = QWidget()
@@ -44,11 +51,11 @@ class MainWindow(QMainWindow):
 
         # Create and add menu and toolbars
         self.create_menu_bar()
-        self.create_toolbars() # This will now add the toolbar to the layout
+        self.create_toolbars() 
 
         # Central splitter widget
         self.splitter = QSplitter(Qt.Horizontal)
-        self.main_layout.addWidget(self.splitter, 1) # Give it stretch factor
+        self.main_layout.addWidget(self.splitter, 1) 
 
         # Add bottom controls
         self.create_bottom_controls()
@@ -60,16 +67,16 @@ class MainWindow(QMainWindow):
         self.right_splitter = QSplitter(Qt.Vertical)
         self.splitter.addWidget(self.right_splitter)
 
-        self.view_top = View2D(self, "top")
+        self.view_top = View2D(self, self, "top")
         self.right_splitter.addWidget(self.view_top)
 
         self.bottom_splitter = QSplitter(Qt.Horizontal)
         self.right_splitter.addWidget(self.bottom_splitter)
 
-        self.view_side = View2D(self, "side")
+        self.view_side = View2D(self, self, "side")
         self.bottom_splitter.addWidget(self.view_side)
 
-        self.view_front = View2D(self, "front")
+        self.view_front = View2D(self, self, "front")
         self.bottom_splitter.addWidget(self.view_front)
 
         self.splitter.setSizes([800, 400])
@@ -86,6 +93,7 @@ class MainWindow(QMainWindow):
             state = self.undo_stack[-1]
             self.brushes = [b.copy() for b in state['brushes']]
             self.selected_brush_index = state['selected']
+            self.selected_object = self.brushes[self.selected_brush_index] if self.selected_brush_index != -1 else None
             self.update_views()
 
     def redo(self):
@@ -94,7 +102,23 @@ class MainWindow(QMainWindow):
             self.undo_stack.append(state)
             self.brushes = [b.copy() for b in state['brushes']]
             self.selected_brush_index = state['selected']
+            self.selected_object = self.brushes[self.selected_brush_index] if self.selected_brush_index != -1 else None
             self.update_views()
+
+    # New method to set the selected object and update its index
+    def set_selected_object(self, obj):
+        self.selected_object = obj
+        if obj is None:
+            self.selected_brush_index = -1
+        else:
+            try:
+                # Assuming obj is one of the brushes in self.brushes
+                self.selected_brush_index = self.brushes.index(obj)
+            except ValueError:
+                # obj not found in brushes, might be a new object or an error
+                self.selected_brush_index = -1 
+        self.update_views() # Update views to reflect the new selection
+
 
     def create_menu_bar(self):
         menubar = self.menuBar()
@@ -151,16 +175,20 @@ class MainWindow(QMainWindow):
 
         # Grid size
         bottom_layout.addWidget(QLabel("Grid Size:"))
-        self.grid_size_spinbox = QSpinBox(range=(4, 128), value=16, singleStep=4, valueChanged=self.set_grid_size)
+        self.grid_size_spinbox = QSpinBox(value=16, singleStep=4)
+        self.grid_size_spinbox.setRange(4, 128)
+        self.grid_size_spinbox.valueChanged.connect(self.set_grid_size)
         bottom_layout.addWidget(self.grid_size_spinbox)
         bottom_layout.addSpacing(20)
 
         # World size
         bottom_layout.addWidget(QLabel("World Size:"))
-        self.world_size_spinbox = QSpinBox(range=(256, 8192), value=1024, singleStep=256, valueChanged=self.set_world_size)
+        self.world_size_spinbox = QSpinBox(value=1024, singleStep=256)
+        self.world_size_spinbox.setRange(256, 8192)
+        self.world_size_spinbox.valueChanged.connect(self.set_world_size)
         bottom_layout.addWidget(self.world_size_spinbox)
         
-        bottom_layout.addStretch(1) # Pushes controls to the left
+        bottom_layout.addStretch(1) 
 
         # Add a separator line
         line = QFrame()
@@ -191,7 +219,7 @@ class MainWindow(QMainWindow):
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Z, Qt.Key_Y) and event.modifiers() & Qt.ControlModifier:
-            return # Handled by shortcuts
+            return 
         self.keys_pressed.add(event.key())
         super().keyPressEvent(event)
 
@@ -222,7 +250,8 @@ class MainWindow(QMainWindow):
         self.save_state()
         new_brush = {'pos': [0, 0, 0], 'size': [64, 64, 64], 'operation': 'subtract' if self.cs_subtract_mode else 'add'}
         self.brushes.append(new_brush)
-        self.selected_brush_index = len(self.brushes) - 1
+        # Call set_selected_object to correctly update both selected_brush_index and selected_object
+        self.set_selected_object(new_brush)
         self.update_views()
 
     def update_views(self):
@@ -233,15 +262,6 @@ class MainWindow(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    # Monkey-patching QSpinBox to accept keyword arguments for cleaner initialization
-    def QSpinBox_init(self, range=None, value=None, singleStep=None, valueChanged=None, **kwargs):
-        QSpinBox._original_init(self, **kwargs)
-        if range is not None: self.setRange(*range)
-        if value is not None: self.setValue(value)
-        if singleStep is not None: self.setSingleStep(singleStep)
-        if valueChanged is not None: self.valueChanged.connect(valueChanged)
-    QSpinBox._original_init = QSpinBox.__init__
-    QSpinBox.__init__ = QSpinBox_init
     
     main_win = MainWindow()
     main_win.show()

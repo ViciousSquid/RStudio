@@ -1,58 +1,112 @@
-# editor/generation_dialog.py
+# RStudio/editor/rand_map_gen_dial.py
 
 import tkinter as tk
-from tkinter import ttk
-from generate_level import generate
+from tkinter import ttk, messagebox
+import numpy as np
 
-class GenerationDialog(tk.Toplevel):
-    def __init__(self, parent, editor):
-        super().__init__(parent)
-        self.editor = editor
-        self.title("Generate Random Level")
-        self.transient(parent)
-        self.grab_set()
+# Corrected import: Use relative import for rand_map_gen
+from .rand_map_gen import generate
 
-        self.width_var = tk.IntVar(value=self.editor.grid_width)
-        self.height_var = tk.IntVar(value=self.editor.grid_height)
-        self.generator_var = tk.StringVar(value="genA")
+class RandomMapGeneratorDialog(tk.Toplevel):
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("Generate Random Map")
+        self.geometry("300x250")
+        self.grab_set() # Make the dialog modal
+        self.result = False # To store if user clicked OK
 
-        self._setup_widgets()
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.generated_brushes = []
+        self.generated_things = []
 
-    def _setup_widgets(self):
-        main_frame = ttk.Frame(self, padding="10")
-        main_frame.pack(fill="both", expand=True)
+        self._setup_ui()
 
-        # Size Inputs
-        size_frame = ttk.LabelFrame(main_frame, text="Dimensions")
-        size_frame.pack(fill="x", pady=5)
-        ttk.Label(size_frame, text="Width:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        ttk.Entry(size_frame, textvariable=self.width_var, width=5).grid(row=0, column=1, padx=5, pady=5)
-        ttk.Label(size_frame, text="Height:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-        ttk.Entry(size_frame, textvariable=self.height_var, width=5).grid(row=1, column=1, padx=5, pady=5)
+    def _setup_ui(self):
+        # --- Settings Frame ---
+        settings_frame = ttk.LabelFrame(self, text="Map Settings")
+        settings_frame.pack(padx=10, pady=10, fill="x")
 
-        # Generator Choice
-        gen_frame = ttk.LabelFrame(main_frame, text="Generator Type")
-        gen_frame.pack(fill="x", pady=5)
-        ttk.Radiobutton(gen_frame, text="Generator A", variable=self.generator_var, value="genA").pack(anchor="w", padx=5)
-        ttk.Radiobutton(gen_frame, text="Generator B", variable=self.generator_var, value="genB").pack(anchor="w", padx=5)
-        
-        # Action Buttons
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill="x", pady=(10, 0))
-        ttk.Button(button_frame, text="Cancel", command=self.destroy).pack(side="right")
-        ttk.Button(button_frame, text="Generate", command=self.generate_level, style="Accent.TButton").pack(side="right", padx=5)
+        # Map Size
+        ttk.Label(settings_frame, text="Map Size (e.g., 64x64):").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        self.size_var = tk.StringVar(value="64,64")
+        ttk.Entry(settings_frame, textvariable=self.size_var).grid(row=0, column=1, padx=5, pady=5, sticky="ew")
 
-    def generate_level(self):
-        width = self.width_var.get()
-        height = self.height_var.get()
-        generator_type = self.generator_var.get()
-        
-        new_map = generate(method=generator_type, width=width, height=height)
-        
-        self.editor.tile_map = new_map
-        self.editor.grid_width = width
-        self.editor.grid_height = height
-        self.editor.redraw_canvas()
-        
+        # Density
+        ttk.Label(settings_frame, text="Wall Density (0-1):").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        self.density_var = tk.DoubleVar(value=0.5)
+        ttk.Scale(settings_frame, from_=0, to=1, orient="horizontal", resolution=0.01, variable=self.density_var).grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+
+        # Smoothing Iterations
+        ttk.Label(settings_frame, text="Smoothing Iterations:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
+        self.smooth_iter_var = tk.IntVar(value=5)
+        ttk.Entry(settings_frame, textvariable=self.smooth_iter_var).grid(row=2, column=1, padx=5, pady=5, sticky="ew")
+
+        settings_frame.grid_columnconfigure(1, weight=1)
+
+        # --- Buttons ---
+        button_frame = ttk.Frame(self)
+        button_frame.pack(pady=10)
+        ttk.Button(button_frame, text="Generate", command=self.on_generate).pack(side="left", padx=5)
+        ttk.Button(button_frame, text="Cancel", command=self.on_cancel).pack(side="left", padx=5)
+
+    def on_generate(self):
+        try:
+            size_str = self.size_var.get().split(',')
+            map_width = int(size_str[0].strip())
+            map_height = int(size_str[1].strip())
+            density = self.density_var.get()
+            smooth_iter = self.smooth_iter_var.get()
+
+            if map_width <= 0 or map_height <= 0:
+                messagebox.showerror("Input Error", "Map size must be positive integers.")
+                return
+            if not (0 <= density <= 1):
+                messagebox.showerror("Input Error", "Wall density must be between 0 and 1.")
+                return
+            if smooth_iter < 0:
+                messagebox.showerror("Input Error", "Smoothing iterations cannot be negative.")
+                return
+
+            # Generate the map using the generate function from rand_map_gen
+            generated_map, player_start_pos = generate(map_width, map_height, density, smooth_iter)
+
+            self.generated_brushes = []
+            self.generated_things = []
+
+            # Convert generated_map to brushes
+            for y in range(map_height):
+                for x in range(map_width):
+                    if generated_map[y, x] == 1: # Assuming 1 is a wall
+                        # Create a brush for each wall segment
+                        # Assuming grid_size is 64 for simplicity, adjust as needed
+                        brush_size = [64, 64, 64] # x, y, z size
+                        brush_pos = [x * brush_size[0], 0, y * brush_size[2]] # x, y, z position
+                        
+                        self.generated_brushes.append({
+                            'pos': brush_pos,
+                            'size': brush_size,
+                            'operation': 'add',
+                            'properties': {}
+                        })
+            
+            # Add player start thing
+            if player_start_pos:
+                # Assuming player_start_pos is in grid coordinates [x, y_grid]
+                # Convert to world coordinates and adjust Y for player height
+                player_world_pos = [player_start_pos[0] * 64, 128, player_start_pos[1] * 64]
+                self.generated_things.append({
+                    'pos': player_world_pos,
+                    'type': 'PlayerStart',
+                    'properties': {}
+                })
+
+            self.result = True
+            self.destroy()
+
+        except ValueError:
+            messagebox.showerror("Input Error", "Please enter valid numbers for all fields.")
+        except Exception as e:
+            messagebox.showerror("Generation Error", f"An error occurred during map generation: {e}")
+
+    def on_cancel(self):
+        self.result = False
         self.destroy()
