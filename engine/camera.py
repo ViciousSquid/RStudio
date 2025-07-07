@@ -9,28 +9,19 @@ class Camera:
 
     def get_view_matrix(self):
         """Calculates the view matrix for the camera's current position and orientation."""
-        yaw_rad = np.radians(self.yaw)
-        pitch_rad = np.radians(self.pitch)
-
-        # Calculate the front vector
-        front = np.array([
-            np.cos(yaw_rad) * np.cos(pitch_rad),
-            np.sin(pitch_rad),
-            np.sin(yaw_rad) * np.cos(pitch_rad)
-        ])
-        front = front / np.linalg.norm(front)
+        front = self.get_front_vector()
 
         # Calculate right and up vectors
         world_up = np.array([0.0, 1.0, 0.0])
         right = np.cross(front, world_up)
         right = right / np.linalg.norm(right)
-        
+
         up = np.cross(right, front)
         up = up / np.linalg.norm(up)
 
         # Create the look-at matrix
         target = self.pos + front
-        
+
         # Manual implementation of a look-at matrix
         cam_pos = np.array(self.pos)
         z_axis = (cam_pos - target) / np.linalg.norm(cam_pos - target)
@@ -46,8 +37,20 @@ class Camera:
         rotation[0, 0:3] = x_axis
         rotation[1, 0:3] = y_axis
         rotation[2, 0:3] = z_axis
-        
+
         return (rotation @ translation).astype(np.float32)
+
+    def get_front_vector(self):
+        """Calculates and returns the camera's normalized front vector."""
+        yaw_rad = np.radians(self.yaw)
+        pitch_rad = np.radians(self.pitch)
+
+        front = np.array([
+            np.cos(yaw_rad) * np.cos(pitch_rad),
+            np.sin(pitch_rad),
+            np.sin(yaw_rad) * np.cos(pitch_rad)
+        ])
+        return front / np.linalg.norm(front)
 
     def rotate(self, dx, dy, sensitivity=0.1):
         """Rotates the camera based on mouse movement."""
@@ -56,7 +59,7 @@ class Camera:
         self.pitch = max(-89.0, min(89.0, self.pitch))
 
     def move_forward(self, speed):
-        """Moves the camera along its front vector."""
+        """Moves the camera along its front vector, ignoring the pitch."""
         rad_yaw = math.radians(self.yaw)
         self.pos[0] += math.cos(rad_yaw) * speed
         self.pos[2] += math.sin(rad_yaw) * speed
@@ -70,3 +73,10 @@ class Camera:
     def move_up(self, speed):
         """Moves the camera along the world's up vector."""
         self.pos[1] += speed
+
+    def zoom(self, amount):
+        """Moves the camera forward or backward along its true front vector."""
+        front_vector = self.get_front_vector()
+        self.pos[0] += front_vector[0] * amount
+        self.pos[1] += front_vector[1] * amount
+        self.pos[2] += front_vector[2] * amount
