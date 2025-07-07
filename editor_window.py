@@ -1,196 +1,332 @@
-import sys
-import os
-from PyQt5 import QtWidgets as _QtWidgets
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout,
-    QSplitter, QToolBar, QLabel, QSpinBox, QCheckBox, QAction,
-    QComboBox, QMessageBox, QDockWidget, QGridLayout, QLineEdit
-)
-from PyQt5.QtCore import Qt, QSettings, QTimer
+# RStudio/editor_window.py
+
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import json
+import numpy as np
 
 from editor.view_2d import View2D
 from engine.qt_game_view import QtGameView
+from editor.property_editor import PropertyEditor
+from editor.map_launcher import MapLauncher
+from editor.rand_map_gen_dial import RandomMapGeneratorDialog
+from editor.lights import LightsFrame
+from editor.things import Thing, Light, PlayerStart
+from editor.SettingsWindow import SettingsWindow
 
-class EditorWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("RooStudio")
-        self.setMinimumSize(1280, 1024)
+class EditorWindow(tk.Toplevel):
+    def __init__(self, master=None):
+        super().__init__(master)
+        self.title("R-Studio Editor")
+        self.geometry("1200x800")
 
-        # --- Attributes ---
         self.brushes = []
-        self.selected_brush_index = -1
-        self.keys_pressed = set()
-        self.is_first_show = True
+        self.things = []
+        self.lights = []
+        self.selected_object = None # Can be a brush or a thing
+        self.selected_light_index = -1 # Used for lights list management, not part of selected_object
 
-        # --- UI Setup ---
-        self.setDockNestingEnabled(True)
-        self.create_views()
-        self.create_toolbars_and_docks()
-        self.setCentralWidget(QWidget(self))
+        self.last_saved_map_path = None
 
-        # --- Debug Window ---
-        self.debug_window = self.create_debug_window()
-        self.debug_timer = QTimer(self)
-        self.debug_timer.setInterval(100)
-        self.debug_timer.timeout.connect(self.update_debug_info)
+        self._setup_ui()
+        self._setup_key_bindings()
+
+        self.game_view.set_editor(self) # Pass self (EditorWindow) to QtGameView
+        self.property_editor.set_editor(self) # Pass self to PropertyEditor
+        self.map_launcher.set_editor(self) # Pass self to MapLauncher
+        self.lights_frame.editor = self # Ensure lights frame has editor reference
+        self.things_frame.editor = self # Ensure things frame has editor reference
+
+        self.load_default_map()
+        self.update_views()
+
+    def _setup_ui(self):
+        # Create a main pane for horizontal division
+        self.main_pane = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        self.main_pane.pack(fill=tk.BOTH, expand=True)
+
+        # Left pane for 2D views and property editor
+        self.left_pane = ttk.PanedWindow(self.main_pane, orient=tk.VERTICAL)
+        self.main_pane.add(self.left_pane, weight=1)
+
+        # Notebook for 2D views
+        self.view_notebook = ttk.Notebook(self.left_pane)
+        self.left_pane.add(self.view_notebook, weight=3)
+
+        self.view_top = View2D(self.view_notebook, self, 'top')
+        self.view_front = View2D(self.view_notebook, self, 'front')
+        self.view_side = View2D(self.view_notebook, self, 'side')
+
+        self.view_notebook.add(self.view_top, text="Top (X-Z)")
+        self.view_notebook.add(self.view_front, text="Front (Z-Y)")
+        self.view_notebook.add(self.view_side, text="Side (X-Y)")
+
+        # Property Editor and Object List
+        self.property_editor_frame = ttk.Frame(self.left_pane)
+        self.left_pane.add(self.property_editor_frame, weight=2)
+
+        self.property_editor_notebook = ttk.Notebook(self.property_editor_frame)
+        self.property_editor_notebook.pack(fill="both", expand=True)
+
+        # Brushes/Things List
+        self.object_list_frame = ttk.LabelFrame(self.property_editor_notebook, text="Objects")
+        self.property_editor_notebook.add(self.object_list_frame, text="Objects")
         
-        self.setFocusPolicy(Qt.StrongFocus)
+        self.object_listbox = tk.Listbox(self.object_list_frame, exportselection=False)
+        self.object_listbox.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+        self.object_listbox.bind("<<ListboxSelect>>", self.on_object_selection)
 
-    def showEvent(self, event):
-        """Apply layout settings on the first time the window is shown."""
-        super().showEvent(event)
-        if self.is_first_show:
-            QTimer.singleShot(0, self.load_layout)
-            self.is_first_show = False
-            
-    def create_debug_window(self):
-        window = QWidget(self, Qt.Window)
-        window.setWindowTitle("View Geometry")
-        layout = QGridLayout(window)
-        self.debug_fields = {
-            '3D View': QLineEdit(readOnly=True), 'Top View': QLineEdit(readOnly=True),
-            'Front View': QLineEdit(readOnly=True), 'Side View': QLineEdit(readOnly=True)
-        }
-        for i, (name, field) in enumerate(self.debug_fields.items()):
-            layout.addWidget(QLabel(name + ":"), i, 0)
-            layout.addWidget(field, i, 1)
-        return window
+        obj_button_frame = ttk.Frame(self.object_list_frame)
+        obj_button_frame.pack(side="right", fill="y", padx=(0, 5))
+        ttk.Button(obj_button_frame, text="+Brush", command=self.add_brush).pack(pady=2)
+        ttk.Button(obj_button_frame, text="+Thing", command=self.add_thing).pack(pady=2)
+        ttk.Button(obj_button_frame, text="-", command=self.delete_selected_object).pack(pady=2)
 
-    def toggle_debug_window(self):
-        if self.debug_window.isVisible():
-            self.debug_window.hide()
-            self.debug_timer.stop()
+        # Property Editor
+        self.property_editor = PropertyEditor(self.property_editor_notebook, self)
+        self.property_editor_notebook.add(self.property_editor, text="Properties")
+
+        # Lights Editor
+        self.lights_frame = LightsFrame(self.property_editor_notebook, self)
+        self.property_editor_notebook.add(self.lights_frame, text="Lights")
+
+        # Things Editor (for specific things properties)
+        self.things_frame = ThingsFrame(self.property_editor_notebook, self)
+        self.property_editor_notebook.add(self.things_frame, text="Things")
+
+
+        # Right pane for 3D view and tools
+        self.right_pane = ttk.PanedWindow(self.main_pane, orient=tk.VERTICAL)
+        self.main_pane.add(self.right_pane, weight=1)
+
+        # 3D Game View
+        self.game_view = QtGameView(self)
+        self.right_pane.add(self.game_view, weight=3)
+
+        # Map Launcher (Tools)
+        self.map_launcher = MapLauncher(self.right_pane, self)
+        self.right_pane.add(self.map_launcher, weight=1)
+
+        self._create_menu()
+
+    def _create_menu(self):
+        self.menubar = tk.Menu(self)
+        self.config(menu=self.menubar)
+
+        file_menu = tk.Menu(self.menubar, tearoff=0)
+        file_menu.add_command(label="New Map", command=self.new_map)
+        file_menu.add_command(label="Open Map...", command=self.open_map)
+        file_menu.add_command(label="Save Map", command=self.save_map)
+        file_menu.add_command(label="Save Map As...", command=self.save_map_as)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.quit)
+        self.menubar.add_cascade(label="File", menu=file_menu)
+
+        edit_menu = tk.Menu(self.menubar, tearoff=0)
+        edit_menu.add_command(label="Undo", command=self.undo, accelerator="Ctrl+Z")
+        edit_menu.add_command(label="Redo", command=self.redo, accelerator="Ctrl+Y")
+        self.menubar.add_cascade(label="Edit", menu=edit_menu)
+
+        tools_menu = tk.Menu(self.menubar, tearoff=0)
+        tools_menu.add_command(label="Generate Random Map...", command=self.open_random_map_generator)
+        self.menubar.add_cascade(label="Tools", menu=tools_menu)
+
+        view_menu = tk.Menu(self.menubar, tearoff=0)
+        view_menu.add_command(label="Settings...", command=self.open_settings)
+        self.menubar.add_cascade(label="View", menu=view_menu)
+
+    def _setup_key_bindings(self):
+        self.bind("<Control-z>", lambda event: self.undo())
+        self.bind("<Control-y>", lambda event: self.redo())
+
+    def update_views(self):
+        self.view_top.update()
+        self.view_side.update()
+        if self.game_view:
+            self.game_view.repaint() # Changed from .update() to .repaint()
+        self.update_object_list()
+        self.property_editor.update_properties_ui()
+        self.lights_frame.update_light_list() # Ensure lights list is updated on view refresh
+        self.things_frame.update_thing_list() # Ensure things list is updated on view refresh
+
+    def update_object_list(self):
+        self.object_listbox.delete(0, tk.END)
+        for i, brush in enumerate(self.brushes):
+            self.object_listbox.insert(tk.END, f"Brush {i+1}")
+            if brush == self.selected_object:
+                self.object_listbox.selection_set(i)
+                self.object_listbox.activate(i)
+        
+        # Add things after brushes, adjusting index
+        brush_count = len(self.brushes)
+        for i, thing in enumerate(self.things):
+            self.object_listbox.insert(tk.END, f"Thing {i+1} ({thing['type']})")
+            if thing == self.selected_object:
+                self.object_listbox.selection_set(brush_count + i)
+                self.object_listbox.activate(brush_count + i)
+
+    def on_object_selection(self, event):
+        selected_indices = self.object_listbox.curselection()
+        if selected_indices:
+            index = selected_indices[0]
+            if index < len(self.brushes):
+                self.set_selected_object(self.brushes[index])
+            else:
+                self.set_selected_object(self.things[index - len(self.brushes)])
         else:
-            self.update_debug_info()
-            self.debug_window.show()
-            self.debug_timer.start()
+            self.set_selected_object(None)
 
-    def update_debug_info(self):
-        views = {
-            '3D View': self.dock_3d, 'Top View': self.view_top,
-            'Front View': self.view_front, 'Side View': self.view_side
-        }
-        for name, view in views.items():
-            if view and view.isVisible():
-                geo = view.geometry()
-                self.debug_fields[name].setText(f"x:{geo.x()}, y:{geo.y()}, w:{geo.width()}, h:{geo.height()}")
+    def set_selected_object(self, obj):
+        self.selected_object = obj
+        self.game_view.selected_object = obj # Inform game_view about selected object
+        self.view_top.selected_object = obj
+        self.view_front.selected_object = obj
+        self.view_side.selected_object = obj
+        self.update_views()
 
-    def create_views(self):
-        self.view_3d = QtGameView(self)
-        self.view_top = View2D(self, "top")
-        self.view_front = View2D(self, "front")
-        self.view_side = View2D(self, "side")
-
-    def create_toolbars_and_docks(self):
-        # --- Menubar ---
-        menubar = self.menuBar()
-        edit_menu, view_menu = menubar.addMenu('Edit'), menubar.addMenu('View')
-        
-        undo_action = QAction('Undo', self, shortcut='Ctrl+Z')
-        redo_action = QAction('Redo', self, shortcut='Ctrl+Y')
-        save_layout_action = QAction('Save Layout', self, triggered=self.save_layout)
-        reset_layout_action = QAction('Reset Layout', self, triggered=self.reset_layout)
-        debug_action = QAction('Show Geometry Panel', self, shortcut="Alt+D", triggered=self.toggle_debug_window)
-        
-        edit_menu.addActions([undo_action, redo_action])
-        view_menu.addActions([save_layout_action, reset_layout_action, debug_action])
-        
-        # --- Toolbars ---
-        top_toolbar = QToolBar("Main Tools")
-        top_toolbar.setObjectName("MainToolbar")
-        self.addToolBar(top_toolbar)
-        
-        top_toolbar.addAction(QAction("Hollow", self))
-        top_toolbar.addAction(QAction("Subtract", self, checkable=True))
-        top_toolbar.addSeparator()
-        top_toolbar.addActions([undo_action, redo_action])
-
-        bottom_toolbar = QToolBar("Grid")
-        bottom_toolbar.setObjectName("GridToolbar")
-        self.addToolBar(Qt.BottomToolBarArea, bottom_toolbar)
-        
-        bottom_toolbar.addWidget(QCheckBox("Snap to Grid", checked=True))
-        bottom_toolbar.addSeparator()
-        bottom_toolbar.addWidget(QLabel("Grid Size:"))
-        bottom_toolbar.addWidget(QSpinBox(minimum=4, maximum=128, value=16, singleStep=4))
-        bottom_toolbar.addSeparator()
-        bottom_toolbar.addWidget(QLabel("World Size:"))
-        bottom_toolbar.addWidget(QSpinBox(minimum=256, maximum=8192, value=1024, singleStep=256))
-        spacer = QWidget()
-        spacer.setSizePolicy(_QtWidgets.QSizePolicy.Expanding, _QtWidgets.QSizePolicy.Preferred)
-        bottom_toolbar.addWidget(spacer)
-        bottom_toolbar.addWidget(QLabel("Display:"))
-        bottom_toolbar.addWidget(QComboBox())
-
-        # --- Dock Windows and Splitters ---
-        self.dock_3d = QDockWidget("3D View", self)
-        self.dock_3d.setObjectName("Dock3D")
-        self.dock_3d.setWidget(self.view_3d)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.dock_3d)
-
-        self.right_splitter = QSplitter(Qt.Vertical)
-        self.right_splitter.addWidget(self.view_top)
-        self.bottom_splitter = QSplitter(Qt.Horizontal)
-        self.bottom_splitter.addWidget(self.view_front)
-        self.bottom_splitter.addWidget(self.view_side)
-        self.right_splitter.addWidget(self.bottom_splitter)
-
-        self.dock_2d = QDockWidget("2D Views", self)
-        self.dock_2d.setObjectName("Dock2D")
-        self.dock_2d.setWidget(self.right_splitter)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.dock_2d)
-
-        self.splitDockWidget(self.dock_3d, self.dock_2d, Qt.Horizontal)
-
-    def load_layout(self):
-        """Loads the splitter sizes from config.ini, or applies a default."""
-        settings = QSettings("config.ini", QSettings.IniFormat)
-        if settings.contains("Layout/main_splitter"):
-            main_sizes = [int(s) for s in settings.value("Layout/main_splitter")]
-            right_sizes = [int(s) for s in settings.value("Layout/right_splitter")]
-            
-            # The main horizontal split is between the two docks
-            self.resizeDocks([self.dock_3d, self.dock_2d], main_sizes, Qt.Horizontal)
-            self.right_splitter.setSizes(right_sizes)
-            # The bottom splitter state is implicitly handled by its parent
+    def select_light(self, index):
+        if 0 <= index < len(self.lights):
+            self.selected_light_index = index
+            self.game_view.selected_light_index = index # Inform game_view about selected light
         else:
-            self.apply_default_layout()
+            self.selected_light_index = -1
+            self.game_view.selected_light_index = -1
+        self.update_views() # This should cause redraw for highlighting
 
-    def apply_default_layout(self):
-        """Applies a known-good default layout."""
-        total_width = self.width()
-        self.resizeDocks([self.dock_3d, self.dock_2d], [int(total_width * 0.5), int(total_width * 0.5)], Qt.Horizontal)
+    def add_brush(self):
+        new_brush = {'pos': [0, 0, 0], 'size': [64, 64, 64], 'operation': 'add', 'properties': {}}
+        self.brushes.append(new_brush)
+        self.set_selected_object(new_brush)
+        self.update_views()
 
-        total_height_2d = self.right_splitter.height()
-        self.right_splitter.setSizes([total_height_2d // 2, total_height_2d // 2])
-        
-    def reset_layout(self):
-        """Resets the layout to the hard-coded default."""
-        self.apply_default_layout()
-        QMessageBox.information(self, "Layout Reset", "The layout has been reset to its default state.")
-        
-    def save_layout(self):
-        """Saves the current splitter and dock sizes to the INI file."""
-        settings = QSettings("config.ini", QSettings.IniFormat)
-        settings.beginGroup("Layout")
-        settings.setValue("main_splitter", [self.dock_3d.width(), self.dock_2d.width()])
-        settings.setValue("right_splitter", self.right_splitter.sizes())
-        settings.endGroup()
-        QMessageBox.information(self, "Layout Saved", "The current layout has been saved.")
+    def add_thing(self):
+        new_thing = {'pos': [0,0,0], 'type': 'PlayerStart', 'properties': {}}
+        self.things.append(new_thing)
+        self.set_selected_object(new_thing)
+        self.update_views()
 
-    def keyPressEvent(self, event):
-        self.keys_pressed.add(event.key())
+    def add_light(self):
+        new_light = {'pos': [0, 200, 0], 'color': [1.0, 1.0, 1.0], 'intensity': 1.0}
+        self.lights.append(new_light)
+        self.lights_frame.update_light_list() # Update listbox specifically
+        self.update_views()
 
-    def keyReleaseEvent(self, event):
-        if not event.isAutoRepeat(): self.keys_pressed.discard(event.key())
+    def delete_selected_object(self):
+        if self.selected_object:
+            if self.selected_object in self.brushes:
+                self.brushes.remove(self.selected_object)
+            elif self.selected_object in self.things:
+                self.things.remove(self.selected_object)
+            self.set_selected_object(None)
+            self.update_views()
 
-    def closeEvent(self, event):
-        self.debug_window.close()
-        super().closeEvent(event)
+    def delete_light(self, index):
+        if 0 <= index < len(self.lights):
+            del self.lights[index]
+            self.lights_frame.update_light_list() # Update listbox specifically
+            self.update_views()
 
-if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    window = EditorWindow()
-    window.showMaximized()
-    sys.exit(app.exec_())
+    def new_map(self):
+        if messagebox.askyesno("New Map", "Are you sure you want to create a new map? Unsaved changes will be lost."):
+            self.brushes = []
+            self.things = []
+            self.lights = []
+            self.selected_object = None
+            self.last_saved_map_path = None
+            self.game_view.reset_camera() # Reset camera for new map
+            self.update_views()
+
+    def load_map_from_path(self, path):
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+                self.brushes = data.get('brushes', [])
+                self.things = data.get('things', [])
+                self.lights = data.get('lights', [])
+                # Convert light colors from hex to float RGB if needed (for older formats)
+                for light in self.lights:
+                    if isinstance(light['color'], str) and light['color'].startswith('#'):
+                        hex_color = light['color'].lstrip('#')
+                        light['color'] = [int(hex_color[i:i+2], 16) / 255.0 for i in (0, 2, 4)]
+                
+                self.last_saved_map_path = path
+                self.set_selected_object(None) # Deselect anything previously selected
+                self.lights_frame.update_light_list() # Reload lights list
+                self.things_frame.update_thing_list() # Reload things list
+                self.game_view.reset_camera() # Reset camera for new map
+                self.update_views()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load map: {e}")
+
+    def load_default_map(self):
+        # This will assume a default.json is present, used at startup
+        # You might want to make this path configurable or more robust
+        default_map_path = "maps/default.json" 
+        self.load_map_from_path(default_map_path)
+
+
+    def open_map(self):
+        path = filedialog.askopenfilename(defaultextension=".json", filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")])
+        if path:
+            self.load_map_from_path(path)
+
+    def save_map(self):
+        if self.last_saved_map_path:
+            self._do_save(self.last_saved_map_path)
+        else:
+            self.save_map_as()
+
+    def save_map_as(self):
+        path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")])
+        if path:
+            self._do_save(path)
+            self.last_saved_map_path = path
+
+    def _do_save(self, path):
+        try:
+            # Ensure light colors are saved as float RGB
+            serializable_lights = []
+            for light in self.lights:
+                serializable_lights.append({
+                    'pos': light['pos'],
+                    'color': light['color'],
+                    'intensity': light['intensity']
+                })
+
+            data = {
+                'brushes': self.brushes,
+                'things': self.things,
+                'lights': serializable_lights
+            }
+            with open(path, 'w') as f:
+                json.dump(data, f, indent=4)
+            messagebox.showinfo("Save Map", f"Map saved to {path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save map: {e}")
+
+    def undo(self):
+        # Placeholder for undo logic
+        messagebox.showinfo("Undo", "Undo functionality not yet implemented.")
+
+    def redo(self):
+        # Placeholder for redo logic
+        messagebox.showinfo("Redo", "Redo functionality not yet implemented.")
+
+    def open_random_map_generator(self):
+        dialog = RandomMapGeneratorDialog(self)
+        if dialog.result: # If user clicked OK
+            # Replace current brushes/things with generated ones
+            self.brushes = dialog.generated_brushes
+            self.things = dialog.generated_things
+            self.lights = [] # Clear lights for new random map
+            self.set_selected_object(None)
+            self.last_saved_map_path = None
+            self.game_view.reset_camera()
+            self.update_views()
+
+    def open_settings(self):
+        settings_window = SettingsWindow(self)
+        settings_window.grab_set() # Make it modal
+        self.wait_window(settings_window)
+        # Settings might affect rendering (e.g., brush display mode), so update
+        self.update_views()
