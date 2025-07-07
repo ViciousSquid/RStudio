@@ -17,7 +17,7 @@ from editor.SettingsWindow import SettingsWindow
 class EditorWindow(tk.Toplevel):
     def __init__(self, master=None):
         super().__init__(master)
-        self.title("R-Studio Editor")
+        self.title("RStudio")
         self.geometry("1200x800")
 
         self.brushes = []
