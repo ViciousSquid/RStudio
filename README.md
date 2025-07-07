@@ -1,9 +1,7 @@
 ## RStudio
 Requires `pyqt5` and `pygame`
-![image](https://github.com/user-attachments/assets/e79e455c-7cd2-4296-befe-0f2fef555504)
 
-
-
+![image](https://github.com/user-attachments/assets/d80fd11c-d8ba-4e0e-a649-189630987afd)
 
 
 Game creation tools made in Python
