@@ -1,6 +1,7 @@
 ## RStudio
 Requires `pyqt5` and `pygame`
-![image](https://github.com/user-attachments/assets/1adc92d1-a8e6-4854-b04a-ebec40a6e419)
+![image](https://github.com/user-attachments/assets/3300d3d2-4b37-4463-974c-04ae93eb047b)
+
 
 
 
