@@ -50,6 +50,7 @@ class GameWindow(QMainWindow):
         
         self.things = []
         player_start_pos = [0, 50, 0]
+        player_start_angle = -90.0
         for thing_data in level_data.get('things', []):
             name = thing_data.get('name')
             pos = thing_data.get('pos', [0,0,0])
@@ -58,11 +59,14 @@ class GameWindow(QMainWindow):
                 self.things.append(Light(pos))
             elif name == "Player Start":
                 player_start = PlayerStart(pos)
+                if 'properties' in thing_data and 'angle' in thing_data['properties']:
+                    player_start_angle = thing_data['properties']['angle']
                 self.things.append(player_start)
                 player_start_pos = player_start.pos
 
         # Position the camera at the player start, slightly above
         self.game_view.camera.pos = [player_start_pos[0], player_start_pos[1] + 20, player_start_pos[2]]
+        self.game_view.camera.yaw = player_start_angle
         print("Level loaded. Player spawned.")
 
 if __name__ == '__main__':
