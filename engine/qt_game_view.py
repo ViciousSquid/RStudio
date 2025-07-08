@@ -3,6 +3,7 @@ import math
 from PyQt5.QtWidgets import QOpenGLWidget
 from PyQt5.QtCore import Qt, QTimer, QPoint
 from OpenGL.GL import *
+from OpenGL.GLU import *
 from OpenGL.GL.shaders import compileProgram, compileShader
 import numpy as np
 import ctypes
@@ -116,6 +117,7 @@ class QtGameView(QOpenGLWidget):
     def __init__(self, editor):
         super().__init__(editor)
         self.editor = editor
+        self.render_mode = "Modern (Shaders)"
         self.brush_display_mode = "Solid Lit"
         self.camera = Camera(); self.camera.pos = [0.0, 150.0, 400.0]
         self.grid_size, self.world_size = 16, 1024
@@ -272,12 +274,66 @@ class QtGameView(QOpenGLWidget):
             glBindVertexArray(self.vao_grid)
             glDrawArrays(GL_LINES, 0, self.grid_indices_count)
             glBindVertexArray(0)
+        glUseProgram(0)
 
     def draw_brushes(self, view, projection):
-        if self.brush_display_mode == "Wireframe":
+        if self.render_mode == "Immediate (Legacy)":
+            self.draw_brushes_immediate(view, projection)
+        elif self.brush_display_mode == "Wireframe":
             self.draw_brushes_simple(view, projection)
         else:
             self.draw_brushes_lit(view, projection)
+
+    def _draw_cube_immediate(self):
+        glBegin(GL_QUADS)
+        # Front Face
+        glVertex3f(-0.5, -0.5, 0.5); glVertex3f(0.5, -0.5, 0.5); glVertex3f(0.5, 0.5, 0.5); glVertex3f(-0.5, 0.5, 0.5)
+        # Back Face
+        glVertex3f(-0.5, -0.5, -0.5); glVertex3f(-0.5, 0.5, -0.5); glVertex3f(0.5, 0.5, -0.5); glVertex3f(0.5, -0.5, -0.5)
+        # Top Face
+        glVertex3f(-0.5, 0.5, -0.5); glVertex3f(-0.5, 0.5, 0.5); glVertex3f(0.5, 0.5, 0.5); glVertex3f(0.5, 0.5, -0.5)
+        # Bottom Face
+        glVertex3f(-0.5, -0.5, -0.5); glVertex3f(0.5, -0.5, -0.5); glVertex3f(0.5, -0.5, 0.5); glVertex3f(-0.5, -0.5, 0.5)
+        # Right face
+        glVertex3f(0.5, -0.5, -0.5); glVertex3f(0.5, 0.5, -0.5); glVertex3f(0.5, 0.5, 0.5); glVertex3f(0.5, -0.5, 0.5)
+        # Left Face
+        glVertex3f(-0.5, -0.5, -0.5); glVertex3f(-0.5, -0.5, 0.5); glVertex3f(-0.5, 0.5, 0.5); glVertex3f(-0.5, 0.5, -0.5)
+        glEnd()
+
+    def draw_brushes_immediate(self, view, projection):
+        glUseProgram(0) # Ensure no shaders are active
+        
+        glMatrixMode(GL_PROJECTION)
+        glLoadMatrixf(np.transpose(projection))
+
+        glMatrixMode(GL_MODELVIEW)
+        glLoadMatrixf(np.transpose(view))
+
+        for brush in self.editor.brushes:
+            pos, size = brush['pos'], brush['size']
+            is_selected = (brush == self.editor.selected_object)
+            is_subtract = (brush.get('operation') == 'subtract')
+
+            glPushMatrix()
+            glTranslatef(pos[0], pos[1], pos[2])
+            glScalef(size[0], size[1], size[2])
+
+            # Draw filled cube
+            color = [1.0,0.4,0.4] if is_selected else ([0.4,0.4,1.0] if is_subtract else [0.8,0.8,0.8])
+            glColor3f(*color)
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+            self._draw_cube_immediate()
+
+            # Draw wireframe outline
+            glColor3f(0.1, 0.1, 0.1)
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
+            glLineWidth(2)
+            self._draw_cube_immediate()
+            glLineWidth(1)
+            
+            glPopMatrix()
+        
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL) # Reset polygon mode
 
     def draw_brushes_lit(self, view, projection):
         glUseProgram(self.shader_lit)
@@ -305,6 +361,7 @@ class QtGameView(QOpenGLWidget):
             glUniform3fv(glGetUniformLocation(self.shader_lit, "object_color"), 1, color)
             glDrawArrays(GL_TRIANGLES, 0, 36)
         glBindVertexArray(0)
+        glUseProgram(0)
 
     def draw_brushes_simple(self, view, projection):
         glUseProgram(self.shader_simple)
@@ -326,6 +383,7 @@ class QtGameView(QOpenGLWidget):
             glUniform3fv(color_loc, 1, color)
             glDrawElements(GL_LINES, 24, GL_UNSIGNED_INT, None)
         glBindVertexArray(0)
+        glUseProgram(0)
 
     def draw_things(self, view, projection):
         glUseProgram(self.shader_sprite)
@@ -353,6 +411,7 @@ class QtGameView(QOpenGLWidget):
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, None)
 
         glBindVertexArray(0)
+        glUseProgram(0)
 
 
     def update_loop(self):
