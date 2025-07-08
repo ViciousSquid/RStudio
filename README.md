@@ -1,11 +1,9 @@
 ## RStudio
+### Game creation tools made in Python
 Requires `pyqt5` and `pygame`
 
 ![image](https://github.com/user-attachments/assets/c1e67214-3f03-42aa-979a-294e307343f4)
 
-
-
-Game creation tools made in Python
 
 * Custom implementation of an OpenGL renderer via PyGame
 * Brush-based engine using CSG subtract
