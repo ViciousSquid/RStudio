@@ -219,6 +219,7 @@ class View2D(QWidget):
                 elif isinstance(obj, Thing): # Thing
                     obj.pos[ax_map[ax1]] = self.original_object_pos[ax_map[ax1]] + drag_delta.x()
                     obj.pos[ax_map[ax2]] = self.original_object_pos[ax_map[ax2]] + drag_delta.y()
+                self.editor.property_editor.set_object(obj) # Refresh property editor
                 self.editor.update_views()
 
             elif self.drag_mode == 'resize':

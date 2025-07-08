@@ -22,7 +22,8 @@ from PyQt5.QtWidgets import (
     QDockWidget,
     QTabWidget,
     QFileDialog,
-    QPushButton
+    QPushButton,
+    QActionGroup
 )
 from PyQt5.QtCore import Qt
 from editor.view_2d import View2D
@@ -132,6 +133,7 @@ class MainWindow(QMainWindow):
         menubar = self.menuBar()
         file_menu = menubar.addMenu('File')
         edit_menu = menubar.addMenu('Edit')
+        render_menu = menubar.addMenu('Render')
         help_menu = menubar.addMenu('Help')
 
         new_random_map_action = QAction('New Random Map...', self, triggered=self.show_random_map_dialog)
@@ -143,8 +145,24 @@ class MainWindow(QMainWindow):
         redo_action = QAction('Redo', self, shortcut='Ctrl+Y', triggered=self.redo)
         edit_menu.addActions([undo_action, redo_action])
 
+        # Render menu actions
+        render_group = QActionGroup(self)
+        modern_action = QAction('Modern (Shaders)', self, checkable=True, checked=True)
+        immediate_action = QAction('Immediate (Legacy)', self, checkable=True)
+        render_group.addAction(modern_action)
+        render_group.addAction(immediate_action)
+        render_menu.addActions(render_group.actions())
+
+        modern_action.triggered.connect(lambda: self.set_render_mode("Modern (Shaders)"))
+        immediate_action.triggered.connect(lambda: self.set_render_mode("Immediate (Legacy)"))
+
         about_action = QAction('About', self, triggered=self.show_about)
         help_menu.addAction(about_action)
+
+    def set_render_mode(self, mode):
+        self.view_3d.render_mode = mode
+        self.display_mode_combobox.setEnabled(mode == "Modern (Shaders)")
+        self.update_views()
 
     def show_about(self):
         QMessageBox.about(self, "About", "Backrooms Editor\nCSG Editing Tool")
