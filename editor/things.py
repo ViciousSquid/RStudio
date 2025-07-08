@@ -27,6 +27,7 @@ class PlayerStart(Thing):
     def __init__(self, pos):
         super().__init__(pos)
         self.name = "Player Start"
+        self.properties['angle'] = 0.0  # Add angle property
         if PlayerStart.pixmap is None:
             self.load_pixmap()
 

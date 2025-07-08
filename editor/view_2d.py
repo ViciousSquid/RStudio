@@ -3,6 +3,7 @@ from PyQt5.QtGui import QPainter, QPen, QColor, QBrush, QPixmap, QImage
 from PyQt5.QtCore import Qt, QPoint, QRect, QSize
 from editor.things import PlayerStart, Light, Thing
 import os
+import math
 
 class View2D(QWidget):
     def __init__(self, parent, editor, view_type):
@@ -40,6 +41,9 @@ class View2D(QWidget):
         add_player_start_action = add_thing_menu.addAction("Player Start")
         add_light_action = add_thing_menu.addAction("Light")
 
+        menu.addSeparator()
+        place_camera_action = menu.addAction("Place camera here")
+
         action = menu.exec_(self.mapToGlobal(event.pos()))
 
         world_pos = self.screen_to_world(event.pos())
@@ -50,6 +54,12 @@ class View2D(QWidget):
         ax_map = {'x': 0, 'y': 1, 'z': 2}
         pos3d[ax_map[ax1]] = snapped_pos.x()
         pos3d[ax_map[ax2]] = snapped_pos.y()
+
+        if action == place_camera_action:
+            self.editor.view_3d.camera.pos[ax_map[ax1]] = snapped_pos.x()
+            self.editor.view_3d.camera.pos[ax_map[ax2]] = snapped_pos.y()
+            self.editor.update_views()
+            return
 
         new_thing = None
         if action == add_player_start_action:
@@ -70,7 +80,7 @@ class View2D(QWidget):
 
         # Check things first as they are generally smaller
         for thing in reversed(self.editor.things):
-            thing_pos_2d = QPoint(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
+            thing_pos_2d = QPoint(int(thing.pos[ax_map[ax1]]), int(thing.pos[ax_map[ax2]]))
             # Use a small radius for picking things
             if (world_pos - thing_pos_2d).manhattanLength() < self.grid_size / self.zoom:
                 return thing
@@ -87,14 +97,35 @@ class View2D(QWidget):
         self.draw_grid(painter)
         self.draw_brushes(painter)
         self.draw_things(painter)
+        self.draw_camera(painter)
         painter.end()
+
+    def draw_camera(self, painter):
+        ax1, ax2 = self.get_axes()
+        ax_map = {'x': 0, 'y': 1, 'z': 2}
+        
+        cam_pos = self.editor.view_3d.camera.pos
+        cam_angle = self.editor.view_3d.camera.yaw
+        
+        pos_2d = QPoint(int(cam_pos[ax_map[ax1]]), int(cam_pos[ax_map[ax2]]))
+        screen_pos = self.world_to_screen(pos_2d)
+
+        painter.setPen(QPen(QColor(255, 0, 255), 2))
+        painter.setBrush(QBrush(QColor(255, 0, 255, 100)))
+        painter.drawEllipse(screen_pos, 8, 8)
+
+        line_len = 30
+        if self.view_type == 'top':
+            end_x = screen_pos.x() + line_len * math.cos(math.radians(cam_angle))
+            end_y = screen_pos.y() + line_len * math.sin(math.radians(cam_angle))
+            painter.drawLine(screen_pos.x(), screen_pos.y(), int(end_x), int(end_y))
 
     def draw_things(self, painter):
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
 
         for thing in self.editor.things:
-            pos_2d = QPoint(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
+            pos_2d = QPoint(int(thing.pos[ax_map[ax1]]), int(thing.pos[ax_map[ax2]]))
             screen_pos = self.world_to_screen(pos_2d)
             is_selected = (thing == self.editor.selected_object)
 
@@ -103,8 +134,11 @@ class View2D(QWidget):
 
             if isinstance(thing, PlayerStart):
                 painter.drawEllipse(screen_pos, 16, 16)
-                painter.drawLine(screen_pos.x() - 16, screen_pos.y(), screen_pos.x() + 16, screen_pos.y())
-                painter.drawLine(screen_pos.x(), screen_pos.y() - 16, screen_pos.x(), screen_pos.y() + 16)
+                angle = thing.properties.get('angle', 0.0)
+                line_len = 20
+                end_x = screen_pos.x() + line_len * math.cos(math.radians(angle))
+                end_y = screen_pos.y() - line_len * math.sin(math.radians(angle))
+                painter.drawLine(screen_pos.x(), screen_pos.y(), int(end_x), int(end_y))
 
             elif isinstance(thing, Light):
                 if Light.pixmap:
