@@ -194,7 +194,7 @@ class MainWindow(QMainWindow):
         self.update_views()
 
     def show_about(self):
-        QMessageBox.about(self, "About", "Backrooms Editor\nCSG Editing Tool")
+        QMessageBox.about(self, "About", "RStudio version 1.0.0")
 
     def show_random_map_dialog(self):
         dialog = RandomMapGeneratorDialog(self)
