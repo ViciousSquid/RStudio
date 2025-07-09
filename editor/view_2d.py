@@ -267,6 +267,14 @@ class View2D(QWidget):
         self.zoom *= zoom_factor
         self.update()
 
+    def zoom_in(self):
+        self.zoom *= 1.1
+        self.update()
+
+    def zoom_out(self):
+        self.zoom /= 1.1
+        self.update()
+
     def get_axes(self):
         # Defines which 3D axes map to the 2D view's X and Y
         if self.view_type == 'top':

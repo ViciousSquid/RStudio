@@ -59,11 +59,12 @@ class MainWindow(QMainWindow):
         self.view_front = View2D(self, self, "front")
         self.property_editor = PropertyEditor(self)
 
-        self.setDockOptions(QMainWindow.AllowNestedDocks | QMainWindow.AllowTabbedDocks)
+        self.setDockOptions(QMainWindow.AnimatedDocks | QMainWindow.AllowNestedDocks | QMainWindow.AllowTabbedDocks)
         self.setTabPosition(Qt.AllDockWidgetAreas, QTabWidget.North)
 
         self.view_3d_dock = QDockWidget("3D View", self)
         self.view_3d_dock.setWidget(self.view_3d)
+        self.view_3d_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.view_3d_dock)
 
         self.right_dock = QDockWidget("2D Views", self)
@@ -72,6 +73,7 @@ class MainWindow(QMainWindow):
         self.right_tabs.addTab(self.view_side, "Side")
         self.right_tabs.addTab(self.view_front, "Front")
         self.right_dock.setWidget(self.right_tabs)
+        self.right_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         self.addDockWidget(Qt.RightDockWidgetArea, self.right_dock)
 
         self.right_tabs.setStyleSheet("""
@@ -79,14 +81,31 @@ class MainWindow(QMainWindow):
             QTabBar::tab { background: #444; color: #ccc; padding: 5px; border: 1px solid #222; }
         """)
 
+        corner_widget = QWidget()
+        corner_layout = QHBoxLayout(corner_widget)
+        corner_layout.setContentsMargins(0, 0, 0, 0)
+
         subtract_button = QPushButton("Subtract")
         subtract_button.setToolTip("Mark the selected brush as subtractive")
-        subtract_button.setStyleSheet("padding: 2px 8px;")
+        subtract_button.setStyleSheet("background-color: orange; padding: 2px 8px; color: black;")
         subtract_button.clicked.connect(self.perform_subtraction)
-        self.right_tabs.setCornerWidget(subtract_button, Qt.TopRightCorner)
+        corner_layout.addWidget(subtract_button)
+
+        zoom_in_button = QPushButton("+")
+        zoom_in_button.setToolTip("Zoom in")
+        zoom_in_button.clicked.connect(self.zoom_in_2d)
+        corner_layout.addWidget(zoom_in_button)
+
+        zoom_out_button = QPushButton("-")
+        zoom_out_button.setToolTip("Zoom out")
+        zoom_out_button.clicked.connect(self.zoom_out_2d)
+        corner_layout.addWidget(zoom_out_button)
+
+        self.right_tabs.setCornerWidget(corner_widget, Qt.TopRightCorner)
 
         self.properties_dock = QDockWidget("Properties", self)
         self.properties_dock.setWidget(self.property_editor)
+        self.properties_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         self.addDockWidget(Qt.RightDockWidgetArea, self.properties_dock)
 
         self.splitDockWidget(self.view_3d_dock, self.right_dock, Qt.Horizontal)
@@ -96,6 +115,16 @@ class MainWindow(QMainWindow):
         self.resizeDocks([self.right_dock, self.properties_dock], [500, 300], Qt.Vertical)
 
         self.setFocus()
+
+    def zoom_in_2d(self):
+        current_view = self.right_tabs.currentWidget()
+        if isinstance(current_view, View2D):
+            current_view.zoom_in()
+
+    def zoom_out_2d(self):
+        current_view = self.right_tabs.currentWidget()
+        if isinstance(current_view, View2D):
+            current_view.zoom_out()
 
     def save_state(self):
         state = {
