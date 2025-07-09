@@ -1,6 +1,6 @@
 import time
 import math
-from PyQt5.QtWidgets import QOpenGLWidget
+from PyQt5.QtWidgets import QOpenGLWidget, QPushButton, QVBoxLayout
 from PyQt5.QtCore import Qt, QTimer, QPoint
 from OpenGL.GL import *
 from OpenGL.GLU import *
@@ -124,8 +124,32 @@ class QtGameView(QOpenGLWidget):
         self.mouselook_active, self.last_mouse_pos = False, QPoint()
         self.last_time = time.time()
         self.textures_loaded = False
+        self.grid_dirty = True # Flag to recreate grid buffers
+
+        # Add zoom buttons
+        self.zoom_in_button = QPushButton("+", self)
+        self.zoom_in_button.setToolTip("Zoom in")
+        self.zoom_in_button.clicked.connect(self.zoom_in)
+        self.zoom_out_button = QPushButton("-", self)
+        self.zoom_out_button.setToolTip("Zoom out")
+        self.zoom_out_button.clicked.connect(self.zoom_out)
+
+        # Layout for zoom buttons
+        button_layout = QVBoxLayout()
+        button_layout.addWidget(self.zoom_in_button)
+        button_layout.addWidget(self.zoom_out_button)
+        button_layout.addStretch()
+        self.setLayout(button_layout)
+        button_layout.setAlignment(Qt.AlignTop | Qt.AlignRight)
+
         timer = QTimer(self); timer.setInterval(16); timer.timeout.connect(self.update_loop); timer.start()
         self.setFocusPolicy(Qt.ClickFocus)
+
+    def zoom_in(self):
+        self.camera.zoom(20)
+
+    def zoom_out(self):
+        self.camera.zoom(-20)
 
     def initializeGL(self):
         glClearColor(0.1, 0.1, 0.15, 1.0)
@@ -136,8 +160,8 @@ class QtGameView(QOpenGLWidget):
             self.shader_sprite = compileProgram(compileShader(vertex_shader_sprite, GL_VERTEX_SHADER), compileShader(fragment_shader_sprite, GL_FRAGMENT_SHADER))
         except Exception as e: print(f"Shader Error: {e}"); return
         self.create_cube_buffers()
-        self.create_grid_buffers()
         self.create_sprite_buffers()
+        self.grid_dirty = True # Mark for creation
 
     def create_cube_buffers(self):
         # Data for a lit cube (with normals)
@@ -182,6 +206,13 @@ class QtGameView(QOpenGLWidget):
 
     def create_grid_buffers(self):
         if self.grid_size <= 0: return
+
+        # Clean up old buffers if they exist, to prevent resource leaks
+        if hasattr(self, 'vbo_grid'):
+            glDeleteBuffers(1, [self.vbo_grid])
+        if hasattr(self, 'vao_grid'):
+            glDeleteVertexArrays(1, [self.vao_grid])
+
         s, g = self.world_size, self.grid_size
         lines = []
         for i in range(-s, s + 1, g):
@@ -190,15 +221,11 @@ class QtGameView(QOpenGLWidget):
         grid_vertices = np.array(lines, dtype=np.float32)
         self.grid_indices_count = len(grid_vertices)
 
-        if not hasattr(self, 'vao_grid'):
-            self.vao_grid = glGenVertexArrays(1)
-
+        self.vao_grid = glGenVertexArrays(1)
         glBindVertexArray(self.vao_grid)
-        if not hasattr(self, 'vbo_grid'):
-            self.vbo_grid = glGenBuffers(1)
-
+        self.vbo_grid = glGenBuffers(1)
         glBindBuffer(GL_ARRAY_BUFFER, self.vbo_grid)
-        glBufferData(GL_ARRAY_BUFFER, grid_vertices.nbytes, grid_vertices, GL_DYNAMIC_DRAW)
+        glBufferData(GL_ARRAY_BUFFER, grid_vertices.nbytes, grid_vertices, GL_STATIC_DRAW)
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, None)
         glEnableVertexAttribArray(0)
         glBindVertexArray(0)
@@ -250,6 +277,10 @@ class QtGameView(QOpenGLWidget):
     def paintGL(self):
         if not self.textures_loaded:
             self.load_textures()
+            
+        if self.grid_dirty:
+            self.create_grid_buffers()
+            self.grid_dirty = False
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
@@ -472,8 +503,7 @@ class QtGameView(QOpenGLWidget):
         self.update()
 
     def update_grid(self):
-        if self.isValid():
-            self.create_grid_buffers()
+        self.grid_dirty = True
         self.update()
 
     def get_object_at_screen_pos(self, x, y):
