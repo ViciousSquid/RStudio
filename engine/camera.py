@@ -60,9 +60,9 @@ class Camera:
 
     def move_forward(self, speed):
         """Moves the camera along its front vector, ignoring the pitch."""
-        rad_yaw = math.radians(self.yaw)
-        self.pos[0] += math.cos(rad_yaw) * speed
-        self.pos[2] += math.sin(rad_yaw) * speed
+        front_vector = self.get_front_vector()
+        self.pos[0] += front_vector[0] * speed
+        self.pos[2] += front_vector[2] * speed
 
     def strafe(self, speed):
         """Moves the camera along its right vector."""
