@@ -84,11 +84,28 @@ dark_stylesheet = """
     QSpinBox::up-button, QSpinBox::down-button {
         subcontrol-origin: border;
         width: 16px;
-        border: none;
+        border-left: 1px solid #666;
+        background-color: #555;
     }
-    QSpinBox::up-arrow, QSpinBox::down-arrow {
-        width: 10px;
-        height: 10px;
+    QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+        background-color: #6a6a6a;
+    }
+    QSpinBox::up-button:pressed, QSpinBox::down-button:pressed {
+        background-color: #0078d7;
+    }
+    QSpinBox::up-arrow {
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        border-bottom: 6px solid #f0f0f0;
+        width: 0px;
+        height: 0px;
+    }
+    QSpinBox::down-arrow {
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        border-top: 6px solid #f0f0f0;
+        width: 0px;
+        height: 0px;
     }
     QCheckBox::indicator {
         width: 13px;
