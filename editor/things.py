@@ -1,94 +1,128 @@
-from PyQt5.QtGui import QPixmap, QImage
-from PyQt5.QtCore import Qt
 import os
-import copy
+from PyQt5.QtGui import QPixmap
+import json
+import ast
+
+def find_subclasses(cls):
+    """Recursively finds all subclasses of a given class."""
+    all_subclasses = []
+    for subclass in cls.__subclasses__():
+        all_subclasses.append(subclass)
+        all_subclasses.extend(find_subclasses(subclass))
+    return all_subclasses
 
 class Thing:
-    """Base class for all placeable objects in the editor."""
-    def __init__(self, pos):
-        self.pos = pos
-        # Properties are used by the Properties Manager
-        self.properties = {'x': pos[0], 'y': pos[1], 'z': pos[2]}
-        self.name = "Thing"
+    pixmap_path = None
+    _pixmap_cache = {} # Class-level cache for loaded pixmaps
 
-    def update_from_properties(self):
-        """Updates the thing's position from its properties dictionary."""
-        self.pos[0] = self.properties.get('x', self.pos[0])
-        self.pos[1] = self.properties.get('y', self.pos[1])
-        self.pos[2] = self.properties.get('z', self.pos[2])
+    def __init__(self, pos=None, properties=None):
+        self.pos = pos if pos is not None else [0, 0, 0]
+        self.properties = properties if properties is not None else {}
+        self.properties.setdefault('type', self.__class__.__name__.lower())
 
-    def copy(self):
-        """Creates a deep copy of the object for the undo/redo system."""
-        return copy.deepcopy(self)
+    @classmethod
+    def get_pixmap(cls):
+        """
+        Gets the QPixmap for this class, loading it from disk and caching it
+        the first time it's requested. This is the new on-demand system.
+        """
+        class_name = cls.__name__
+        if class_name in cls._pixmap_cache:
+            return cls._pixmap_cache[class_name]
+
+        if not cls.pixmap_path:
+            cls._pixmap_cache[class_name] = None
+            return None
+
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+        except NameError:
+            project_root = os.path.abspath(os.path.join(os.getcwd()))
+
+        absolute_path = os.path.join(project_root, cls.pixmap_path)
+
+        pixmap = None
+        if os.path.exists(absolute_path):
+            loaded_pixmap = QPixmap(absolute_path)
+            if not loaded_pixmap.isNull():
+                pixmap = loaded_pixmap
+            else:
+                print(f"Error: QPixmap failed to load image for {class_name} from {absolute_path}")
+        else:
+            print(f"Warning: Sprite file not found for {class_name} at: {absolute_path}")
+
+        cls._pixmap_cache[class_name] = pixmap
+        return pixmap
+
+    def to_dict(self):
+        serializable_props = {k: str(v) for k, v in self.properties.items()}
+        return {'type': self.properties.get('type'), 'pos': self.pos, 'properties': serializable_props}
+
+    @staticmethod
+    def from_dict(data):
+        thing_type = data.get('type')
+        if not thing_type: return None
+
+        properties = data.get('properties', {})
+        for key, value in properties.items():
+            if isinstance(value, str):
+                try: properties[key] = ast.literal_eval(value)
+                except (ValueError, SyntaxError): pass
+
+        for cls in find_subclasses(Thing):
+            if cls().properties.get('type') == thing_type:
+                return cls(pos=data.get('pos'), properties=properties)
+        
+        return Thing(pos=data.get('pos'), properties=properties)
+
+# --- Thing Subclasses (No changes needed below this line) ---
 
 class PlayerStart(Thing):
-    """Represents the player's starting position."""
-    pixmap = None
-    def __init__(self, pos):
-        super().__init__(pos)
-        self.name = "Player Start"
-        self.properties['angle'] = 0.0  # Add angle property
-        if PlayerStart.pixmap is None:
-            self.load_pixmap()
-
-    def load_pixmap(self):
-        """Loads the player start icon."""
-        try:
-            icon_path = os.path.join(os.path.dirname(__file__), '..', 'assets', 'player.png')
-            if os.path.exists(icon_path):
-                PlayerStart.pixmap = QPixmap(icon_path)
-            else:
-                print(f"Warning: Could not find player icon at {icon_path}")
-                self.create_fallback_pixmap()
-        except Exception as e:
-            print(f"Error loading player icon: {e}")
-            self.create_fallback_pixmap()
-
-    def create_fallback_pixmap(self):
-        """Creates a fallback magenta square if the icon is missing."""
-        if PlayerStart.pixmap is None:
-            fallback_image = QImage(32, 32, QImage.Format_ARGB32)
-            fallback_image.fill(Qt.magenta)
-            PlayerStart.pixmap = QPixmap.fromImage(fallback_image)
-
+    pixmap_path = "assets/player.png"
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties.setdefault('type', 'player_start')
+        self.properties.setdefault('angle', 0.0)
 
 class Light(Thing):
-    """Represents a light source."""
-    pixmap = None
-    
-    def __init__(self, pos):
-        super().__init__(pos)
-        self.name = "Light"
-        # Add light-specific properties
-        self.properties.update({'r': 255, 'g': 255, 'b': 255, 'intensity': 1.0})
-        
-        if Light.pixmap is None:
-            self.load_pixmap()
-
-    def load_pixmap(self):
-        """Loads the light icon."""
-        try:
-            icon_path = os.path.join(os.path.dirname(__file__), '..', 'assets', 'light.png')
-            if os.path.exists(icon_path):
-                Light.pixmap = QPixmap(icon_path)
-            else:
-                print(f"Warning: Could not find light icon at {icon_path}")
-                self.create_fallback_pixmap()
-        except Exception as e:
-            print(f"Error loading light icon: {e}")
-            self.create_fallback_pixmap()
-
-    def create_fallback_pixmap(self):
-        """Creates a fallback yellow square if the icon is missing."""
-        if Light.pixmap is None:
-            fallback_image = QImage(32, 32, QImage.Format_ARGB32)
-            fallback_image.fill(Qt.yellow)
-            Light.pixmap = QPixmap.fromImage(fallback_image)
-
+    pixmap_path = "assets/light.png"
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties.setdefault('type', 'light')
+        self.properties.setdefault('color', [255, 255, 200])
+        self.properties.setdefault('intensity', 1.0)
+        self.properties.setdefault('radius', 512.0)
 
     def get_color(self):
-        """Returns the light color as an (r, g, b) tuple normalized to 0-1."""
-        r = self.properties.get('r', 255) / 255.0
-        g = self.properties.get('g', 255) / 255.0
-        b = self.properties.get('b', 255) / 255.0
-        return (r, g, b)
+        color = self.properties.get('color', [255, 255, 255])
+        return [c / 255.0 for c in color]
+
+    def get_intensity(self):
+        return float(self.properties.get('intensity', 1.0))
+
+    def get_radius(self):
+        return float(self.properties.get('radius', 512.0))
+
+class Monster(Thing):
+    pixmap_path = "assets/monster.png"
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties.setdefault('type', 'monster')
+        self.properties.setdefault('id', 0)
+
+class Pickup(Thing):
+    pixmap_path = "assets/item.png"
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties.setdefault('type', 'pickup')
+        self.properties.setdefault('item_type', 'health')
+        self.properties.setdefault('amount', 25)
+
+class Trigger(Thing):
+    pixmap_path = None
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties.setdefault('type', 'trigger')
+        self.properties.setdefault('target', '')
+        self.properties.setdefault('action', 'on_enter')
