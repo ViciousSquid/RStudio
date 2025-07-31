@@ -1,5 +1,6 @@
 import sys
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QSplashScreen
+from PyQt5.QtGui import QPixmap
 from editor.main_window import MainWindow
 
 # --- Dark Theme Stylesheet ---
@@ -122,6 +123,16 @@ if __name__ == "__main__":
     # Apply the global dark stylesheet
     app.setStyleSheet(dark_stylesheet)
     
+    # Create and show the splash screen
+    splash_pixmap = QPixmap('assets/splash.png') # Using an existing asset as the splash image
+    splash = QSplashScreen(splash_pixmap)
+    splash.show()
+    app.processEvents() # Added to ensure splash screen is drawn immediately
+    
     main_win = MainWindow()
     main_win.show()
+    
+    # Close the splash screen once the main window is shown
+    splash.finish(main_win)
+    
     sys.exit(app.exec_())
