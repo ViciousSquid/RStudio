@@ -6,6 +6,7 @@ import random
 import numpy as np
 import configparser
 import math
+import copy
 from PyQt5.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -31,12 +32,13 @@ from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QFont, QIcon
 from editor.view_2d import View2D
 from engine.qt_game_view import QtGameView
-from editor.things import Light, PlayerStart, Thing
+from editor.things import Light, PlayerStart, Thing, Pickup, Monster
 from editor.property_editor import PropertyEditor
 from editor.rand_map_gen_dial import RandomMapGeneratorDialog
 from editor.rand_map_gen import generate
 from editor.asset_browser import AssetBrowser
 from editor.SettingsWindow import SettingsWindow
+from editor.scene_hierarchy import SceneHierarchy
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -54,17 +56,21 @@ class MainWindow(QMainWindow):
         self.things = []
         self.selected_object = None
         self.keys_pressed = set()
-        self.file_path = None # To keep track of the current file
+        self.file_path = None
 
         self.undo_stack = []
         self.redo_stack = []
 
         # --- Create UI Components FIRST ---
         self.view_3d = QtGameView(self)
+        # --- ADDED: Property for 3D view to check ---
+        self.view_3d.show_triggers_as_solid = True 
+        
         self.view_top = View2D(self, self, "top")
         self.view_side = View2D(self, self, "side")
         self.view_front = View2D(self, self, "front")
-        self.property_editor = PropertyEditor(self, self)
+        self.property_editor = PropertyEditor(self)
+        self.scene_hierarchy = SceneHierarchy(self, self)
 
         # --- Create and Arrange Docks ---
         self.setDockOptions(QMainWindow.AnimatedDocks | QMainWindow.AllowNestedDocks | QMainWindow.AllowTabbedDocks)
@@ -98,18 +104,14 @@ class MainWindow(QMainWindow):
         subtract_button.setStyleSheet("background-color: orange; padding: 2px 8px; color: black;")
         subtract_button.clicked.connect(self.perform_subtraction)
         corner_layout.addWidget(subtract_button)
-
-        zoom_in_button = QPushButton("+")
-        zoom_in_button.setToolTip("Zoom in")
-        zoom_in_button.clicked.connect(self.zoom_in_2d)
-        corner_layout.addWidget(zoom_in_button)
-
-        zoom_out_button = QPushButton("-")
-        zoom_out_button.setToolTip("Zoom out")
-        zoom_out_button.clicked.connect(self.zoom_out_2d)
-        corner_layout.addWidget(zoom_out_button)
-
+        
         self.right_tabs.setCornerWidget(corner_widget, Qt.TopRightCorner)
+        
+        self.scene_hierarchy_dock = QDockWidget("Scene", self)
+        self.scene_hierarchy_dock.setWidget(self.scene_hierarchy)
+        self.scene_hierarchy_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.scene_hierarchy_dock)
+        self.scene_hierarchy_dock.setVisible(False)
 
         self.properties_dock = QDockWidget("Properties", self)
         self.properties_dock.setWidget(self.property_editor)
@@ -123,22 +125,23 @@ class MainWindow(QMainWindow):
         self.asset_browser_dock.setFloating(True)
         self.asset_browser_dock.setVisible(False)
         self.addDockWidget(Qt.RightDockWidgetArea, self.asset_browser_dock)
-
+        
         self.splitDockWidget(self.view_3d_dock, self.right_dock, Qt.Horizontal)
+        self.tabifyDockWidget(self.properties_dock, self.scene_hierarchy_dock)
         self.splitDockWidget(self.right_dock, self.properties_dock, Qt.Vertical)
 
         self.resizeDocks([self.view_3d_dock, self.right_dock], [1000, 600], Qt.Horizontal)
         self.resizeDocks([self.right_dock, self.properties_dock], [600, 300], Qt.Vertical)
+        
+        self.properties_dock.raise_()
 
-        # --- Create Menus and Toolbars AFTER Docks Exist ---
         self.create_menu_bar()
         self.create_toolbars()
         self.create_status_bar()
 
         self.setFocus()
         self.update_global_font()
-
-        # Initialize with a base state for undo
+        
         self.save_state()
 
     @staticmethod
@@ -203,7 +206,20 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(QAction('Undo', self, shortcut='Ctrl+Z', triggered=self.undo))
         edit_menu.addAction(QAction('Redo', self, shortcut='Ctrl+Y', triggered=self.redo))
 
-        view_menu.addActions([self.view_3d_dock.toggleViewAction(), self.right_dock.toggleViewAction(), self.properties_dock.toggleViewAction()])
+        view_menu.addActions([
+            self.view_3d_dock.toggleViewAction(), 
+            self.right_dock.toggleViewAction(), 
+            self.properties_dock.toggleViewAction(),
+            self.scene_hierarchy_dock.toggleViewAction()
+        ])
+        
+
+        view_menu.addSeparator()
+        toggle_triggers_action = QAction('Solid Triggers', self, checkable=True)
+        toggle_triggers_action.setChecked(self.view_3d.show_triggers_as_solid)
+        toggle_triggers_action.triggered.connect(self.toggle_trigger_display)
+        view_menu.addAction(toggle_triggers_action)
+
 
         tools_menu.addAction(QAction('Random Map Generator...', self, triggered=self.show_random_map_dialog))
 
@@ -302,7 +318,7 @@ class MainWindow(QMainWindow):
         self.grid_size_spinbox.valueChanged.connect(self.set_grid_size)
 
         self.world_size_spinbox = QSpinBox()
-        self.world_size_spinbox.setRange(256, 8192)
+        self.world_size_spinbox.setRange(512, 16384)
         self.world_size_spinbox.setValue(1024)
         self.world_size_spinbox.setSingleStep(1)
         self.world_size_spinbox.valueChanged.connect(self.set_world_size)
@@ -369,6 +385,7 @@ class MainWindow(QMainWindow):
         self.things = [Thing.from_dict(t_data) for t_data in state.get('things', [])]
         self.set_selected_object(None)
         self.update_views()
+        self.update_scene_hierarchy()
 
     def undo(self):
         if len(self.undo_stack) > 1:
@@ -382,20 +399,22 @@ class MainWindow(QMainWindow):
             self.undo_stack.append(state_json)
             self.restore_state(state_json)
 
+    def select_object(self, obj):
+        self.set_selected_object(obj)
+
     def set_selected_object(self, obj):
         self.selected_object = obj
-        if self.property_editor:
-            self.property_editor.set_object(obj)
+        self.property_editor.set_object(obj)
+        if hasattr(self, 'scene_hierarchy'):
+            self.scene_hierarchy.select_item_by_data(obj)
         self.update_views()
 
     def set_render_mode(self, mode):
         self.view_3d.render_mode = mode
-        if hasattr(self, 'display_mode_combobox'):
-            self.display_mode_combobox.setEnabled(mode == "Modern (Shaders)")
         self.update_views()
 
     def show_about(self):
-        QMessageBox.about(self, "About R-Studio", "R-Studio version 1.0.2\nA hobby level editor.")
+        QMessageBox.about(self, "About R-Studio", "R-Studio version 1.0.2\nhttps://github.com/ViciousSquid/RStudio")
 
     def new_map(self):
         self.save_state()
@@ -404,6 +423,7 @@ class MainWindow(QMainWindow):
         self.file_path = None
         self.set_selected_object(None)
         self.update_views()
+        self.update_scene_hierarchy()
 
     def show_random_map_dialog(self):
         dialog = RandomMapGeneratorDialog(self)
@@ -415,6 +435,7 @@ class MainWindow(QMainWindow):
             self.set_selected_object(None)
             self.save_state()
             self.update_views()
+            self.update_scene_hierarchy()
             print("Generated new random map.")
 
     def convert_grid_to_level(self, grid, cell_size=128, wall_height=128):
@@ -466,7 +487,48 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, "Invalid Selection", "Please select a brush to make it subtractive.")
 
+    # --- ADDED: Method to handle the new menu toggle ---
+    def toggle_trigger_display(self, checked):
+        """Tells the 3D view to render triggers as solid or wireframe."""
+        self.view_3d.show_triggers_as_solid = checked
+        self.view_3d.update()
+
     def keyPressEvent(self, event):
+        if self.selected_object:
+            if event.key() == Qt.Key_Delete:
+                self.save_state()
+                if isinstance(self.selected_object, dict):
+                    self.brushes.remove(self.selected_object)
+                else: # Thing
+                    self.things.remove(self.selected_object)
+                self.set_selected_object(None)
+                self.update_scene_hierarchy()
+                return
+
+            if event.key() == Qt.Key_Space:
+                self.save_state()
+                if isinstance(self.selected_object, dict):
+                    new_obj = copy.deepcopy(self.selected_object)
+                    self.brushes.append(new_obj)
+                else: # Thing
+                    new_obj = copy.copy(self.selected_object)
+                    self.things.append(new_obj)
+                
+                current_view = self.right_tabs.currentWidget()
+                if isinstance(current_view, View2D):
+                    axis_map = {'top': ('x', 'z'), 'side': ('y', 'z'), 'front': ('x', 'y')}
+                    pos_map = {'x': 0, 'y': 1, 'z': 2}
+                    ax1_name, ax2_name = axis_map.get(current_view.view_type, ('x', 'z'))
+                    offset = self.grid_size_spinbox.value()
+                    
+                    pos_ref = new_obj['pos'] if isinstance(new_obj, dict) else new_obj.pos
+                    pos_ref[pos_map[ax1_name]] += offset
+                    pos_ref[pos_map[ax2_name]] += offset
+                
+                self.set_selected_object(new_obj)
+                self.update_scene_hierarchy()
+                return
+
         if event.key() == Qt.Key_T:
             if not self.asset_browser_dock.isVisible():
                 screen_rect = QApplication.desktop().screenGeometry()
@@ -475,18 +537,20 @@ class MainWindow(QMainWindow):
                 new_x = center_point.x() - dock_size_hint.width() / 2 + 200
                 new_y = center_point.y() - dock_size_hint.height() / 2
                 self.asset_browser_dock.move(int(new_x), int(new_y))
-
             self.asset_browser_dock.setVisible(not self.asset_browser_dock.isVisible())
             return
+            
         if event.key() == Qt.Key_Escape and self.selected_object:
             self.set_selected_object(None)
             return
+            
         self.keys_pressed.add(event.key())
         super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event):
         if event.key() in self.keys_pressed:
             self.keys_pressed.remove(event.key())
+        self.update_views()
         super().keyReleaseEvent(event)
 
     def toggle_snap_to_grid(self, state):
@@ -499,6 +563,10 @@ class MainWindow(QMainWindow):
         self.view_top.update()
         self.view_side.update()
         self.view_front.update()
+
+    def update_scene_hierarchy(self):
+        if hasattr(self, 'scene_hierarchy'):
+            self.scene_hierarchy.update_list(self.brushes, self.things)
 
     def _get_level_data(self):
         return {'brushes': self.brushes, 'things': [t.to_dict() for t in self.things]}
@@ -552,6 +620,7 @@ class MainWindow(QMainWindow):
         self.redo_stack.clear()
         self.save_state()
         self.update_views()
+        self.update_scene_hierarchy()
         print(f"Level loaded from {filePath}")
 
     def quicksave_and_launch(self):

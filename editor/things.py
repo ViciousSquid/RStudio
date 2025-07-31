@@ -19,6 +19,7 @@ class Thing:
         self.pos = pos if pos is not None else [0, 0, 0]
         self.properties = properties if properties is not None else {}
         self.properties.setdefault('type', self.__class__.__name__.lower())
+        self.properties.setdefault('name', '') # <-- ADDED: Ensures all things have a name property
 
     @classmethod
     def get_pixmap(cls):
@@ -71,18 +72,24 @@ class Thing:
                 except (ValueError, SyntaxError): pass
 
         for cls in find_subclasses(Thing):
-            if cls().properties.get('type') == thing_type:
+            # Use lower() for case-insensitive matching with type property
+            if cls.__name__.lower() == thing_type:
                 return cls(pos=data.get('pos'), properties=properties)
         
-        return Thing(pos=data.get('pos'), properties=properties)
+        # Fallback for base Thing if no specific subclass matches
+        if thing_type == 'thing':
+            return Thing(pos=data.get('pos'), properties=properties)
+        
+        print(f"Warning: Unknown thing type '{thing_type}' found in map file.")
+        return None
 
-# --- Thing Subclasses (No changes needed below this line) ---
+# --- Thing Subclasses ---
 
 class PlayerStart(Thing):
     pixmap_path = "assets/player.png"
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
-        self.properties.setdefault('type', 'player_start')
+        self.properties.setdefault('type', 'playerstart')
         self.properties.setdefault('angle', 0.0)
 
 class Light(Thing):
@@ -105,14 +112,14 @@ class Light(Thing):
         return float(self.properties.get('radius', 512.0))
 
 class Monster(Thing):
-    pixmap_path = "assets/monster.png"
+    pixmap_path = "assets/monster.png" # Assuming you have this asset
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'monster')
         self.properties.setdefault('id', 0)
 
 class Pickup(Thing):
-    pixmap_path = "assets/item.png"
+    pixmap_path = "assets/pickup.png" # Changed from item.png to match assets
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'pickup')

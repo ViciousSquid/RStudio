@@ -1,408 +1,496 @@
+import numpy as np
 from PyQt5.QtWidgets import QWidget, QMenu
-from PyQt5.QtGui import QPainter, QPainterPath, QPen, QColor, QBrush, QPixmap
-from PyQt5.QtCore import QPoint, QRect, Qt, QSize
-from editor.things import (PlayerStart, Light, Thing, Monster,
-                           Pickup, Trigger)
-import os
-import math
+from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF
+from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint
+from editor.things import Thing, Light, PlayerStart, Pickup
 
 class View2D(QWidget):
-    def __init__(self, parent, editor, view_type):
-        super().__init__(parent)
+    def __init__(self, editor, main_window, view_type):
+        super().__init__()
         self.editor = editor
+        self.main_window = main_window
         self.view_type = view_type
-
-        self.zoom = 1.0
-        self.pan_offset = QPoint(0, 0)
-        self.world_size = 1024
+        
+        self.zoom_factor = 1.0
+        self.pan_offset = QPointF(0.0, 0.0)
+        self.last_pan_pos = QPoint()
+        
         self.grid_size = 16
+        self.world_size = 1024
         self.snap_to_grid_enabled = True
 
-        self.mouse_pos = QPoint(0, 0)
-        self.last_mouse_pos = QPoint(0, 0)
+        # State variables for mouse actions
         self.is_panning = False
-
-        self.drag_mode = 'none'
-        self.resize_handle = ''
-        self.hot_object = None
-        self.drag_start_pos = QPoint(0,0)
-        self.original_object_pos = [0,0,0]
-        self.original_brush_rect = QRect(0,0,0,0)
+        self.is_drawing_brush = False
+        self.is_dragging_object = False
+        self.is_resizing_brush = False
+        self.resize_handle_ix = -1
+        
+        self.draw_start_pos = QPointF()
+        self.draw_current_pos = QPointF()
+        self.drag_start_pos = QPointF()
+        self.drag_offset = QPointF()
 
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.ClickFocus)
 
-    def contextMenuEvent(self, event):
-        menu = QMenu(self)
-        add_thing_menu = menu.addMenu("Add Thing")
-        add_player_start_action = add_thing_menu.addAction("Player Start")
-        add_light_action = add_thing_menu.addAction("Light")
-        add_monster_action = add_thing_menu.addAction("Monster")
-        add_pickup_action = add_thing_menu.addAction("Pickup")
+    def get_axes(self):
+        if self.view_type == 'top': return 'x', 'z'
+        elif self.view_type == 'side': return 'y', 'z'
+        elif self.view_type == 'front': return 'x', 'y'
+        return None, None
+        
+    def world_to_screen(self, p):
+        center_x, center_y = self.width() / 2, self.height() / 2
+        screen_x = center_x + (p.x() - self.pan_offset.x()) * self.zoom_factor
+        screen_y = center_y + (p.y() - self.pan_offset.y()) * self.zoom_factor
+        return QPointF(screen_x, screen_y)
 
-        menu.addSeparator()
+    def screen_to_world(self, p):
+        center_x, center_y = self.width() / 2, self.height() / 2
+        world_x = (p.x() - center_x) / self.zoom_factor + self.pan_offset.x()
+        world_y = (p.y() - center_y) / self.zoom_factor + self.pan_offset.y()
+        return QPointF(world_x, world_y)
 
-        convert_to_trigger_action = None
-        selected = self.editor.selected_object
-        if isinstance(selected, dict) and selected.get('type') != 'trigger':
-            convert_to_trigger_action = menu.addAction("Convert Brush to Trigger")
+    def snap_to_grid(self, pos):
+        if not self.snap_to_grid_enabled:
+            return pos
+        grid = self.grid_size
+        return QPointF(round(pos.x() / grid) * grid, round(pos.y() / grid) * grid)
 
-        place_camera_action = menu.addAction("Place camera here")
-        action = menu.exec_(self.mapToGlobal(event.pos()))
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(50, 50, 50))
+        
+        self.draw_grid(painter)
+        self.draw_brushes(painter)
+        self.draw_things(painter)
 
-        world_pos = self.screen_to_world(event.pos())
-        snapped_pos = self.snap_to_grid(world_pos)
+        # --- MODIFIED: Draw camera in all 2D views ---
+        self.draw_camera(painter)
 
-        pos3d = [0, 0, 0]
+        if self.is_drawing_brush:
+            pen = QPen(QColor(255, 255, 0), 1, Qt.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            start_screen = self.world_to_screen(self.draw_start_pos)
+            current_screen = self.world_to_screen(self.draw_current_pos)
+            painter.drawRect(QRectF(start_screen, current_screen).normalized())
+
+    def draw_grid(self, painter):
+        grid_color = QColor(70, 70, 70)
+        thick_grid_color = QColor(90, 90, 90)
+        world_origin_color = QColor(0, 255, 0)
+        painter.setPen(QPen(grid_color, 1))
+
+        screen_rect = self.rect()
+        top_left_world = self.screen_to_world(screen_rect.topLeft())
+        bottom_right_world = self.screen_to_world(screen_rect.bottomRight())
+        
+        grid = self.grid_size
+        if grid * self.zoom_factor < 4: return 
+
+        start_x = int(top_left_world.x() / grid) * grid
+        end_x = int(bottom_right_world.x() / grid) * grid
+        start_y = int(top_left_world.y() / grid) * grid
+        end_y = int(bottom_right_world.y() / grid) * grid
+
+        for x in range(start_x, end_x + 1, grid):
+            is_thick = (x % (grid * 8)) == 0
+            is_origin = x == 0
+            pen = QPen(thick_grid_color if is_thick else grid_color, 1)
+            if is_origin: pen.setColor(world_origin_color)
+            painter.setPen(pen)
+            p1 = self.world_to_screen(QPointF(x, top_left_world.y()))
+            p2 = self.world_to_screen(QPointF(x, bottom_right_world.y()))
+            painter.drawLine(p1, p2)
+        
+        for y in range(start_y, end_y + 1, grid):
+            is_thick = (y % (grid * 8)) == 0
+            is_origin = y == 0
+            pen = QPen(thick_grid_color if is_thick else grid_color, 1)
+            if is_origin: pen.setColor(world_origin_color)
+            painter.setPen(pen)
+            p1 = self.world_to_screen(QPointF(top_left_world.x(), y))
+            p2 = self.world_to_screen(QPointF(bottom_right_world.x(), y))
+            painter.drawLine(p1, p2)
+
+    def draw_brushes(self, painter):
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
-        pos3d[ax_map[ax1]] = snapped_pos.x()
-        pos3d[ax_map[ax2]] = snapped_pos.y()
+        
+        for brush in self.editor.brushes:
+            is_selected = (brush == self.editor.selected_object)
+            is_trigger = brush.get('is_trigger', False)
+            is_subtractive = brush.get('operation') == 'subtract'
+
+            pen_color = QColor(0, 255, 255, 150) if is_trigger else (QColor(255, 0, 0) if is_subtractive else QColor(0, 0, 255))
+            if is_selected:
+                pen_color = QColor(255, 255, 0)
+            
+            pen = QPen(pen_color, 2 if is_selected else 1)
+            if is_trigger: pen.setStyle(Qt.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+
+            pos = brush['pos']
+            size = brush['size']
+            
+            w_pos = QPointF(pos[ax_map[ax1]] - size[ax_map[ax1]]/2, pos[ax_map[ax2]] - size[ax_map[ax2]]/2)
+            w_size = QPointF(size[ax_map[ax1]], size[ax_map[ax2]])
+            p1 = self.world_to_screen(w_pos)
+            p2 = self.world_to_screen(w_pos + w_size)
+            screen_rect = QRectF(p1, p2).normalized()
+            painter.drawRect(screen_rect)
+
+            if is_trigger:
+                painter.setPen(QColor(255, 255, 255, 180))
+                font = painter.font()
+                font.setPointSize(10)
+                painter.setFont(font)
+                painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, "t r i g g e r")
+
+            if is_selected:
+                self.draw_resize_handles(painter, screen_rect)
+
+    def draw_things(self, painter):
+        ax1, ax2 = self.get_axes()
+        ax_map = {'x': 0, 'y': 1, 'z': 2}
+        
+        for thing in self.editor.things:
+            pixmap = thing.get_pixmap()
+            if not pixmap: continue
+
+            w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
+            s_pos = self.world_to_screen(w_pos)
+            
+            pixmap_size = pixmap.size()
+            draw_rect = QRectF(s_pos.x() - pixmap_size.width() / 2, s_pos.y() - pixmap_size.height() / 2,
+                               pixmap_size.width(), pixmap_size.height())
+            
+            painter.drawPixmap(draw_rect.toRect(), pixmap)
+
+            if thing == self.editor.selected_object:
+                painter.setPen(QPen(QColor(255, 255, 0), 2, Qt.DotLine))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRect(draw_rect.adjusted(-2, -2, 2, 2))
+    
+    # --- THIS IS THE CORRECTED METHOD ---
+    def draw_camera(self, painter):
+        camera = self.editor.view_3d.camera
+        ax1, ax2 = self.get_axes()
+        ax_map = {'x': 0, 'y': 1, 'z': 2}
+
+        # Determine which 3D camera coordinates map to this view's 2D plane
+        cam_pos_2d = QPointF(camera.pos[ax_map[ax1]], camera.pos[ax_map[ax2]])
+        screen_pos = self.world_to_screen(cam_pos_2d)
+
+        # Determine the correct angle to use for this view
+        yaw = camera.yaw
+        pitch = camera.pitch
+        
+        if self.view_type == 'top': # X/Z plane, use Yaw
+            angle_deg = -yaw - 90
+        elif self.view_type == 'front': # X/Y plane, also use Yaw for direction
+            angle_deg = -yaw - 90
+        elif self.view_type == 'side': # Y/Z plane, use Pitch for direction
+            angle_deg = -pitch - 90
+        else:
+            return
+
+        fov = camera.fov
+        cone_length = 200
+        
+        # Calculate angles for the view cone
+        left_angle_rad = np.radians(angle_deg - fov / 2)
+        right_angle_rad = np.radians(angle_deg + fov / 2)
+
+        left_point = QPointF(cam_pos_2d.x() + cone_length * np.cos(left_angle_rad),
+                             cam_pos_2d.y() + cone_length * np.sin(left_angle_rad))
+        right_point = QPointF(cam_pos_2d.x() + cone_length * np.cos(right_angle_rad),
+                              cam_pos_2d.y() + cone_length * np.sin(right_angle_rad))
+
+        screen_left = self.world_to_screen(left_point)
+        screen_right = self.world_to_screen(right_point)
+
+        # Draw the filled cone
+        cone_poly = QPolygonF([screen_pos, screen_left, screen_right])
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 25))
+        painter.drawPolygon(cone_poly)
+        
+        # Draw the camera icon
+        painter.setPen(QPen(QColor(255, 255, 255), 2))
+        painter.setBrush(QColor(0, 0, 0, 150))
+        painter.drawEllipse(screen_pos, 8, 8)
+        
+        # Draw the direction line
+        forward_angle_rad = np.radians(angle_deg)
+        forward_point = QPointF(cam_pos_2d.x() + 20 * np.cos(forward_angle_rad),
+                                cam_pos_2d.y() + 20 * np.sin(forward_angle_rad))
+        screen_forward = self.world_to_screen(forward_point)
+        painter.drawLine(screen_pos, screen_forward)
+
+    def draw_resize_handles(self, painter, rect):
+        painter.setPen(QPen(QColor(255, 255, 255), 1))
+        painter.setBrush(QBrush(QColor(255, 255, 255)))
+        
+        handle_size = 8
+        handles = self.get_resize_handles(rect)
+        for handle in handles:
+            handle_rect = QRectF(handle.x() - handle_size/2, handle.y() - handle_size/2, handle_size, handle_size)
+            painter.drawRect(handle_rect)
+
+    def get_resize_handles(self, rect):
+        return [
+            rect.topLeft(), rect.topRight(), rect.bottomLeft(), rect.bottomRight(),
+            QPointF(rect.center().x(), rect.top()), QPointF(rect.center().x(), rect.bottom()),
+            QPointF(rect.left(), rect.center().y()), QPointF(rect.right(), rect.center().y())
+        ]
+
+    def mousePressEvent(self, event):
+        world_pos = self.screen_to_world(event.pos())
+
+        if event.button() == Qt.RightButton:
+            if not self.is_panning:
+                self.contextMenuEvent(event)
+            return
+
+        elif event.button() == Qt.LeftButton:
+            self.resize_handle_ix = self.get_handle_at(event.pos())
+            
+            if self.resize_handle_ix != -1 and isinstance(self.editor.selected_object, dict):
+                self.is_resizing_brush = True
+            else:
+                clicked_object = self.get_object_at(world_pos)
+                self.editor.set_selected_object(clicked_object)
+
+                if clicked_object:
+                    self.is_dragging_object = True
+                    self.drag_start_pos = world_pos
+                    ax1, ax2 = self.get_axes()
+                    ax_map = {'x': 0, 'y': 1, 'z': 2}
+                    
+                    pos_ref = clicked_object['pos'] if isinstance(clicked_object, dict) else clicked_object.pos
+                    obj_pos_2d = QPointF(pos_ref[ax_map[ax1]], pos_ref[ax_map[ax2]])
+                    self.drag_offset = obj_pos_2d - world_pos
+                else:
+                    self.is_drawing_brush = True
+                    self.draw_start_pos = self.snap_to_grid(world_pos)
+                    self.draw_current_pos = self.draw_start_pos
+        
+        self.update()
+
+    def mouseMoveEvent(self, event):
+        world_pos = self.screen_to_world(event.pos())
+        
+        if not event.buttons():
+            handle_ix = self.get_handle_at(event.pos())
+            if handle_ix != -1:
+                if handle_ix in [0, 3]:
+                    self.setCursor(Qt.SizeFDiagCursor)
+                elif handle_ix in [1, 2]:
+                    self.setCursor(Qt.SizeBDiagCursor)
+                elif handle_ix in [4, 5]:
+                    self.setCursor(Qt.SizeVerCursor)
+                elif handle_ix in [6, 7]:
+                    self.setCursor(Qt.SizeHorCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
+
+        if event.buttons() & Qt.RightButton:
+             self.is_panning = True
+             if self.last_pan_pos.isNull(): self.last_pan_pos = event.pos()
+             delta = event.pos() - self.last_pan_pos
+             self.last_pan_pos = event.pos()
+             self.pan_offset -= QPointF(delta.x() / self.zoom_factor, delta.y() / self.zoom_factor)
+        
+        elif self.is_drawing_brush:
+            self.draw_current_pos = self.snap_to_grid(world_pos)
+
+        elif self.is_dragging_object:
+            ax1, ax2 = self.get_axes()
+            ax_map = {'x': 0, 'y': 1, 'z': 2}
+            new_obj_pos = self.snap_to_grid(world_pos + self.drag_offset)
+            
+            obj = self.editor.selected_object
+            if obj:
+                pos_ref = obj['pos'] if isinstance(obj, dict) else obj.pos
+                pos_ref[ax_map[ax1]] = new_obj_pos.x()
+                pos_ref[ax_map[ax2]] = new_obj_pos.y()
+                self.editor.property_editor.set_object(obj) 
+        
+        elif self.is_resizing_brush:
+            self.resize_brush(world_pos)
+            self.editor.property_editor.set_object(self.editor.selected_object)
+        
+        self.update()
+
+    def mouseReleaseEvent(self, event):
+        action_taken = self.is_dragging_object or self.is_resizing_brush
+        
+        if event.button() == Qt.RightButton:
+            self.is_panning = False
+            self.last_pan_pos = QPoint()
+
+        elif event.button() == Qt.LeftButton:
+            if self.is_dragging_object: self.is_dragging_object = False
+            if self.is_resizing_brush: self.is_resizing_brush = False
+
+            if self.is_drawing_brush:
+                self.is_drawing_brush = False
+                rect = QRectF(self.draw_start_pos, self.draw_current_pos).normalized()
+
+                if rect.width() >= self.grid_size and rect.height() >= self.grid_size:
+                    action_taken = True
+                    self.main_window.save_state()
+                    ax1, ax2 = self.get_axes()
+                    ax_map = {'x': 0, 'y': 1, 'z': 2}
+                    pos = [0, 0, 0]
+                    size = [self.grid_size, 128, self.grid_size]
+                    pos[ax_map[ax1]] = rect.center().x()
+                    pos[ax_map[ax2]] = rect.center().y()
+                    size[ax_map[ax1]] = rect.width()
+                    size[ax_map[ax2]] = rect.height()
+
+                    new_brush = {'pos': pos, 'size': size, 'textures': {f: 'default.png' for f in ['north','south','east','west','top','down']}}
+                    self.editor.brushes.append(new_brush)
+                    self.editor.set_selected_object(new_brush)
+                    self.editor.update_scene_hierarchy()
+            
+            if action_taken:
+                self.main_window.save_state()
+        
+        self.update()
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        
+        add_light_action = menu.addAction("Add Light")
+        add_player_start_action = menu.addAction("Add Player Start")
+        add_pickup_action = menu.addAction("Add Pickup")
+
+        action = menu.exec_(self.mapToGlobal(event.pos()))
+        
+        world_pos = self.snap_to_grid(self.screen_to_world(event.pos()))
+        ax1, ax2 = self.get_axes()
+        ax_map = {'x': 0, 'y': 1, 'z': 2}
+        pos_3d = [0, 40, 0]
+        pos_3d[ax_map[ax1]] = world_pos.x()
+        pos_3d[ax_map[ax2]] = world_pos.y()
+        if self.view_type == 'top':
+            pos_3d[1] = 40
 
         new_thing = None
-        if action == add_player_start_action: new_thing = PlayerStart(pos=pos3d)
-        elif action == add_light_action: new_thing = Light(pos=pos3d)
-        elif action == add_monster_action: new_thing = Monster(pos=pos3d)
-        elif action == add_pickup_action: new_thing = Pickup(pos=pos3d)
-        elif action == place_camera_action:
-            cam_pos = self.editor.view_3d.camera.pos
-            cam_pos[ax_map[ax1]] = snapped_pos.x()
-            cam_pos[ax_map[ax2]] = snapped_pos.y()
-            self.editor.update_views()
-            return
-        elif action == convert_to_trigger_action and isinstance(self.editor.selected_object, dict):
-            self.editor.save_state()
-            brush = self.editor.selected_object
-            brush['type'] = 'trigger'
-            trigger_defaults = Trigger(pos=[0,0,0]).properties
-            for key, value in trigger_defaults.items():
-                brush.setdefault(key, value)
-            self.editor.property_editor.set_object(brush)
-            self.editor.update_views()
-            return
+        if action == add_light_action:
+            new_thing = Light(pos=pos_3d)
+        elif action == add_player_start_action:
+            new_thing = PlayerStart(pos=pos_3d)
+        elif action == add_pickup_action:
+            new_thing = Pickup(pos=pos_3d)
 
         if new_thing:
-            self.editor.save_state()
+            self.main_window.save_state()
             self.editor.things.append(new_thing)
             self.editor.set_selected_object(new_thing)
-            self.editor.update_views()
+            self.editor.update_scene_hierarchy()
+            self.update()
+
+    def wheelEvent(self, event):
+        if event.angleDelta().y() > 0: self.zoom_in()
+        else: self.zoom_out()
 
     def get_object_at(self, world_pos):
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
 
         for thing in reversed(self.editor.things):
-            thing_pos_2d = QPoint(int(thing.pos[ax_map[ax1]]), int(thing.pos[ax_map[ax2]]))
-            if (world_pos - thing_pos_2d).manhattanLength() < self.grid_size / self.zoom * 2:
-                return thing
-
-        for brush in reversed(self.editor.brushes):
-            if self.get_brush_rect_2d(brush).contains(world_pos):
-                return brush
-        return None
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(50, 50, 50))
-        self.draw_grid(painter)
-        self.draw_brushes(painter)
-        self.draw_things(painter)
-        self.draw_camera(painter)
-        painter.end()
-
-    def draw_camera(self, painter):
-        ax1, ax2 = self.get_axes()
-        ax_map = {'x': 0, 'y': 1, 'z': 2}
-        cam = self.editor.view_3d.camera
-        fov = 45.0
-        pos_2d = QPoint(int(cam.pos[ax_map[ax1]]), int(cam.pos[ax_map[ax2]]))
-        screen_pos = self.world_to_screen(pos_2d)
-
-        painter.setPen(QPen(QColor(255, 0, 255), 2))
-        painter.setBrush(QBrush(QColor(255, 0, 255, 20)))
-        painter.drawEllipse(screen_pos, 8, 8)
-
-        if self.view_type == 'top':
-            angle_rad = math.radians(cam.yaw)
-            fov_rad = math.radians(fov)
-            line_len = 100 / self.zoom
-            p1 = screen_pos
-            p2 = screen_pos + QPoint(int(line_len * math.cos(angle_rad - fov_rad / 2)), int(-line_len * math.sin(angle_rad - fov_rad / 2)))
-            p3 = screen_pos + QPoint(int(line_len * math.cos(angle_rad + fov_rad / 2)), int(-line_len * math.sin(angle_rad + fov_rad / 2)))
-            path = QPainterPath(); path.moveTo(p1); path.lineTo(p2); path.lineTo(p3); path.closeSubpath()
-            painter.drawPath(path)
-
-    def draw_things(self, painter):
-        ax1, ax2 = self.get_axes()
-        ax_map = {'x': 0, 'y': 1, 'z': 2}
-        for thing in self.editor.things:
-            pos_2d = QPoint(int(thing.pos[ax_map[ax1]]), int(thing.pos[ax_map[ax2]]))
-            screen_pos = self.world_to_screen(pos_2d)
-            is_selected = (thing == self.editor.selected_object)
-
             pixmap = thing.get_pixmap()
+            if not pixmap: continue
+            
+            w_2d, h_2d = pixmap.width(), pixmap.height() 
+            
+            thing_w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
+            
+            thing_rect = QRectF(thing_w_pos.x() - w_2d/2, thing_w_pos.y() - h_2d/2, w_2d, h_2d)
 
-            if pixmap and not pixmap.isNull():
-                size = pixmap.size()
-                painter.drawPixmap(screen_pos.x() - size.width() // 2, screen_pos.y() - size.height() // 2, pixmap)
-            else:
-                painter.setPen(QPen(QColor(255,0,0)))
-                painter.drawRect(screen_pos.x() - 8, screen_pos.y() - 8, 16, 16)
+            if thing_rect.contains(world_pos):
+                return thing
+                
+        for brush in reversed(self.editor.brushes):
+            pos = brush['pos']
+            size = brush['size']
+            p1 = QPointF(pos[ax_map[ax1]] - size[ax_map[ax1]]/2, pos[ax_map[ax2]] - size[ax_map[ax2]]/2)
+            p2 = QPointF(pos[ax_map[ax1]] + size[ax_map[ax1]]/2, pos[ax_map[ax2]] + size[ax_map[ax2]]/2)
+            brush_rect = QRectF(p1, p2).normalized()
+            if brush_rect.contains(world_pos):
+                return brush
 
-            if isinstance(thing, PlayerStart):
-                painter.setPen(QPen(QColor(255, 255, 0), 2))
-                angle = float(thing.properties.get('angle', 0.0))
-                line_len = 20
-                end_x = screen_pos.x() + line_len * math.cos(math.radians(angle))
-                end_y = screen_pos.y() - line_len * math.sin(math.radians(angle))
-                painter.drawLine(screen_pos.x(), screen_pos.y(), int(end_x), int(end_y))
-
-            if is_selected:
-                painter.setPen(QPen(QColor(255, 255, 0), 2, Qt.DashLine))
-                painter.setBrush(Qt.NoBrush)
-                width = pixmap.width() if pixmap and not pixmap.isNull() else 16
-                height = pixmap.height() if pixmap and not pixmap.isNull() else 16
-                painter.drawRect(screen_pos.x() - width // 2 - 4, screen_pos.y() - height // 2 - 4, width + 8, height + 8)
-
-    def mousePressEvent(self, event):
-        self.last_mouse_pos = event.pos()
-        world_pos = self.screen_to_world(event.pos())
-
-        if event.button() == Qt.RightButton:
-            self.is_panning = False
-            return
-
-        if event.button() == Qt.LeftButton:
-            self.drag_start_pos = self.snap_to_grid(world_pos)
-            obj = self.editor.selected_object
-
-            if isinstance(obj, dict) and obj.get('type') != 'trigger':
-                handle = self.get_handle_at(event.pos())
-                if handle:
-                    self.editor.save_state()
-                    self.drag_mode = 'resize'
-                    self.resize_handle = handle
-                    self.original_brush_rect = self.get_brush_rect_2d(obj)
-                    return
-
-            self.hot_object = self.get_object_at(world_pos)
-            if self.hot_object != self.editor.selected_object:
-                self.editor.set_selected_object(self.hot_object)
-
-            if self.hot_object:
-                self.editor.save_state()
-                self.drag_mode = 'move'
-                self.original_object_pos = self.hot_object.pos[:] if isinstance(self.hot_object, Thing) else self.hot_object['pos'][:]
-            else:
-                self.editor.save_state()
-                self.drag_mode = 'new'
-                new_brush = {'pos': [0,0,0], 'size': [0,0,0], 'operation': 'add', 'textures':{f:'default.png' for f in ['north','south','east','west','top','down']}}
-                self.editor.brushes.append(new_brush)
-                self.editor.set_selected_object(new_brush)
-
-            self.editor.update_views()
-
-    def mouseMoveEvent(self, event):
-        self.mouse_pos = event.pos()
-        if event.buttons() & Qt.RightButton:
-             self.is_panning = True
-             self.setCursor(Qt.ClosedHandCursor)
-             delta = self.mouse_pos - self.last_mouse_pos
-             self.pan_offset += delta
-             self.last_mouse_pos = event.pos()
-             self.update()
-             return
-
-        world_pos = self.screen_to_world(event.pos())
-        snapped_world_pos = self.snap_to_grid(world_pos)
-
-        if self.drag_mode != 'none' and self.editor.selected_object:
-            ax1, ax2 = self.get_axes()
-            ax_map = {'x': 0, 'y': 1, 'z': 2}
-            obj = self.editor.selected_object
-            target_pos = obj.pos if isinstance(obj, Thing) else obj['pos']
-
-            if self.drag_mode == 'move':
-                drag_delta = snapped_world_pos - self.drag_start_pos
-                target_pos[ax_map[ax1]] = self.original_object_pos[ax_map[ax1]] + drag_delta.x()
-                target_pos[ax_map[ax2]] = self.original_object_pos[ax_map[ax2]] + drag_delta.y()
-                self.editor.property_editor.set_object(obj)
-                self.editor.update_views()
-
-            elif self.drag_mode == 'resize':
-                self.resize_brush(snapped_world_pos)
-                self.editor.update_views()
-
-            elif self.drag_mode == 'new' and isinstance(obj, dict):
-                rect = QRect(self.drag_start_pos, snapped_world_pos).normalized()
-                depth_ax_char = list({'x','y','z'} - {ax1, ax2})[0]
-                depth_ax = ax_map[depth_ax_char]
-
-                obj['pos'][ax_map[ax1]] = rect.center().x()
-                obj['pos'][ax_map[ax2]] = rect.center().y()
-                obj['size'][ax_map[ax1]] = rect.width() if rect.width() > 0 else self.grid_size
-                obj['size'][ax_map[ax2]] = rect.height() if rect.height() > 0 else self.grid_size
-                if obj['size'][depth_ax] == 0: obj['size'][depth_ax] = self.grid_size * 4
-                self.editor.update_views()
-        else:
-            self.update_cursor(event.pos())
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.RightButton:
-            if not self.is_panning:
-                self.contextMenuEvent(event)
-            self.is_panning = False
-            self.setCursor(Qt.ArrowCursor)
-            return
-
-        if event.button() == Qt.LeftButton:
-            if self.drag_mode == 'new':
-                selected = self.editor.selected_object
-                if isinstance(selected, dict):
-                    size = selected['size']
-                    if any(abs(s) < self.grid_size/2 for s in [size[0], size[1], size[2]]):
-                        self.editor.brushes.remove(selected)
-                        self.editor.set_selected_object(None)
-                        if self.editor.undo_stack:
-                            self.editor.undo_stack.pop()
-
-            self.drag_mode = 'none'
-            self.resize_handle = ''
-            self.update_cursor(event.pos())
-            self.editor.update_views()
-
-    def wheelEvent(self, event):
-        delta = event.angleDelta().y()
-        zoom_factor = 1.1 if delta > 0 else 1 / 1.1
-
-        old_world_pos = self.screen_to_world(event.pos())
-        self.zoom *= zoom_factor
-        new_world_pos = self.screen_to_world(event.pos())
-
-        delta_world = old_world_pos - new_world_pos
-        
-        # --- FIX: Convert pan offset calculations to integers ---
-        new_pan_x = self.pan_offset.x() - delta_world.x() * self.zoom
-        new_pan_y = self.pan_offset.y() + delta_world.y() * self.zoom
-        
-        self.pan_offset.setX(int(new_pan_x))
-        self.pan_offset.setY(int(new_pan_y))
-        
-        self.update()
-
-    def zoom_in(self): self.zoom *= 1.2; self.update()
-    def zoom_out(self): self.zoom /= 1.2; self.update()
-    def get_axes(self): return {'top': ('x', 'z'), 'front': ('x', 'y'), 'side': ('z', 'y')}.get(self.view_type, ('x', 'z'))
-
-    def world_to_screen(self, p):
-        center_x = self.width() / 2 + self.pan_offset.x()
-        center_y = self.height() / 2 + self.pan_offset.y()
-        return QPoint(int(p.x() * self.zoom + center_x), int(-p.y() * self.zoom + center_y))
-
-    def screen_to_world(self, p):
-        center_x = self.width() / 2 + self.pan_offset.x()
-        center_y = self.height() / 2 + self.pan_offset.y()
-        if self.zoom == 0: return QPoint(0,0)
-        return QPoint(int((p.x() - center_x) / self.zoom), int(-(p.y() - center_y) / self.zoom))
-
-    def snap_to_grid(self, p):
-        if not self.snap_to_grid_enabled or self.grid_size == 0: return p
-        return QPoint(round(p.x() / self.grid_size) * self.grid_size, round(p.y() / self.grid_size) * self.grid_size)
-
-    def draw_grid(self, painter):
-        painter.setPen(QPen(QColor(70, 70, 70)))
-        if self.grid_size > 0 and self.zoom > 0.05:
-            start_world, end_world = self.screen_to_world(QPoint(0,0)), self.screen_to_world(QPoint(self.width(), self.height()))
-            start_x, end_x = math.floor(start_world.x()/self.grid_size)*self.grid_size, math.ceil(end_world.x()/self.grid_size)*self.grid_size
-            start_y, end_y = math.floor(start_world.y()/self.grid_size)*self.grid_size, math.ceil(end_world.y()/self.grid_size)*self.grid_size
-            for x in range(start_x, end_x + 1, self.grid_size): painter.drawLine(self.world_to_screen(QPoint(x, start_y)), self.world_to_screen(QPoint(x, end_y)))
-            for y in range(start_y, end_y + 1, self.grid_size): painter.drawLine(self.world_to_screen(QPoint(start_x, y)), self.world_to_screen(QPoint(end_x, y)))
-
-        painter.setPen(QPen(QColor(90, 90, 90), 2))
-        painter.drawLine(self.world_to_screen(QPoint(-self.world_size,0)), self.world_to_screen(QPoint(self.world_size,0)))
-        painter.drawLine(self.world_to_screen(QPoint(0,-self.world_size)), self.world_to_screen(QPoint(0,self.world_size)))
-
-    def draw_brushes(self, painter):
-        should_show_caulk = self.editor.config.getboolean('Display', 'show_caulk', fallback=True)
-        for brush in self.editor.brushes:
-            is_caulk = all(tex == 'caulk' for tex in brush.get('textures', {}).values())
-            if is_caulk and not should_show_caulk:
-                continue
-
-            rect = self.get_brush_rect_2d(brush)
-            screen_rect = QRect(self.world_to_screen(rect.topLeft()), self.world_to_screen(rect.bottomRight())).normalized()
-            is_selected = (brush == self.editor.selected_object)
-            is_trigger = brush.get('type') == 'trigger'
-
-            pen_color = QColor(255,255,0) if is_selected else QColor(0,255,0,180) if is_trigger else QColor(255,165,0, 180) if is_caulk else QColor(100,100,200) if brush.get('operation')=='subtract' else QColor(200,200,200)
-            fill_color = QColor(0,255,0,40) if is_trigger else QColor(255,165,0,40) if is_caulk else QColor(100,100,200,100) if brush.get('operation')=='subtract' else QColor(200,200,200,50)
-
-            painter.setPen(QPen(pen_color, 2 if is_selected else 1, Qt.DashLine if is_trigger else Qt.SolidLine))
-            painter.setBrush(QBrush(fill_color))
-            painter.drawRect(screen_rect)
-            if is_selected and not is_trigger: self.draw_resize_handles(painter, screen_rect)
-
-    def get_brush_rect_2d(self, brush):
-        ax1, ax2 = self.get_axes()
-        ax_map = {'x':0, 'y':1, 'z':2}
-        pos_x, pos_y = brush['pos'][ax_map[ax1]], brush['pos'][ax_map[ax2]]
-        size_x, size_y = brush['size'][ax_map[ax1]], brush['size'][ax_map[ax2]]
-        return QRect(int(pos_x - size_x/2), int(pos_y - size_y/2), int(size_x), int(size_y))
-
-    def update_cursor(self, screen_pos):
-        if self.is_panning: self.setCursor(Qt.ClosedHandCursor); return
-        obj = self.editor.selected_object
-        if isinstance(obj, dict) and obj.get('type') == 'trigger': self.setCursor(Qt.ArrowCursor); return
-
-        handle = self.get_handle_at(screen_pos)
-        if handle:
-            if handle in ['n','s']: self.setCursor(Qt.SizeVerCursor)
-            elif handle in ['e','w']: self.setCursor(Qt.SizeHorCursor)
-            elif handle in ['nw','se']: self.setCursor(Qt.SizeFDiagCursor)
-            elif handle in ['ne','sw']: self.setCursor(Qt.SizeBDiagCursor)
-        else: self.setCursor(Qt.ArrowCursor)
-
-    def get_handle_rects(self, screen_rect):
-        s = 12; hs = s//2
-        c = screen_rect.center()
-        return {
-            'n': QRect(c.x()-hs, screen_rect.top()-hs, s, s), 's': QRect(c.x()-hs, screen_rect.bottom()-hs, s, s),
-            'w': QRect(screen_rect.left()-hs, c.y()-hs, s, s), 'e': QRect(screen_rect.right()-hs, c.y()-hs, s, s),
-            'nw': QRect(screen_rect.left()-hs, screen_rect.top()-hs, s, s), 'ne': QRect(screen_rect.right()-hs, screen_rect.top()-hs, s, s),
-            'sw': QRect(screen_rect.left()-hs, screen_rect.bottom()-hs, s, s), 'se': QRect(screen_rect.right()-hs, screen_rect.bottom()-hs, s, s)
-        }
+        return None
 
     def get_handle_at(self, screen_pos):
-        if not isinstance(self.editor.selected_object, dict): return None
-        rect = self.get_brush_rect_2d(self.editor.selected_object)
-        screen_rect = QRect(self.world_to_screen(rect.topLeft()), self.world_to_screen(rect.bottomRight())).normalized()
-        for name, handle_rect in self.get_handle_rects(screen_rect).items():
-            if handle_rect.contains(screen_pos): return name
-        return None
-
-    def draw_resize_handles(self, painter, rect):
-        painter.setBrush(QBrush(QColor(255,255,0))); painter.setPen(QPen(QColor(0,0,0)))
-        for handle in self.get_handle_rects(rect).values(): painter.drawRect(handle)
-
-    def resize_brush(self, world_pos):
-        if not isinstance(self.editor.selected_object, dict): return
-
         brush = self.editor.selected_object
+        if not isinstance(brush, dict): return -1
+
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
-        ax1_idx, ax2_idx = ax_map[ax1], ax_map[ax2]
+        
+        pos = brush['pos']
+        size = brush['size']
+        w_pos = QPointF(pos[ax_map[ax1]] - size[ax_map[ax1]]/2, pos[ax_map[ax2]] - size[ax_map[ax2]]/2)
+        w_size = QPointF(size[ax_map[ax1]], size[ax_map[ax2]])
+        p1 = self.world_to_screen(w_pos)
+        p2 = self.world_to_screen(w_pos + w_size)
+        screen_rect = QRectF(p1, p2).normalized()
+        
+        handles = self.get_resize_handles(screen_rect)
+        handle_size = 10
+        for i, handle in enumerate(handles):
+            if (screen_pos - handle).manhattanLength() < handle_size:
+                return i
+        return -1
+        
+    def resize_brush(self, world_pos):
+        brush = self.editor.selected_object
+        if not brush: return
+        
+        snapped_pos = self.snap_to_grid(world_pos)
+        ax1, ax2 = self.get_axes()
+        ax_map = {'x': 0, 'y': 1, 'z': 2}
 
-        orig_rect = self.original_brush_rect
-        new_rect = QRect(orig_rect)
+        ix1, ix2 = ax_map[ax1], ax_map[ax2]
+        
+        old_pos = list(brush['pos'])
+        old_size = list(brush['size'])
 
-        if 'n' in self.resize_handle: new_rect.setTop(world_pos.y())
-        if 's' in self.resize_handle: new_rect.setBottom(world_pos.y())
-        if 'w' in self.resize_handle: new_rect.setLeft(world_pos.x())
-        if 'e' in self.resize_handle: new_rect.setRight(world_pos.x())
+        min_x = old_pos[ix1] - old_size[ix1] / 2
+        max_x = old_pos[ix1] + old_size[ix1] / 2
+        min_y = old_pos[ix2] - old_size[ix2] / 2
+        max_y = old_pos[ix2] + old_size[ix2] / 2
 
-        final_rect = new_rect.normalized()
+        if self.resize_handle_ix in [0, 2, 6]: min_x = snapped_pos.x()
+        if self.resize_handle_ix in [1, 3, 7]: max_x = snapped_pos.x()
+        if self.resize_handle_ix in [0, 1, 4]: min_y = snapped_pos.y()
+        if self.resize_handle_ix in [2, 3, 5]: max_y = snapped_pos.y()
 
-        brush['pos'][ax1_idx] = final_rect.center().x()
-        brush['pos'][ax2_idx] = final_rect.center().y()
-        brush['size'][ax1_idx] = final_rect.width()
-        brush['size'][ax2_idx] = final_rect.height()
+        if max_x < min_x: min_x, max_x = max_x, min_x
+        if max_y < min_y: min_y, max_y = max_y, min_y
+        
+        new_size_x = max_x - min_x
+        new_size_y = max_y - min_y
+        
+        if new_size_x < self.grid_size: new_size_x = self.grid_size
+        if new_size_y < self.grid_size: new_size_y = self.grid_size
+        
+        brush['pos'][ix1] = min_x + new_size_x / 2
+        brush['pos'][ix2] = min_y + new_size_y / 2
+        brush['size'][ix1] = new_size_x
+        brush['size'][ix2] = new_size_y
+
+    def zoom_in(self):
+        self.zoom_factor *= 1.25
+        self.update()
+
+    def zoom_out(self):
+        self.zoom_factor *= 0.8
+        self.update()

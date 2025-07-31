@@ -1,190 +1,121 @@
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-                             QComboBox, QColorDialog, QPushButton,
-                             QCheckBox, QGridLayout)
-from PyQt5.QtGui import QColor, QPalette
+from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox, 
+                             QFormLayout, QCheckBox, QComboBox)
 from PyQt5.QtCore import Qt
 from editor.things import Thing
-from functools import partial
 
 class PropertyEditor(QWidget):
-    def __init__(self, parent, editor):
-        super().__init__(parent)
+    def __init__(self, editor):
+        super().__init__()
         self.editor = editor
-        self.layout = QVBoxLayout()
-        self.setLayout(self.layout)
         self.current_object = None
-        self.row = 0
-
-    def set_object(self, obj):
-        self.clear_layout()
-        self.current_object = obj
-        if obj is None:
-            self.layout.addWidget(QLabel("No object selected."))
-            return
-
-        if isinstance(obj, Thing):
-            self.populate_for_thing(obj)
-        elif isinstance(obj, dict): # For brushes
-            self.populate_for_brush(obj)
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(5, 5, 5, 5)
+        self.setLayout(self.main_layout)
+        
+        self.set_object(None)
 
     def clear_layout(self):
-        while self.layout.count():
-            child = self.layout.takeAt(0)
+        while self.main_layout.count():
+            child = self.main_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
-        self.row = 0
+            elif child.layout():
+                # Recursively clear nested layouts
+                layout = child.layout()
+                while layout.count():
+                    item = layout.takeAt(0)
+                    if item.widget():
+                        item.widget().deleteLater()
 
-    def populate_for_thing(self, thing):
-        # Display Class Name (read-only)
-        self.add_read_only_property("Class", thing.__class__.__name__)
+    def set_object(self, obj):
+        self.current_object = obj
+        self.clear_layout()
 
-        # Editable Properties
-        for key, value in sorted(thing.properties.items()):
-            if key in ['type']: # Don't show the internal 'type' string
-                continue
+        if obj is None:
+            self.main_layout.addWidget(QLabel("Nothing selected."))
+            return
 
-            if key == 'color':
-                self.add_color_property(thing, key, value)
-            elif isinstance(value, bool):
-                self.add_bool_property(thing.properties, key, value)
-            elif isinstance(value, list):
-                self.add_vector_property(thing.properties, key, value)
-            else: # Handle strings, ints, floats
-                self.add_string_property(thing.properties, key, value)
+        if isinstance(obj, dict): # It's a brush
+            self.populate_for_brush(obj)
+        elif isinstance(obj, Thing): # It's a Thing
+            self.populate_for_thing(obj)
 
     def populate_for_brush(self, brush):
-        self.add_read_only_property("Type", "Brush")
-        self.add_vector_property(brush, 'pos', brush['pos'])
-        self.add_vector_property(brush, 'size', brush['size'])
-        self.add_combo_box_property(brush, 'operation', ['add', 'subtract'], brush.get('operation', 'add'))
+        layout = QFormLayout()
+        
+        # --- Trigger Properties ---
+        trigger_checkbox = QCheckBox()
+        trigger_checkbox.setChecked(brush.get('is_trigger', False))
+        layout.addRow("Is Trigger:", trigger_checkbox)
 
-        if brush.get('type') == 'trigger':
-            self.add_read_only_property("Trigger", "True")
-            trigger_thing = self.editor.get_thing_for_trigger(brush)
-            if trigger_thing:
-                self.populate_for_thing(trigger_thing)
+        target_input = QLineEdit(brush.get('target', ''))
+        layout.addRow("Target:", target_input)
+        
+        type_combo = QComboBox()
+        type_combo.addItems(['Once', 'Multiple'])
+        type_combo.setCurrentText(brush.get('trigger_type', 'Once'))
+        layout.addRow("Trigger Type:", type_combo)
 
-    def add_property_row(self, label_text, widget):
-        grid_layout = self.layout.itemAt(0).layout() if self.row > 0 and self.layout.itemAt(0) else None
-        if grid_layout is None:
-            grid_layout = QGridLayout()
-            grid_layout.setColumnStretch(1, 1)
-            self.layout.addLayout(grid_layout)
-
-        label = QLabel(label_text)
-        grid_layout.addWidget(label, self.row, 0)
-        grid_layout.addWidget(widget, self.row, 1)
-        self.row += 1
-
-    def add_read_only_property(self, key, value):
-        self.add_property_row(key.replace('_', ' ').title(), QLineEdit(str(value), readOnly=True))
-
-    def add_color_property(self, obj, key, value):
-        color_btn = QPushButton()
-        color_btn.clicked.connect(lambda: self.choose_color(obj, key, color_btn))
-        self.update_color_button_style(color_btn, value)
-        self.add_property_row(key.title(), color_btn)
-
-    def update_color_button_style(self, button, color_value):
-        """Updates the button's background color and text."""
-        try:
-            if isinstance(color_value, list) and len(color_value) == 3:
-                r, g, b = color_value
-            else:
-                r, g, b = 255, 0, 255 # Default to magenta on error
-                print(f"Warning: Invalid color format '{color_value}', defaulting to magenta.")
-
-            r, g, b = int(r), int(g), int(b)
-            if not (0 <= r <= 255 and 0 <= g <= 255 and 0 <= b <= 255):
-                 raise ValueError("RGB values out of range 0-255")
-
-            color = QColor(r, g, b)
-            button.setText(f"RGB({r}, {g}, {b})")
-            button.setStyleSheet(f"background-color: {color.name()}; color: {get_contrasting_text_color(color).name()};")
-
-        except (ValueError, TypeError) as e:
-            print(f"Error processing color value '{color_value}': {e}")
-            button.setText("Invalid Color")
-            button.setStyleSheet("background-color: #FF00FF;")
-
-    def choose_color(self, obj, key, button):
-        """Opens a color dialog and updates the property."""
-        current_color_list = obj.properties.get(key, [255, 255, 255])
-        initial_color = QColor(*[int(c) for c in current_color_list])
-
-        new_color = QColorDialog.getColor(initial_color, self, "Select Color")
-        if new_color.isValid():
-            new_color_list = [new_color.red(), new_color.green(), new_color.blue()]
-            obj.properties[key] = new_color_list
-            self.update_color_button_style(button, new_color_list)
+        def toggle_trigger_fields(state):
+            is_trigger = (state == Qt.Checked)
+            brush['is_trigger'] = is_trigger
+            # Iterate from row 1 to skip the "Is Trigger" checkbox itself
+            for i in range(1, layout.rowCount()):
+                label_item = layout.itemAt(i, QFormLayout.LabelRole)
+                field_item = layout.itemAt(i, QFormLayout.FieldRole)
+                if label_item and label_item.widget():
+                    label_item.widget().setVisible(is_trigger)
+                if field_item and field_item.widget():
+                    field_item.widget().setVisible(is_trigger)
             self.editor.update_views()
 
-    def add_string_property(self, prop_dict, key, value):
-        le = QLineEdit(str(value))
-        le.editingFinished.connect(lambda: self.update_property_from_string(prop_dict, key, le.text()))
-        self.add_property_row(key.replace('_', ' ').title(), le)
+        trigger_checkbox.stateChanged.connect(toggle_trigger_fields)
+        
+        target_input.textChanged.connect(lambda t: self.update_object_prop('target', t))
+        type_combo.currentTextChanged.connect(lambda t: self.update_object_prop('trigger_type', t))
 
-    def add_bool_property(self, prop_dict, key, value):
-        cb = QCheckBox()
-        cb.setChecked(bool(value))
-        cb.stateChanged.connect(lambda state, k=key: self.update_property(prop_dict, k, state == Qt.Checked))
-        self.add_property_row(key.replace('_', ' ').title(), cb)
+        self.main_layout.addLayout(layout)
+        # Call this once to set initial visibility
+        toggle_trigger_fields(trigger_checkbox.checkState())
 
-    def add_vector_property(self, prop_dict, key, value):
-        self.add_property_row(key.replace('_', ' ').title(), VectorEditor(prop_dict, key, value, self.editor))
+    def populate_for_thing(self, thing):
+        layout = QFormLayout()
+        
+        for key, value in sorted(thing.properties.items()):
+            label_text = key.replace('_', ' ').title() + ":"
+            
+            if isinstance(value, bool):
+                widget = QCheckBox()
+                widget.setChecked(value)
+                widget.stateChanged.connect(lambda state, k=key: self.update_object_prop(k, state == Qt.Checked))
+            elif isinstance(value, int):
+                widget = QSpinBox()
+                widget.setRange(-99999, 99999)
+                widget.setValue(value)
+                widget.valueChanged.connect(lambda v, k=key: self.update_object_prop(k, v))
+            elif isinstance(value, float):
+                widget = QLineEdit(str(value))
+                widget.textChanged.connect(lambda t, k=key: self.update_object_prop(k, float(t) if t and t.replace('.', '', 1).isdigit() else 0.0))
+            elif isinstance(value, list):
+                widget = QLineEdit(str(value))
+                widget.textChanged.connect(lambda t, k=key: self.update_object_prop(k, eval(t) if t else []))
+            else: # String and other types
+                widget = QLineEdit(str(value))
+                widget.textChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
 
-    def add_combo_box_property(self, prop_dict, key, items, value):
-        combo = QComboBox()
-        combo.addItems(items)
-        combo.setCurrentText(value)
-        combo.currentTextChanged.connect(lambda text, k=key: self.update_property(prop_dict, k, text))
-        self.add_property_row(key.replace('_', ' ').title(), combo)
+            layout.addRow(label_text, widget)
+            
+        self.main_layout.addLayout(layout)
 
-    def update_property(self, prop_dict, key, value):
-        prop_dict[key] = value
+    def update_object_prop(self, key, value):
+        if self.current_object is None: return
+
+        if isinstance(self.current_object, dict):
+            self.current_object[key] = value
+        elif isinstance(self.current_object, Thing):
+            self.current_object.properties[key] = value
+        
+        if key.lower() == 'name':
+            self.editor.update_scene_hierarchy()
+        
         self.editor.update_views()
-
-    def update_property_from_string(self, prop_dict, key, text_value):
-        try:
-            value = float(text_value)
-            if value.is_integer():
-                value = int(value)
-        except ValueError:
-            value = text_value # Keep as string
-        self.update_property(prop_dict, key, value)
-
-
-class VectorEditor(QWidget):
-    def __init__(self, prop_dict, key, values, editor):
-        super().__init__()
-        self.prop_dict = prop_dict
-        self.key = key
-        self.editor = editor
-        self.layout = QHBoxLayout()
-        self.layout.setContentsMargins(0, 0, 0, 0)
-        self.setLayout(self.layout)
-
-        self.line_edits = []
-        for val in values:
-            le = QLineEdit(str(val))
-            le.editingFinished.connect(self.update_vector)
-            self.layout.addWidget(le)
-            self.line_edits.append(le)
-
-    def update_vector(self):
-        new_values = []
-        for le in self.line_edits:
-            try:
-                # Try to convert to int first, then float
-                if float(le.text()).is_integer():
-                    new_values.append(int(float(le.text())))
-                else:
-                    new_values.append(float(le.text()))
-            except ValueError:
-                new_values.append(0.0) # or handle error appropriately
-        self.prop_dict[self.key] = new_values
-        self.editor.update_views()
-
-def get_contrasting_text_color(bg_color):
-    """Calculates whether black or white text is more readable on a given background color."""
-    return QColor(0, 0, 0) if (bg_color.red() * 0.299 + bg_color.green() * 0.587 + bg_color.blue() * 0.114) > 186 else QColor(255, 255, 255)
