@@ -1,0 +1,202 @@
+{
+    "brushes": [
+        {
+            "pos": [
+                0.0,
+                416.0,
+                16.0
+            ],
+            "size": [
+                832.0,
+                64.0,
+                800.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                16.0,
+                192.0,
+                -368.0
+            ],
+            "size": [
+                800.0,
+                512.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                24.0,
+                192.0,
+                384.0
+            ],
+            "size": [
+                816.0,
+                512.0,
+                96.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                -440.0,
+                192.0,
+                16.0
+            ],
+            "size": [
+                112.0,
+                512.0,
+                832.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                464.0,
+                192.0,
+                16.0
+            ],
+            "size": [
+                96.0,
+                512.0,
+                832.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                32.0,
+                -96.0,
+                -64.0
+            ],
+            "size": [
+                832.0,
+                64.0,
+                800.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                304.0,
+                0,
+                -240.0
+            ],
+            "size": [
+                208.0,
+                128,
+                368.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                144.0,
+                0,
+                -240.0
+            ],
+            "size": [
+                128.0,
+                128,
+                368.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "is_trigger": true
+        }
+    ],
+    "things": [
+        {
+            "type": "light",
+            "pos": [
+                32.0,
+                160.0,
+                -16.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "",
+                "color": "[255, 255, 200]",
+                "intensity": "1.0",
+                "radius": "512.0"
+            }
+        },
+        {
+            "type": "playerstart",
+            "pos": [
+                0.0,
+                40,
+                -160.0
+            ],
+            "properties": {
+                "type": "playerstart",
+                "name": "",
+                "angle": "0.0"
+            }
+        }
+    ]
+}
