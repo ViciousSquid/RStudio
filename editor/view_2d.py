@@ -123,8 +123,19 @@ class View2D(QWidget):
             is_selected = (brush == self.editor.selected_object)
             is_trigger = brush.get('is_trigger', False)
             is_subtractive = brush.get('operation') == 'subtract'
+            is_locked = brush.get('locked', False)
 
-            pen_color = QColor(0, 255, 255, 150) if is_trigger else (QColor(255, 0, 0) if is_subtractive else QColor(0, 0, 255))
+            if is_locked:
+                pen_color = QColor(0, 0, 255)  # Blue for locked
+            else:
+                pen_color = QColor(200, 200, 200) # Light grey for unlocked brushes
+
+            if is_trigger:
+                pen_color = QColor(0, 255, 255, 150)
+            elif is_subtractive:
+                pen_color = QColor(255, 0, 0)
+
+
             if is_selected:
                 pen_color = QColor(255, 255, 0)
             
@@ -150,7 +161,7 @@ class View2D(QWidget):
                 painter.setFont(font)
                 painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, "t r i g g e r")
 
-            if is_selected:
+            if is_selected and not is_locked:
                 self.draw_resize_handles(painter, screen_rect)
 
     def draw_things(self, painter):
@@ -158,12 +169,19 @@ class View2D(QWidget):
         ax_map = {'x': 0, 'y': 1, 'z': 2}
         
         for thing in self.editor.things:
+            w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
+            s_pos = self.world_to_screen(w_pos)
+
+            if isinstance(thing, Light):
+                r, g, b = thing.properties.get('color', [255, 255, 255])
+                light_color = QColor(r, g, b, 60)
+                painter.setBrush(QBrush(light_color))
+                painter.setPen(QPen(light_color.darker(120), 1))
+                painter.drawEllipse(s_pos, 12, 12)
+
             pixmap = thing.get_pixmap()
             if not pixmap: continue
 
-            w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
-            s_pos = self.world_to_screen(w_pos)
-            
             pixmap_size = pixmap.size()
             draw_rect = QRectF(s_pos.x() - pixmap_size.width() / 2, s_pos.y() - pixmap_size.height() / 2,
                                pixmap_size.width(), pixmap_size.height())
@@ -259,13 +277,18 @@ class View2D(QWidget):
         elif event.button() == Qt.LeftButton:
             self.resize_handle_ix = self.get_handle_at(event.pos())
             
-            if self.resize_handle_ix != -1 and isinstance(self.editor.selected_object, dict):
+            clicked_object = self.get_object_at(world_pos)
+            is_locked = False
+            if isinstance(clicked_object, dict) and clicked_object.get('locked', False):
+                is_locked = True
+
+
+            if self.resize_handle_ix != -1 and isinstance(self.editor.selected_object, dict) and not is_locked:
                 self.is_resizing_brush = True
             else:
-                clicked_object = self.get_object_at(world_pos)
                 self.editor.set_selected_object(clicked_object)
 
-                if clicked_object:
+                if clicked_object and not is_locked:
                     self.is_dragging_object = True
                     self.drag_start_pos = world_pos
                     ax1, ax2 = self.get_axes()
@@ -274,7 +297,7 @@ class View2D(QWidget):
                     pos_ref = clicked_object['pos'] if isinstance(clicked_object, dict) else clicked_object.pos
                     obj_pos_2d = QPointF(pos_ref[ax_map[ax1]], pos_ref[ax_map[ax2]])
                     self.drag_offset = obj_pos_2d - world_pos
-                else:
+                elif not clicked_object:
                     self.is_drawing_brush = True
                     self.draw_start_pos = self.snap_to_grid(world_pos)
                     self.draw_current_pos = self.draw_start_pos
@@ -315,14 +338,20 @@ class View2D(QWidget):
             
             obj = self.editor.selected_object
             if obj:
-                pos_ref = obj['pos'] if isinstance(obj, dict) else obj.pos
-                pos_ref[ax_map[ax1]] = new_obj_pos.x()
-                pos_ref[ax_map[ax2]] = new_obj_pos.y()
-                self.editor.property_editor.set_object(obj) 
+                is_locked = False
+                if isinstance(obj, dict):
+                    is_locked = obj.get('locked', False)
+                if not is_locked:
+                    pos_ref = obj['pos'] if isinstance(obj, dict) else obj.pos
+                    pos_ref[ax_map[ax1]] = new_obj_pos.x()
+                    pos_ref[ax_map[ax2]] = new_obj_pos.y()
+                    self.editor.property_editor.set_object(obj) 
         
         elif self.is_resizing_brush:
-            self.resize_brush(world_pos)
-            self.editor.property_editor.set_object(self.editor.selected_object)
+            obj = self.editor.selected_object
+            if obj and isinstance(obj, dict) and not obj.get('locked', False):
+                self.resize_brush(world_pos)
+                self.editor.property_editor.set_object(self.editor.selected_object)
         
         self.update()
 
@@ -405,10 +434,8 @@ class View2D(QWidget):
         ax_map = {'x': 0, 'y': 1, 'z': 2}
 
         for thing in reversed(self.editor.things):
-            pixmap = thing.get_pixmap()
-            if not pixmap: continue
-            
-            w_2d, h_2d = pixmap.width(), pixmap.height() 
+            # Use a consistent clickable area for things
+            w_2d, h_2d = 24, 24 
             
             thing_w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
             
@@ -430,7 +457,7 @@ class View2D(QWidget):
 
     def get_handle_at(self, screen_pos):
         brush = self.editor.selected_object
-        if not isinstance(brush, dict): return -1
+        if not isinstance(brush, dict) or brush.get('locked', False): return -1
 
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
