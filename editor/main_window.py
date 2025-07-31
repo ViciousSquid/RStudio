@@ -26,10 +26,12 @@ from PyQt5.QtWidgets import (
     QTabWidget,
     QFileDialog,
     QPushButton,
-    QActionGroup
+    QActionGroup,
+    QDialog,
+    QDialogButtonBox
 )
 from PyQt5.QtCore import Qt, QPoint
-from PyQt5.QtGui import QFont, QIcon
+from PyQt5.QtGui import QFont, QIcon, QPixmap
 from editor.view_2d import View2D
 from engine.qt_game_view import QtGameView
 from editor.things import Light, PlayerStart, Thing, Pickup, Monster
@@ -39,6 +41,52 @@ from editor.rand_map_gen import generate
 from editor.asset_browser import AssetBrowser
 from editor.SettingsWindow import SettingsWindow
 from editor.scene_hierarchy import SceneHierarchy
+
+# Custom AboutDialog class
+class AboutDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("About R-Studio")
+        self.setFixedSize(500, 550)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setAlignment(Qt.AlignTop)
+
+        # Image
+        splash_pixmap = QPixmap('assets/splash.png')
+        if not splash_pixmap.isNull():
+            scaled_pixmap = splash_pixmap.scaled(480, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            image_label = QLabel()
+            image_label.setPixmap(scaled_pixmap)
+            image_label.setAlignment(Qt.AlignCenter)
+            main_layout.addWidget(image_label)
+        else:
+            print("Error: Could not load assets/splash.png for About dialog.")
+
+        # Text with hyperlink, now with yellow color
+        text_label = QLabel()
+        text_label.setTextFormat(Qt.RichText) # Enable rich text
+        text_label.setText("R-Studio version 1.0.2<br><a style='color: yellow;' href='https://github.com/ViciousSquid/RStudio'>https://github.com/ViciousSquid/RStudio</a>")
+        text_label.setOpenExternalLinks(True) # Make links clickable
+        text_label.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(text_label)
+
+        # Additional text below the hyperlink
+        additional_text_label = QLabel("This is a work in progress<br>"
+                                       "<br>"
+                                       "<br>"
+                                       " ")
+        additional_text_label.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(additional_text_label)
+
+        # Spacer to push buttons to the bottom
+        main_layout.addStretch()
+
+        # OK Button
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok)
+        button_box.accepted.connect(self.accept)
+        main_layout.addWidget(button_box)
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -414,7 +462,9 @@ class MainWindow(QMainWindow):
         self.update_views()
 
     def show_about(self):
-        QMessageBox.about(self, "About R-Studio", "R-Studio version 1.0.2\nhttps://github.com/ViciousSquid/RStudio")
+        # Changed to custom AboutDialog
+        about_dialog = AboutDialog(self)
+        about_dialog.exec_()
 
     def new_map(self):
         self.save_state()
@@ -487,7 +537,7 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, "Invalid Selection", "Please select a brush to make it subtractive.")
 
-    # --- ADDED: Method to handle the new menu toggle ---
+    # Method to handle the new menu toggle
     def toggle_trigger_display(self, checked):
         """Tells the 3D view to render triggers as solid or wireframe."""
         self.view_3d.show_triggers_as_solid = checked
