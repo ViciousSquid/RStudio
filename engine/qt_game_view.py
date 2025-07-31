@@ -19,8 +19,7 @@ def perspective_projection(fov, aspect, near, far):
         [0, 0, -1, 0]
     ], dtype=np.float32)
 
-# --- SHADERS ---
-
+# --- SHADERS (Unchanged) ---
 VERTEX_SHADER_SIMPLE = """
 #version 330
 layout(location = 0) in vec3 a_position;
@@ -39,7 +38,6 @@ void main() {
     out_color = vec4(color, 1.0);
 }
 """
-
 VERTEX_SHADER_LIT = """
 #version 330 core
 layout (location = 0) in vec3 a_pos;
@@ -69,6 +67,7 @@ struct Light {
 uniform Light lights[MAX_LIGHTS];
 uniform int active_lights;
 uniform vec3 object_color;
+uniform float alpha;
 void main() {
     vec3 ambient = 0.15 * object_color;
     vec3 norm = normalize(Normal);
@@ -79,10 +78,9 @@ void main() {
         total_diffuse += lights[i].color * diff * lights[i].intensity;
     }
     vec3 result = ambient + (total_diffuse * object_color);
-    FragColor = vec4(result, 1.0);
+    FragColor = vec4(result, alpha);
 }
 """
-
 VERTEX_SHADER_TEXTURED = """
 #version 330 core
 layout (location = 0) in vec3 a_pos;
@@ -124,27 +122,21 @@ void main() {
     FragColor = vec4(final_color, 1.0);
 }
 """
-
 VERTEX_SHADER_SPRITE = """
 #version 330 core
-layout (location = 0) in vec2 a_pos; // Quad vertices from -0.5 to 0.5
+layout (location = 0) in vec2 a_pos;
 uniform mat4 projection;
 uniform mat4 view;
 uniform vec3 sprite_pos_world;
 uniform vec2 sprite_size;
 out vec2 TexCoord;
 void main() {
-    // Start with the sprite's world position
     vec4 pos_world = vec4(sprite_pos_world, 1.0);
-    // Transform to view space
     vec4 pos_view = view * pos_world;
-    // Add the quad's vertex offset in view space to make it a billboard
     pos_view.xy += a_pos * sprite_size;
-    // Project to screen space
     gl_Position = projection * pos_view;
-    // Set texture coordinates
     TexCoord = a_pos + vec2(0.5, 0.5);
-    TexCoord.y = 1.0 - TexCoord.y; // Flip Y for standard texture mapping
+    TexCoord.y = 1.0 - TexCoord.y;
 }
 """
 FRAGMENT_SHADER_SPRITE = """
@@ -154,7 +146,7 @@ in vec2 TexCoord;
 uniform sampler2D sprite_texture;
 void main() {
     vec4 tex_color = texture(sprite_texture, TexCoord);
-    if(tex_color.a < 0.1) discard; // Discard transparent pixels
+    if(tex_color.a < 0.1) discard;
     FragColor = tex_color;
 }
 """
@@ -165,6 +157,7 @@ class QtGameView(QOpenGLWidget):
         super().__init__(editor)
         self.editor = editor
         self.brush_display_mode = "Textured"
+        self.show_triggers_as_solid = False
         self.camera = Camera(); self.camera.pos = [0, 150, 400]
         self.grid_size, self.world_size = 16, 1024
         self.mouselook_active, self.last_mouse_pos = False, QPoint()
@@ -185,7 +178,7 @@ class QtGameView(QOpenGLWidget):
 
     def initializeGL(self):
         glClearColor(0.1, 0.1, 0.15, 1.0)
-        glEnable(GL_DEPTH_TEST); glEnable(GL_CULL_FACE); glEnable(GL_TEXTURE_2D)
+        glEnable(GL_DEPTH_TEST); #glEnable(GL_CULL_FACE);
         try:
             self.shader_simple = compileProgram(compileShader(VERTEX_SHADER_SIMPLE, GL_VERTEX_SHADER), compileShader(FRAGMENT_SHADER_SIMPLE, GL_FRAGMENT_SHADER))
             self.shader_lit = compileProgram(compileShader(VERTEX_SHADER_LIT, GL_VERTEX_SHADER), compileShader(FRAGMENT_SHADER_LIT, GL_FRAGMENT_SHADER))
@@ -210,7 +203,6 @@ class QtGameView(QOpenGLWidget):
         glBindVertexArray(0)
         
     def create_sprite_buffers(self):
-        # A simple quad. The vertex shader will position and size it.
         vertices = np.array([-0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, 0.5], dtype=np.float32)
         self.vao_sprite = glGenVertexArrays(1); glBindVertexArray(self.vao_sprite)
         vbo = glGenBuffers(1); glBindBuffer(GL_ARRAY_BUFFER, vbo)
@@ -265,24 +257,61 @@ class QtGameView(QOpenGLWidget):
         except Exception as e: print(f"Error loading texture '{texture_name}': {e}"); return self.load_texture('default.png', 'textures')
 
     def load_all_sprite_textures(self):
-        # Maps Thing class names to their icon files
         things_with_sprites = {'PlayerStart': 'player.png', 'Light': 'light.png', 'Monster': 'monster.png', 'Pickup': 'pickup.png'}
         for class_name, filename in things_with_sprites.items():
-            tex_id = self.load_texture(filename, '') # Sprites are in the root 'assets' folder
+            tex_id = self.load_texture(filename, '')
             if tex_id:
                 self.sprite_textures[class_name] = tex_id
 
     def paintGL(self):
         if self.grid_dirty: self.create_grid_buffers()
+        
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        view = self.camera.get_view_matrix(); proj = perspective_projection(45.0, self.width()/self.height() if self.height()>0 else 0, 0.1, 10000.0)
+        view = self.camera.get_view_matrix()
+        # --- MODIFIED: Use camera's fov property ---
+        proj = perspective_projection(self.camera.fov, self.width()/self.height() if self.height()>0 else 0, 0.1, 10000.0)
+
+        # 1. Draw grid (always opaque)
         self.draw_grid(view, proj)
+
+        # 2. Separate objects into opaque and transparent lists
+        opaque_brushes = []
+        transparent_objects = []
+        for brush in self.editor.brushes:
+            if brush.get('is_trigger', False):
+                transparent_objects.append(brush)
+            else:
+                opaque_brushes.append(brush)
         
-        if self.brush_display_mode == "Textured": self.draw_brushes_textured(view, proj)
-        else: self.draw_brushes_lit(view, proj)
+        transparent_objects.extend(self.editor.things)
+
+        # 3. Draw all opaque brushes
+        glDepthMask(GL_TRUE)
+        if self.brush_display_mode == "Textured":
+            self.draw_brushes_textured(view, proj, opaque_brushes)
+        else:
+            self.draw_brushes_lit(view, proj, opaque_brushes)
         
-        # Draw sprites on top of everything
-        self.draw_sprites(view, proj)
+        # 4. Sort and draw all transparent objects
+        if transparent_objects:
+            camera_pos = self.camera.pos
+            def sort_key(obj):
+                pos = obj['pos'] if isinstance(obj, dict) else obj.pos
+                return -np.linalg.norm(np.array(pos) - camera_pos)
+            transparent_objects.sort(key=sort_key)
+
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            glDepthMask(GL_FALSE)
+
+            self.draw_sprites(view, proj, [o for o in transparent_objects if isinstance(o, Thing)])
+            
+            trigger_brushes = [o for o in transparent_objects if isinstance(o, dict)]
+            if trigger_brushes:
+                self.draw_brushes_lit(view, proj, trigger_brushes, is_transparent_pass=True)
+            
+            glDepthMask(GL_TRUE)
+            glDisable(GL_BLEND)
 
     def draw_grid(self, view, projection):
         if not self.shader_simple or self.vao_grid is None: return
@@ -293,64 +322,66 @@ class QtGameView(QOpenGLWidget):
         glUniform3f(glGetUniformLocation(self.shader_simple, "color"), 0.2, 0.2, 0.2)
         glBindVertexArray(self.vao_grid); glDrawArrays(GL_LINES, 0, self.grid_indices_count); glBindVertexArray(0); glUseProgram(0)
             
-    def draw_brushes_lit(self, view, projection):
-        if not self.shader_lit: return
+    def draw_brushes_lit(self, view, projection, brushes, is_transparent_pass=False):
+        if not self.shader_lit or not brushes: return
         glUseProgram(self.shader_lit)
         glUniformMatrix4fv(glGetUniformLocation(self.shader_lit, "projection"), 1, GL_TRUE, projection); glUniformMatrix4fv(glGetUniformLocation(self.shader_lit, "view"), 1, GL_TRUE, view)
+        
         lights = [t for t in self.editor.things if isinstance(t, Light)]; glUniform1i(glGetUniformLocation(self.shader_lit, "active_lights"), len(lights))
         for i, light in enumerate(lights):
             glUniform3fv(glGetUniformLocation(self.shader_lit, f"lights[{i}].position"), 1, light.pos)
             glUniform3fv(glGetUniformLocation(self.shader_lit, f"lights[{i}].color"), 1, light.get_color())
-            # FIX: Use the get_intensity() method to ensure the value is a float
             glUniform1f(glGetUniformLocation(self.shader_lit, f"lights[{i}].intensity"), light.get_intensity())
         
         glBindVertexArray(self.vao_cube)
-        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE if self.brush_display_mode == "Wireframe" else GL_FILL)
         
-        for brush in self.editor.brushes:
-            # Don't draw triggers in lit/flat modes, only wireframe
-            is_trigger = brush.get('type') == 'trigger'
-            if is_trigger and self.brush_display_mode != "Wireframe": continue
+        for brush in brushes:
+            is_trigger = brush.get('is_trigger', False)
+            
+            if is_transparent_pass and not self.show_triggers_as_solid:
+                glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
+            else:
+                glPolygonMode(GL_FRONT_AND_BACK, GL_LINE if self.brush_display_mode == "Wireframe" and not is_transparent_pass else GL_FILL)
 
             pos, size = np.array(brush['pos']), np.array(brush['size'])
-            model_matrix = np.identity(4, dtype=np.float32); model_matrix[:3, :3] = np.diag(size)
-            model_matrix[3, :3] = pos / 2.0 # Corrected transformation
+            model_matrix = np.identity(4, dtype=np.float32); model_matrix[:3, :3] = np.diag(size); model_matrix[3, :3] = pos
             glUniformMatrix4fv(glGetUniformLocation(self.shader_lit, "model"), 1, GL_FALSE, model_matrix)
 
             is_selected = (brush == self.editor.selected_object)
             is_subtract = (brush.get('operation') == 'subtract')
-
-            if is_trigger: color = [0,1,0]
-            elif is_selected: color = [1,0.4,0.4]
-            elif is_subtract: color = [0.4,0.4,1]
-            else: color = [0.8,0.8,0.8]
-
+            
+            if is_trigger:
+                color = [0, 1, 1]; alpha = 0.3
+            elif is_selected:
+                color = [1, 1, 0]; alpha = 1.0
+            elif is_subtract:
+                color = [1, 0, 0]; alpha = 1.0
+            else:
+                color = [0.8, 0.8, 0.8]; alpha = 1.0
+            
             glUniform3fv(glGetUniformLocation(self.shader_lit, "object_color"), 1, color)
+            glUniform1f(glGetUniformLocation(self.shader_lit, "alpha"), alpha)
             glDrawArrays(GL_TRIANGLES, 0, 36)
             
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL); glBindVertexArray(0); glUseProgram(0)
 
-    def draw_brushes_textured(self, view, projection):
-        if not self.shader_textured: return
+    def draw_brushes_textured(self, view, projection, brushes):
+        if not self.shader_textured or not brushes: return
         glUseProgram(self.shader_textured)
         glUniformMatrix4fv(glGetUniformLocation(self.shader_textured, "projection"), 1, GL_TRUE, projection); glUniformMatrix4fv(glGetUniformLocation(self.shader_textured, "view"), 1, GL_TRUE, view)
+        
         lights = [t for t in self.editor.things if isinstance(t, Light)]; glUniform1i(glGetUniformLocation(self.shader_textured, "active_lights"), len(lights))
         for i, light in enumerate(lights):
             glUniform3fv(glGetUniformLocation(self.shader_textured, f"lights[{i}].position"), 1, light.pos)
             glUniform3fv(glGetUniformLocation(self.shader_textured, f"lights[{i}].color"), 1, light.get_color())
-            # FIX: Use the get_intensity() method to ensure the value is a float
             glUniform1f(glGetUniformLocation(self.shader_textured, f"lights[{i}].intensity"), light.get_intensity())
         
         glActiveTexture(GL_TEXTURE0); glUniform1i(glGetUniformLocation(self.shader_textured, "texture_diffuse"), 0); glBindVertexArray(self.vao_cube)
         show_caulk = self.editor.config.getboolean('Display', 'show_caulk', fallback=True)
         
-        for brush in self.editor.brushes:
-            # Triggers are invisible in textured view
-            if brush.get('type') == 'trigger': continue
-            
+        for brush in brushes:
             pos, size = np.array(brush['pos']), np.array(brush['size'])
-            model_matrix = np.identity(4, dtype=np.float32); model_matrix[:3, :3] = np.diag(size)
-            model_matrix[3, :3] = pos / 2.0
+            model_matrix = np.identity(4, dtype=np.float32); model_matrix[:3, :3] = np.diag(size); model_matrix[3, :3] = pos
             glUniformMatrix4fv(glGetUniformLocation(self.shader_textured, "model"), 1, GL_FALSE, model_matrix)
 
             textures = brush.get('textures', {})
@@ -363,29 +394,26 @@ class QtGameView(QOpenGLWidget):
                 
         glBindVertexArray(0); glUseProgram(0)
 
-    def draw_sprites(self, view, projection):
-        if not self.shader_sprite or not self.vao_sprite: return
+    def draw_sprites(self, view, projection, things_to_draw):
+        if not self.shader_sprite or not self.vao_sprite or not things_to_draw: return
         glUseProgram(self.shader_sprite)
         glUniformMatrix4fv(glGetUniformLocation(self.shader_sprite, "projection"), 1, GL_TRUE, projection)
         glUniformMatrix4fv(glGetUniformLocation(self.shader_sprite, "view"), 1, GL_TRUE, view)
         
-        glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        glDepthMask(GL_FALSE) # Disable depth writing to handle transparency correctly
         glBindVertexArray(self.vao_sprite); glActiveTexture(GL_TEXTURE0)
         glUniform1i(glGetUniformLocation(self.shader_sprite, "sprite_texture"), 0)
 
-        for thing in self.editor.things:
+        for thing in things_to_draw:
             thing_type = thing.__class__.__name__
             if thing_type in self.sprite_textures:
                 glBindTexture(GL_TEXTURE_2D, self.sprite_textures[thing_type])
                 glUniform3fv(glGetUniformLocation(self.shader_sprite, "sprite_pos_world"), 1, thing.pos)
                 
-                # Make lights smaller than other things
                 size = 16.0 if isinstance(thing, Light) else 32.0
                 glUniform2f(glGetUniformLocation(self.shader_sprite, "sprite_size"), size, size)
                 glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
 
-        glBindVertexArray(0); glDepthMask(GL_TRUE); glDisable(GL_BLEND); glUseProgram(0)
+        glBindVertexArray(0); glUseProgram(0)
 
     def update_loop(self):
         delta = time.time() - self.last_time; self.last_time = time.time()
@@ -403,7 +431,6 @@ class QtGameView(QOpenGLWidget):
         if Qt.Key_Space in keys: self.camera.move_up(speed); moved = True
         if Qt.Key_C in keys: self.camera.move_up(-speed); moved = True
         
-        # If camera moved, update all views
         if moved: self.editor.update_views()
         
     def mousePressEvent(self, event):
@@ -417,7 +444,6 @@ class QtGameView(QOpenGLWidget):
             dx = event.x() - self.last_mouse_pos.x()
             dy = event.y() - self.last_mouse_pos.y()
             self.camera.rotate(dx, dy)
-            # Reset cursor to keep it centered
             self.cursor().setPos(self.mapToGlobal(self.last_mouse_pos))
             self.editor.update_views()
 
@@ -427,5 +453,9 @@ class QtGameView(QOpenGLWidget):
             self.setCursor(Qt.ArrowCursor)
 
     def wheelEvent(self, event):
-        self.camera.zoom(event.angleDelta().y() * 0.1)
+        # --- MODIFIED: Adjust FOV on wheel event ---
+        if event.angleDelta().y() > 0:
+            self.camera.fov = max(30.0, self.camera.fov - 5)
+        else:
+            self.camera.fov = min(120.0, self.camera.fov + 5)
         self.editor.update_views()

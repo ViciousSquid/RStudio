@@ -6,6 +6,7 @@ class Camera:
         self.pos = [0.0, 0.0, 0.0]
         self.yaw = -90.0  # Looking down the negative Z-axis
         self.pitch = 0.0
+        self.fov = 90.0  # --- THIS IS THE NEWLY ADDED LINE ---
 
     def get_view_matrix(self):
         """Calculates the view matrix for the camera's current position and orientation."""
@@ -20,7 +21,7 @@ class Camera:
         up = up / np.linalg.norm(up)
 
         # Create the look-at matrix
-        target = self.pos + front
+        target = np.array(self.pos) + front
 
         # Manual implementation of a look-at matrix
         cam_pos = np.array(self.pos)
