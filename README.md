@@ -2,11 +2,12 @@
 ### Game creation tools made in Python
 Requires `pyqt5` , `pycsg` , `pyrr` and `pygame`
 
-![image](https://github.com/user-attachments/assets/c1e67214-3f03-42aa-979a-294e307343f4)
+<img width="1844" height="1158" alt="image" src="https://github.com/user-attachments/assets/1c64685b-23d1-485f-940d-751d1fcfa689" />
+
 
 
 * Custom implementation of an OpenGL renderer via PyGame
-* Brush-based engine using CSG subtract
+* Brush-based engine using CSG
 * Engine and editor are tightly integrated
 * Parses raw GLSL
 * WYSIWYG mouse-based interface
