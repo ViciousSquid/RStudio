@@ -17,7 +17,7 @@ Requires `pyqt5` , `pycsg` , `pyrr` and `pygame`
   
 ### Roadmap:
 * OBJ model support
-* Human-readable scripting language and parser
+* Natural language scripting and parser
 * Support for multiple genres of game
 
 
