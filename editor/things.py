@@ -119,6 +119,7 @@ class Light(Thing):
         self.properties.setdefault('color', [255, 255, 200])
         self.properties.setdefault('intensity', 1.0)
         self.properties.setdefault('radius', 512.0)
+        self.properties.setdefault('state', 'on')
 
     def get_color(self):
         color = self.properties.get('color', [255, 255, 255])

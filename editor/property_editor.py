@@ -137,7 +137,6 @@ class PropertyEditor(QWidget):
 
     def populate_for_thing(self, thing):
         """Populates the UI with properties for a Thing object."""
-        # This function remains unchanged
         layout = QFormLayout()
         
         for key, value in sorted(thing.properties.items()):
@@ -145,6 +144,12 @@ class PropertyEditor(QWidget):
             
             if isinstance(thing, Light) and key == 'color':
                 self.add_color_picker_widget(layout, thing, key)
+            elif isinstance(thing, Light) and key == 'state':
+                widget = QComboBox()
+                widget.addItems(['on', 'off'])
+                widget.setCurrentText(value)
+                widget.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
+                layout.addRow(label_text, widget)
             elif isinstance(value, bool):
                 widget = QCheckBox(); widget.setChecked(value)
                 widget.stateChanged.connect(lambda state, k=key: self.update_object_prop(k, state == Qt.Checked))

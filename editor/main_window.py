@@ -377,20 +377,30 @@ class MainWindow(QMainWindow):
         self.setStatusBar(status_bar)
         bottom_widget = QWidget()
         bottom_layout = QHBoxLayout(bottom_widget)
-        bottom_layout.setContentsMargins(10,2,10,2)
+        bottom_layout.setContentsMargins(10, 2, 10, 2)
+        
+        # --- Create all the widgets first ---
         self.snap_checkbox = QCheckBox("Snap to Grid")
         self.snap_checkbox.setChecked(True)
         self.snap_checkbox.stateChanged.connect(self.toggle_snap_to_grid)
+        
         self.grid_size_spinbox = QSpinBox()
         self.grid_size_spinbox.setRange(4, 128)
         self.grid_size_spinbox.setValue(16)
         self.grid_size_spinbox.setSingleStep(1)
         self.grid_size_spinbox.valueChanged.connect(self.set_grid_size)
+        
         self.world_size_spinbox = QSpinBox()
         self.world_size_spinbox.setRange(512, 16384)
         self.world_size_spinbox.setValue(1024)
         self.world_size_spinbox.setSingleStep(1)
         self.world_size_spinbox.valueChanged.connect(self.set_world_size)
+        
+        self.culling_checkbox = QCheckBox("Enable Culling")
+        self.culling_checkbox.setChecked(False)
+        self.culling_checkbox.stateChanged.connect(self.toggle_culling)
+        
+        # --- Add widgets to the layout ---
         bottom_layout.addWidget(self.snap_checkbox)
         bottom_layout.addSpacing(20)
         bottom_layout.addWidget(QLabel("Grid Size:"))
@@ -398,8 +408,18 @@ class MainWindow(QMainWindow):
         bottom_layout.addSpacing(20)
         bottom_layout.addWidget(QLabel("World Size:"))
         bottom_layout.addWidget(self.world_size_spinbox)
+        
+        # This is the magic line ✨
+        # It adds a stretchable space that will push subsequent widgets to the right.
         bottom_layout.addStretch(1)
+        
+        # Now add the culling checkbox, which will appear on the far right.
+        bottom_layout.addWidget(self.culling_checkbox)
+        
         status_bar.addPermanentWidget(bottom_widget, 1)
+
+    def toggle_culling(self, state):
+        self.view_3d.set_culling(state == Qt.Checked)
 
     def set_grid_size(self, size):
         snapped_size = self._snap_to_power_of_two(size)
