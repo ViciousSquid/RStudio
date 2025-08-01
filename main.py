@@ -3,7 +3,7 @@ import os
 import shutil
 import argparse
 from PyQt5.QtWidgets import QApplication, QSplashScreen
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtGui import QPixmap, QSurfaceFormat # Imported QSurfaceFormat
 from editor.main_window import MainWindow
 
 def clean_pycache():
@@ -138,6 +138,17 @@ dark_stylesheet = """
 """
 
 if __name__ == "__main__":
+    # --- Set the default OpenGL format ---
+    # This must be done BEFORE the QApplication is created.
+    # It tells Qt to request a specific version of OpenGL.
+    format = QSurfaceFormat()
+    format.setVersion(3, 3)
+    format.setProfile(QSurfaceFormat.CoreProfile)
+    format.setDepthBufferSize(24)
+    format.setStencilBufferSize(8)
+    QSurfaceFormat.setDefaultFormat(format)
+    # --- End of new block ---
+
     parser = argparse.ArgumentParser(description="RStudio development tools")
     parser.add_argument(
         '-c', '--clean',
