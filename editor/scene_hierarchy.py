@@ -1,94 +1,97 @@
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem, 
-                             QTreeWidgetItemIterator) # <-- Added missing import
-from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QTreeWidget, QTreeWidgetItem
+from PyQt5.QtGui import QIcon
 
-from editor.things import Thing 
+class SceneHierarchy(QTreeWidget):
+    """
+    Manages the tree view list of all objects in the scene.
+    When an item is selected in this list, it notifies the main window
+    to trigger a full application UI refresh.
+    """
 
-class SceneHierarchy(QWidget):
-    """
-    A widget that displays all the objects (brushes and things) in the scene
-    in a hierarchical tree view.
-    """
-    def __init__(self, editor):
+    def __init__(self, main_window):
+        """
+        Initializes the scene hierarchy widget.
+        """
         super().__init__()
-        self.editor = editor
-        
-        # --- UI Setup ---
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        self.setLayout(layout)
+        self.main_window = main_window
+        self.setHeaderLabel("Scene Objects")
 
-        self.tree = QTreeWidget()
-        self.tree.setHeaderLabel("Scene")
-        layout.addWidget(self.tree)
+        # Create the lock icon once and reuse it
+        self.lock_icon = QIcon("assets/lock.png")
+        self.itemSelectionChanged.connect(self.handle_selection_change)
 
-        # --- Icon ---
-        self.lock_icon = QIcon("assets/lock.png") 
-
-        # --- Connections ---
-        self.tree.itemSelectionChanged.connect(self.on_selection_changed)
-
-    def populate(self, brushes, things):
+    def handle_selection_change(self):
         """
-        Clears and re-populates the tree with the current brushes and things 
-        from the scene.
+        This method is called automatically whenever the selection changes.
+        It finds the selected object and tells the main window.
         """
-        self.tree.blockSignals(True)
-        self.tree.clear()
-
-        # --- Brushes Section ---
-        brush_parent = QTreeWidgetItem(self.tree, ["Brushes"])
-        for i, brush in enumerate(brushes):
-            name = f"Brush {i}"
-            item = QTreeWidgetItem(brush_parent, [name])
-            item.setData(0, Qt.UserRole, brush) 
-
-            if brush.get('lock', False):
-                item.setIcon(0, self.lock_icon)
-            else:
-                item.setIcon(0, QIcon())
-
-        # --- Things Section ---
-        thing_parent = QTreeWidgetItem(self.tree, ["Things"])
-        for thing in things:
-            item = QTreeWidgetItem(thing_parent, [thing.name])
-            item.setData(0, Qt.UserRole, thing)
-
-        self.tree.expandAll()
-        self.tree.blockSignals(False)
-
-    def on_selection_changed(self):
-        """
-        Handles when the user selects an item in the tree.
-        """
-        selected_items = self.tree.selectedItems()
+        selected_items = self.selectedItems()
         if not selected_items:
             return
+        first_item = selected_items[0]
+        selected_object = self.get_object_from_item(first_item)
 
-        selected_item = selected_items[0]
-        obj = selected_item.data(0, Qt.UserRole) 
+        if selected_object is not None:
+            self.main_window.set_selected_object(selected_object)
 
-        if obj:
-            self.editor.select_object(obj)
-
-    def select_object(self, obj_to_select):
+    def get_object_from_item(self, item: QTreeWidgetItem):
         """
-        Finds and selects the tree item corresponding to the given object.
+        Retrieves an application object (brush or thing) from a QTreeWidget item.
         """
-        if obj_to_select is None:
-            self.tree.clearSelection()
-            return
-            
-        iterator = QTreeWidgetItemIterator(self.tree, QTreeWidgetItemIterator.All)
-        while iterator.value():
-            item = iterator.value()
-            item_data = item.data(0, Qt.UserRole)
+        if not item:
+            return None
+        try:
+            object_name = item.data(0, Qt.UserRole)
+            if object_name is None:
+                return None
+            # Search through both lists to find the matching object
+            for obj in self.main_window.brushes + self.main_window.things:
+                if isinstance(obj, dict) and obj.get('name') == object_name:
+                    return obj
+                elif hasattr(obj, 'name') and obj.name == object_name:
+                    return obj
+        except Exception as e:
+            print(f"Error retrieving object from item: {e}")
 
-            if item_data is obj_to_select:
-                self.tree.blockSignals(True)
-                self.tree.setCurrentItem(item)
-                self.tree.blockSignals(False)
-                break
-            
-            iterator += 1
+        return None
+
+    def refresh_list(self, all_brushes, all_things, selected_item):
+        """
+        Clears and repopulates the list with brushes and things,
+        assigning unique names and a lock icon where appropriate.
+        """
+        self.blockSignals(True)
+        self.clear()
+
+        brush_counter = 1
+
+        brush_parent = QTreeWidgetItem(self, ["Brushes"])
+        for brush_dict in all_brushes:
+            display_name = brush_dict.get('name')
+            if not display_name:
+                display_name = f"Brush {brush_counter}"
+                brush_dict['name'] = display_name
+
+            brush_counter += 1
+            item = QTreeWidgetItem(brush_parent, [display_name])
+            item.setData(0, Qt.UserRole, display_name)
+
+            # Check for lock status and apply icon
+            if brush_dict.get('lock', False):
+                item.setIcon(0, self.lock_icon)
+
+            if selected_item is brush_dict:
+                self.setCurrentItem(item)
+
+        thing_parent = QTreeWidgetItem(self, ["Things"])
+        for thing in all_things:
+            display_name = getattr(thing, 'name', 'Unnamed Thing')
+
+            item = QTreeWidgetItem(thing_parent, [display_name])
+            item.setData(0, Qt.UserRole, display_name)
+            if selected_item is thing:
+                self.setCurrentItem(item)
+
+        self.expandAll()
+        self.blockSignals(False)

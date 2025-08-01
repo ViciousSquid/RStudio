@@ -166,11 +166,10 @@ class MainWindow(QMainWindow):
         self.view_side.reset_state()
 
     def update_scene_hierarchy(self):
-        """Updates the scene hierarchy list and re-applies the current selection."""
-        if hasattr(self, 'scene_hierarchy'):
-            self.scene_hierarchy.populate(self.brushes, self.things)
-            if self.selected_object:
-                self.scene_hierarchy.select_object(self.selected_object)
+        """
+        Refreshes the scene list with all current items.
+        """
+        self.scene_hierarchy.refresh_list(self.brushes, self.things, self.selected_object)
     
     def select_object(self, obj):
         """Alias for set_selected_object to maintain compatibility."""

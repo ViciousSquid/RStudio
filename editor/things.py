@@ -14,15 +14,22 @@ def find_subclasses(cls):
 class Thing:
     pixmap_path = None
     _pixmap_cache = {} # Class-level cache for loaded pixmaps
+    _counters = {} # Class-level counter for unique naming
 
     def __init__(self, pos=None, properties=None):
         self.pos = pos if pos is not None else [0, 0, 0]
         self.properties = properties if properties is not None else {}
         self.properties.setdefault('type', self.__class__.__name__.lower())
-        # --- CORRECTED: Set a more descriptive default name ---
-        self.properties.setdefault('name', self.__class__.__name__)
+        
+        # --- MODIFIED: Set a default and unique name ---
+        if 'name' not in self.properties or not self.properties['name']:
+            class_name = self.__class__.__name__
+            if class_name not in Thing._counters:
+                Thing._counters[class_name] = 1
+            else:
+                Thing._counters[class_name] += 1
+            self.properties['name'] = f"{class_name}_{Thing._counters[class_name]}"
 
-    # --- CORRECTED: Add a property to expose the name attribute directly ---
     @property
     def name(self):
         """Gets the name from the properties dictionary."""
