@@ -505,12 +505,137 @@ class MainWindow(QMainWindow):
         return brushes, things
 
     def perform_subtraction(self):
-        if isinstance(self.selected_object, dict):
-            self.save_state()
-            self.selected_object['operation'] = 'subtract'
-            self.update_views()
-        else:
+        if not isinstance(self.selected_object, dict):
             QMessageBox.warning(self, "Invalid Selection", "Please select a brush to make it subtractive.")
+            return
+
+        # Save state for undo/redo
+        self.save_state()
+        
+        # Set brush as subtractive
+        self.selected_object['operation'] = 'subtract'
+        subtract_brush = self.selected_object
+        
+        # Get subtract brush boundaries
+        sub_pos = subtract_brush['pos']
+        sub_size = subtract_brush['size']
+        sub_min = [sub_pos[0] - sub_size[0]/2, sub_pos[1] - sub_size[1]/2, sub_pos[2] - sub_size[2]/2]
+        sub_max = [sub_pos[0] + sub_size[0]/2, sub_pos[1] + sub_size[1]/2, sub_pos[2] + sub_size[2]/2]
+        
+        new_brushes = []
+        for brush in self.brushes:
+            # Skip subtract brush itself
+            if brush is subtract_brush:
+                continue
+                
+            # Skip other subtract brushes
+            if brush.get('operation') == 'subtract':
+                new_brushes.append(brush)
+                continue
+                
+            # Get brush boundaries
+            pos = brush['pos']
+            size = brush['size']
+            brush_min = [pos[0] - size[0]/2, pos[1] - size[1]/2, pos[2] - size[2]/2]
+            brush_max = [pos[0] + size[0]/2, pos[1] + size[1]/2, pos[2] + size[2]/2]
+            
+            # Check if brushes intersect
+            if not (brush_min[0] < sub_max[0] and brush_max[0] > sub_min[0] and
+                    brush_min[1] < sub_max[1] and brush_max[1] > sub_min[1] and
+                    brush_min[2] < sub_max[2] and brush_max[2] > sub_min[2]):
+                new_brushes.append(brush)
+                continue
+                
+            # Split brush into 6 potential fragments (left, right, bottom, top, front, back)
+            fragments = []
+            
+            # Left fragment (x-min side)
+            if brush_min[0] < sub_min[0]:
+                left_max = min(brush_max[0], sub_min[0])
+                if left_max - brush_min[0] > 0.01:  # Avoid degenerate brushes
+                    fragments.append({
+                        'pos': [(brush_min[0] + left_max)/2, pos[1], pos[2]],
+                        'size': [left_max - brush_min[0], size[1], size[2]],
+                        'operation': 'add',
+                        'textures': brush['textures'].copy()
+                    })
+            
+            # Right fragment (x-max side)
+            if brush_max[0] > sub_max[0]:
+                right_min = max(brush_min[0], sub_max[0])
+                if brush_max[0] - right_min > 0.01:
+                    fragments.append({
+                        'pos': [(right_min + brush_max[0])/2, pos[1], pos[2]],
+                        'size': [brush_max[0] - right_min, size[1], size[2]],
+                        'operation': 'add',
+                        'textures': brush['textures'].copy()
+                    })
+            
+            # Bottom fragment (y-min side)
+            if brush_min[1] < sub_min[1]:
+                bottom_max = min(brush_max[1], sub_min[1])
+                x_min = max(brush_min[0], sub_min[0])
+                x_max = min(brush_max[0], sub_max[0])
+                if bottom_max - brush_min[1] > 0.01 and x_max - x_min > 0.01:
+                    fragments.append({
+                        'pos': [pos[0], (brush_min[1] + bottom_max)/2, pos[2]],
+                        'size': [x_max - x_min, bottom_max - brush_min[1], size[2]],
+                        'operation': 'add',
+                        'textures': brush['textures'].copy()
+                    })
+            
+            # Top fragment (y-max side)
+            if brush_max[1] > sub_max[1]:
+                top_min = max(brush_min[1], sub_max[1])
+                x_min = max(brush_min[0], sub_min[0])
+                x_max = min(brush_max[0], sub_max[0])
+                if brush_max[1] - top_min > 0.01 and x_max - x_min > 0.01:
+                    fragments.append({
+                        'pos': [pos[0], (top_min + brush_max[1])/2, pos[2]],
+                        'size': [x_max - x_min, brush_max[1] - top_min, size[2]],
+                        'operation': 'add',
+                        'textures': brush['textures'].copy()
+                    })
+            
+            # Front fragment (z-min side)
+            if brush_min[2] < sub_min[2]:
+                front_max = min(brush_max[2], sub_min[2])
+                x_min = max(brush_min[0], sub_min[0])
+                x_max = min(brush_max[0], sub_max[0])
+                y_min = max(brush_min[1], sub_min[1])
+                y_max = min(brush_max[1], sub_max[1])
+                if front_max - brush_min[2] > 0.01 and x_max - x_min > 0.01 and y_max - y_min > 0.01:
+                    fragments.append({
+                        'pos': [pos[0], pos[1], (brush_min[2] + front_max)/2],
+                        'size': [x_max - x_min, y_max - y_min, front_max - brush_min[2]],
+                        'operation': 'add',
+                        'textures': brush['textures'].copy()
+                    })
+            
+            # Back fragment (z-max side)
+            if brush_max[2] > sub_max[2]:
+                back_min = max(brush_min[2], sub_max[2])
+                x_min = max(brush_min[0], sub_min[0])
+                x_max = min(brush_max[0], sub_max[0])
+                y_min = max(brush_min[1], sub_min[1])
+                y_max = min(brush_max[1], sub_max[1])
+                if brush_max[2] - back_min > 0.01 and x_max - x_min > 0.01 and y_max - y_min > 0.01:
+                    fragments.append({
+                        'pos': [pos[0], pos[1], (back_min + brush_max[2])/2],
+                        'size': [x_max - x_min, y_max - y_min, brush_max[2] - back_min],
+                        'operation': 'add',
+                        'textures': brush['textures'].copy()
+                    })
+            
+            # Add fragments to new brushes
+            new_brushes.extend(fragments)
+        
+        # Add the subtract brush back to the list
+        new_brushes.append(subtract_brush)
+        self.brushes = new_brushes
+        
+        # Update UI
+        self.update_all_ui()
 
     def toggle_trigger_display(self, checked):
         self.view_3d.show_triggers_as_solid = checked
