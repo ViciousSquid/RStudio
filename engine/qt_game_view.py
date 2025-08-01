@@ -3,6 +3,7 @@ import os
 import numpy as np
 from PyQt5.QtWidgets import QOpenGLWidget
 from PyQt5.QtCore import Qt, QTimer, QPoint
+from PyQt5.QtGui import QPainter, QColor, QFont
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
 from engine.camera import Camera
@@ -172,13 +173,22 @@ class QtGameView(QOpenGLWidget):
         self.vao_cube = None; self.vao_grid = None; self.vao_sprite = None
         self.grid_dirty = True
         
+        self.culling_enabled = False
+        self.fps = 0
+        self.frame_count = 0
+        self.last_fps_time = time.time()
+
         timer = QTimer(self); timer.setInterval(16); timer.timeout.connect(self.update_loop); timer.start()
         self.setFocusPolicy(Qt.ClickFocus)
         self.setMouseTracking(True)
 
+    def set_culling(self, enabled):
+        self.culling_enabled = enabled
+        self.update()
+
     def initializeGL(self):
         glClearColor(0.1, 0.1, 0.15, 1.0)
-        glEnable(GL_DEPTH_TEST); #glEnable(GL_CULL_FACE);
+        glEnable(GL_DEPTH_TEST)
         try:
             self.shader_simple = compileProgram(compileShader(VERTEX_SHADER_SIMPLE, GL_VERTEX_SHADER), compileShader(FRAGMENT_SHADER_SIMPLE, GL_FRAGMENT_SHADER))
             self.shader_lit = compileProgram(compileShader(VERTEX_SHADER_LIT, GL_VERTEX_SHADER), compileShader(FRAGMENT_SHADER_LIT, GL_FRAGMENT_SHADER))
@@ -264,6 +274,11 @@ class QtGameView(QOpenGLWidget):
                 self.sprite_textures[class_name] = tex_id
 
     def paintGL(self):
+        if self.culling_enabled:
+            glEnable(GL_CULL_FACE)
+        else:
+            glDisable(GL_CULL_FACE)
+
         if self.grid_dirty: self.create_grid_buffers()
         
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -312,6 +327,17 @@ class QtGameView(QOpenGLWidget):
             
             glDepthMask(GL_TRUE)
             glDisable(GL_BLEND)
+        
+        if self.editor.config.getboolean('Display', 'show_fps', fallback=False):
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing)
+            font = QFont()
+            font.setPointSize(8)
+            painter.setFont(font)
+            painter.setPen(QColor(255, 255, 255))
+            painter.fillRect(5, 5, 70, 20, QColor(0, 0, 0, 128))
+            painter.drawText(10, 20, f"FPS: {self.fps:.0f}")
+            painter.end()
 
     def draw_grid(self, view, projection):
         if not self.shader_simple or self.vao_grid is None: return
@@ -327,7 +353,7 @@ class QtGameView(QOpenGLWidget):
         glUseProgram(self.shader_lit)
         glUniformMatrix4fv(glGetUniformLocation(self.shader_lit, "projection"), 1, GL_TRUE, projection); glUniformMatrix4fv(glGetUniformLocation(self.shader_lit, "view"), 1, GL_TRUE, view)
         
-        lights = [t for t in self.editor.things if isinstance(t, Light)]; glUniform1i(glGetUniformLocation(self.shader_lit, "active_lights"), len(lights))
+        lights = [t for t in self.editor.things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']; glUniform1i(glGetUniformLocation(self.shader_lit, "active_lights"), len(lights))
         for i, light in enumerate(lights):
             glUniform3fv(glGetUniformLocation(self.shader_lit, f"lights[{i}].position"), 1, light.pos)
             glUniform3fv(glGetUniformLocation(self.shader_lit, f"lights[{i}].color"), 1, light.get_color())
@@ -370,7 +396,7 @@ class QtGameView(QOpenGLWidget):
         glUseProgram(self.shader_textured)
         glUniformMatrix4fv(glGetUniformLocation(self.shader_textured, "projection"), 1, GL_TRUE, projection); glUniformMatrix4fv(glGetUniformLocation(self.shader_textured, "view"), 1, GL_TRUE, view)
         
-        lights = [t for t in self.editor.things if isinstance(t, Light)]; glUniform1i(glGetUniformLocation(self.shader_textured, "active_lights"), len(lights))
+        lights = [t for t in self.editor.things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']; glUniform1i(glGetUniformLocation(self.shader_textured, "active_lights"), len(lights))
         for i, light in enumerate(lights):
             glUniform3fv(glGetUniformLocation(self.shader_textured, f"lights[{i}].position"), 1, light.pos)
             glUniform3fv(glGetUniformLocation(self.shader_textured, f"lights[{i}].color"), 1, light.get_color())
@@ -416,7 +442,16 @@ class QtGameView(QOpenGLWidget):
         glBindVertexArray(0); glUseProgram(0)
 
     def update_loop(self):
-        delta = time.time() - self.last_time; self.last_time = time.time()
+        current_time = time.time()
+        delta = current_time - self.last_time
+        self.last_time = current_time
+
+        self.frame_count += 1
+        if current_time - self.last_fps_time > 1:
+            self.fps = self.frame_count / (current_time - self.last_fps_time)
+            self.frame_count = 0
+            self.last_fps_time = current_time
+
         if self.hasFocus(): self.handle_keyboard_input(delta)
         self.update()
 
