@@ -11,7 +11,6 @@ Requires `pyqt5` , `pycsg` , `pyrr` and `pygame`
 * Engine and editor are tightly integrated
 * Parses raw GLSL
 * WYSIWYG mouse-based interface
-* GUI is fully dockable/undockable!
 * Fully modular and open source (MIT License)
   
 ### Roadmap:

@@ -1,3 +1,4 @@
+import configparser
 import sys
 import json
 from PyQt5.QtWidgets import QApplication, QMainWindow
@@ -5,17 +6,24 @@ from PyQt5.QtCore import Qt
 from engine.qt_game_view import QtGameView
 from editor.things import Light, PlayerStart
 
+
 class GameWindow(QMainWindow):
     def __init__(self, level_file):
         super().__init__()
         self.setWindowTitle("Game")
         self.setGeometry(100, 100, 1280, 720)
 
+        # Load config.ini
+        self.config = configparser.ConfigParser()
+        # Attempt to read config.ini. Adjust path if it's not in the same directory.
+        self.config.read('config.ini')
+
         # The GameWindow needs attributes that the QtGameView expects.
         self.brushes = []
         self.things = []
         self.selected_object = None
-        self.keys_pressed = set() # Add the missing attribute
+        # Add the missing attribute 'keys_pressed'
+        self.keys_pressed = set()
 
         # The game view will be the main widget
         self.game_view = QtGameView(self)
