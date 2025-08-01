@@ -1,9 +1,31 @@
 import sys
+import os
+import shutil
+import argparse
 from PyQt5.QtWidgets import QApplication, QSplashScreen
 from PyQt5.QtGui import QPixmap
 from editor.main_window import MainWindow
 
-# --- Dark Theme Stylesheet ---
+# --- NEW FUNCTION ---
+def clean_pycache():
+    """
+    Finds and deletes all '__pycache__' folders recursively
+    from the script's root directory.
+    """
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    print(f"🧹 Starting cleanup from root: {project_root}")
+
+    for root, dirs, files in os.walk(project_root):
+        if '__pycache__' in dirs:
+            pycache_path = os.path.join(root, '__pycache__')
+            print(f"🗑️ Found and removing: {pycache_path}")
+            try:
+                shutil.rmtree(pycache_path)
+            except OSError as e:
+                print(f"Error removing {pycache_path}: {e}")
+    print("✨ Cleanup complete.")
+
+# --- Dark Theme Stylesheet (remains the same) ---
 dark_stylesheet = """
     QWidget {
         background-color: #2b2b2b;
@@ -118,13 +140,26 @@ dark_stylesheet = """
 """
 
 if __name__ == "__main__":
+    # --- NEW ARGUMENT PARSING LOGIC ---
+    parser = argparse.ArgumentParser(description="RStudio development tools")
+    parser.add_argument(
+        '-c', '--clean',
+        action='store_true',
+        help="Checks for and deletes all '__pycache__' folders on startup."
+    )
+    args = parser.parse_args()
+
+    if args.clean:
+        clean_pycache()
+    # ------------------------------------
+
     app = QApplication(sys.argv)
     
     # Apply the global dark stylesheet
     app.setStyleSheet(dark_stylesheet)
     
     # Create and show the splash screen
-    splash_pixmap = QPixmap('assets/splash.png') # Using an existing asset as the splash image
+    splash_pixmap = QPixmap('assets/splash.png')
     splash = QSplashScreen(splash_pixmap)
     splash.show()
     app.processEvents() # Added to ensure splash screen is drawn immediately
