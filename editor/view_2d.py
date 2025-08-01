@@ -77,6 +77,8 @@ class View2D(QWidget):
         self.draw_brushes(painter)
         self.draw_things(painter)
         self.draw_camera(painter)
+        self.draw_trigger_connections(painter)
+
 
         if self.is_drawing_brush:
             pen = QPen(QColor(255, 255, 0), 1, Qt.DashLine)
@@ -217,10 +219,9 @@ class View2D(QWidget):
         yaw = camera.yaw
         pitch = camera.pitch
         
-        if self.view_type == 'top': angle_deg = -yaw - 90
-        elif self.view_type == 'front': angle_deg = -yaw - 90
-        elif self.view_type == 'side': angle_deg = -pitch - 90
-        else: return
+        if self.view_type == 'top': angle_deg = -yaw + 90
+        elif self.view_type == 'front': angle_deg = -yaw + 90
+        elif self.view_type == 'side': angle_deg = -pitch + 90
 
         fov = camera.fov
         cone_length = 200
@@ -260,6 +261,29 @@ class View2D(QWidget):
         for handle in handles:
             handle_rect = QRectF(handle.x() - handle_size/2, handle.y() - handle_size/2, handle_size, handle_size)
             painter.drawRect(handle_rect)
+
+    def draw_trigger_connections(self, painter):
+        ax1, ax2 = self.get_axes()
+        ax_map = {'x': 0, 'y': 1, 'z': 2}
+
+        pen = QPen(QColor(139, 69, 19), 2, Qt.DotLine)  # Brown dotted line
+        painter.setPen(pen)
+
+        for brush in self.editor.brushes:
+            if brush.get('is_trigger') and brush.get('target'):
+                target_name = brush.get('target')
+                target_thing = next((t for t in self.editor.things if hasattr(t, 'name') and t.name == target_name), None)
+
+                if target_thing:
+                    brush_pos_3d = brush['pos']
+                    thing_pos_3d = target_thing.pos
+                    
+                    brush_pos_2d = QPointF(brush_pos_3d[ax_map[ax1]], brush_pos_3d[ax_map[ax2]])
+                    thing_pos_2d = QPointF(thing_pos_3d[ax_map[ax1]], thing_pos_3d[ax_map[ax2]])
+
+                    p1 = self.world_to_screen(brush_pos_2d)
+                    p2 = self.world_to_screen(thing_pos_2d)
+                    painter.drawLine(p1, p2)
 
     def get_resize_handles(self, rect):
         return [
