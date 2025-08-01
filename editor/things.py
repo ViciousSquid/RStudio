@@ -19,7 +19,19 @@ class Thing:
         self.pos = pos if pos is not None else [0, 0, 0]
         self.properties = properties if properties is not None else {}
         self.properties.setdefault('type', self.__class__.__name__.lower())
-        self.properties.setdefault('name', '') # <-- Ensures all things have a name property
+        # --- CORRECTED: Set a more descriptive default name ---
+        self.properties.setdefault('name', self.__class__.__name__)
+
+    # --- CORRECTED: Add a property to expose the name attribute directly ---
+    @property
+    def name(self):
+        """Gets the name from the properties dictionary."""
+        return self.properties.get('name', '')
+
+    @name.setter
+    def name(self, value):
+        """Sets the name in the properties dictionary."""
+        self.properties['name'] = value
 
     @classmethod
     def get_pixmap(cls):
