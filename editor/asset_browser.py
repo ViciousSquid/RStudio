@@ -18,7 +18,6 @@ class AssetBrowser(QWidget):
         self.selected_item = None
 
         # --- Main Layout ---
-        # The main layout will hold the splitter
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         
@@ -36,7 +35,7 @@ class AssetBrowser(QWidget):
         self.scroll_area.setStyleSheet("border: none;")
         
         self.scroll_content = QWidget()
-        self.asset_layout = QGridLayout(self.scroll_content) # Changed to QGridLayout
+        self.asset_layout = QGridLayout(self.scroll_content)
         self.asset_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.asset_layout.setSpacing(10)
         self.scroll_area.setWidget(self.scroll_content)
@@ -46,10 +45,10 @@ class AssetBrowser(QWidget):
         # --- Right Pane (Details Panel) ---
         right_pane = QFrame()
         right_pane.setFrameShape(QFrame.StyledPanel)
-        right_pane.setMinimumWidth(250)
+        right_pane.setMinimumWidth(300)  # Increased from 250
         right_pane.setStyleSheet("background-color: #e8e8e8;")
 
-        self.details_layout = QVBoxLayout(right_pane) # Changed to QVBoxLayout
+        self.details_layout = QVBoxLayout(right_pane)
         self.details_layout.setContentsMargins(10, 10, 10, 10)
         
         self.preview_label = QLabel("Select an asset")
@@ -72,7 +71,12 @@ class AssetBrowser(QWidget):
         # --- Add Panes to Splitter ---
         self.splitter.addWidget(left_pane)
         self.splitter.addWidget(right_pane)
-        self.splitter.setSizes([550, 250]) # Set initial splitter sizes
+        
+        # Set initial sizes and stretch factors
+        self.setMinimumWidth(1024)  # Minimum width for the whole browser
+        self.splitter.setSizes([600, 300])  # More balanced initial sizes
+        self.splitter.setStretchFactor(0, 2)  # Left pane gets 2/3 of space
+        self.splitter.setStretchFactor(1, 1)  # Right pane gets 1/3 of space
 
         self.refresh_assets()
 

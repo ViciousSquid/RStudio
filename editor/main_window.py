@@ -141,15 +141,30 @@ class MainWindow(QMainWindow):
         corner_layout.addWidget(subtract_button)
         self.right_tabs.setCornerWidget(corner_widget, Qt.TopRightCorner)
         
-       # MODIFICATION: Pass the root directory to the Asset Browser
+               # Asset Browser Setup
         self.asset_browser_dock = QDockWidget("Asset Browser", self)
         self.asset_browser = AssetBrowser(self.root_dir, self)
         self.asset_browser_dock.setWidget(self.asset_browser)
         self.asset_browser_dock.setAllowedAreas(Qt.NoDockWidgetArea)
         self.asset_browser_dock.setFloating(True)
         self.asset_browser_dock.setVisible(False)
-        self.asset_browser_dock.resize(1024, 500)
-        # self.addDockWidget(Qt.RightDockWidgetArea, self.asset_browser_dock)
+        
+        # Set initial size and center position
+        initial_width = 1280
+        initial_height = 600
+        self.asset_browser_dock.resize(initial_width, initial_height)
+        
+        # Calculate centered position relative to main window
+        main_window_center = self.geometry().center()
+        self.asset_browser_dock.move(
+            main_window_center.x() - initial_width // 2,
+            main_window_center.y() - initial_height // 2
+        )
+        
+        # Add toggle action to view menu (will be connected in create_menu_bar)
+        self.asset_browser_toggle_action = self.asset_browser_dock.toggleViewAction()
+        self.asset_browser_toggle_action.setText("Toggle Asset Browser")
+        self.asset_browser_toggle_action.setShortcut("Ctrl+T")
         
         self.create_menu_bar()
         self.create_toolbars()
