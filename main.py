@@ -6,7 +6,6 @@ from PyQt5.QtWidgets import QApplication, QSplashScreen
 from PyQt5.QtGui import QPixmap
 from editor.main_window import MainWindow
 
-# --- NEW FUNCTION ---
 def clean_pycache():
     """
     Finds and deletes all '__pycache__' folders recursively
@@ -25,7 +24,6 @@ def clean_pycache():
                 print(f"Error removing {pycache_path}: {e}")
     print("✨ Cleanup complete.")
 
-# --- Dark Theme Stylesheet (remains the same) ---
 dark_stylesheet = """
     QWidget {
         background-color: #2b2b2b;
@@ -140,7 +138,6 @@ dark_stylesheet = """
 """
 
 if __name__ == "__main__":
-    # --- NEW ARGUMENT PARSING LOGIC ---
     parser = argparse.ArgumentParser(description="RStudio development tools")
     parser.add_argument(
         '-c', '--clean',
@@ -151,23 +148,23 @@ if __name__ == "__main__":
 
     if args.clean:
         clean_pycache()
-    # ------------------------------------
 
     app = QApplication(sys.argv)
     
-    # Apply the global dark stylesheet
     app.setStyleSheet(dark_stylesheet)
     
-    # Create and show the splash screen
     splash_pixmap = QPixmap('assets/splash.png')
     splash = QSplashScreen(splash_pixmap)
     splash.show()
-    app.processEvents() # Added to ensure splash screen is drawn immediately
+    app.processEvents()
     
-    main_win = MainWindow()
+    # --- MODIFICATION: Determine the root directory of the project ---
+    root_directory = os.path.dirname(os.path.abspath(__file__))
+    
+    # --- MODIFICATION: Pass the root directory to the MainWindow ---
+    main_win = MainWindow(root_dir=root_directory)
     main_win.show()
     
-    # Close the splash screen once the main window is shown
     splash.finish(main_win)
     
     sys.exit(app.exec_())
