@@ -19,7 +19,7 @@ class Thing:
         self.pos = pos if pos is not None else [0, 0, 0]
         self.properties = properties if properties is not None else {}
         self.properties.setdefault('type', self.__class__.__name__.lower())
-        self.properties.setdefault('name', '') # <-- ADDED: Ensures all things have a name property
+        self.properties.setdefault('name', '') # <-- Ensures all things have a name property
 
     @classmethod
     def get_pixmap(cls):

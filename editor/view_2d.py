@@ -34,6 +34,17 @@ class View2D(QWidget):
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.ClickFocus)
 
+    def reset_state(self):
+        """
+        Resets the internal state of the view. This is crucial for forcing
+        the view to re-evaluate brush states (like 'lock') after a property change.
+        """
+        # --- CORRECTED: Reset the specific states that matter ---
+        self.is_dragging_object = False
+        self.is_resizing_brush = False
+        self.resize_handle_ix = -1
+        self.update() # Schedule a repaint with the reset state
+
     def get_axes(self):
         if self.view_type == 'top': return 'x', 'z'
         elif self.view_type == 'side': return 'y', 'z'
@@ -65,8 +76,6 @@ class View2D(QWidget):
         self.draw_grid(painter)
         self.draw_brushes(painter)
         self.draw_things(painter)
-
-        # --- MODIFIED: Draw camera in all 2D views ---
         self.draw_camera(painter)
 
         if self.is_drawing_brush:
@@ -120,29 +129,33 @@ class View2D(QWidget):
         ax_map = {'x': 0, 'y': 1, 'z': 2}
         
         for brush in self.editor.brushes:
-            is_selected = (brush == self.editor.selected_object)
+            is_selected = (brush is self.editor.selected_object)
             is_trigger = brush.get('is_trigger', False)
             is_subtractive = brush.get('operation') == 'subtract'
-            is_locked = brush.get('locked', False)
+            is_locked = brush.get('lock', False)
 
+            # --- This logic is sound, but we add a fill to make locked state clearer ---
             if is_locked:
-                pen_color = QColor(0, 0, 255)  # Blue for locked
+                pen_color = QColor(0, 0, 139)  # Dark Blue for locked
+                fill_color = QColor(0, 0, 139, 70)
             else:
-                pen_color = QColor(200, 200, 200) # Light grey for unlocked brushes
+                pen_color = QColor(211, 211, 211) # Light Grey for unlocked
+                fill_color = QColor(200, 200, 200, 30)
 
             if is_trigger:
                 pen_color = QColor(0, 255, 255, 150)
+                fill_color = QColor(0, 255, 255, 30)
             elif is_subtractive:
                 pen_color = QColor(255, 0, 0)
-
+                fill_color = QColor(255, 0, 0, 30)
 
             if is_selected:
-                pen_color = QColor(255, 255, 0)
+                pen_color = QColor(255, 255, 0) # Yellow for selected
             
             pen = QPen(pen_color, 2 if is_selected else 1)
-            if is_trigger: pen.setStyle(Qt.DashLine)
+            if is_trigger and not is_selected: pen.setStyle(Qt.DashLine)
             painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)
+            painter.setBrush(QBrush(fill_color)) # --- CORRECTED: Apply the brush fill ---
 
             pos = brush['pos']
             size = brush['size']
@@ -184,7 +197,7 @@ class View2D(QWidget):
 
             pixmap_size = pixmap.size()
             draw_rect = QRectF(s_pos.x() - pixmap_size.width() / 2, s_pos.y() - pixmap_size.height() / 2,
-                               pixmap_size.width(), pixmap_size.height())
+                                  pixmap_size.width(), pixmap_size.height())
             
             painter.drawPixmap(draw_rect.toRect(), pixmap)
 
@@ -193,59 +206,48 @@ class View2D(QWidget):
                 painter.setBrush(Qt.NoBrush)
                 painter.drawRect(draw_rect.adjusted(-2, -2, 2, 2))
     
-    # --- THIS IS THE CORRECTED METHOD ---
     def draw_camera(self, painter):
         camera = self.editor.view_3d.camera
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
 
-        # Determine which 3D camera coordinates map to this view's 2D plane
         cam_pos_2d = QPointF(camera.pos[ax_map[ax1]], camera.pos[ax_map[ax2]])
         screen_pos = self.world_to_screen(cam_pos_2d)
 
-        # Determine the correct angle to use for this view
         yaw = camera.yaw
         pitch = camera.pitch
         
-        if self.view_type == 'top': # X/Z plane, use Yaw
-            angle_deg = -yaw - 90
-        elif self.view_type == 'front': # X/Y plane, also use Yaw for direction
-            angle_deg = -yaw - 90
-        elif self.view_type == 'side': # Y/Z plane, use Pitch for direction
-            angle_deg = -pitch - 90
-        else:
-            return
+        if self.view_type == 'top': angle_deg = -yaw - 90
+        elif self.view_type == 'front': angle_deg = -yaw - 90
+        elif self.view_type == 'side': angle_deg = -pitch - 90
+        else: return
 
         fov = camera.fov
         cone_length = 200
         
-        # Calculate angles for the view cone
         left_angle_rad = np.radians(angle_deg - fov / 2)
         right_angle_rad = np.radians(angle_deg + fov / 2)
 
         left_point = QPointF(cam_pos_2d.x() + cone_length * np.cos(left_angle_rad),
-                             cam_pos_2d.y() + cone_length * np.sin(left_angle_rad))
+                                 cam_pos_2d.y() + cone_length * np.sin(left_angle_rad))
         right_point = QPointF(cam_pos_2d.x() + cone_length * np.cos(right_angle_rad),
-                              cam_pos_2d.y() + cone_length * np.sin(right_angle_rad))
+                                  cam_pos_2d.y() + cone_length * np.sin(right_angle_rad))
 
         screen_left = self.world_to_screen(left_point)
         screen_right = self.world_to_screen(right_point)
 
-        # Draw the filled cone
         cone_poly = QPolygonF([screen_pos, screen_left, screen_right])
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor(255, 255, 255, 25))
         painter.drawPolygon(cone_poly)
         
-        # Draw the camera icon
         painter.setPen(QPen(QColor(255, 255, 255), 2))
         painter.setBrush(QColor(0, 0, 0, 150))
         painter.drawEllipse(screen_pos, 8, 8)
         
-        # Draw the direction line
         forward_angle_rad = np.radians(angle_deg)
         forward_point = QPointF(cam_pos_2d.x() + 20 * np.cos(forward_angle_rad),
-                                cam_pos_2d.y() + 20 * np.sin(forward_angle_rad))
+                                      cam_pos_2d.y() + 20 * np.sin(forward_angle_rad))
         screen_forward = self.world_to_screen(forward_point)
         painter.drawLine(screen_pos, screen_forward)
 
@@ -274,84 +276,86 @@ class View2D(QWidget):
                 self.contextMenuEvent(event)
             return
 
+        # --- CORRECTED: The entire logic for LeftButton is replaced for clarity and correctness ---
         elif event.button() == Qt.LeftButton:
-            self.resize_handle_ix = self.get_handle_at(event.pos())
-            
-            clicked_object = self.get_object_at(world_pos)
-            is_locked = False
-            if isinstance(clicked_object, dict) and clicked_object.get('locked', False):
-                is_locked = True
-
-
-            if self.resize_handle_ix != -1 and isinstance(self.editor.selected_object, dict) and not is_locked:
+            # First, check if we are clicking a resize handle of an existing, unlocked selection.
+            handle_ix = self.get_handle_at(event.pos())
+            if handle_ix != -1:
+                # The get_handle_at method already confirms the selected object is a brush and not locked.
                 self.is_resizing_brush = True
-            else:
-                self.editor.set_selected_object(clicked_object)
+                self.resize_handle_ix = handle_ix
+                self.update()
+                return
 
-                if clicked_object and not is_locked:
+            # If not a handle, find what object (if any) is under the cursor.
+            clicked_object = self.get_object_at(world_pos)
+            
+            # Always update the selection. This is key. It allows selecting a locked brush to view its properties.
+            self.editor.set_selected_object(clicked_object)
+
+            # Now, determine if the selected object can be dragged.
+            if clicked_object:
+                # Only start dragging if the object is not a locked brush.
+                is_locked = isinstance(clicked_object, dict) and clicked_object.get('lock', False)
+                if not is_locked:
                     self.is_dragging_object = True
                     self.drag_start_pos = world_pos
                     ax1, ax2 = self.get_axes()
                     ax_map = {'x': 0, 'y': 1, 'z': 2}
-                    
                     pos_ref = clicked_object['pos'] if isinstance(clicked_object, dict) else clicked_object.pos
                     obj_pos_2d = QPointF(pos_ref[ax_map[ax1]], pos_ref[ax_map[ax2]])
                     self.drag_offset = obj_pos_2d - world_pos
-                elif not clicked_object:
-                    self.is_drawing_brush = True
-                    self.draw_start_pos = self.snap_to_grid(world_pos)
-                    self.draw_current_pos = self.draw_start_pos
+            else:
+                # If we clicked on empty space, start drawing a new brush.
+                self.is_drawing_brush = True
+                self.draw_start_pos = self.snap_to_grid(world_pos)
+                self.draw_current_pos = self.draw_start_pos
         
         self.update()
 
     def mouseMoveEvent(self, event):
         world_pos = self.screen_to_world(event.pos())
         
+        # --- Handle hover events for cursor changes ---
         if not event.buttons():
             handle_ix = self.get_handle_at(event.pos())
             if handle_ix != -1:
-                if handle_ix in [0, 3]:
-                    self.setCursor(Qt.SizeFDiagCursor)
-                elif handle_ix in [1, 2]:
-                    self.setCursor(Qt.SizeBDiagCursor)
-                elif handle_ix in [4, 5]:
-                    self.setCursor(Qt.SizeVerCursor)
-                elif handle_ix in [6, 7]:
-                    self.setCursor(Qt.SizeHorCursor)
+                # This check is now robust because get_handle_at checks the lock status.
+                if handle_ix in [0, 3]: self.setCursor(Qt.SizeFDiagCursor)
+                elif handle_ix in [1, 2]: self.setCursor(Qt.SizeBDiagCursor)
+                elif handle_ix in [4, 5]: self.setCursor(Qt.SizeVerCursor)
+                elif handle_ix in [6, 7]: self.setCursor(Qt.SizeHorCursor)
             else:
                 self.setCursor(Qt.ArrowCursor)
 
-        if event.buttons() & Qt.RightButton:
-             self.is_panning = True
-             if self.last_pan_pos.isNull(): self.last_pan_pos = event.pos()
-             delta = event.pos() - self.last_pan_pos
-             self.last_pan_pos = event.pos()
-             self.pan_offset -= QPointF(delta.x() / self.zoom_factor, delta.y() / self.zoom_factor)
+        elif event.buttons() & Qt.RightButton:
+            self.is_panning = True
+            if self.last_pan_pos.isNull(): self.last_pan_pos = event.pos()
+            delta = event.pos() - self.last_pan_pos
+            self.last_pan_pos = event.pos()
+            self.pan_offset -= QPointF(delta.x() / self.zoom_factor, delta.y() / self.zoom_factor)
         
         elif self.is_drawing_brush:
             self.draw_current_pos = self.snap_to_grid(world_pos)
 
         elif self.is_dragging_object:
-            ax1, ax2 = self.get_axes()
-            ax_map = {'x': 0, 'y': 1, 'z': 2}
-            new_obj_pos = self.snap_to_grid(world_pos + self.drag_offset)
-            
+            # This state is now correctly prevented from starting on locked objects in mousePressEvent.
             obj = self.editor.selected_object
-            if obj:
-                is_locked = False
-                if isinstance(obj, dict):
-                    is_locked = obj.get('locked', False)
-                if not is_locked:
-                    pos_ref = obj['pos'] if isinstance(obj, dict) else obj.pos
-                    pos_ref[ax_map[ax1]] = new_obj_pos.x()
-                    pos_ref[ax_map[ax2]] = new_obj_pos.y()
-                    self.editor.property_editor.set_object(obj) 
+            if obj: # The check for lock status is implicitly handled by is_dragging_object being False.
+                ax1, ax2 = self.get_axes()
+                ax_map = {'x': 0, 'y': 1, 'z': 2}
+                new_obj_pos = self.snap_to_grid(world_pos + self.drag_offset)
+                pos_ref = obj['pos'] if isinstance(obj, dict) else obj.pos
+                pos_ref[ax_map[ax1]] = new_obj_pos.x()
+                pos_ref[ax_map[ax2]] = new_obj_pos.y()
+                # self.editor.property_editor.set_object(obj) # This causes feedback loops, MainWindow handles it.
         
         elif self.is_resizing_brush:
+            # This state is also correctly prevented from starting on locked objects.
             obj = self.editor.selected_object
-            if obj and isinstance(obj, dict) and not obj.get('locked', False):
+            if obj:
                 self.resize_brush(world_pos)
-                self.editor.property_editor.set_object(self.editor.selected_object)
+                # self.editor.property_editor.set_object(self.editor.selected_object) # Also causes feedback loops.
         
         self.update()
 
@@ -385,7 +389,6 @@ class View2D(QWidget):
                     new_brush = {'pos': pos, 'size': size, 'textures': {f: 'default.png' for f in ['north','south','east','west','top','down']}}
                     self.editor.brushes.append(new_brush)
                     self.editor.set_selected_object(new_brush)
-                    self.editor.update_scene_hierarchy()
             
             if action_taken:
                 self.main_window.save_state()
@@ -411,18 +414,14 @@ class View2D(QWidget):
             pos_3d[1] = 40
 
         new_thing = None
-        if action == add_light_action:
-            new_thing = Light(pos=pos_3d)
-        elif action == add_player_start_action:
-            new_thing = PlayerStart(pos=pos_3d)
-        elif action == add_pickup_action:
-            new_thing = Pickup(pos=pos_3d)
+        if action == add_light_action: new_thing = Light(pos=pos_3d)
+        elif action == add_player_start_action: new_thing = PlayerStart(pos=pos_3d)
+        elif action == add_pickup_action: new_thing = Pickup(pos=pos_3d)
 
         if new_thing:
             self.main_window.save_state()
             self.editor.things.append(new_thing)
             self.editor.set_selected_object(new_thing)
-            self.editor.update_scene_hierarchy()
             self.update()
 
     def wheelEvent(self, event):
@@ -434,13 +433,9 @@ class View2D(QWidget):
         ax_map = {'x': 0, 'y': 1, 'z': 2}
 
         for thing in reversed(self.editor.things):
-            # Use a consistent clickable area for things
             w_2d, h_2d = 24, 24 
-            
             thing_w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
-            
             thing_rect = QRectF(thing_w_pos.x() - w_2d/2, thing_w_pos.y() - h_2d/2, w_2d, h_2d)
-
             if thing_rect.contains(world_pos):
                 return thing
                 
@@ -457,17 +452,16 @@ class View2D(QWidget):
 
     def get_handle_at(self, screen_pos):
         brush = self.editor.selected_object
-        if not isinstance(brush, dict) or brush.get('locked', False): return -1
+        # This check is the gatekeeper for all resizing operations. It correctly checks the LIVE data.
+        if not isinstance(brush, dict) or brush.get('lock', False): return -1
 
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
         
-        pos = brush['pos']
-        size = brush['size']
+        pos, size = brush['pos'], brush['size']
         w_pos = QPointF(pos[ax_map[ax1]] - size[ax_map[ax1]]/2, pos[ax_map[ax2]] - size[ax_map[ax2]]/2)
         w_size = QPointF(size[ax_map[ax1]], size[ax_map[ax2]])
-        p1 = self.world_to_screen(w_pos)
-        p2 = self.world_to_screen(w_pos + w_size)
+        p1, p2 = self.world_to_screen(w_pos), self.world_to_screen(w_pos + w_size)
         screen_rect = QRectF(p1, p2).normalized()
         
         handles = self.get_resize_handles(screen_rect)
@@ -484,16 +478,11 @@ class View2D(QWidget):
         snapped_pos = self.snap_to_grid(world_pos)
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
-
         ix1, ix2 = ax_map[ax1], ax_map[ax2]
         
-        old_pos = list(brush['pos'])
-        old_size = list(brush['size'])
-
-        min_x = old_pos[ix1] - old_size[ix1] / 2
-        max_x = old_pos[ix1] + old_size[ix1] / 2
-        min_y = old_pos[ix2] - old_size[ix2] / 2
-        max_y = old_pos[ix2] + old_size[ix2] / 2
+        old_pos, old_size = list(brush['pos']), list(brush['size'])
+        min_x, max_x = old_pos[ix1] - old_size[ix1]/2, old_pos[ix1] + old_size[ix1]/2
+        min_y, max_y = old_pos[ix2] - old_size[ix2]/2, old_pos[ix2] + old_size[ix2]/2
 
         if self.resize_handle_ix in [0, 2, 6]: min_x = snapped_pos.x()
         if self.resize_handle_ix in [1, 3, 7]: max_x = snapped_pos.x()
@@ -503,9 +492,7 @@ class View2D(QWidget):
         if max_x < min_x: min_x, max_x = max_x, min_x
         if max_y < min_y: min_y, max_y = max_y, min_y
         
-        new_size_x = max_x - min_x
-        new_size_y = max_y - min_y
-        
+        new_size_x, new_size_y = max_x - min_x, max_y - min_y
         if new_size_x < self.grid_size: new_size_x = self.grid_size
         if new_size_y < self.grid_size: new_size_y = self.grid_size
         

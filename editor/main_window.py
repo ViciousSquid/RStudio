@@ -26,12 +26,10 @@ from PyQt5.QtWidgets import (
     QTabWidget,
     QFileDialog,
     QPushButton,
-    QActionGroup,
-    QDialog,
-    QDialogButtonBox
+    QActionGroup
 )
 from PyQt5.QtCore import Qt, QPoint
-from PyQt5.QtGui import QFont, QIcon, QPixmap
+from PyQt5.QtGui import QFont, QIcon
 from editor.view_2d import View2D
 from engine.qt_game_view import QtGameView
 from editor.things import Light, PlayerStart, Thing, Pickup, Monster
@@ -41,52 +39,6 @@ from editor.rand_map_gen import generate
 from editor.asset_browser import AssetBrowser
 from editor.SettingsWindow import SettingsWindow
 from editor.scene_hierarchy import SceneHierarchy
-
-# Custom AboutDialog class
-class AboutDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("About R-Studio")
-        self.setFixedSize(500, 550)
-
-        main_layout = QVBoxLayout(self)
-        main_layout.setAlignment(Qt.AlignTop)
-
-        # Image
-        splash_pixmap = QPixmap('assets/splash.png')
-        if not splash_pixmap.isNull():
-            scaled_pixmap = splash_pixmap.scaled(480, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            image_label = QLabel()
-            image_label.setPixmap(scaled_pixmap)
-            image_label.setAlignment(Qt.AlignCenter)
-            main_layout.addWidget(image_label)
-        else:
-            print("Error: Could not load assets/splash.png for About dialog.")
-
-        # Text with hyperlink, now with yellow color
-        text_label = QLabel()
-        text_label.setTextFormat(Qt.RichText) # Enable rich text
-        text_label.setText("R-Studio version 1.0.2<br><a style='color: yellow;' href='https://github.com/ViciousSquid/RStudio'>https://github.com/ViciousSquid/RStudio</a>")
-        text_label.setOpenExternalLinks(True) # Make links clickable
-        text_label.setAlignment(Qt.AlignCenter)
-        main_layout.addWidget(text_label)
-
-        # Additional text below the hyperlink
-        additional_text_label = QLabel("This is a work in progress<br>"
-                                       "<br>"
-                                       "<br>"
-                                       " ")
-        additional_text_label.setAlignment(Qt.AlignCenter)
-        main_layout.addWidget(additional_text_label)
-
-        # Spacer to push buttons to the bottom
-        main_layout.addStretch()
-
-        # OK Button
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok)
-        button_box.accepted.connect(self.accept)
-        main_layout.addWidget(button_box)
-
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -111,23 +63,28 @@ class MainWindow(QMainWindow):
 
         # --- Create UI Components FIRST ---
         self.view_3d = QtGameView(self)
-        # --- ADDED: Property for 3D view to check ---
         self.view_3d.show_triggers_as_solid = True 
         
         self.view_top = View2D(self, self, "top")
         self.view_side = View2D(self, self, "side")
         self.view_front = View2D(self, self, "front")
         self.property_editor = PropertyEditor(self)
-        self.scene_hierarchy = SceneHierarchy(self, self)
+        self.scene_hierarchy = SceneHierarchy(self)
 
         # --- Create and Arrange Docks ---
         self.setDockOptions(QMainWindow.AnimatedDocks | QMainWindow.AllowNestedDocks | QMainWindow.AllowTabbedDocks)
         self.setTabPosition(Qt.AllDockWidgetAreas, QTabWidget.North)
 
+        self.scene_hierarchy_dock = QDockWidget("Scene", self)
+        self.scene_hierarchy_dock.setWidget(self.scene_hierarchy)
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.scene_hierarchy_dock)
+        
+        screen_width = QApplication.primaryScreen().geometry().width()
+        self.scene_hierarchy_dock.setMaximumWidth(int(screen_width * 0.10))
+
         self.view_3d_dock = QDockWidget("3D View", self)
         self.view_3d_dock.setWidget(self.view_3d)
-        self.view_3d_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.view_3d_dock)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.view_3d_dock)
 
         self.right_dock = QDockWidget("2D Views", self)
         self.right_tabs = QTabWidget()
@@ -135,8 +92,17 @@ class MainWindow(QMainWindow):
         self.right_tabs.addTab(self.view_side, "Side")
         self.right_tabs.addTab(self.view_front, "Front")
         self.right_dock.setWidget(self.right_tabs)
-        self.right_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         self.addDockWidget(Qt.RightDockWidgetArea, self.right_dock)
+        
+        self.properties_dock = QDockWidget("Properties", self)
+        self.properties_dock.setWidget(self.property_editor)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.properties_dock)
+
+        self.splitDockWidget(self.view_3d_dock, self.right_dock, Qt.Horizontal)
+        self.splitDockWidget(self.right_dock, self.properties_dock, Qt.Vertical)
+
+        self.resizeDocks([self.view_3d_dock, self.right_dock], [800, 600], Qt.Horizontal)
+        self.resizeDocks([self.right_dock, self.properties_dock], [600, 300], Qt.Vertical)
 
         self.right_tabs.setStyleSheet("""
             QTabBar::tab:selected { background: #0078d7; color: white; }
@@ -146,26 +112,13 @@ class MainWindow(QMainWindow):
         corner_widget = QWidget()
         corner_layout = QHBoxLayout(corner_widget)
         corner_layout.setContentsMargins(0, 0, 0, 0)
-
         subtract_button = QPushButton("Subtract")
         subtract_button.setToolTip("Mark the selected brush as subtractive")
         subtract_button.setStyleSheet("background-color: orange; padding: 2px 8px; color: black;")
         subtract_button.clicked.connect(self.perform_subtraction)
         corner_layout.addWidget(subtract_button)
-        
         self.right_tabs.setCornerWidget(corner_widget, Qt.TopRightCorner)
         
-        self.scene_hierarchy_dock = QDockWidget("Scene", self)
-        self.scene_hierarchy_dock.setWidget(self.scene_hierarchy)
-        self.scene_hierarchy_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.scene_hierarchy_dock)
-        self.scene_hierarchy_dock.setVisible(False)
-
-        self.properties_dock = QDockWidget("Properties", self)
-        self.properties_dock.setWidget(self.property_editor)
-        self.properties_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.properties_dock)
-
         self.asset_browser_dock = QDockWidget("Asset Browser", self)
         self.asset_browser = AssetBrowser("assets", self)
         self.asset_browser_dock.setWidget(self.asset_browser)
@@ -174,23 +127,56 @@ class MainWindow(QMainWindow):
         self.asset_browser_dock.setVisible(False)
         self.addDockWidget(Qt.RightDockWidgetArea, self.asset_browser_dock)
         
-        self.splitDockWidget(self.view_3d_dock, self.right_dock, Qt.Horizontal)
-        self.tabifyDockWidget(self.properties_dock, self.scene_hierarchy_dock)
-        self.splitDockWidget(self.right_dock, self.properties_dock, Qt.Vertical)
-
-        self.resizeDocks([self.view_3d_dock, self.right_dock], [1000, 600], Qt.Horizontal)
-        self.resizeDocks([self.right_dock, self.properties_dock], [600, 300], Qt.Vertical)
-        
-        self.properties_dock.raise_()
-
         self.create_menu_bar()
         self.create_toolbars()
         self.create_status_bar()
 
         self.setFocus()
         self.update_global_font()
-        
         self.save_state()
+
+    # --- CORE UI UPDATE LOGIC (MODIFIED) ---
+
+    def set_selected_object(self, obj):
+        """Sets the currently selected object and triggers a full UI refresh."""
+        self.selected_object = obj
+        self.update_all_ui()
+
+    def update_all_ui(self):
+        """
+        Updates all UI components to reflect the current state.
+        This is the single source of truth for all UI refreshes.
+        """
+        # 1. Refresh the property editor to show the selected object's details
+        self.property_editor.set_object(self.selected_object)
+        
+        # 2. Refresh the scene hierarchy list and re-apply selection
+        self.update_scene_hierarchy()
+        
+        # 3. Force all 2D and 3D views to repaint
+        self.update_views()
+
+    def update_views(self):
+        """Forces all 2D and 3D views to repaint and reset state."""
+        self.view_3d.update()
+        
+        # Call the new reset_state method for each 2D view
+        self.view_top.reset_state()
+        self.view_front.reset_state()
+        self.view_side.reset_state()
+
+    def update_scene_hierarchy(self):
+        """Updates the scene hierarchy list and re-applies the current selection."""
+        if hasattr(self, 'scene_hierarchy'):
+            self.scene_hierarchy.populate(self.brushes, self.things)
+            if self.selected_object:
+                self.scene_hierarchy.select_object(self.selected_object)
+    
+    def select_object(self, obj):
+        """Alias for set_selected_object to maintain compatibility."""
+        self.set_selected_object(obj)
+
+    # --- END OF CORE UI UPDATE LOGIC ---
 
     @staticmethod
     def _snap_to_power_of_two(n):
@@ -212,6 +198,7 @@ class MainWindow(QMainWindow):
         QApplication.setFont(font)
 
     def show_settings_dialog(self):
+        # This function remains unchanged
         old_dpi_setting = self.config.getboolean('Display', 'high_dpi_scaling', fallback=False)
         old_font_size = self.config.getint('Display', 'font_size', fallback=10)
         old_show_caulk = self.config.getboolean('Display', 'show_caulk', fallback=True)
@@ -231,9 +218,10 @@ class MainWindow(QMainWindow):
             new_dpi_setting = self.config.getboolean('Display', 'high_dpi_scaling', fallback=False)
             if old_dpi_setting != new_dpi_setting:
                     QMessageBox.information(self, "Restart Required",
-                                            "High DPI scaling setting has been changed.\nPlease restart the application for the change to take effect.")
+                                              "High DPI scaling setting has been changed.\nPlease restart the application for the change to take effect.")
 
     def create_menu_bar(self):
+        # This function remains unchanged
         menubar = self.menuBar()
         file_menu = menubar.addMenu('File')
         edit_menu = menubar.addMenu('Edit')
@@ -255,19 +243,17 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(QAction('Redo', self, shortcut='Ctrl+Y', triggered=self.redo))
 
         view_menu.addActions([
+            self.scene_hierarchy_dock.toggleViewAction(),
             self.view_3d_dock.toggleViewAction(), 
             self.right_dock.toggleViewAction(), 
-            self.properties_dock.toggleViewAction(),
-            self.scene_hierarchy_dock.toggleViewAction()
+            self.properties_dock.toggleViewAction()
         ])
         
-
         view_menu.addSeparator()
         toggle_triggers_action = QAction('Solid Triggers', self, checkable=True)
         toggle_triggers_action.setChecked(self.view_3d.show_triggers_as_solid)
         toggle_triggers_action.triggered.connect(self.toggle_trigger_display)
         view_menu.addAction(toggle_triggers_action)
-
 
         tools_menu.addAction(QAction('Random Map Generator...', self, triggered=self.show_random_map_dialog))
 
@@ -283,6 +269,7 @@ class MainWindow(QMainWindow):
         help_menu.addAction(QAction('About', self, triggered=self.show_about))
 
     def apply_caulk_to_brush(self):
+        # This function remains unchanged
         if not isinstance(self.selected_object, dict):
             QMessageBox.warning(self, "No Brush Selected", "Please select a brush to apply caulk to.")
             return
@@ -295,6 +282,7 @@ class MainWindow(QMainWindow):
         self.update_views()
 
     def apply_texture_to_brush(self):
+        # This function remains unchanged
         if not isinstance(self.selected_object, dict):
             QMessageBox.warning(self, "No Brush Selected", "Please select a brush to apply the texture to.")
             return
@@ -312,6 +300,7 @@ class MainWindow(QMainWindow):
         self.update_views()
 
     def create_toolbars(self):
+        # This function remains unchanged
         top_toolbar = QToolBar("Main Tools")
         self.addToolBar(top_toolbar)
 
@@ -348,6 +337,7 @@ class MainWindow(QMainWindow):
         top_toolbar.addWidget(launch_button)
 
     def create_status_bar(self):
+        # This function remains unchanged
         status_bar = QStatusBar()
         self.setStatusBar(status_bar)
 
@@ -383,6 +373,7 @@ class MainWindow(QMainWindow):
         status_bar.addPermanentWidget(bottom_widget, 1)
 
     def set_grid_size(self, size):
+        # This function remains unchanged
         snapped_size = self._snap_to_power_of_two(size)
         if snapped_size != size:
             self.grid_size_spinbox.blockSignals(True)
@@ -395,6 +386,7 @@ class MainWindow(QMainWindow):
         self.update_views()
 
     def set_world_size(self, size):
+        # This function remains unchanged
         snapped_size = self._snap_to_power_of_two(size)
         if snapped_size != size:
             self.world_size_spinbox.blockSignals(True)
@@ -431,9 +423,7 @@ class MainWindow(QMainWindow):
         state = json.loads(state_json)
         self.brushes = state.get('brushes', [])
         self.things = [Thing.from_dict(t_data) for t_data in state.get('things', [])]
-        self.set_selected_object(None)
-        self.update_views()
-        self.update_scene_hierarchy()
+        self.set_selected_object(None) # This now triggers a full UI update
 
     def undo(self):
         if len(self.undo_stack) > 1:
@@ -447,33 +437,19 @@ class MainWindow(QMainWindow):
             self.undo_stack.append(state_json)
             self.restore_state(state_json)
 
-    def select_object(self, obj):
-        self.set_selected_object(obj)
-
-    def set_selected_object(self, obj):
-        self.selected_object = obj
-        self.property_editor.set_object(obj)
-        if hasattr(self, 'scene_hierarchy'):
-            self.scene_hierarchy.select_item_by_data(obj)
-        self.update_views()
-
     def set_render_mode(self, mode):
         self.view_3d.render_mode = mode
         self.update_views()
 
     def show_about(self):
-        # Changed to custom AboutDialog
-        about_dialog = AboutDialog(self)
-        about_dialog.exec_()
+        QMessageBox.about(self, "About R-Studio", "R-Studio version 1.0.2\nhttps://github.com/ViciousSquid/RStudio")
 
     def new_map(self):
         self.save_state()
         self.brushes.clear()
         self.things.clear()
         self.file_path = None
-        self.set_selected_object(None)
-        self.update_views()
-        self.update_scene_hierarchy()
+        self.set_selected_object(None) # This now triggers a full UI update
 
     def show_random_map_dialog(self):
         dialog = RandomMapGeneratorDialog(self)
@@ -484,11 +460,11 @@ class MainWindow(QMainWindow):
             self.view_3d.camera.pos = [0, 150, 400]
             self.set_selected_object(None)
             self.save_state()
-            self.update_views()
-            self.update_scene_hierarchy()
+            self.update_all_ui() # Ensure UI is consistent after generation
             print("Generated new random map.")
 
     def convert_grid_to_level(self, grid, cell_size=128, wall_height=128):
+        # This function remains unchanged
         if not isinstance(grid, np.ndarray):
             print("Error: Invalid grid.")
             return [], []
@@ -537,22 +513,20 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, "Invalid Selection", "Please select a brush to make it subtractive.")
 
-    # Method to handle the new menu toggle
     def toggle_trigger_display(self, checked):
-        """Tells the 3D view to render triggers as solid or wireframe."""
         self.view_3d.show_triggers_as_solid = checked
         self.view_3d.update()
 
     def keyPressEvent(self, event):
+        # All calls to set_selected_object will now trigger a full UI update
         if self.selected_object:
             if event.key() == Qt.Key_Delete:
                 self.save_state()
                 if isinstance(self.selected_object, dict):
                     self.brushes.remove(self.selected_object)
-                else: # Thing
+                else:
                     self.things.remove(self.selected_object)
                 self.set_selected_object(None)
-                self.update_scene_hierarchy()
                 return
 
             if event.key() == Qt.Key_Space:
@@ -560,7 +534,7 @@ class MainWindow(QMainWindow):
                 if isinstance(self.selected_object, dict):
                     new_obj = copy.deepcopy(self.selected_object)
                     self.brushes.append(new_obj)
-                else: # Thing
+                else:
                     new_obj = copy.copy(self.selected_object)
                     self.things.append(new_obj)
                 
@@ -570,13 +544,11 @@ class MainWindow(QMainWindow):
                     pos_map = {'x': 0, 'y': 1, 'z': 2}
                     ax1_name, ax2_name = axis_map.get(current_view.view_type, ('x', 'z'))
                     offset = self.grid_size_spinbox.value()
-                    
                     pos_ref = new_obj['pos'] if isinstance(new_obj, dict) else new_obj.pos
                     pos_ref[pos_map[ax1_name]] += offset
                     pos_ref[pos_map[ax2_name]] += offset
                 
                 self.set_selected_object(new_obj)
-                self.update_scene_hierarchy()
                 return
 
         if event.key() == Qt.Key_T:
@@ -607,16 +579,6 @@ class MainWindow(QMainWindow):
         enabled = state == Qt.Checked
         for view in [self.view_top, self.view_side, self.view_front]:
             view.snap_to_grid_enabled = enabled
-
-    def update_views(self):
-        self.view_3d.update()
-        self.view_top.update()
-        self.view_side.update()
-        self.view_front.update()
-
-    def update_scene_hierarchy(self):
-        if hasattr(self, 'scene_hierarchy'):
-            self.scene_hierarchy.update_list(self.brushes, self.things)
 
     def _get_level_data(self):
         return {'brushes': self.brushes, 'things': [t.to_dict() for t in self.things]}
@@ -665,15 +627,14 @@ class MainWindow(QMainWindow):
             self.view_3d.camera.yaw = -90
 
         self.file_path = filePath
-        self.set_selected_object(None)
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.save_state()
-        self.update_views()
-        self.update_scene_hierarchy()
+        self.set_selected_object(None) # This now triggers a full UI update
         print(f"Level loaded from {filePath}")
 
     def quicksave_and_launch(self):
+        # This function remains unchanged
         maps_dir = "maps"
         if not os.path.exists(maps_dir):
             os.makedirs(maps_dir)
@@ -695,6 +656,10 @@ class MainWindow(QMainWindow):
             subprocess.Popen([sys.executable, game_script_path, quicksave_path])
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not launch game:\n{e}")
+
+    # --- REMOVED ---
+    # The set_brush_lock_state method is no longer needed as the centralized
+    # update_all_ui method now handles this responsibility.
 
 if __name__ == '__main__':
     config = configparser.ConfigParser()
