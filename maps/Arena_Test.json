@@ -1,0 +1,233 @@
+{
+  "brushes": [
+    {
+      "pos": [0, 0, 0],
+      "size": [1600, 64, 1600],
+      "textures": {
+        "north": "concrete.png",
+        "south": "concrete.png",
+        "east": "concrete.png",
+        "west": "concrete.png",
+        "top": "floor_tile.png",
+        "down": "floor_tile.png"
+      },
+      "is_trigger": false
+    },
+    {
+      "pos": [-600, 128, -400],
+      "size": [256, 64, 512],
+      "textures": {
+        "north": "metal_wall.png",
+        "south": "metal_wall.png",
+        "east": "metal_wall.png",
+        "west": "metal_wall.png",
+        "top": "grate.png",
+        "down": "grate.png"
+      },
+      "is_trigger": false
+    },
+    {
+      "pos": [500, 196, 200],
+      "size": [512, 32, 128],
+      "textures": {
+        "north": "platform_metal.png",
+        "south": "platform_metal.png",
+        "east": "platform_metal.png",
+        "west": "platform_metal.png",
+        "top": "grate.png",
+        "down": "grate.png"
+      },
+      "is_trigger": false
+    },
+    {
+      "pos": [-300, 256, 300],
+      "size": [128, 32, 128],
+      "textures": {
+        "north": "platform_dark.png",
+        "south": "platform_dark.png",
+        "east": "platform_dark.png",
+        "west": "platform_dark.png",
+        "top": "tile.png",
+        "down": "tile.png"
+      },
+      "is_trigger": false
+    },
+    {
+      "pos": [0, 400, 0],
+      "size": [256, 16, 2048],
+      "textures": {
+        "north": "beam.png",
+        "south": "beam.png",
+        "east": "beam.png",
+        "west": "beam.png",
+        "top": "beam_top.png",
+        "down": "beam_top.png"
+      },
+      "is_trigger": false
+    },
+    {
+      "pos": [800, 200, -600],
+      "size": [128, 160, 64],
+      "textures": {
+        "north": "pillar_stone.png",
+        "south": "pillar_stone.png",
+        "east": "pillar_stone.png",
+        "west": "pillar_stone.png",
+        "top": "marble.png",
+        "down": "marble.png"
+      },
+      "is_trigger": false
+    },
+    {
+      "pos": [-800, 80, 500],
+      "size": [96, 32, 384],
+      "textures": {
+        "north": "stair.png",
+        "south": "stair.png",
+        "east": "stair.png",
+        "west": "stair.png",
+        "top": "stair_top.png",
+        "down": "stair_top.png"
+      },
+      "is_trigger": false
+    },
+    {
+      "pos": [300, 160, 700],
+      "size": [320, 48, 64],
+      "textures": {
+        "north": "bridge.png",
+        "south": "bridge.png",
+        "east": "bridge.png",
+        "west": "bridge.png",
+        "top": "bridge_top.png",
+        "down": "bridge_top.png"
+      },
+      "is_trigger": false
+    },
+    {
+      "pos": [300, 128, 700],
+      "size": [64, 64, 64],
+      "textures": {
+        "north": "crate.png",
+        "south": "crate.png",
+        "east": "crate.png",
+        "west": "crate.png",
+        "top": "crate_top.png",
+        "down": "crate_top.png"
+      },
+      "is_trigger": false
+    },
+    {
+      "pos": [0, 48, -800],
+      "size": [160, 48, 128],
+      "textures": {
+        "north": "step.png",
+        "south": "step.png",
+        "east": "step.png",
+        "west": "step.png",
+        "top": "step_top.png",
+        "down": "step_top.png"
+      },
+      "is_trigger": false
+    },
+    {
+      "pos": [-100, 64, -300],
+      "size": [64, 32, 64],
+      "textures": {
+        "north": "fountain.png",
+        "south": "fountain.png",
+        "east": "fountain.png",
+        "west": "fountain.png",
+        "top": "water.png",
+        "down": "concrete.png"
+      },
+      "is_trigger": false
+    },
+    {
+      "pos": [0, 96, 0],
+      "size": [64, 64, 64],
+      "textures": {
+        "north": "powercore.png",
+        "south": "powercore.png",
+        "east": "powercore.png",
+        "west": "powercore.png",
+        "top": "glow.png",
+        "down": "glow.png"
+      },
+      "is_trigger": true
+    }
+  ],
+  "things": [
+    {
+      "type": "playerstart",
+      "pos": [-1400, 96, -1400],
+      "properties": {
+        "type": "playerstart",
+        "name": "spawn_corner",
+        "angle": "45"
+      }
+    },
+    {
+      "type": "playerstart",
+      "pos": [600, 128, 200],
+      "properties": {
+        "type": "playerstart",
+        "name": "spawn_upper",
+        "angle": "270"
+      }
+    },
+    {
+      "type": "playerstart",
+      "pos": [0, 64, 1400],
+      "properties": {
+        "type": "playerstart",
+        "name": "spawn_lower",
+        "angle": "180"
+      }
+    },
+    {
+      "type": "light",
+      "pos": [0, 500, 0],
+      "properties": {
+        "type": "light",
+        "name": "main_atrium_light",
+        "color": "[255,230,200]",
+        "intensity": "2.0",
+        "radius": "1000"
+      }
+    },
+    {
+      "type": "light",
+      "pos": [-600, 196, -400],
+      "properties": {
+        "type": "light",
+        "name": "platform_shadow",
+        "color": "[180,220,255]",
+        "intensity": "1.2",
+        "radius": "500"
+      }
+    },
+    {
+      "type": "light",
+      "pos": [500, 220, 200],
+      "properties": {
+        "type": "light",
+        "name": "upper_walkway_glow",
+        "color": "[255,180,180]",
+        "intensity": "1.5",
+        "radius": "450"
+      }
+    },
+    {
+      "type": "light",
+      "pos": [-100, 100, -300],
+      "properties": {
+        "type": "light",
+        "name": "fountain_light",
+        "color": "[120,200,255]",
+        "intensity": "0.8",
+        "radius": "300"
+      }
+    }
+  ]
+}
