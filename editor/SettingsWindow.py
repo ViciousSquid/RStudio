@@ -75,24 +75,20 @@ class SettingsWindow(QDialog):
         shortcuts_layout = QFormLayout(shortcuts_widget)
         self.tabs.addTab(shortcuts_widget, "Keyboard")
 
-        self.control_buttons = {}
-        movement_keys = ["forward", "back", "left", "right"]
-        for control_name in movement_keys:
-            self.control_buttons[control_name] = QPushButton("...")
-            self.control_buttons[control_name].setFixedWidth(120)
-            self.control_buttons[control_name].clicked.connect(lambda _, c=control_name: self.change_key(c))
-            shortcuts_layout.addRow(f"Move {control_name.capitalize()}:", self.control_buttons[control_name])
-
-        shortcuts_layout.addRow(QWidget()) # Add a separator
-
         self.shortcut_buttons = {}
-        shortcut_actions = ["apply_texture"] 
+        shortcut_actions = [
+            "apply_texture", "Clone Brush", "Delete Brush",
+            "reset_layout", "save_layout"
+        ]
         for action_name in shortcut_actions:
             label_text = action_name.replace('_', ' ').title()
             self.shortcut_buttons[action_name] = QPushButton("...")
             self.shortcut_buttons[action_name].setFixedWidth(120)
             self.shortcut_buttons[action_name].clicked.connect(lambda _, a=action_name: self.change_key(a))
             shortcuts_layout.addRow(label_text, self.shortcut_buttons[action_name])
+
+        asset_browser_label = QLabel("T")
+        shortcuts_layout.addRow("Asset Browser:", asset_browser_label)
         
         # --- OK and Cancel Buttons ---
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -112,12 +108,19 @@ class SettingsWindow(QDialog):
         self.invert_mouse_checkbox.setChecked(self.config.getboolean('Controls', 'invert_mouse', fallback=False))
         self.middle_click_drag_checkbox.setChecked(self.config.getboolean('Controls', 'MiddleClickDrag', fallback=False))
         
-        for control, button in self.control_buttons.items():
-            key = self.config.get('Controls', control, fallback='W' if control == 'forward' else 'S' if control == 'back' else 'A' if control == 'left' else 'D')
-            button.setText(key)
-
         for action, button in self.shortcut_buttons.items():
-            shortcut = self.config.get('Controls', action, fallback='Shift+T' if action == 'apply_texture' else '')
+            fallback_key = ''
+            if action == 'apply_texture':
+                fallback_key = 'Shift+T'
+            elif action == 'Clone Brush':
+                fallback_key = 'Space'
+            elif action == 'Delete Brush':
+                fallback_key = 'Del'
+            elif action == 'reset_layout':
+                fallback_key = 'Ctrl+Shift+R'
+            elif action == 'save_layout':
+                fallback_key = 'Ctrl+Shift+S'
+            shortcut = self.config.get('Controls', action, fallback=fallback_key)
             button.setText(shortcut)
 
 
@@ -135,8 +138,6 @@ class SettingsWindow(QDialog):
         if not self.config.has_section('Controls'): self.config.add_section('Controls')
         self.config.set('Controls', 'invert_mouse', str(self.invert_mouse_checkbox.isChecked()))
         self.config.set('Controls', 'MiddleClickDrag', str(self.middle_click_drag_checkbox.isChecked()))
-        for control, button in self.control_buttons.items():
-            self.config.set('Controls', control, button.text())
 
         for action, button in self.shortcut_buttons.items():
             self.config.set('Controls', action, button.text())
@@ -146,10 +147,7 @@ class SettingsWindow(QDialog):
     def change_key(self, control_name):
         """Prepares to capture the next key press for a specific control."""
         self.binding_in_progress = control_name
-        if control_name in self.control_buttons:
-            button = self.control_buttons[control_name]
-        else:
-            button = self.shortcut_buttons[control_name]
+        button = self.shortcut_buttons[control_name]
         button.setText("Press a key...")
         self.grabKeyboard()
 
@@ -166,9 +164,6 @@ class SettingsWindow(QDialog):
             if self.binding_in_progress in self.shortcut_buttons:
                 button = self.shortcut_buttons[self.binding_in_progress]
                 button.setText(key_name)
-            elif self.binding_in_progress in self.control_buttons:
-                 button = self.control_buttons[self.binding_in_progress]
-                 button.setText(key_name.upper())
 
 
             self.releaseKeyboard()

@@ -28,8 +28,8 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QActionGroup
 )
-from PyQt5.QtCore import Qt, QPoint
-from PyQt5.QtGui import QFont, QIcon, QKeySequence
+from PyQt5.QtCore import Qt, QPoint, QByteArray
+from PyQt5.QtGui import QFont, QIcon, QKeySequence, QPixmap
 from editor.view_2d import View2D
 from engine.qt_game_view import QtGameView
 from editor.things import Light, PlayerStart, Thing, Pickup, Monster
@@ -98,6 +98,7 @@ class MainWindow(QMainWindow):
         self.setTabPosition(Qt.AllDockWidgetAreas, QTabWidget.North)
 
         self.scene_hierarchy_dock = QDockWidget("Scene", self)
+        self.scene_hierarchy_dock.setObjectName("SceneDock")
         self.scene_hierarchy_dock.setWidget(self.scene_hierarchy)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.scene_hierarchy_dock)
         
@@ -105,10 +106,12 @@ class MainWindow(QMainWindow):
         self.scene_hierarchy_dock.setMaximumWidth(int(screen_width * 0.10))
 
         self.view_3d_dock = QDockWidget("3D View", self)
+        self.view_3d_dock.setObjectName("View3DDock")
         self.view_3d_dock.setWidget(self.view_3d)
         self.addDockWidget(Qt.RightDockWidgetArea, self.view_3d_dock)
 
         self.right_dock = QDockWidget("2D Views", self)
+        self.right_dock.setObjectName("2DViewsDock")
         self.right_tabs = QTabWidget()
         self.right_tabs.addTab(self.view_top, "Top")
         self.right_tabs.addTab(self.view_side, "Side")
@@ -117,6 +120,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, self.right_dock)
         
         self.properties_dock = QDockWidget("Properties", self)
+        self.properties_dock.setObjectName("PropertiesDock")
         self.properties_dock.setWidget(self.property_editor)
         self.addDockWidget(Qt.RightDockWidgetArea, self.properties_dock)
 
@@ -143,7 +147,14 @@ class MainWindow(QMainWindow):
         
                # Asset Browser Setup
         self.asset_browser_dock = QDockWidget("Asset Browser", self)
-        self.asset_browser = AssetBrowser(self.root_dir, self)
+
+        # FIX: Construct the correct paths for textures and models
+        texture_path = os.path.join(self.root_dir, "assets", "textures")
+        model_path = os.path.join(self.root_dir, "assets", "models")
+        
+        self.asset_browser = AssetBrowser(texture_path, model_path)
+        self.asset_browser.main_window = self # Inject reference for the "Add Model" button
+
         self.asset_browser_dock.setWidget(self.asset_browser)
         self.asset_browser_dock.setAllowedAreas(Qt.NoDockWidgetArea)
         self.asset_browser_dock.setFloating(True)
@@ -173,6 +184,7 @@ class MainWindow(QMainWindow):
         self.setFocus()
         self.update_global_font()
         self.save_state()
+        self.load_layout()
 
     # --- NEW METHOD TO ADD MODELS TO THE SCENE ---
     def add_model_to_scene(self, filepath, rotation, scale):
@@ -262,7 +274,6 @@ class MainWindow(QMainWindow):
             if old_dpi_setting != new_dpi_setting:
                     QMessageBox.information(self, "Restart Required",
                                               "High DPI scaling setting has been changed.\nPlease restart the application for the change to take effect.")
-
     def create_menu_bar(self):
         menubar = self.menuBar()
         file_menu = menubar.addMenu('File')
@@ -297,6 +308,15 @@ class MainWindow(QMainWindow):
         asset_browser_action.setText("Toggle Asset Browser")
         asset_browser_action.setShortcut("T")
         view_menu.addAction(asset_browser_action)
+        
+        view_menu.addSeparator()
+        self.save_layout_action = QAction("Save Layout", self)
+        self.save_layout_action.triggered.connect(self.save_layout)
+        view_menu.addAction(self.save_layout_action)
+        
+        self.reset_layout_action = QAction("Reset Layout", self)
+        self.reset_layout_action.triggered.connect(self.reset_layout)
+        view_menu.addAction(self.reset_layout_action)
         
         view_menu.addSeparator()
         toggle_triggers_action = QAction('Solid Triggers', self, checkable=True)
@@ -346,6 +366,7 @@ class MainWindow(QMainWindow):
 
     def create_toolbars(self):
         top_toolbar = QToolBar("Main Tools")
+        top_toolbar.setObjectName("MainToolbar")
         self.addToolBar(top_toolbar)
         display_mode_widget = QWidget()
         display_mode_layout = QHBoxLayout(display_mode_widget)
@@ -377,6 +398,10 @@ class MainWindow(QMainWindow):
     def update_shortcuts(self):
         apply_texture_shortcut = self.config.get('Controls', 'apply_texture', fallback='Shift+T')
         self.apply_texture_action.setShortcut(QKeySequence(apply_texture_shortcut))
+        reset_layout_shortcut = self.config.get('Controls', 'reset_layout', fallback='Ctrl+Shift+R')
+        self.reset_layout_action.setShortcut(QKeySequence(reset_layout_shortcut))
+        save_layout_shortcut = self.config.get('Controls', 'save_layout', fallback='Ctrl+Shift+S')
+        self.save_layout_action.setShortcut(QKeySequence(save_layout_shortcut))
 
     def create_status_bar(self):
         status_bar = QStatusBar()
@@ -507,7 +532,39 @@ class MainWindow(QMainWindow):
         self.update_views()
 
     def show_about(self):
-        QMessageBox.about(self, "About R-Studio", "R-Studio version 1.0.2\nhttps://github.com/ViciousSquid/RStudio")
+        try:
+            with open('editor/version.txt', 'r') as f:
+                version = f.read().strip()
+        except FileNotFoundError:
+            version = "Version not found"
+
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("About RStudio")
+
+        # This widget will hold our custom layout
+        container_widget = QWidget()
+        layout = QVBoxLayout(container_widget) # Apply the layout to the container
+
+        splash_label = QLabel()
+        pixmap = QPixmap('assets/splash.png')
+        splash_label.setPixmap(pixmap.scaled(512, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        layout.addWidget(splash_label)
+
+        version_label = QLabel(f"{version}<br>https://github.com/ViciousSquid/RStudio")
+        version_label.setTextFormat(Qt.RichText) # Use RichText to render the <br> tag
+        version_label.setAlignment(Qt.AlignCenter)
+        version_label.setOpenExternalLinks(True) # Make the link clickable
+        layout.addWidget(version_label)
+
+        # This is a bit of a hack to get the custom widget into the QMessageBox
+        # We add our container_widget (which is a QWidget) instead of the layout itself.
+        msg_box.layout().addWidget(container_widget, 0, 0, 1, msg_box.layout().columnCount())
+        
+        # We need to add a standard button so the dialog can be closed.
+        # Otherwise, it might appear without an OK/Close button.
+        msg_box.setStandardButtons(QMessageBox.Ok)
+
+        msg_box.exec_()
 
     def new_map(self):
         self.save_state()
@@ -541,7 +598,7 @@ class MainWindow(QMainWindow):
             'pos': [total_width / 2 - cell_size/2, wall_height / 2, total_height / 2 - cell_size/2],
             'size': [total_width, wall_height, total_height],
             'operation': 'subtract',
-            'textures': {f: 'default.png' for f in ['north','south','east','west','top','down']}
+            'textures': {f: 'assets/textures/default.png' for f in ['north','south','east','west','top','down']}
         })
 
         for r in range(grid_height):
@@ -552,7 +609,7 @@ class MainWindow(QMainWindow):
                         'pos': [pos_x, pos_y, pos_z],
                         'size': [cell_size, wall_height, cell_size],
                         'operation': 'add',
-                        'textures': {f: 'default.png' for f in ['north','south','east','west','top','down']}
+                        'textures': {f: 'assets/textures/default.png' for f in ['north','south','east','west','top','down']}
                     })
                 else:
                     floor_locations.append((pos_x, pos_y, pos_z))
@@ -826,6 +883,43 @@ class MainWindow(QMainWindow):
             subprocess.Popen([sys.executable, game_script_path, quicksave_path])
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not launch game:\n{e}")
+            
+    def save_layout(self):
+        if not self.config.has_section('Layout'):
+            self.config.add_section('Layout')
+        self.config['Layout']['geometry'] = self.saveGeometry().toHex().data().decode()
+        self.config['Layout']['state'] = self.saveState().toHex().data().decode()
+        self.save_config()
+        self.statusBar().showMessage("Layout saved.", 2000)
+
+    def load_layout(self):
+        if self.config.has_section('Layout') and self.config.has_option('Layout', 'geometry'):
+            self.restoreGeometry(QByteArray.fromHex(self.config['Layout']['geometry'].encode()))
+        if self.config.has_section('Layout') and self.config.has_option('Layout', 'state'):
+            self.restoreState(QByteArray.fromHex(self.config['Layout']['state'].encode()))
+
+    def reset_layout(self):
+        # This function provides a default layout.
+        # It's a simplified version of the initial setup in __init__.
+        self.scene_hierarchy_dock.setFloating(False)
+        self.view_3d_dock.setFloating(False)
+        self.right_dock.setFloating(False)
+        self.properties_dock.setFloating(False)
+        self.asset_browser_dock.setFloating(True)
+        
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.scene_hierarchy_dock)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.view_3d_dock)
+        self.splitDockWidget(self.view_3d_dock, self.right_dock, Qt.Horizontal)
+        self.splitDockWidget(self.right_dock, self.properties_dock, Qt.Vertical)
+        
+        # You may need to adjust these sizes to what you consider "default"
+        self.resizeDocks([self.view_3d_dock, self.right_dock], [800, 600], Qt.Horizontal)
+        self.resizeDocks([self.right_dock, self.properties_dock], [600, 300], Qt.Vertical)
+        self.statusBar().showMessage("Layout reset to default.", 2000)
+
+    def closeEvent(self, event):
+        self.save_layout()
+        super().closeEvent(event)
 
 
 if __name__ == '__main__':
@@ -837,6 +931,6 @@ if __name__ == '__main__':
 
     app = QApplication(sys.argv)
 
-    main_win = MainWindow()
+    main_win = MainWindow(os.path.dirname(os.path.abspath(__file__)))
     main_win.show()
     sys.exit(app.exec_())
