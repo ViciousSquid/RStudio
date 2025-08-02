@@ -11,6 +11,7 @@ Requires `pyqt5` , `pycsg` , `pyrr` and `pygame`
 #### ALPHA---ALPHA--- THE EDITOR AND 3D ENGINE COMPONENTS ARE VERY HEAVILY WORK IN PROGRESS
 
 * Custom implementation of an OpenGL renderer via PyGame
+* Worlds saved to json
 * Engine and editor are tightly integrated
 * Fully modular and open source (MIT License)
   
