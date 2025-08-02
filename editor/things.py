@@ -21,7 +21,7 @@ class Thing:
         self.properties = properties if properties is not None else {}
         self.properties.setdefault('type', self.__class__.__name__.lower())
         
-        # --- MODIFIED: Set a default and unique name ---
+        # --- Set a default and unique name ---
         if 'name' not in self.properties or not self.properties['name']:
             class_name = self.__class__.__name__
             if class_name not in Thing._counters:
@@ -120,7 +120,7 @@ class Light(Thing):
         self.properties.setdefault('intensity', 1.0)
         self.properties.setdefault('radius', 512.0)
         self.properties.setdefault('state', 'on')
-        self.properties.setdefault('show_radius', True)
+        self.properties.setdefault('show_radius', False)
 
     def get_color(self):
         color = self.properties.get('colour', [255, 255, 255])
