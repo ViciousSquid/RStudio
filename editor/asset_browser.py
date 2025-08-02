@@ -2,8 +2,8 @@ import os
 import sys
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame,
                              QHBoxLayout, QGridLayout, QSplitter, QApplication,
-                             QMainWindow, QPushButton, QFileDialog)
-from PyQt5.QtCore import Qt, QSize
+                             QMainWindow, QPushButton, QFileDialog, QTreeView, QFileSystemModel)
+from PyQt5.QtCore import Qt, QSize, QDir
 from PyQt5.QtGui import QPixmap
 
 class AssetBrowser(QWidget):
@@ -13,7 +13,8 @@ class AssetBrowser(QWidget):
     """
     def __init__(self, asset_folder, editor=None):
         super().__init__()
-        self.asset_folder = asset_folder
+        self.base_asset_folder = asset_folder # Store the base folder
+        self.current_asset_folder = asset_folder
         self.editor = editor
         self.selected_item = None
 
@@ -22,8 +23,60 @@ class AssetBrowser(QWidget):
         self.main_layout.setContentsMargins(5, 5, 5, 5)
         self.main_layout.setSpacing(5)
 
-        # --- Browse Button ---
-        self.browse_button = QPushButton(os.path.abspath(self.asset_folder))
+        # --- Main Horizontal Splitter ---
+        self.main_splitter = QSplitter(Qt.Horizontal)
+        self.main_layout.addWidget(self.main_splitter)
+
+        # --- Left Pane (Directory Tree) ---
+        left_pane_tree = QFrame()
+        left_pane_tree_layout = QVBoxLayout(left_pane_tree)
+        left_pane_tree_layout.setContentsMargins(0, 0, 0, 0)
+
+        # --- Textures Button ---
+        self.textures_button = QPushButton("Textures")
+        self.textures_button.clicked.connect(self.reset_to_default_path)
+        self.textures_button.setStyleSheet("""
+            QPushButton {
+                padding: 8px;
+                text-align: center;
+                background-color: #444;
+                border: 1px solid #666;
+                color: #f0f0f0;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #555;
+            }
+        """)
+        left_pane_tree_layout.addWidget(self.textures_button)
+
+
+        self.model = QFileSystemModel()
+        self.model.setRootPath(self.base_asset_folder)
+        self.model.setFilter(QDir.NoDotAndDotDot | QDir.AllDirs)
+
+        self.tree = QTreeView()
+        self.tree.setModel(self.model)
+        self.tree.setRootIndex(self.model.index(self.base_asset_folder))
+        self.tree.clicked.connect(self.on_tree_selection_changed)
+
+        # Hide columns for size, type, date modified
+        self.tree.setHeaderHidden(True)
+        for i in range(1, self.model.columnCount()):
+            self.tree.hideColumn(i)
+
+
+        left_pane_tree_layout.addWidget(self.tree)
+
+        # --- Right Pane (Nested Splitter for Grid and Details) ---
+        right_pane_nested = QSplitter(Qt.Horizontal)
+
+        # --- Middle Pane (Asset Grid) ---
+        middle_pane = QFrame()
+        middle_pane_layout = QVBoxLayout(middle_pane)
+        middle_pane_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.browse_button = QPushButton(os.path.abspath(self.current_asset_folder))
         self.browse_button.clicked.connect(self.browse_for_folder)
         self.browse_button.setStyleSheet("""
             QPushButton {
@@ -37,16 +90,7 @@ class AssetBrowser(QWidget):
                 background-color: #555;
             }
         """)
-        self.main_layout.addWidget(self.browse_button)
-
-        # --- Horizontal Splitter ---
-        self.splitter = QSplitter(Qt.Horizontal)
-        self.main_layout.addWidget(self.splitter)
-
-        # --- Left Pane (Asset Grid) ---
-        left_pane = QFrame()
-        left_pane_layout = QVBoxLayout(left_pane)
-        left_pane_layout.setContentsMargins(0, 0, 0, 0)
+        middle_pane_layout.addWidget(self.browse_button)
 
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
@@ -58,16 +102,15 @@ class AssetBrowser(QWidget):
         self.asset_layout.setSpacing(10)
         self.scroll_area.setWidget(self.scroll_content)
 
-        left_pane_layout.addWidget(self.scroll_area)
+        middle_pane_layout.addWidget(self.scroll_area)
 
-        # --- Right Pane (Details Panel) ---
-        right_pane = QFrame()
-        right_pane.setFrameShape(QFrame.StyledPanel)
-        right_pane.setMinimumWidth(300)
-        # Matching the dark theme from main.py
-        right_pane.setStyleSheet("background-color: #3c3c3c;")
+        # --- Rightmost Pane (Details Panel) ---
+        rightmost_pane = QFrame()
+        rightmost_pane.setFrameShape(QFrame.StyledPanel)
+        rightmost_pane.setMinimumWidth(300)
+        rightmost_pane.setStyleSheet("background-color: #3c3c3c;")
 
-        self.details_layout = QVBoxLayout(right_pane)
+        self.details_layout = QVBoxLayout(rightmost_pane)
         self.details_layout.setContentsMargins(10, 10, 10, 10)
 
         self.preview_label = QLabel("Select an asset")
@@ -87,36 +130,54 @@ class AssetBrowser(QWidget):
         self.details_layout.addWidget(self.type_label)
         self.details_layout.addStretch()
 
-        # --- Add Panes to Splitter ---
-        self.splitter.addWidget(left_pane)
-        self.splitter.addWidget(right_pane)
+        # Add panes to nested splitter
+        right_pane_nested.addWidget(middle_pane)
+        right_pane_nested.addWidget(rightmost_pane)
 
-        self.setMinimumWidth(1024)
-        self.splitter.setSizes([600, 300])
-        self.splitter.setStretchFactor(0, 2)
-        self.splitter.setStretchFactor(1, 1)
+        # Add panes to main splitter
+        self.main_splitter.addWidget(left_pane_tree)
+        self.main_splitter.addWidget(right_pane_nested)
+
+        self.setMinimumWidth(1280)
+        self.main_splitter.setSizes([200, 1080]) # Adjust initial sizes
+        right_pane_nested.setSizes([600,300])
+        right_pane_nested.setStretchFactor(0, 2)
+        right_pane_nested.setStretchFactor(1, 1)
 
         self.refresh_assets()
 
+    def reset_to_default_path(self):
+        """Resets the asset browser to the base asset folder."""
+        self.current_asset_folder = self.base_asset_folder
+        self.browse_button.setText(os.path.abspath(self.current_asset_folder))
+        self.refresh_assets()
+        self.tree.setCurrentIndex(self.model.index(self.base_asset_folder))
+
+
+    def on_tree_selection_changed(self, index):
+        path = self.model.filePath(index)
+        self.current_asset_folder = path
+        self.browse_button.setText(os.path.abspath(self.current_asset_folder))
+        self.refresh_assets()
+
+
     def browse_for_folder(self):
         """Opens a dialog to select a new asset folder."""
-        new_folder = QFileDialog.getExistingDirectory(self, "Select Image Directory", self.asset_folder)
+        new_folder = QFileDialog.getExistingDirectory(self, "Select Image Directory", self.current_asset_folder)
 
-        if new_folder and new_folder != self.asset_folder:
-            self.asset_folder = new_folder
-            self.browse_button.setText(os.path.abspath(self.asset_folder))
+        if new_folder and new_folder != self.current_asset_folder:
+            self.current_asset_folder = new_folder
+            self.browse_button.setText(os.path.abspath(self.current_asset_folder))
             self.refresh_assets()
 
     def refresh_assets(self):
         """Reloads assets from the current asset_folder into the grid view."""
-        # Clear existing widgets from the grid layout
         while self.asset_layout.count():
             child = self.asset_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
 
-        # MODIFICATION: Use self.asset_folder directly
-        textures_path = self.asset_folder
+        textures_path = self.current_asset_folder
         if not os.path.exists(textures_path) or not os.path.isdir(textures_path):
             print(f"Warning: Asset path not found or not a directory: '{textures_path}'")
             self.preview_label.setText("Directory not found.")
@@ -125,7 +186,6 @@ class AssetBrowser(QWidget):
             self.selected_item = None
             return
 
-        # --- Populate Grid View ---
         row, col = 0, 0
         num_columns = 4
 
@@ -140,7 +200,6 @@ class AssetBrowser(QWidget):
                     col = 0
                     row += 1
 
-        # Reset details panel
         self.preview_label.setText("Select an asset")
         self.name_label.setText("Name: ")
         self.type_label.setText("Type: ")
@@ -247,7 +306,8 @@ class AssetItem(QWidget):
 # --- Main Application Runner ---
 if __name__ == '__main__':
     # Define the path for dummy assets
-    dummy_texture_path = "./project_folder/assets/textures"
+    dummy_asset_path = "./project_folder/assets" # Base asset folder
+    dummy_texture_path = os.path.join(dummy_asset_path, "textures") # Specific texture path for initial view
 
     # Create dummy files for demonstration if they don't exist
     if not os.path.exists(dummy_texture_path):
@@ -269,10 +329,10 @@ if __name__ == '__main__':
 
     main_window = QMainWindow()
     main_window.setWindowTitle("Asset Browser Standalone Test")
-    main_window.setGeometry(100, 100, 1024, 768)
+    main_window.setGeometry(100, 100, 1280, 768)
 
-    # MODIFICATION: Pass the specific texture path directly to the browser
-    asset_browser = AssetBrowser(dummy_texture_path)
+    # Pass the base asset path to the browser
+    asset_browser = AssetBrowser(dummy_asset_path)
 
     main_window.setCentralWidget(asset_browser)
     main_window.show()
