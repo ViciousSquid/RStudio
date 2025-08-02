@@ -3,7 +3,7 @@ import os
 import shutil
 import argparse
 from PyQt5.QtWidgets import QApplication, QSplashScreen
-from PyQt5.QtGui import QPixmap, QSurfaceFormat # Imported QSurfaceFormat
+from PyQt5.QtGui import QPixmap, QSurfaceFormat
 from editor.main_window import MainWindow
 
 def clean_pycache():
@@ -17,11 +17,11 @@ def clean_pycache():
     for root, dirs, files in os.walk(project_root):
         if '__pycache__' in dirs:
             pycache_path = os.path.join(root, '__pycache__')
-            print(f"🗑️ Found and removing: {pycache_path}")
+            print(f"🗑️ Found existing cached data and deleted them")
             try:
                 shutil.rmtree(pycache_path)
             except OSError as e:
-                print(f"Error removing {pycache_path}: {e}")
+                print(f"Skipping cleanup")
     print("✨ Cleanup complete.")
 
 dark_stylesheet = """
@@ -149,16 +149,8 @@ if __name__ == "__main__":
     QSurfaceFormat.setDefaultFormat(format)
     # --- End of new block ---
 
-    parser = argparse.ArgumentParser(description="RStudio development tools")
-    parser.add_argument(
-        '-c', '--clean',
-        action='store_true',
-        help="Checks for and deletes all '__pycache__' folders on startup."
-    )
-    args = parser.parse_args()
-
-    if args.clean:
-        clean_pycache()
+    # Always clean pycache on startup
+    clean_pycache()
 
     app = QApplication(sys.argv)
     
