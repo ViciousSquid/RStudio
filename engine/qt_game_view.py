@@ -167,7 +167,6 @@ void main() {
 }
 """
 
-
 class QtGameView(QOpenGLWidget):
     def __init__(self, editor):
         super().__init__(editor)
@@ -204,6 +203,7 @@ class QtGameView(QOpenGLWidget):
     def initializeGL(self):
         glClearColor(0.1, 0.1, 0.15, 1.0)
         glEnable(GL_DEPTH_TEST)
+        glDepthFunc(GL_LEQUAL)
         try:
             self.shader_simple = compileProgram(compileShader(VERTEX_SHADER_SIMPLE, GL_VERTEX_SHADER), compileShader(FRAGMENT_SHADER_SIMPLE, GL_FRAGMENT_SHADER))
             self.shader_lit = compileProgram(compileShader(VERTEX_SHADER_LIT, GL_VERTEX_SHADER), compileShader(FRAGMENT_SHADER_LIT, GL_FRAGMENT_SHADER))
@@ -291,9 +291,10 @@ class QtGameView(QOpenGLWidget):
     def paintGL(self):
         if self.culling_enabled:
             glEnable(GL_CULL_FACE)
+            glCullFace(GL_BACK)
         else:
             glDisable(GL_CULL_FACE)
-
+        
         if self.grid_dirty: self.create_grid_buffers()
         
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -333,7 +334,9 @@ class QtGameView(QOpenGLWidget):
             
             trigger_brushes = [o for o in transparent_objects if isinstance(o, dict)]
             if trigger_brushes:
+                glDepthMask(GL_TRUE)
                 self.draw_brushes_lit(view, proj, trigger_brushes, is_transparent_pass=True)
+                glDepthMask(GL_FALSE)
             
             glDepthMask(GL_TRUE)
             glDisable(GL_BLEND)
@@ -372,13 +375,17 @@ class QtGameView(QOpenGLWidget):
         
         glBindVertexArray(self.vao_cube)
         
+        # Save current polygon mode (just get the first element since both faces are the same)
+        current_polygon_mode = glGetIntegerv(GL_POLYGON_MODE)[0]
+        
         for brush in brushes:
             is_trigger = brush.get('is_trigger', False)
             
-            if is_transparent_pass and not self.show_triggers_as_solid:
-                glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
+            if is_transparent_pass:
+                glDisable(GL_CULL_FACE)
+                glPolygonMode(GL_FRONT_AND_BACK, GL_LINE if not self.show_triggers_as_solid else GL_FILL)
             else:
-                glPolygonMode(GL_FRONT_AND_BACK, GL_LINE if self.brush_display_mode == "Wireframe" and not is_transparent_pass else GL_FILL)
+                glPolygonMode(GL_FRONT_AND_BACK, GL_LINE if self.brush_display_mode == "Wireframe" else GL_FILL)
 
             pos, size = np.array(brush['pos']), np.array(brush['size'])
             model_matrix = np.identity(4, dtype=np.float32); model_matrix[:3, :3] = np.diag(size); model_matrix[3, :3] = pos
@@ -400,7 +407,11 @@ class QtGameView(QOpenGLWidget):
             glUniform1f(glGetUniformLocation(self.shader_lit, "alpha"), alpha)
             glDrawArrays(GL_TRIANGLES, 0, 36)
             
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL); glBindVertexArray(0); glUseProgram(0)
+        # Restore polygon mode
+        glPolygonMode(GL_FRONT_AND_BACK, current_polygon_mode)
+        if self.culling_enabled:
+            glEnable(GL_CULL_FACE)
+        glBindVertexArray(0); glUseProgram(0)
 
     def draw_brushes_textured(self, view, projection, brushes):
         if not self.shader_textured or not brushes: return
@@ -417,6 +428,9 @@ class QtGameView(QOpenGLWidget):
         glActiveTexture(GL_TEXTURE0); glUniform1i(glGetUniformLocation(self.shader_textured, "texture_diffuse"), 0); glBindVertexArray(self.vao_cube)
         show_caulk = self.editor.config.getboolean('Display', 'show_caulk', fallback=True)
         
+        # Save current polygon mode (just get the first element since both faces are the same)
+        current_polygon_mode = glGetIntegerv(GL_POLYGON_MODE)[0]
+        
         for brush in brushes:
             pos, size = np.array(brush['pos']), np.array(brush['size'])
             model_matrix = np.identity(4, dtype=np.float32); model_matrix[:3, :3] = np.diag(size); model_matrix[3, :3] = pos
@@ -424,12 +438,20 @@ class QtGameView(QOpenGLWidget):
 
             textures = brush.get('textures', {})
             face_keys = ['south', 'north', 'west', 'east', 'bottom', 'top']
+            
+            glDisable(GL_CULL_FACE)
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+            
             for i, face_key in enumerate(face_keys):
                 tex_name = textures.get(face_key, 'default.png')
                 if tex_name == 'caulk' and not show_caulk: continue
                 tex_id = self.load_texture(tex_name, 'textures'); glBindTexture(GL_TEXTURE_2D, tex_id)
                 glDrawArrays(GL_TRIANGLES, i * 6, 6)
                 
+        # Restore polygon mode
+        glPolygonMode(GL_FRONT_AND_BACK, current_polygon_mode)
+        if self.culling_enabled:
+            glEnable(GL_CULL_FACE)
         glBindVertexArray(0); glUseProgram(0)
 
     def draw_sprites(self, view, projection, things_to_draw):
