@@ -20,7 +20,6 @@ def perspective_projection(fov, aspect, near, far):
         [0, 0, -1, 0]
     ], dtype=np.float32)
 
-# --- SHADERS (Unchanged) ---
 VERTEX_SHADER_SIMPLE = """
 #version 330
 layout(location = 0) in vec3 a_position;
@@ -63,6 +62,7 @@ struct Light {
     vec3 position;
     vec3 color;
     float intensity;
+    float radius;
 };
 #define MAX_LIGHTS 16
 uniform Light lights[MAX_LIGHTS];
@@ -74,9 +74,14 @@ void main() {
     vec3 norm = normalize(Normal);
     vec3 total_diffuse = vec3(0.0);
     for (int i = 0; i < active_lights; i++) {
-        vec3 light_dir = normalize(lights[i].position - FragPos);
-        float diff = max(dot(norm, light_dir), 0.0);
-        total_diffuse += lights[i].color * diff * lights[i].intensity;
+        vec3 light_dir = lights[i].position - FragPos;
+        float distance = length(light_dir);
+        if(distance < lights[i].radius){
+            light_dir = normalize(light_dir);
+            float diff = max(dot(norm, light_dir), 0.0);
+            float attenuation = 1.0 - (distance / lights[i].radius);
+            total_diffuse += lights[i].color * diff * lights[i].intensity * attenuation;
+        }
     }
     vec3 result = ambient + (total_diffuse * object_color);
     FragColor = vec4(result, alpha);
@@ -104,7 +109,12 @@ FRAGMENT_SHADER_TEXTURED = """
 #version 330 core
 out vec4 FragColor;
 in vec3 FragPos; in vec3 Normal; in vec2 TexCoord;
-struct Light { vec3 position; vec3 color; float intensity; };
+struct Light { 
+    vec3 position; 
+    vec3 color; 
+    float intensity; 
+    float radius;
+};
 #define MAX_LIGHTS 16
 uniform Light lights[MAX_LIGHTS];
 uniform int active_lights;
@@ -115,9 +125,14 @@ void main() {
     vec3 norm = normalize(Normal);
     vec3 total_diffuse_light = vec3(0.0);
     for (int i = 0; i < active_lights; i++) {
-        vec3 light_dir = normalize(lights[i].position - FragPos);
-        float diff = max(dot(norm, light_dir), 0.0);
-        total_diffuse_light += lights[i].color * diff * lights[i].intensity;
+        vec3 light_dir = lights[i].position - FragPos;
+        float distance = length(light_dir);
+        if(distance < lights[i].radius){
+            light_dir = normalize(light_dir);
+            float diff = max(dot(norm, light_dir), 0.0);
+            float attenuation = 1.0 - (distance / lights[i].radius);
+            total_diffuse_light += lights[i].color * diff * lights[i].intensity * attenuation;
+        }
     }
     vec3 final_color = ambient + (total_diffuse_light * tex_color);
     FragColor = vec4(final_color, 1.0);
@@ -283,13 +298,10 @@ class QtGameView(QOpenGLWidget):
         
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         view = self.camera.get_view_matrix()
-        # --- MODIFIED: Use camera's fov property ---
         proj = perspective_projection(self.camera.fov, self.width()/self.height() if self.height()>0 else 0, 0.1, 10000.0)
 
-        # 1. Draw grid (always opaque)
         self.draw_grid(view, proj)
 
-        # 2. Separate objects into opaque and transparent lists
         opaque_brushes = []
         transparent_objects = []
         for brush in self.editor.brushes:
@@ -300,14 +312,12 @@ class QtGameView(QOpenGLWidget):
         
         transparent_objects.extend(self.editor.things)
 
-        # 3. Draw all opaque brushes
         glDepthMask(GL_TRUE)
         if self.brush_display_mode == "Textured":
             self.draw_brushes_textured(view, proj, opaque_brushes)
         else:
             self.draw_brushes_lit(view, proj, opaque_brushes)
         
-        # 4. Sort and draw all transparent objects
         if transparent_objects:
             camera_pos = self.camera.pos
             def sort_key(obj):
@@ -358,6 +368,7 @@ class QtGameView(QOpenGLWidget):
             glUniform3fv(glGetUniformLocation(self.shader_lit, f"lights[{i}].position"), 1, light.pos)
             glUniform3fv(glGetUniformLocation(self.shader_lit, f"lights[{i}].color"), 1, light.get_color())
             glUniform1f(glGetUniformLocation(self.shader_lit, f"lights[{i}].intensity"), light.get_intensity())
+            glUniform1f(glGetUniformLocation(self.shader_lit, f"lights[{i}].radius"), light.get_radius())
         
         glBindVertexArray(self.vao_cube)
         
@@ -401,6 +412,7 @@ class QtGameView(QOpenGLWidget):
             glUniform3fv(glGetUniformLocation(self.shader_textured, f"lights[{i}].position"), 1, light.pos)
             glUniform3fv(glGetUniformLocation(self.shader_textured, f"lights[{i}].color"), 1, light.get_color())
             glUniform1f(glGetUniformLocation(self.shader_textured, f"lights[{i}].intensity"), light.get_intensity())
+            glUniform1f(glGetUniformLocation(self.shader_textured, f"lights[{i}].radius"), light.get_radius())
         
         glActiveTexture(GL_TEXTURE0); glUniform1i(glGetUniformLocation(self.shader_textured, "texture_diffuse"), 0); glBindVertexArray(self.vao_cube)
         show_caulk = self.editor.config.getboolean('Display', 'show_caulk', fallback=True)
@@ -488,7 +500,6 @@ class QtGameView(QOpenGLWidget):
             self.setCursor(Qt.ArrowCursor)
 
     def wheelEvent(self, event):
-        # --- MODIFIED: Adjust FOV on wheel event ---
         if event.angleDelta().y() > 0:
             self.camera.fov = max(30.0, self.camera.fov - 5)
         else:
