@@ -29,7 +29,7 @@ from PyQt5.QtWidgets import (
     QActionGroup
 )
 from PyQt5.QtCore import Qt, QPoint
-from PyQt5.QtGui import QFont, QIcon
+from PyQt5.QtGui import QFont, QIcon, QKeySequence
 from editor.view_2d import View2D
 from engine.qt_game_view import QtGameView
 from editor.things import Light, PlayerStart, Thing, Pickup, Monster
@@ -251,6 +251,7 @@ class MainWindow(QMainWindow):
         dialog = SettingsWindow(self.config, self)
         if dialog.exec_():
             self.save_config()
+            self.update_shortcuts()
             new_font_size = self.config.getint('Display', 'font_size', fallback=10)
             if old_font_size != new_font_size:
                 self.update_global_font()
@@ -361,9 +362,10 @@ class MainWindow(QMainWindow):
         redo_action = QAction(QIcon("assets/b_redo.png"),"",self,shortcut="Ctrl+Y",toolTip="Redo",triggered=self.redo)
         top_toolbar.addActions([undo_action, redo_action])
         top_toolbar.addSeparator()
-        apply_texture_action = QAction(QIcon("assets/b_applytex.png"),"",self,toolTip="Apply selected texture to brush",triggered=self.apply_texture_to_brush)
+        self.apply_texture_action = QAction(QIcon("assets/b_applytex.png"),"",self,toolTip="Apply selected texture to brush",triggered=self.apply_texture_to_brush)
+        self.update_shortcuts()
         apply_caulk_action = QAction(QIcon("assets/b_caulk.png"),"",self,toolTip="Apply caulk texture to brush",triggered=self.apply_caulk_to_brush)
-        top_toolbar.addAction(apply_texture_action)
+        top_toolbar.addAction(self.apply_texture_action)
         top_toolbar.addAction(apply_caulk_action)
         top_toolbar.addSeparator()
         launch_button = QPushButton(QIcon("assets/b_test.png"),"")
@@ -371,6 +373,10 @@ class MainWindow(QMainWindow):
         launch_button.setStyleSheet("background-color: #7CFC00; font-weight: bold; padding: 4px 8px;")
         launch_button.clicked.connect(self.quicksave_and_launch)
         top_toolbar.addWidget(launch_button)
+
+    def update_shortcuts(self):
+        apply_texture_shortcut = self.config.get('Controls', 'apply_texture', fallback='Shift+T')
+        self.apply_texture_action.setShortcut(QKeySequence(apply_texture_shortcut))
 
     def create_status_bar(self):
         status_bar = QStatusBar()
@@ -821,9 +827,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not launch game:\n{e}")
 
-    # --- REMOVED ---
-    # The set_brush_lock_state method is no longer needed as the centralized
-    # update_all_ui method now handles this responsibility.
 
 if __name__ == '__main__':
     config = configparser.ConfigParser()

@@ -294,10 +294,16 @@ class View2D(QWidget):
 
     def mousePressEvent(self, event):
         world_pos = self.screen_to_world(event.pos())
+        middle_click_pan_enabled = self.main_window.config.getboolean('Controls', 'MiddleClickDrag', fallback=False)
 
         if event.button() == Qt.RightButton:
-            if not self.is_panning:
-                self.contextMenuEvent(event)
+            self.is_panning = True
+            self.last_pan_pos = event.pos()
+            return
+        
+        if event.button() == Qt.MiddleButton and middle_click_pan_enabled:
+            self.is_panning = True
+            self.last_pan_pos = event.pos()
             return
 
         # --- CORRECTED: The entire logic for LeftButton is replaced for clarity and correctness ---
@@ -339,6 +345,7 @@ class View2D(QWidget):
 
     def mouseMoveEvent(self, event):
         world_pos = self.screen_to_world(event.pos())
+        middle_click_pan_enabled = self.main_window.config.getboolean('Controls', 'MiddleClickDrag', fallback=False)
         
         # --- Handle hover events for cursor changes ---
         if not event.buttons():
@@ -352,7 +359,8 @@ class View2D(QWidget):
             else:
                 self.setCursor(Qt.ArrowCursor)
 
-        elif event.buttons() & Qt.RightButton:
+        elif (event.buttons() & Qt.RightButton) or \
+             (event.buttons() & Qt.MiddleButton and middle_click_pan_enabled):
             self.is_panning = True
             if self.last_pan_pos.isNull(): self.last_pan_pos = event.pos()
             delta = event.pos() - self.last_pan_pos
@@ -386,11 +394,13 @@ class View2D(QWidget):
     def mouseReleaseEvent(self, event):
         action_taken = self.is_dragging_object or self.is_resizing_brush
         
-        if event.button() == Qt.RightButton:
-            self.is_panning = False
-            self.last_pan_pos = QPoint()
+        if event.button() == Qt.RightButton and not self.is_panning:
+            self.contextMenuEvent(event)
+        
+        self.is_panning = False
+        self.last_pan_pos = QPoint()
 
-        elif event.button() == Qt.LeftButton:
+        if event.button() == Qt.LeftButton:
             if self.is_dragging_object: self.is_dragging_object = False
             if self.is_resizing_brush: self.is_resizing_brush = False
 
