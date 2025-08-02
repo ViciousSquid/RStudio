@@ -48,10 +48,7 @@ class PropertyEditor(QWidget):
             self.main_layout.addWidget(QLabel("Nothing selected."))
             return
 
-        # We now use isinstance on the class from brushes.py, not dict
-        # Assuming you have `from editor.brushes import Brush`
-        # If brush is still a dict, isinstance(obj, dict) is correct.
-        if isinstance(obj, dict): # Or `isinstance(obj, Brush)`
+        if isinstance(obj, dict):
             self.populate_for_brush(obj)
         elif isinstance(obj, Thing):
             self.populate_for_thing(obj)
@@ -113,38 +110,33 @@ class PropertyEditor(QWidget):
         """Handler for when the lock checkbox is toggled."""
         if self.current_object is None: return
         
-        # 1. Update the data model
         self.current_object['lock'] = is_locked
-        
-        # 2. Update the UI state within the property editor itself
         self.update_brush_ui_state()
-        
-        # 3. Notify the rest of the application to update (this triggers the chain reaction)
         self.editor.update_all_ui()
 
     def on_trigger_changed(self, is_trigger):
         """Handler for when the trigger checkbox is toggled."""
         if self.current_object is None: return
         
-        # 1. Update the data model
         self.current_object['is_trigger'] = is_trigger
-        
-        # 2. Update the UI state within the property editor itself
         self.update_brush_ui_state()
-        
-        # 3. Notify the rest of the application to update
         self.editor.update_all_ui()
 
     def populate_for_thing(self, thing):
         """Populates the UI with properties for a Thing object."""
         layout = QFormLayout()
         
+        # Special handling for colour picker at the top
+        if isinstance(thing, Light):
+            self.add_color_picker_widget(layout, thing, 'colour')
+
         for key, value in sorted(thing.properties.items()):
+            if isinstance(thing, Light) and key == 'colour':
+                continue
+
             label_text = key.replace('_', ' ').title() + ":"
             
-            if isinstance(thing, Light) and key == 'color':
-                self.add_color_picker_widget(layout, thing, key)
-            elif isinstance(thing, Light) and key == 'state':
+            if isinstance(thing, Light) and key == 'state':
                 widget = QComboBox()
                 widget.addItems(['on', 'off'])
                 widget.setCurrentText(value)
@@ -171,8 +163,30 @@ class PropertyEditor(QWidget):
 
     def add_color_picker_widget(self, form_layout, thing, key):
         """Creates a color picker widget for light color properties."""
-        # This function can be pasted from your existing code
-        pass
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        current_color_rgb = thing.properties.get(key, [255, 255, 255])
+        color_swatch = QPushButton()
+        color_swatch.setFixedSize(24, 24)
+        
+        def update_swatch():
+            rgb = thing.properties.get(key, [255, 255, 255])
+            color_swatch.setStyleSheet(f"background-color: rgb({rgb[0]}, {rgb[1]}, {rgb[2]});")
+
+        def open_color_dialog():
+            current_color_rgb = thing.properties.get(key, [255, 255, 255])
+            color = QColorDialog.getColor(QColor(*current_color_rgb), self, "Choose Light Colour")
+            if color.isValid():
+                self.update_object_prop(key, [color.red(), color.green(), color.blue()])
+                update_swatch()
+
+        color_swatch.clicked.connect(open_color_dialog)
+        update_swatch()
+        layout.addWidget(color_swatch)
+        form_layout.addRow("Colour:", widget)
+
 
     def update_object_prop(self, key, value):
         """
@@ -181,11 +195,9 @@ class PropertyEditor(QWidget):
         """
         if self.current_object is None: return
 
-        # 1. Update the data model
         if isinstance(self.current_object, dict):
             self.current_object[key] = value
         elif isinstance(self.current_object, Thing):
-            # This logic correctly handles type conversion for Thing properties
             if key in self.current_object.properties:
                 prop_type = type(self.current_object.properties.get(key))
                 if prop_type == float:
@@ -193,5 +205,4 @@ class PropertyEditor(QWidget):
                     except (ValueError, TypeError): value = 0.0
             self.current_object.properties[key] = value
 
-        # 2. Tell the main editor to update ALL UI components.
         self.editor.update_all_ui()

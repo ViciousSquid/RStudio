@@ -39,11 +39,10 @@ class View2D(QWidget):
         Resets the internal state of the view. This is crucial for forcing
         the view to re-evaluate brush states (like 'lock') after a property change.
         """
-        # --- CORRECTED: Reset the specific states that matter ---
         self.is_dragging_object = False
         self.is_resizing_brush = False
         self.resize_handle_ix = -1
-        self.update() # Schedule a repaint with the reset state
+        self.update()
 
     def get_axes(self):
         if self.view_type == 'top': return 'x', 'z'
@@ -78,7 +77,6 @@ class View2D(QWidget):
         self.draw_things(painter)
         self.draw_camera(painter)
         self.draw_trigger_connections(painter)
-
 
         if self.is_drawing_brush:
             pen = QPen(QColor(255, 255, 0), 1, Qt.DashLine)
@@ -136,12 +134,11 @@ class View2D(QWidget):
             is_subtractive = brush.get('operation') == 'subtract'
             is_locked = brush.get('lock', False)
 
-            # --- This logic is sound, but we add a fill to make locked state clearer ---
             if is_locked:
-                pen_color = QColor(0, 0, 139)  # Dark Blue for locked
+                pen_color = QColor(0, 0, 139)
                 fill_color = QColor(0, 0, 139, 70)
             else:
-                pen_color = QColor(211, 211, 211) # Light Grey for unlocked
+                pen_color = QColor(211, 211, 211)
                 fill_color = QColor(200, 200, 200, 30)
 
             if is_trigger:
@@ -152,12 +149,12 @@ class View2D(QWidget):
                 fill_color = QColor(255, 0, 0, 30)
 
             if is_selected:
-                pen_color = QColor(255, 255, 0) # Yellow for selected
+                pen_color = QColor(255, 255, 0)
             
             pen = QPen(pen_color, 2 if is_selected else 1)
             if is_trigger and not is_selected: pen.setStyle(Qt.DashLine)
             painter.setPen(pen)
-            painter.setBrush(QBrush(fill_color)) # --- CORRECTED: Apply the brush fill ---
+            painter.setBrush(QBrush(fill_color))
 
             pos = brush['pos']
             size = brush['size']
@@ -188,10 +185,15 @@ class View2D(QWidget):
             s_pos = self.world_to_screen(w_pos)
 
             if isinstance(thing, Light):
-                r, g, b = thing.properties.get('color', [255, 255, 255])
+                r, g, b = thing.properties.get('colour', [255, 255, 255])
                 light_color = QColor(r, g, b, 60)
                 painter.setBrush(QBrush(light_color))
                 painter.setPen(QPen(light_color.darker(120), 1))
+                
+                if thing.properties.get('show_radius', False):
+                    radius = thing.get_radius() * self.zoom_factor
+                    painter.drawEllipse(s_pos, radius, radius)
+
                 painter.drawEllipse(s_pos, 12, 12)
 
             pixmap = thing.get_pixmap()
@@ -266,7 +268,7 @@ class View2D(QWidget):
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
 
-        pen = QPen(QColor(139, 69, 19), 2, Qt.DotLine)  # Brown dotted line
+        pen = QPen(QColor(139, 69, 19), 2, Qt.DotLine)
         painter.setPen(pen)
 
         for brush in self.editor.brushes:
@@ -306,26 +308,18 @@ class View2D(QWidget):
             self.last_pan_pos = event.pos()
             return
 
-        # --- CORRECTED: The entire logic for LeftButton is replaced for clarity and correctness ---
         elif event.button() == Qt.LeftButton:
-            # First, check if we are clicking a resize handle of an existing, unlocked selection.
             handle_ix = self.get_handle_at(event.pos())
             if handle_ix != -1:
-                # The get_handle_at method already confirms the selected object is a brush and not locked.
                 self.is_resizing_brush = True
                 self.resize_handle_ix = handle_ix
                 self.update()
                 return
 
-            # If not a handle, find what object (if any) is under the cursor.
             clicked_object = self.get_object_at(world_pos)
-            
-            # Always update the selection. This is key. It allows selecting a locked brush to view its properties.
             self.editor.set_selected_object(clicked_object)
 
-            # Now, determine if the selected object can be dragged.
             if clicked_object:
-                # Only start dragging if the object is not a locked brush.
                 is_locked = isinstance(clicked_object, dict) and clicked_object.get('lock', False)
                 if not is_locked:
                     self.is_dragging_object = True
@@ -336,7 +330,6 @@ class View2D(QWidget):
                     obj_pos_2d = QPointF(pos_ref[ax_map[ax1]], pos_ref[ax_map[ax2]])
                     self.drag_offset = obj_pos_2d - world_pos
             else:
-                # If we clicked on empty space, start drawing a new brush.
                 self.is_drawing_brush = True
                 self.draw_start_pos = self.snap_to_grid(world_pos)
                 self.draw_current_pos = self.draw_start_pos
@@ -347,11 +340,9 @@ class View2D(QWidget):
         world_pos = self.screen_to_world(event.pos())
         middle_click_pan_enabled = self.main_window.config.getboolean('Controls', 'MiddleClickDrag', fallback=False)
         
-        # --- Handle hover events for cursor changes ---
         if not event.buttons():
             handle_ix = self.get_handle_at(event.pos())
             if handle_ix != -1:
-                # This check is now robust because get_handle_at checks the lock status.
                 if handle_ix in [0, 3]: self.setCursor(Qt.SizeFDiagCursor)
                 elif handle_ix in [1, 2]: self.setCursor(Qt.SizeBDiagCursor)
                 elif handle_ix in [4, 5]: self.setCursor(Qt.SizeVerCursor)
@@ -371,23 +362,19 @@ class View2D(QWidget):
             self.draw_current_pos = self.snap_to_grid(world_pos)
 
         elif self.is_dragging_object:
-            # This state is now correctly prevented from starting on locked objects in mousePressEvent.
             obj = self.editor.selected_object
-            if obj: # The check for lock status is implicitly handled by is_dragging_object being False.
+            if obj:
                 ax1, ax2 = self.get_axes()
                 ax_map = {'x': 0, 'y': 1, 'z': 2}
                 new_obj_pos = self.snap_to_grid(world_pos + self.drag_offset)
                 pos_ref = obj['pos'] if isinstance(obj, dict) else obj.pos
                 pos_ref[ax_map[ax1]] = new_obj_pos.x()
                 pos_ref[ax_map[ax2]] = new_obj_pos.y()
-                # self.editor.property_editor.set_object(obj) # This causes feedback loops, MainWindow handles it.
         
         elif self.is_resizing_brush:
-            # This state is also correctly prevented from starting on locked objects.
             obj = self.editor.selected_object
             if obj:
                 self.resize_brush(world_pos)
-                # self.editor.property_editor.set_object(self.editor.selected_object) # Also causes feedback loops.
         
         self.update()
 
@@ -486,7 +473,6 @@ class View2D(QWidget):
 
     def get_handle_at(self, screen_pos):
         brush = self.editor.selected_object
-        # This check is the gatekeeper for all resizing operations. It correctly checks the LIVE data.
         if not isinstance(brush, dict) or brush.get('lock', False): return -1
 
         ax1, ax2 = self.get_axes()

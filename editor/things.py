@@ -116,13 +116,14 @@ class Light(Thing):
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'light')
-        self.properties.setdefault('color', [255, 255, 200])
+        self.properties.setdefault('colour', [255, 255, 255])
         self.properties.setdefault('intensity', 1.0)
         self.properties.setdefault('radius', 512.0)
         self.properties.setdefault('state', 'on')
+        self.properties.setdefault('show_radius', True)
 
     def get_color(self):
-        color = self.properties.get('color', [255, 255, 255])
+        color = self.properties.get('colour', [255, 255, 255])
         return [c / 255.0 for c in color]
 
     def get_intensity(self):
