@@ -5,7 +5,7 @@
 #### A brush-based CSG world editor inspired by QeRadiant and Worldcraft (from the old times!)
 
 * Custom OpenGL/PyGame engine supports immediate "drop-in and play" (like CryEngine Editor)
-  
+* real-time lighting preview
 * `json` level format :-)
 * Fully modular and open source (MIT License)
   
