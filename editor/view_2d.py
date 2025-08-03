@@ -1,8 +1,9 @@
 import numpy as np
 from PyQt5.QtWidgets import QWidget, QMenu
-from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF
+from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint
 from editor.things import Thing, Light, PlayerStart, Pickup
+from editor.scene_hierarchy import SceneHierarchy # Import SceneHierarchy to access color_icons
 
 class View2D(QWidget):
     def __init__(self, editor, main_window, view_type):
@@ -33,6 +34,11 @@ class View2D(QWidget):
 
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.ClickFocus)
+
+        # Initialize color icons from SceneHierarchy
+        self.color_pixmaps = {}
+        for color_name, qicon in SceneHierarchy(main_window).color_icons.items():
+            self.color_pixmaps[color_name] = qicon.pixmap(16, 16) # Render QIcon to QPixmap
 
     def reset_state(self):
         """
@@ -177,6 +183,19 @@ class View2D(QWidget):
 
             if is_selected and not is_locked:
                 self.draw_resize_handles(painter, screen_rect)
+            
+            self.draw_brush_color_tag(painter, brush, screen_rect) # Draw color tag
+
+    def draw_brush_color_tag(self, painter, brush, screen_rect):
+        if 'color' in brush and brush['color'] in self.color_pixmaps:
+            pixmap = self.color_pixmaps[brush['color']]
+            tag_size = 16 # Size of the color tag icon
+            
+            # Position the tag in the bottom-right corner of the brush
+            tag_x = int(screen_rect.bottomRight().x() - tag_size - 2) # 2 pixels padding
+            tag_y = int(screen_rect.bottomRight().y() - tag_size - 2) # 2 pixels padding
+            
+            painter.drawPixmap(tag_x, tag_y, pixmap)
 
     def draw_things(self, painter):
         ax1, ax2 = self.get_axes()
