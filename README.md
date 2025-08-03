@@ -10,6 +10,7 @@
 * Fully modular and open source (MIT License)
   
 ### Roadmap:
+* Quake/Half-life map support
 * OBJ model support
 * Physics
 * Visual scripting
