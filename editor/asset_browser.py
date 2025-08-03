@@ -226,7 +226,17 @@ class AssetBrowser(QWidget):
         self.type_label.setText("Type: Texture")
 
     def get_selected_filepath(self):
-        return self.selected_item.filepath if self.selected_item else None
+        """Returns the path of the currently selected file, or None if invalid/not selected"""
+        if not self.selected_item:
+            return None
+        
+        try:
+            # Verify the file exists and is accessible
+            if os.path.exists(self.selected_item.filepath) and os.path.isfile(self.selected_item.filepath):
+                return self.selected_item.filepath
+            return None
+        except Exception:
+            return None
 
 
 class AssetItem(QWidget):

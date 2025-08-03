@@ -186,30 +186,35 @@ class View2D(QWidget):
             w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
             s_pos = self.world_to_screen(w_pos)
 
-            if isinstance(thing, Light):
+            # Special case for drawing light radius ONLY.
+            # The light's icon will be drawn by the generic code below.
+            if isinstance(thing, Light) and thing.properties.get('show_radius', False):
                 r, g, b = thing.properties.get('colour', [255, 255, 255])
                 light_color = QColor(r, g, b, 60)
                 painter.setBrush(QBrush(light_color))
                 painter.setPen(QPen(light_color.darker(120), 1))
-                
-                if thing.properties.get('show_radius', False):
-                    radius = thing.get_radius() * self.zoom_factor
-                    painter.drawEllipse(s_pos, radius, radius)
+                radius = thing.get_radius() * self.zoom_factor
+                painter.drawEllipse(s_pos, radius, radius)
 
-                painter.drawEllipse(s_pos, 12, 12)
-
+            # Generic pixmap drawing for ALL things.
             pixmap = thing.get_pixmap()
-            if not pixmap: continue
+            if not pixmap: 
+                continue # Skip if no pixmap is defined for this Thing class.
 
             pixmap_size = pixmap.size()
-            draw_rect = QRectF(s_pos.x() - pixmap_size.width() / 2, s_pos.y() - pixmap_size.height() / 2,
-                                  pixmap_size.width(), pixmap_size.height())
+            # Center the pixmap on the thing's position
+            draw_rect = QRectF(s_pos.x() - pixmap_size.width() / 2, 
+                               s_pos.y() - pixmap_size.height() / 2,
+                               pixmap_size.width(), 
+                               pixmap_size.height())
             
             painter.drawPixmap(draw_rect.toRect(), pixmap)
 
+            # Draw selection outline if the thing is selected.
             if thing == self.editor.selected_object:
                 painter.setPen(QPen(QColor(255, 255, 0), 2, Qt.DotLine))
                 painter.setBrush(Qt.NoBrush)
+                # Adjust the rectangle to be drawn around the pixmap
                 painter.drawRect(draw_rect.adjusted(-2, -2, 2, 2))
     
     def draw_camera(self, painter):

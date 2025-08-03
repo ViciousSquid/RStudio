@@ -147,7 +147,7 @@ class MainWindow(QMainWindow):
         self.save_state()
         if 'textures' not in self.selected_object:
             self.selected_object['textures'] = {}
-        for face in ['north','south','east','west','top','down']:
+        for face in ['south', 'north', 'west', 'east', 'down', 'top']:
             self.selected_object['textures'][face] = texture_name
         self.update_views()
 

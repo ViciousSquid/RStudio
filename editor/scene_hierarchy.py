@@ -1,12 +1,15 @@
 from PyQt5.QtWidgets import QTreeWidget, QTreeWidgetItem, QMenu
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QColor, QBrush, QFont # Import QFont
 from PyQt5.QtCore import Qt
 
 class SceneHierarchy(QTreeWidget):
     def __init__(self, main_window):
         super().__init__()
         self.main_window = main_window
-        self.setHeaderLabels(["Scene"])
+        
+        # Remove the header by setting its height to 0
+        self.header().setVisible(False) 
+
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.open_menu)
         self.lock_icon = QIcon("assets/lock.png")
@@ -17,10 +20,21 @@ class SceneHierarchy(QTreeWidget):
         self.blockSignals(True)
         self.clear()
         
+        # Define font for headers
+        header_font = QFont()
+        header_font.setBold(True)
+
+        # Add Brushes Header
+        brushes_header = QTreeWidgetItem(self, ["Brushes"])
+        brushes_header.setFlags(brushes_header.flags() & ~Qt.ItemIsSelectable)
+        brushes_header.setForeground(0, QBrush(QColor("white"))) # Set text color to white
+        brushes_header.setFont(0, header_font) # Set font to bold
+        brushes_header.setExpanded(True)
+        
         # Add Brushes
         for i, brush_dict in enumerate(self.main_window.brushes):
             item_text = brush_dict.get('name', f'Brush {i+1}')
-            item = QTreeWidgetItem(self, [item_text])
+            item = QTreeWidgetItem(brushes_header, [item_text])
             item.setData(0, Qt.UserRole, ('brush', i))
             
             # Check for lock status and apply icon
@@ -32,10 +46,17 @@ class SceneHierarchy(QTreeWidget):
             if self.main_window.selected_object is brush_dict:
                 item.setSelected(True)
 
+        # Add Things Header
+        things_header = QTreeWidgetItem(self, ["Things"])
+        things_header.setFlags(things_header.flags() & ~Qt.ItemIsSelectable)
+        things_header.setForeground(0, QBrush(QColor("white"))) # Set text color to white
+        things_header.setFont(0, header_font) # Set font to bold
+        things_header.setExpanded(True)
+        
         # Add Things
         for i, thing_obj in enumerate(self.main_window.things):
             item_text = thing_obj.name if thing_obj.name else f'Thing {i+1}'
-            item = QTreeWidgetItem(self, [item_text])
+            item = QTreeWidgetItem(things_header, [item_text])
             item.setData(0, Qt.UserRole, ('thing', i))
 
             if self.main_window.selected_object is thing_obj:
