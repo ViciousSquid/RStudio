@@ -82,7 +82,7 @@ class PropertyEditor(QWidget):
         # Connect Signals to dedicated handlers
         self.locked_checkbox.toggled.connect(self.on_lock_changed)
         self.trigger_checkbox.toggled.connect(self.on_trigger_changed)
-        self.target_input.textChanged.connect(lambda t: self.update_object_prop('target', t))
+        self.target_input.editingFinished.connect(lambda: self.update_object_prop('target', self.target_input.text()))
         self.type_combo.currentTextChanged.connect(lambda t: self.update_object_prop('trigger_type', t))
         
         self.main_layout.addLayout(layout)
@@ -119,6 +119,12 @@ class PropertyEditor(QWidget):
         if self.current_object is None: return
         
         self.current_object['is_trigger'] = is_trigger
+        # Automatically assign trigger texture when a brush is set as a trigger
+        if is_trigger:
+            if 'textures' not in self.current_object:
+                self.current_object['textures'] = {}
+            for face in ['north','south','east','west','top','down']:
+                self.current_object['textures'][face] = 'trigger.jpg'
         self.update_brush_ui_state()
         self.editor.update_all_ui()
 
@@ -152,11 +158,17 @@ class PropertyEditor(QWidget):
                 layout.addRow(label_text, widget)
             elif isinstance(value, float):
                 widget = QLineEdit(str(value))
-                widget.textChanged.connect(lambda t, k=key: self.update_object_prop(k, float(t) if t and t.replace('.', '', 1).isdigit() else 0.0))
+                # --- FIX ---
+                # Use editingFinished to avoid updating on every keystroke
+                widget.editingFinished.connect(
+                    lambda le=widget, k=key: self.update_object_prop(k, float(le.text()) if le.text() and le.text().replace('.', '', 1).isdigit() else 0.0)
+                )
                 layout.addRow(label_text, widget)
             else:
                 widget = QLineEdit(str(value))
-                widget.textChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
+                # --- FIX ---
+                # Use editingFinished for strings as well
+                widget.editingFinished.connect(lambda le=widget, k=key: self.update_object_prop(k, le.text()))
                 layout.addRow(label_text, widget)
                 
         self.main_layout.addLayout(layout)
