@@ -193,6 +193,7 @@ class QtGameView(QOpenGLWidget):
         self.play_mode = False
         self.player = None
         self.tile_map = None
+        self.selected_object = None
 
         timer = QTimer(self); timer.setInterval(16); timer.timeout.connect(self.update_loop); timer.start()
         self.setFocusPolicy(Qt.ClickFocus)
@@ -465,7 +466,7 @@ class QtGameView(QOpenGLWidget):
             else: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE if self.brush_display_mode == "Wireframe" else gl.GL_FILL)
             model_matrix = glm.translate(glm.mat4(1.0), glm.vec3(brush['pos'])) * glm.scale(glm.mat4(1.0), glm.vec3(brush['size']))
             gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_lit, "model"), 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-            is_selected, is_subtract = (brush == self.editor.selected_object), (brush.get('operation') == 'subtract')
+            is_selected, is_subtract = (brush is self.selected_object), (brush.get('operation') == 'subtract')
             color, alpha = [0.8, 0.8, 0.8], 1.0
             if brush.get('is_trigger', False): color, alpha = [0.0, 1.0, 1.0], 0.3
             elif is_selected: color = [1.0, 1.0, 0.0]
@@ -478,11 +479,18 @@ class QtGameView(QOpenGLWidget):
         gl.glUseProgram(0)
 
     def draw_brushes_textured(self, view, projection, brushes):
-        if not self.shader_textured or not brushes: return
+        if not self.shader_textured or not brushes:
+            return
+
+        # Start with the textured shader program
         gl.glUseProgram(self.shader_textured)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+
+        # Set uniforms that are common for all textured brushes
         gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_textured, "projection"), 1, gl.GL_FALSE, glm.value_ptr(projection))
         gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_textured, "view"), 1, gl.GL_FALSE, glm.value_ptr(view))
+
+        # Lighting setup
         lights = [t for t in self.editor.things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
         gl.glUniform1i(gl.glGetUniformLocation(self.shader_textured, "active_lights"), len(lights))
         for i, light in enumerate(lights):
@@ -490,21 +498,62 @@ class QtGameView(QOpenGLWidget):
             gl.glUniform3fv(gl.glGetUniformLocation(self.shader_textured, f"lights[{i}].color"), 1, light.get_color())
             gl.glUniform1f(gl.glGetUniformLocation(self.shader_textured, f"lights[{i}].intensity"), light.get_intensity())
             gl.glUniform1f(gl.glGetUniformLocation(self.shader_textured, f"lights[{i}].radius"), light.get_radius())
+
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(gl.glGetUniformLocation(self.shader_textured, "texture_diffuse"), 0)
+
         gl.glBindVertexArray(self.vao_cube)
         show_caulk = self.editor.config.getboolean('Display', 'show_caulk', fallback=True)
+
         for brush in brushes:
             if brush.get('hidden', False):
                 continue
+
+            # --- 1. Draw the textured brush itself ---
             model_matrix = glm.translate(glm.mat4(1.0), glm.vec3(brush['pos'])) * glm.scale(glm.mat4(1.0), glm.vec3(brush['size']))
             gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_textured, "model"), 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-            textures, face_keys = brush.get('textures', {}), ['south', 'north', 'west', 'east', 'bottom', 'top']
+
+            textures = brush.get('textures', {})
+            face_keys = ['south', 'north', 'west', 'east', 'bottom', 'top']
             for i, face_key in enumerate(face_keys):
                 tex_name = textures.get(face_key, 'default.png')
-                if tex_name == 'caulk' and not show_caulk: continue
+                if tex_name == 'caulk' and not show_caulk:
+                    continue
                 gl.glBindTexture(gl.GL_TEXTURE_2D, self.load_texture(tex_name, 'textures'))
                 gl.glDrawArrays(gl.GL_TRIANGLES, i * 6, 6)
+
+        # --- 2. If there's a selected object, draw its wireframe outline over everything else ---
+        if self.selected_object and isinstance(self.selected_object, dict) and self.selected_object in brushes:
+            brush = self.selected_object
+
+            # Switch to the simple shader for the outline
+            gl.glUseProgram(self.shader_simple)
+
+            # Set uniforms for the simple shader
+            gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_simple, "projection"), 1, gl.GL_FALSE, glm.value_ptr(projection))
+            gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_simple, "view"), 1, gl.GL_FALSE, glm.value_ptr(view))
+            model_matrix = glm.translate(glm.mat4(1.0), glm.vec3(brush['pos'])) * glm.scale(glm.mat4(1.0), glm.vec3(brush['size']))
+            gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_simple, "model"), 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+            gl.glUniform3f(gl.glGetUniformLocation(self.shader_simple, "color"), 1.0, 1.0, 0.0)  # Yellow
+
+            # Configure GL state for wireframe drawing
+            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
+            try:
+                gl.glLineWidth(2)
+            except gl.GLError:
+                gl.glLineWidth(1) # Fallback if width 2 is not supported
+            gl.glDisable(gl.GL_DEPTH_TEST)  # Draw on top
+
+            # Draw the outline
+            gl.glBindVertexArray(self.vao_cube)
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+
+            # Restore GL state
+            gl.glEnable(gl.GL_DEPTH_TEST)
+            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+            gl.glLineWidth(1)
+
+        # Cleanup
         gl.glBindVertexArray(0)
         gl.glUseProgram(0)
 

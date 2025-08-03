@@ -4,10 +4,42 @@ import glm
 
 class Camera:
     def __init__(self):
-        self.pos = glm.vec3(0.0, 0.0, 0.0)
+        # Initialize _pos as a private attribute to be managed by the property
+        self._pos = glm.vec3(0.0, 0.0, 0.0)
         self.yaw = -90.0
         self.pitch = 0.0
         self.fov = 90.0
+
+    @property
+    def pos(self):
+        """Getter for the camera's position."""
+        return self._pos
+
+    @pos.setter
+    def pos(self, value):
+        """
+        Setter for the camera's position.
+        Checks if the assigned value is a glm.vec3. If not, attempts conversion
+        from list/tuple and prints a traceback to help identify the source of
+        incorrect assignments.
+        """
+        if not isinstance(value, glm.vec3):
+            import traceback
+            #print(f"WARNING: Camera position being set to non-glm.vec3 type: {type(value)} - Value: {value}")
+            traceback.print_stack() # Print traceback to show where the assignment happened
+            if isinstance(value, (list, tuple)):
+                try:
+                    self._pos = glm.vec3(*value)
+                    #print(f"INFO: Converted {type(value)} to glm.vec3.")
+                except TypeError as e:
+                    print(f"ERROR: Could not convert {type(value)} {value} to glm.vec3: {e}")
+                    # Fallback or raise, depending on desired robustness
+                    raise
+            else:
+                # If it's not a glm.vec3, list, or tuple, it's an unexpected type
+                raise TypeError(f"Camera position must be glm.vec3, list, or tuple, got {type(value)}")
+        else:
+            self._pos = value
 
     def get_view_matrix(self):
         """Calculates the view matrix for the camera's current position and orientation."""
@@ -44,9 +76,11 @@ class Camera:
         right = glm.normalize(glm.cross(front, glm.vec3(0, 1, 0)))
         self.pos += right * speed
 
-
     def move_up(self, speed):
         """Moves the camera along the world's up vector."""
+        # This line now implicitly uses the 'pos' property setter if 'self.pos'
+        # were to become a different type, but it should correctly
+        # operate on the glm.vec3 if the setter is doing its job.
         self.pos.y += speed
 
     def zoom(self, amount):
