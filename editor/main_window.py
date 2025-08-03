@@ -8,66 +8,27 @@ import configparser
 import math
 import copy
 from PyQt5.QtWidgets import (
-    QApplication,
-    QMainWindow,
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QStatusBar,
-    QToolBar,
-    QLabel,
-    QSpinBox,
-    QCheckBox,
-    QComboBox,
-    QAction,
-    QMessageBox,
-    QFrame,
-    QDockWidget,
-    QTabWidget,
-    QFileDialog,
-    QPushButton,
-    QActionGroup,
-    QDialog,
-    QDialogButtonBox
+    QApplication, QMainWindow, QMessageBox, QFileDialog, QWidget, QLabel, QVBoxLayout
 )
-from PyQt5.QtCore import Qt, QPoint, QByteArray
-from PyQt5.QtGui import QFont, QIcon, QKeySequence, QPixmap
-from editor.view_2d import View2D
-from engine.qt_game_view import QtGameView
+from PyQt5.QtCore import Qt, QByteArray
+from PyQt5.QtGui import QKeySequence, QPixmap
+
 from editor.things import Light, PlayerStart, Thing, Pickup, Monster, Model
-from editor.property_editor import PropertyEditor
 from editor.rand_map_gen_dial import RandomMapGeneratorDialog
 from editor.rand_map_gen import generate
-from editor.asset_browser import AssetBrowser
 from editor.SettingsWindow import SettingsWindow
-from editor.scene_hierarchy import SceneHierarchy
+from editor.ui import Ui_MainWindow, GenerateTilemapDialog
 from engine.constants import TILE_SIZE, WALL_TILE, FLOOR_TILE
-
-class GenerateTilemapDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Generate Tilemap")
-        layout = QVBoxLayout(self)
-        self.save_png_checkbox = QCheckBox("Save a PNG copy of the tilemap")
-        layout.addWidget(self.save_png_checkbox)
-        
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
-        
-    def save_png_checked(self):
-        return self.save_png_checkbox.isChecked()
+from editor.view_2d import View2D
 
 class MainWindow(QMainWindow):
-    def __init__(self, root_dir): # Accept the application's root directory
+    def __init__(self, root_dir):
         super().__init__()
-        self.root_dir = root_dir # Store the root directory
+        self.root_dir = root_dir
         self.setWindowTitle("RStudio")
         self.setGeometry(100, 100, 1600, 900)
         self.setMinimumSize(1200, 800)
 
-        # --- Config Management ---
         self.config = configparser.ConfigParser()
         self.config_path = 'settings.ini'
         self.load_config()
@@ -80,160 +41,50 @@ class MainWindow(QMainWindow):
 
         self.undo_stack = []
         self.redo_stack = []
-
-        # --- Create UI Components FIRST ---
-        self.view_3d = QtGameView(self)
-        self.view_3d.show_triggers_as_solid = True 
         
-        self.view_top = View2D(self, self, "top")
-        self.view_side = View2D(self, self, "side")
-        self.view_front = View2D(self, self, "front")
-        self.property_editor = PropertyEditor(self)
-        self.scene_hierarchy = SceneHierarchy(self)
-
-        # --- Create and Arrange Docks ---
-        self.setDockOptions(QMainWindow.AnimatedDocks | QMainWindow.AllowNestedDocks | QMainWindow.AllowTabbedDocks)
-        self.setTabPosition(Qt.AllDockWidgetAreas, QTabWidget.North)
-
-        self.scene_hierarchy_dock = QDockWidget("Scene", self)
-        self.scene_hierarchy_dock.setObjectName("SceneDock")
-        self.scene_hierarchy_dock.setWidget(self.scene_hierarchy)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.scene_hierarchy_dock)
-        
-        screen_width = QApplication.primaryScreen().geometry().width()
-        self.scene_hierarchy_dock.setMaximumWidth(int(screen_width * 0.10))
-
-        self.view_3d_dock = QDockWidget("3D View", self)
-        self.view_3d_dock.setObjectName("View3DDock")
-        self.view_3d_dock.setWidget(self.view_3d)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.view_3d_dock)
-
-        self.right_dock = QDockWidget("2D Views", self)
-        self.right_dock.setObjectName("2DViewsDock")
-        self.right_tabs = QTabWidget()
-        self.right_tabs.addTab(self.view_top, "Top")
-        self.right_tabs.addTab(self.view_side, "Side")
-        self.right_tabs.addTab(self.view_front, "Front")
-        self.right_dock.setWidget(self.right_tabs)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.right_dock)
-        
-        self.properties_dock = QDockWidget("Properties", self)
-        self.properties_dock.setObjectName("PropertiesDock")
-        self.properties_dock.setWidget(self.property_editor)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.properties_dock)
-
-        self.splitDockWidget(self.view_3d_dock, self.right_dock, Qt.Horizontal)
-        self.splitDockWidget(self.right_dock, self.properties_dock, Qt.Vertical)
-
-        self.resizeDocks([self.view_3d_dock, self.right_dock], [800, 600], Qt.Horizontal)
-        self.resizeDocks([self.right_dock, self.properties_dock], [600, 300], Qt.Vertical)
-
-        self.right_tabs.setStyleSheet("""
-            QTabBar::tab:selected { background: #0078d7; color: white; }
-            QTabBar::tab { background: #444; color: #ccc; padding: 5px; border: 1px solid #222; }
-        """)
-
-        corner_widget = QWidget()
-        corner_layout = QHBoxLayout(corner_widget)
-        corner_layout.setContentsMargins(0, 0, 0, 0)
-        subtract_button = QPushButton("Subtract")
-        subtract_button.setToolTip("Mark the selected brush as subtractive")
-        subtract_button.setStyleSheet("background-color: orange; padding: 2px 8px; color: black;")
-        subtract_button.clicked.connect(self.perform_subtraction)
-        corner_layout.addWidget(subtract_button)
-        self.right_tabs.setCornerWidget(corner_widget, Qt.TopRightCorner)
-        
-               # Asset Browser Setup
-        self.asset_browser_dock = QDockWidget("Asset Browser", self)
-
-        # FIX: Construct the correct paths for textures and models
-        texture_path = os.path.join(self.root_dir, "assets", "textures")
-        model_path = os.path.join(self.root_dir, "assets", "models")
-        
-        self.asset_browser = AssetBrowser(texture_path, editor=self)
-        self.asset_browser.main_window = self # Inject reference for the "Add Model" button
-
-        self.asset_browser_dock.setWidget(self.asset_browser)
-        self.asset_browser_dock.setAllowedAreas(Qt.NoDockWidgetArea)
-        self.asset_browser_dock.setFloating(True)
-        self.asset_browser_dock.setVisible(False)
-        
-        # Set initial size and center position
-        initial_width = 1280
-        initial_height = 600
-        self.asset_browser_dock.resize(initial_width, initial_height)
-        
-        # Calculate centered position relative to main window
-        main_window_center = self.geometry().center()
-        self.asset_browser_dock.move(
-            main_window_center.x() - initial_width // 2,
-            main_window_center.y() - initial_height // 2
-        )
-        
-        # Add toggle action to view menu (will be connected in create_menu_bar)
-        self.asset_browser_toggle_action = self.asset_browser_dock.toggleViewAction()
-        self.asset_browser_toggle_action.setText("Toggle Asset Browser")
-        self.asset_browser_toggle_action.setShortcut("Ctrl+T")
-        
-        self.create_menu_bar()
-        self.create_toolbars()
-        self.create_status_bar()
+        self.ui = Ui_MainWindow()
+        self.ui.setupUi(self)
 
         self.setFocus()
         self.update_global_font()
         self.save_state()
         self.load_layout()
 
-    # --- NEW METHOD TO ADD MODELS TO THE SCENE ---
     def add_model_to_scene(self, filepath, rotation, scale):
-        """Creates a new Model 'thing' and adds it to the scene data."""
-        self.save_state()  # For undo functionality
-        
-        # Create the new model instance at the origin with the specified transform
+        self.save_state()
         new_model = Model(pos=[0, 0, 0], model_path=filepath, rotation=rotation, scale=scale)
         self.things.append(new_model)
-        
-        # Select the new model so it can be immediately manipulated
         self.set_selected_object(new_model)
-        
         QMessageBox.information(self, "Model Added", 
             f"'{os.path.basename(filepath)}' has been added to the scene.\n\n"
             "You can now use the 2D views or the property editor to position it.\n"
             "A 3D transform gizmo in the 3D view is the next step for direct manipulation.")
 
-    # --- CORE UI UPDATE LOGIC (MODIFIED) ---
     def set_selected_object(self, obj):
-        """Sets the currently selected object and triggers a full UI refresh."""
         self.selected_object = obj
+        if self.config.getboolean('Display', 'sync_selection', fallback=True):
+            self.view_3d.selected_object = obj
+        else:
+            self.view_3d.selected_object = None
         self.update_all_ui()
 
     def update_all_ui(self):
-        """
-        Updates all UI components to reflect the current state.
-        This is the single source of truth for all UI refreshes.
-        """
         self.property_editor.set_object(self.selected_object)
         self.scene_hierarchy.refresh_list()
         self.update_views()
 
     def update_views(self):
-        """Forces all 2D and 3D views to repaint and reset state."""
         self.view_3d.update()
         self.view_top.reset_state()
         self.view_front.reset_state()
         self.view_side.reset_state()
 
     def update_scene_hierarchy(self):
-        """
-        Refreshes the scene list with all current items.
-        """
         self.scene_hierarchy.refresh_list(self.brushes, self.things, self.selected_object)
     
     def select_object(self, obj):
-        """Alias for set_selected_object to maintain compatibility."""
         self.set_selected_object(obj)
 
-    # --- END OF CORE UI UPDATE LOGIC ---
     @staticmethod
     def _snap_to_power_of_two(n):
         if n <= 0: return 1
@@ -272,72 +123,6 @@ class MainWindow(QMainWindow):
             if old_dpi_setting != new_dpi_setting:
                     QMessageBox.information(self, "Restart Required",
                                               "High DPI scaling setting has been changed.\nPlease restart the application for the change to take effect.")
-    def create_menu_bar(self):
-        menubar = self.menuBar()
-        file_menu = menubar.addMenu('File')
-        edit_menu = menubar.addMenu('Edit')
-        view_menu = menubar.addMenu('View')
-        tools_menu = menubar.addMenu('Tools')
-        render_menu = menubar.addMenu('Render')
-        help_menu = menubar.addMenu('Help')
-
-        file_menu.addAction(QAction('New Map', self, shortcut='Ctrl+N', triggered=self.new_map))
-        file_menu.addAction(QAction('&Open...', self, shortcut='Ctrl+O', triggered=self.load_level))
-        file_menu.addAction(QAction('&Save', self, shortcut='Ctrl+S', triggered=self.save_level))
-        file_menu.addAction(QAction('Save &As...', self, shortcut='Ctrl+Shift+S', triggered=self.save_level_as))
-        file_menu.addSeparator()
-        file_menu.addAction(QAction('Settings...', self, triggered=self.show_settings_dialog))
-        file_menu.addSeparator()
-        file_menu.addAction(QAction('Exit', self, shortcut='Ctrl+Q', triggered=self.close))
-
-        edit_menu.addAction(QAction('Undo', self, shortcut='Ctrl+Z', triggered=self.undo))
-        edit_menu.addAction(QAction('Redo', self, shortcut='Ctrl+Y', triggered=self.redo))
-        edit_menu.addSeparator()
-        edit_menu.addAction(QAction('Hide Brush', self, shortcut='H', triggered=self.hide_selected_brush))
-        edit_menu.addAction(QAction('Unhide All Brushes', self, shortcut='Shift+H', triggered=self.unhide_all_brushes))
-
-        view_menu.addActions([
-            self.scene_hierarchy_dock.toggleViewAction(),
-            self.view_3d_dock.toggleViewAction(), 
-            self.right_dock.toggleViewAction(), 
-            self.properties_dock.toggleViewAction()
-        ])
-        
-        view_menu.addSeparator()
-        
-        asset_browser_action = self.asset_browser_dock.toggleViewAction()
-        asset_browser_action.setText("Toggle Asset Browser")
-        asset_browser_action.setShortcut("T")
-        view_menu.addAction(asset_browser_action)
-        
-        view_menu.addSeparator()
-        self.save_layout_action = QAction("Save Layout", self)
-        self.save_layout_action.triggered.connect(self.save_layout)
-        view_menu.addAction(self.save_layout_action)
-        
-        self.reset_layout_action = QAction("Reset Layout", self)
-        self.reset_layout_action.triggered.connect(self.reset_layout)
-        view_menu.addAction(self.reset_layout_action)
-        
-        view_menu.addSeparator()
-        toggle_triggers_action = QAction('Solid Triggers', self, checkable=True)
-        toggle_triggers_action.setChecked(self.view_3d.show_triggers_as_solid)
-        toggle_triggers_action.triggered.connect(self.toggle_trigger_display)
-        view_menu.addAction(toggle_triggers_action)
-
-        #tools_menu.addAction(QAction('Random Map Generator...', self, triggered=self.show_random_map_dialog))
-        tools_menu.addAction(QAction('Generate Collision Tilemap...', self, triggered=self.show_generate_tilemap_dialog))
-
-        render_group = QActionGroup(self)
-        modern_action = QAction('Modern (Shaders)', self, checkable=True, checked=True)
-        immediate_action = QAction('Immediate (Legacy)', self, checkable=True)
-        render_group.addAction(modern_action)
-        render_group.addAction(immediate_action)
-        render_menu.addActions(render_group.actions())
-        modern_action.triggered.connect(lambda: self.set_render_mode("Modern (Shaders)"))
-        immediate_action.triggered.connect(lambda: self.set_render_mode("Immediate (Legacy)"))
-
-        help_menu.addAction(QAction('About', self, triggered=self.show_about))
 
     def apply_caulk_to_brush(self):
         if not isinstance(self.selected_object, dict):
@@ -365,42 +150,6 @@ class MainWindow(QMainWindow):
         for face in ['north','south','east','west','top','down']:
             self.selected_object['textures'][face] = texture_name
         self.update_views()
-
-    def create_toolbars(self):
-        top_toolbar = QToolBar("Main Tools")
-        top_toolbar.setObjectName("MainToolbar")
-        self.addToolBar(top_toolbar)
-        display_mode_widget = QWidget()
-        display_mode_layout = QHBoxLayout(display_mode_widget)
-        display_mode_layout.setContentsMargins(5,0,5,0)
-        self.display_mode_combobox = QComboBox()
-        self.display_mode_combobox.addItems(["Wireframe", "Solid Lit", "Textured"])
-        self.display_mode_combobox.setCurrentText("Textured")
-        self.display_mode_combobox.currentTextChanged.connect(self.set_brush_display_mode)
-        display_mode_layout.addWidget(QLabel("Display:"))
-        display_mode_layout.addWidget(self.display_mode_combobox)
-        top_toolbar.addWidget(display_mode_widget)
-        top_toolbar.addSeparator()
-        undo_action = QAction(QIcon("assets/b_undo.png"),"",self,shortcut="Ctrl+Z",toolTip="Undo",triggered=self.undo)
-        redo_action = QAction(QIcon("assets/b_redo.png"),"",self,shortcut="Ctrl+Y",toolTip="Redo",triggered=self.redo)
-        top_toolbar.addActions([undo_action, redo_action])
-        top_toolbar.addSeparator()
-        self.apply_texture_action = QAction(QIcon("assets/b_applytex.png"),"",self,toolTip="Apply selected texture to brush",triggered=self.apply_texture_to_brush)
-        self.update_shortcuts()
-        apply_caulk_action = QAction(QIcon("assets/b_caulk.png"),"",self,toolTip="Apply caulk texture to brush",triggered=self.apply_caulk_to_brush)
-        top_toolbar.addAction(self.apply_texture_action)
-        top_toolbar.addAction(apply_caulk_action)
-        top_toolbar.addSeparator()
-        launch_button = QPushButton(QIcon("assets/b_test.png"),"")
-        launch_button.setToolTip("Quicksave and launch game")
-        launch_button.setStyleSheet("background-color: #7CFC00; font-weight: bold; padding: 4px 8px;")
-        launch_button.clicked.connect(self.quicksave_and_launch)
-        #top_toolbar.addWidget(launch_button)
-        # Add a play button to the toolbar
-        play_button = QPushButton(QIcon("assets/player.png"),"Play")
-        play_button.setToolTip("Drop in and play the level")
-        play_button.clicked.connect(self.enter_play_mode)
-        top_toolbar.addWidget(play_button)
 
     def generate_collision_map(self):
         if not self.brushes:
@@ -482,8 +231,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Player Start", "Please add a Player Start object to the scene before entering play mode.")
             return
 
-        # Tilemap check is removed
-        self.view_3d.set_tile_map(None) # Set tilemap to None for no collision
+        self.view_3d.set_tile_map(None)
         self.view_3d.toggle_play_mode(player_start.pos, player_start.get_angle())
 
 
@@ -497,9 +245,6 @@ class MainWindow(QMainWindow):
 
 
     def generate_and_save_tilemap(self, save_png=False):
-        """
-        Saves the current level and then runs the tilemap generator script.
-        """
         self.save_level()
 
         generator_script_path = os.path.join(self.root_dir, 'tools', 'generate_tilemap.py')
@@ -512,7 +257,6 @@ class MainWindow(QMainWindow):
             if save_png:
                 command.append('--save-png')
             
-            # Run the script as a separate process
             subprocess.run(command, check=True)
             QMessageBox.information(self, "Success", "Collision tilemap generated successfully.")
         except subprocess.CalledProcessError as e:
@@ -527,52 +271,6 @@ class MainWindow(QMainWindow):
         self.reset_layout_action.setShortcut(QKeySequence(reset_layout_shortcut))
         save_layout_shortcut = self.config.get('Controls', 'save_layout', fallback='Ctrl+Shift+S')
         self.save_layout_action.setShortcut(QKeySequence(save_layout_shortcut))
-
-    def create_status_bar(self):
-        status_bar = QStatusBar()
-        self.setStatusBar(status_bar)
-        bottom_widget = QWidget()
-        bottom_layout = QHBoxLayout(bottom_widget)
-        bottom_layout.setContentsMargins(10, 2, 10, 2)
-        
-        # --- Create all the widgets first ---
-        self.snap_checkbox = QCheckBox("Snap to Grid")
-        self.snap_checkbox.setChecked(True)
-        self.snap_checkbox.stateChanged.connect(self.toggle_snap_to_grid)
-        
-        self.grid_size_spinbox = QSpinBox()
-        self.grid_size_spinbox.setRange(4, 128)
-        self.grid_size_spinbox.setValue(16)
-        self.grid_size_spinbox.setSingleStep(1)
-        self.grid_size_spinbox.valueChanged.connect(self.set_grid_size)
-        
-        self.world_size_spinbox = QSpinBox()
-        self.world_size_spinbox.setRange(512, 16384)
-        self.world_size_spinbox.setValue(1024)
-        self.world_size_spinbox.setSingleStep(1)
-        self.world_size_spinbox.valueChanged.connect(self.set_world_size)
-        
-        self.culling_checkbox = QCheckBox("Enable Culling")
-        self.culling_checkbox.setChecked(False)
-        self.culling_checkbox.stateChanged.connect(self.toggle_culling)
-        
-        # --- Add widgets to the layout ---
-        bottom_layout.addWidget(self.snap_checkbox)
-        bottom_layout.addSpacing(20)
-        bottom_layout.addWidget(QLabel("Grid Size:"))
-        bottom_layout.addWidget(self.grid_size_spinbox)
-        bottom_layout.addSpacing(20)
-        bottom_layout.addWidget(QLabel("World Size:"))
-        bottom_layout.addWidget(self.world_size_spinbox)
-        
-        # This is the magic line ✨
-        # It adds a stretchable space that will push subsequent widgets to the right.
-        bottom_layout.addStretch(1)
-        
-        # Now add the culling checkbox, which will appear on the far right.
-        bottom_layout.addWidget(self.culling_checkbox)
-        
-        status_bar.addPermanentWidget(bottom_widget, 1)
 
     def toggle_culling(self, state):
         self.view_3d.set_culling(state == Qt.Checked)
@@ -625,17 +323,13 @@ class MainWindow(QMainWindow):
     def restore_state(self, state_json):
         state = json.loads(state_json)
         self.brushes = state.get('brushes', [])
-        # MODIFICATION: Re-create things using the correct class, including the new Model class
         things_data = state.get('things', [])
         new_things = []
         for t_data in things_data:
-            # Check for the 'type' key to differentiate our 'things'
             if t_data.get('type') == 'Model':
-                # Recreate Model instance, removing 'type' from kwargs to avoid constructor error
                 model_kwargs = {k: v for k, v in t_data.items() if k != 'type'}
                 new_things.append(Model(**model_kwargs))
             else:
-                # Use existing factory method for all other things
                 new_things.append(Thing.from_dict(t_data))
         self.things = new_things
         self.set_selected_object(None)
@@ -665,10 +359,9 @@ class MainWindow(QMainWindow):
 
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle("About RStudio")
-
-        # This widget will hold our custom layout
+        
         container_widget = QWidget()
-        layout = QVBoxLayout(container_widget) # Apply the layout to the container
+        layout = QVBoxLayout(container_widget)
 
         splash_label = QLabel()
         pixmap = QPixmap('assets/splash.png')
@@ -676,17 +369,13 @@ class MainWindow(QMainWindow):
         layout.addWidget(splash_label)
 
         version_label = QLabel(f"{version}<br>https://github.com/ViciousSquid/RStudio")
-        version_label.setTextFormat(Qt.RichText) # Use RichText to render the <br> tag
+        version_label.setTextFormat(Qt.RichText)
         version_label.setAlignment(Qt.AlignCenter)
-        version_label.setOpenExternalLinks(True) # Make the link clickable
+        version_label.setOpenExternalLinks(True)
         layout.addWidget(version_label)
-
-        # This is a bit of a hack to get the custom widget into the QMessageBox
-        # We add our container_widget (which is a QWidget) instead of the layout itself.
+        
         msg_box.layout().addWidget(container_widget, 0, 0, 1, msg_box.layout().columnCount())
         
-        # We need to add a standard button so the dialog can be closed.
-        # Otherwise, it might appear without an OK/Close button.
         msg_box.setStandardButtons(QMessageBox.Ok)
 
         msg_box.exec_()
@@ -866,6 +555,29 @@ class MainWindow(QMainWindow):
         
         self.update_all_ui()
 
+    def rotate_selected_brush(self):
+        if not isinstance(self.selected_object, dict):
+            QMessageBox.warning(self, "Invalid Selection", "Please select a brush to rotate.")
+            return
+
+        current_view = self.right_tabs.currentWidget()
+        if not isinstance(current_view, View2D):
+            QMessageBox.warning(self, "Invalid View", "Please select a 2D view (Top, Side, or Front) to define the rotation axis.")
+            return
+
+        self.save_state()
+        size = self.selected_object['size']
+        view_type = current_view.view_type
+
+        if view_type == 'top':
+            size[0], size[2] = size[2], size[0]
+        elif view_type == 'side':
+            size[1], size[2] = size[2], size[1]
+        elif view_type == 'front':
+            size[0], size[1] = size[1], size[0]
+
+        self.update_all_ui()
+
     def toggle_trigger_display(self, checked):
         self.view_3d.show_triggers_as_solid = checked
         self.view_3d.update()
@@ -982,17 +694,13 @@ class MainWindow(QMainWindow):
             return
 
         self.brushes = level_data.get('brushes', [])
-        # MODIFICATION: Re-create things using the correct class, including the new Model class
         things_data = level_data.get('things', [])
         new_things = []
         for t_data in things_data:
-            # Check for the 'type' key to differentiate our 'things'
             if t_data.get('type') == 'Model':
-                # Recreate Model instance, removing 'type' from kwargs to avoid constructor error
                 model_kwargs = {k: v for k, v in t_data.items() if k != 'type'}
                 new_things.append(Model(**model_kwargs))
             else:
-                # Use existing factory method for all other things
                 new_things.append(Thing.from_dict(t_data))
         self.things = new_things
 
@@ -1052,8 +760,6 @@ class MainWindow(QMainWindow):
             self.restoreState(QByteArray.fromHex(self.config['Layout']['state'].encode()))
 
     def reset_layout(self):
-        # This function provides a default layout.
-        # It's a simplified version of the initial setup in __init__.
         self.scene_hierarchy_dock.setFloating(False)
         self.view_3d_dock.setFloating(False)
         self.right_dock.setFloating(False)
@@ -1065,7 +771,6 @@ class MainWindow(QMainWindow):
         self.splitDockWidget(self.view_3d_dock, self.right_dock, Qt.Horizontal)
         self.splitDockWidget(self.right_dock, self.properties_dock, Qt.Vertical)
         
-        # Default layout
         self.resizeDocks([self.view_3d_dock, self.right_dock], [800, 600], Qt.Horizontal)
         self.resizeDocks([self.right_dock, self.properties_dock], [600, 300], Qt.Vertical)
         self.statusBar().showMessage("Layout reset to default.", 2000)
@@ -1073,17 +778,3 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.save_layout()
         super().closeEvent(event)
-
-
-if __name__ == '__main__':
-    config = configparser.ConfigParser()
-    config.read('settings.ini')
-    if config.getboolean('Display', 'high_dpi_scaling', fallback=False):
-        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-
-    app = QApplication(sys.argv)
-
-    main_win = MainWindow(os.path.dirname(os.path.abspath(__file__)))
-    main_win.show()
-    sys.exit(app.exec_())

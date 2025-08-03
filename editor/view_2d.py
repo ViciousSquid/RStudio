@@ -223,7 +223,7 @@ class View2D(QWidget):
         yaw = camera.yaw
         pitch = camera.pitch
         
-        if self.view_type == 'top': angle_deg = -yaw
+        if self.view_type == 'top': angle_deg = yaw
         elif self.view_type == 'front': angle_deg = -yaw
         elif self.view_type == 'side': angle_deg = -pitch
 

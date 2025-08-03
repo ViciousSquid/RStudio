@@ -39,6 +39,9 @@ class SettingsWindow(QDialog):
         self.show_caulk_checkbox = QCheckBox("Show Caulk textures in editor")
         display_layout.addWidget(self.show_caulk_checkbox)
 
+        self.sync_selection_checkbox = QCheckBox("Highlight selected brushes in 3D view")
+        display_layout.addWidget(self.sync_selection_checkbox)
+
         font_layout = QHBoxLayout()
         font_layout.addWidget(QLabel("Font Size:"))
         self.font_size_spinbox = QSpinBox()
@@ -75,20 +78,29 @@ class SettingsWindow(QDialog):
         shortcuts_layout = QFormLayout(shortcuts_widget)
         self.tabs.addTab(shortcuts_widget, "Keyboard")
 
-        self.shortcut_buttons = {}
-        shortcut_actions = [
-            "apply_texture", "Clone Brush", "Delete Brush",
-            "reset_layout", "save_layout", "Hide Brush", "Unhide All Brushes"
-        ]
-        for action_name in shortcut_actions:
-            label_text = action_name.replace('_', ' ').title()
-            self.shortcut_buttons[action_name] = QPushButton("...")
-            self.shortcut_buttons[action_name].setFixedWidth(120)
-            self.shortcut_buttons[action_name].clicked.connect(lambda _, a=action_name: self.change_key(a))
-            shortcuts_layout.addRow(label_text, self.shortcut_buttons[action_name])
-
+        # Asset Browser first
         asset_browser_label = QLabel("T")
         shortcuts_layout.addRow("Asset Browser:", asset_browser_label)
+
+        shortcut_definitions = {
+            "apply_texture": "Shift+T",
+            "Clone Brush": "SPACE",
+            "Delete Brush": "DEL",
+            "reset_layout": "Ctrl+Shift+R",
+            "save_layout": "Ctrl+Shift+S",
+            "Hide Brush": "H",
+            "Unhide All Brushes": "Shift+H"
+        }
+        
+        self.shortcut_labels = {}
+        for action_name, shortcut_text in shortcut_definitions.items():
+            label_text = action_name.replace('_', ' ').title()
+            shortcut_label = QLabel(shortcut_text)
+            self.shortcut_labels[action_name] = shortcut_label
+            shortcuts_layout.addRow(label_text, shortcut_label)
+
+        switch_2d_views_label = QLabel("Shift+Tab")
+        shortcuts_layout.addRow("Switch 2D Views:", switch_2d_views_label)
         
         # --- OK and Cancel Buttons ---
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -104,6 +116,7 @@ class SettingsWindow(QDialog):
         self.dpi_scaling_checkbox.setChecked(self.config.getboolean('Display', 'high_dpi_scaling', fallback=False))
         self.show_caulk_checkbox.setChecked(self.config.getboolean('Display', 'show_caulk', fallback=True))
         self.font_size_spinbox.setValue(self.config.getint('Display', 'font_size', fallback=10))
+        self.sync_selection_checkbox.setChecked(self.config.getboolean('Display', 'sync_selection', fallback=True))
 
         # Physics settings
         self.physics_checkbox.setChecked(self.config.getboolean('Settings', 'physics', fallback=True))
@@ -112,10 +125,8 @@ class SettingsWindow(QDialog):
         self.invert_mouse_checkbox.setChecked(self.config.getboolean('Controls', 'invert_mouse', fallback=False))
         self.middle_click_drag_checkbox.setChecked(self.config.getboolean('Controls', 'MiddleClickDrag', fallback=False))
 
-        # Shortcut settings
-        for action, button in self.shortcut_buttons.items():
-            shortcut = self.config.get('Controls', action.replace(" ", "_").lower(), fallback="")
-            button.setText(shortcut)
+        # Shortcut settings (no longer loading from config for hardcoded shortcuts)
+        pass
 
 
     def accept(self):
@@ -125,6 +136,7 @@ class SettingsWindow(QDialog):
         self.config.set('Display', 'high_dpi_scaling', str(self.dpi_scaling_checkbox.isChecked()))
         self.config.set('Display', 'show_caulk', str(self.show_caulk_checkbox.isChecked()))
         self.config.set('Display', 'font_size', str(self.font_size_spinbox.value()))
+        self.config.set('Display', 'sync_selection', str(self.sync_selection_checkbox.isChecked()))
 
         if not self.config.has_section('Settings'): self.config.add_section('Settings')
         self.config.set('Settings', 'physics', str(self.physics_checkbox.isChecked()))
@@ -133,34 +145,16 @@ class SettingsWindow(QDialog):
         self.config.set('Controls', 'invert_mouse', str(self.invert_mouse_checkbox.isChecked()))
         self.config.set('Controls', 'MiddleClickDrag', str(self.middle_click_drag_checkbox.isChecked()))
 
-        for action, button in self.shortcut_buttons.items():
-            self.config.set('Controls', action, button.text())
+        # No longer saving shortcut settings as they are hardcoded
         
         super().accept()
 
     def change_key(self, control_name):
         """Prepares to capture the next key press for a specific control."""
-        self.binding_in_progress = control_name
-        button = self.shortcut_buttons[control_name]
-        button.setText("Press a key...")
-        self.grabKeyboard()
+        # This method is no longer needed as there are no buttons to change keys
+        pass
 
     def keyPressEvent(self, event):
         """Captures the key press if a binding is in progress."""
-        if self.binding_in_progress:
-            key_sequence = QKeySequence(event.key() + int(event.modifiers()))
-            key_name = key_sequence.toString(QKeySequence.NativeText)
-
-            if not key_name or key_name in ["Shift", "Ctrl", "Alt"]:
-                 super().keyPressEvent(event)
-                 return
-
-            if self.binding_in_progress in self.shortcut_buttons:
-                button = self.shortcut_buttons[self.binding_in_progress]
-                button.setText(key_name)
-
-
-            self.releaseKeyboard()
-            self.binding_in_progress = None
-        else:
-            super().keyPressEvent(event)
+        # This method is no longer needed as there are no key bindings in progress
+        super().keyPressEvent(event)
