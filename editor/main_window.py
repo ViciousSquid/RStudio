@@ -26,45 +26,43 @@ from PyQt5.QtWidgets import (
     QTabWidget,
     QFileDialog,
     QPushButton,
-    QActionGroup
+    QActionGroup,
+    QDialog,
+    QDialogButtonBox
 )
 from PyQt5.QtCore import Qt, QPoint, QByteArray
 from PyQt5.QtGui import QFont, QIcon, QKeySequence, QPixmap
 from editor.view_2d import View2D
 from engine.qt_game_view import QtGameView
-from editor.things import Light, PlayerStart, Thing, Pickup, Monster
+from editor.things import Light, PlayerStart, Thing, Pickup, Monster, Model
 from editor.property_editor import PropertyEditor
 from editor.rand_map_gen_dial import RandomMapGeneratorDialog
 from editor.rand_map_gen import generate
 from editor.asset_browser import AssetBrowser
 from editor.SettingsWindow import SettingsWindow
 from editor.scene_hierarchy import SceneHierarchy
+from engine.constants import TILE_SIZE, WALL_TILE, FLOOR_TILE
 
-# --- PLACEHOLDER MODEL CLASS ---
-# TODO: This class should be moved to your 'editor/things.py' file and expanded upon.
-class Model(Thing):
-    """Represents a 3D model placed in the world."""
-    def __init__(self, pos=[0,0,0], model_path="", rotation=[0,0,0], scale=[1,1,1]):
-        super().__init__(pos)
-        self.type = 'Model'
-        self.model_path = model_path
-        self.rotation = rotation
-        self.scale = scale
-
-    def to_dict(self):
-        # Extends the base Thing's dictionary representation
-        data = super().to_dict()
-        data.update({
-            'model_path': self.model_path,
-            'rotation': self.rotation,
-            'scale': self.scale
-        })
-        return data
+class GenerateTilemapDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Generate Tilemap")
+        layout = QVBoxLayout(self)
+        self.save_png_checkbox = QCheckBox("Save a PNG copy of the tilemap")
+        layout.addWidget(self.save_png_checkbox)
+        
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+        
+    def save_png_checked(self):
+        return self.save_png_checkbox.isChecked()
 
 class MainWindow(QMainWindow):
-    def __init__(self, root_dir): # MODIFICATION: Accept the application's root directory
+    def __init__(self, root_dir): # Accept the application's root directory
         super().__init__()
-        self.root_dir = root_dir # MODIFICATION: Store the root directory
+        self.root_dir = root_dir # Store the root directory
         self.setWindowTitle("RStudio")
         self.setGeometry(100, 100, 1600, 900)
         self.setMinimumSize(1200, 800)
@@ -152,7 +150,7 @@ class MainWindow(QMainWindow):
         texture_path = os.path.join(self.root_dir, "assets", "textures")
         model_path = os.path.join(self.root_dir, "assets", "models")
         
-        self.asset_browser = AssetBrowser(texture_path, model_path)
+        self.asset_browser = AssetBrowser(texture_path, editor=self)
         self.asset_browser.main_window = self # Inject reference for the "Add Model" button
 
         self.asset_browser_dock.setWidget(self.asset_browser)
@@ -215,7 +213,7 @@ class MainWindow(QMainWindow):
         This is the single source of truth for all UI refreshes.
         """
         self.property_editor.set_object(self.selected_object)
-        self.update_scene_hierarchy()
+        self.scene_hierarchy.refresh_list()
         self.update_views()
 
     def update_views(self):
@@ -294,6 +292,9 @@ class MainWindow(QMainWindow):
 
         edit_menu.addAction(QAction('Undo', self, shortcut='Ctrl+Z', triggered=self.undo))
         edit_menu.addAction(QAction('Redo', self, shortcut='Ctrl+Y', triggered=self.redo))
+        edit_menu.addSeparator()
+        edit_menu.addAction(QAction('Hide Brush', self, shortcut='H', triggered=self.hide_selected_brush))
+        edit_menu.addAction(QAction('Unhide All Brushes', self, shortcut='Shift+H', triggered=self.unhide_all_brushes))
 
         view_menu.addActions([
             self.scene_hierarchy_dock.toggleViewAction(),
@@ -324,7 +325,8 @@ class MainWindow(QMainWindow):
         toggle_triggers_action.triggered.connect(self.toggle_trigger_display)
         view_menu.addAction(toggle_triggers_action)
 
-        tools_menu.addAction(QAction('Random Map Generator...', self, triggered=self.show_random_map_dialog))
+        #tools_menu.addAction(QAction('Random Map Generator...', self, triggered=self.show_random_map_dialog))
+        tools_menu.addAction(QAction('Generate Collision Tilemap...', self, triggered=self.show_generate_tilemap_dialog))
 
         render_group = QActionGroup(self)
         modern_action = QAction('Modern (Shaders)', self, checkable=True, checked=True)
@@ -393,7 +395,130 @@ class MainWindow(QMainWindow):
         launch_button.setToolTip("Quicksave and launch game")
         launch_button.setStyleSheet("background-color: #7CFC00; font-weight: bold; padding: 4px 8px;")
         launch_button.clicked.connect(self.quicksave_and_launch)
-        top_toolbar.addWidget(launch_button)
+        #top_toolbar.addWidget(launch_button)
+        # Add a play button to the toolbar
+        play_button = QPushButton(QIcon("assets/player.png"),"Play")
+        play_button.setToolTip("Drop in and play the level")
+        play_button.clicked.connect(self.enter_play_mode)
+        top_toolbar.addWidget(play_button)
+
+    def generate_collision_map(self):
+        if not self.brushes:
+            return None
+
+        min_x_world, max_x_world = float('inf'), float('-inf')
+        min_z_world, max_z_world = float('inf'), float('-inf')
+
+        solid_brushes_exist = False
+        for brush in self.brushes:
+            if not brush.get('is_trigger', False) and not brush.get('operation') == 'subtract':
+                solid_brushes_exist = True
+                pos, size = np.array(brush['pos']), np.array(brush['size'])
+                half_size = size / 2.0
+
+                min_x_world = min(min_x_world, pos[0] - half_size[0])
+                max_x_world = max(max_x_world, pos[0] + half_size[0])
+                min_z_world = min(min_z_world, pos[2] - half_size[2])
+                max_z_world = max(max_z_world, pos[2] + half_size[2])
+
+        if not solid_brushes_exist:
+            return None
+
+        padding = TILE_SIZE * 2
+        padded_min_x = min_x_world - padding
+        padded_max_x = max_x_world + padding
+        padded_min_z = min_z_world - padding
+        padded_max_z = max_z_world + padding
+
+        min_x_tile_idx = int(math.floor(padded_min_x / TILE_SIZE))
+        max_x_tile_idx = int(math.ceil(padded_max_x / TILE_SIZE))
+        min_z_tile_idx = int(math.floor(padded_min_z / TILE_SIZE))
+        max_z_tile_idx = int(math.ceil(padded_max_z / TILE_SIZE))
+
+        map_width_tiles = max_x_tile_idx - min_x_tile_idx
+        map_depth_tiles = max_z_tile_idx - min_z_tile_idx
+
+        map_width_tiles = max(1, map_width_tiles)
+        map_depth_tiles = max(1, map_depth_tiles)
+
+        collision_tile_map = np.full((map_depth_tiles, map_width_tiles), FLOOR_TILE, dtype=int)
+
+        for brush in self.brushes:
+            if brush.get('is_trigger', False) or brush.get('operation') == 'subtract':
+                continue
+
+            pos, size = np.array(brush['pos']), np.array(brush['size'])
+            half_size = size / 2.0
+
+            brush_min_x_world = pos[0] - half_size[0]
+            brush_max_x_world = pos[0] + half_size[0]
+            brush_min_z_world = pos[2] - half_size[2]
+            brush_max_z_world = pos[2] + half_size[2]
+
+            brush_min_x_map_tile = int(math.floor(brush_min_x_world / TILE_SIZE) - min_x_tile_idx)
+            brush_max_x_map_tile = int(math.ceil(brush_max_x_world / TILE_SIZE) - min_x_tile_idx)
+            brush_min_z_map_tile = int(math.floor(brush_min_z_world / TILE_SIZE) - min_z_tile_idx)
+            brush_max_z_map_tile = int(math.ceil(brush_max_z_world / TILE_SIZE) - min_z_tile_idx)
+
+            min_x_idx_clamped = max(0, brush_min_x_map_tile)
+            max_x_idx_clamped = min(map_width_tiles, brush_max_x_map_tile)
+            min_z_idx_clamped = max(0, brush_min_z_map_tile)
+            max_z_idx_clamped = min(map_depth_tiles, brush_max_z_map_tile)
+
+            if min_x_idx_clamped < max_x_idx_clamped and min_z_idx_clamped < max_z_idx_clamped:
+                collision_tile_map[min_z_idx_clamped:max_x_idx_clamped, min_x_idx_clamped:max_x_idx_clamped] = WALL_TILE
+
+        return collision_tile_map
+
+
+    def enter_play_mode(self):
+        player_start = None
+        for thing in self.things:
+            if isinstance(thing, PlayerStart):
+                player_start = thing
+                break
+        
+        if not player_start:
+            QMessageBox.warning(self, "No Player Start", "Please add a Player Start object to the scene before entering play mode.")
+            return
+
+        # Tilemap check is removed
+        self.view_3d.set_tile_map(None) # Set tilemap to None for no collision
+        self.view_3d.toggle_play_mode(player_start.pos, player_start.get_angle())
+
+
+    def show_generate_tilemap_dialog(self):
+        if not self.file_path:
+            self.save_level_as()
+            if not self.file_path:
+                QMessageBox.warning(self, "File Not Saved", "Please save the level before generating a tilemap.")
+                return
+        self.generate_and_save_tilemap(save_png=True)
+
+
+    def generate_and_save_tilemap(self, save_png=False):
+        """
+        Saves the current level and then runs the tilemap generator script.
+        """
+        self.save_level()
+
+        generator_script_path = os.path.join(self.root_dir, 'tools', 'generate_tilemap.py')
+        if not os.path.exists(generator_script_path):
+            QMessageBox.critical(self, "Error", f"Tilemap generator script not found at:\n{generator_script_path}")
+            return
+
+        try:
+            command = [sys.executable, generator_script_path, self.file_path]
+            if save_png:
+                command.append('--save-png')
+            
+            # Run the script as a separate process
+            subprocess.run(command, check=True)
+            QMessageBox.information(self, "Success", "Collision tilemap generated successfully.")
+        except subprocess.CalledProcessError as e:
+            QMessageBox.critical(self, "Error", f"Failed to generate tilemap.\n\nError: {e}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"An unexpected error occurred:\n{e}")
 
     def update_shortcuts(self):
         apply_texture_shortcut = self.config.get('Controls', 'apply_texture', fallback='Shift+T')
@@ -746,6 +871,14 @@ class MainWindow(QMainWindow):
         self.view_3d.update()
 
     def keyPressEvent(self, event):
+        if self.view_3d.play_mode:
+            if event.key() == Qt.Key_Escape:
+                self.view_3d.toggle_play_mode(None, None)
+            else:
+                self.keys_pressed.add(event.key())
+            super().keyPressEvent(event)
+            return
+
         if self.selected_object:
             if event.key() == Qt.Key_Delete:
                 self.save_state()
@@ -756,6 +889,13 @@ class MainWindow(QMainWindow):
                 self.set_selected_object(None)
                 return
 
+            if event.key() == Qt.Key_H:
+                if event.modifiers() == Qt.ShiftModifier:
+                    self.unhide_all_brushes()
+                elif isinstance(self.selected_object, dict):
+                    self.hide_selected_brush()
+                return
+
             if event.key() == Qt.Key_Space:
                 self.save_state()
                 if isinstance(self.selected_object, dict):
@@ -764,7 +904,7 @@ class MainWindow(QMainWindow):
                 else:
                     new_obj = copy.copy(self.selected_object)
                     self.things.append(new_obj)
-                
+
                 current_view = self.right_tabs.currentWidget()
                 if isinstance(current_view, View2D):
                     axis_map = {'top': ('x', 'z'), 'side': ('y', 'z'), 'front': ('x', 'y')}
@@ -774,16 +914,29 @@ class MainWindow(QMainWindow):
                     pos_ref = new_obj['pos'] if isinstance(new_obj, dict) else new_obj.pos
                     pos_ref[pos_map[ax1_name]] += offset
                     pos_ref[pos_map[ax2_name]] += offset
-                
+
                 self.set_selected_object(new_obj)
                 return
-            
+
         if event.key() == Qt.Key_Escape and self.selected_object:
             self.set_selected_object(None)
             return
-            
+
         self.keys_pressed.add(event.key())
         super().keyPressEvent(event)
+
+    def hide_selected_brush(self):
+        if isinstance(self.selected_object, dict):
+            self.save_state()
+            self.selected_object['hidden'] = True
+            self.update_all_ui()
+
+    def unhide_all_brushes(self):
+        self.save_state()
+        for brush in self.brushes:
+            if 'hidden' in brush:
+                brush['hidden'] = False
+        self.update_all_ui()
 
     def keyReleaseEvent(self, event):
         if event.key() in self.keys_pressed:
@@ -912,7 +1065,7 @@ class MainWindow(QMainWindow):
         self.splitDockWidget(self.view_3d_dock, self.right_dock, Qt.Horizontal)
         self.splitDockWidget(self.right_dock, self.properties_dock, Qt.Vertical)
         
-        # You may need to adjust these sizes to what you consider "default"
+        # Default layout
         self.resizeDocks([self.view_3d_dock, self.right_dock], [800, 600], Qt.Horizontal)
         self.resizeDocks([self.right_dock, self.properties_dock], [600, 300], Qt.Vertical)
         self.statusBar().showMessage("Layout reset to default.", 2000)

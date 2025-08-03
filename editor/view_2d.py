@@ -129,6 +129,8 @@ class View2D(QWidget):
         ax_map = {'x': 0, 'y': 1, 'z': 2}
         
         for brush in self.editor.brushes:
+            if brush.get('hidden', False):
+                continue
             is_selected = (brush is self.editor.selected_object)
             is_trigger = brush.get('is_trigger', False)
             is_subtractive = brush.get('operation') == 'subtract'
@@ -221,9 +223,9 @@ class View2D(QWidget):
         yaw = camera.yaw
         pitch = camera.pitch
         
-        if self.view_type == 'top': angle_deg = -yaw + 90
-        elif self.view_type == 'front': angle_deg = -yaw + 90
-        elif self.view_type == 'side': angle_deg = -pitch + 90
+        if self.view_type == 'top': angle_deg = -yaw
+        elif self.view_type == 'front': angle_deg = -yaw
+        elif self.view_type == 'side': angle_deg = -pitch
 
         fov = camera.fov
         cone_length = 200

@@ -111,6 +111,9 @@ class PlayerStart(Thing):
         self.properties.setdefault('type', 'playerstart')
         self.properties.setdefault('angle', 0.0)
 
+    def get_angle(self):
+        return float(self.properties.get('angle', 0.0))
+
 class Light(Thing):
     pixmap_path = "assets/light.png"
     def __init__(self, pos=None, properties=None):
@@ -133,14 +136,14 @@ class Light(Thing):
         return float(self.properties.get('radius', 512.0))
 
 class Monster(Thing):
-    pixmap_path = "assets/monster.png" # Assuming you have this asset
+    pixmap_path = "assets/monster.png"
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'monster')
         self.properties.setdefault('id', 0)
 
 class Pickup(Thing):
-    pixmap_path = "assets/pickup.png" # Changed from item.png to match assets
+    pixmap_path = "assets/pickup.png"
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'pickup')
@@ -154,3 +157,22 @@ class Trigger(Thing):
         self.properties.setdefault('type', 'trigger')
         self.properties.setdefault('target', '')
         self.properties.setdefault('action', 'on_enter')
+
+class Model(Thing):
+    """Represents a 3D model placed in the world."""
+    def __init__(self, pos=[0,0,0], model_path="", rotation=[0,0,0], scale=[1,1,1]):
+        super().__init__(pos)
+        self.type = 'Model'
+        self.model_path = model_path
+        self.rotation = rotation
+        self.scale = scale
+
+    def to_dict(self):
+        # Extends the base Thing's dictionary representation
+        data = super().to_dict()
+        data.update({
+            'model_path': self.model_path,
+            'rotation': self.rotation,
+            'scale': self.scale
+        })
+        return data

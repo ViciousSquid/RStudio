@@ -12,7 +12,7 @@ class SettingsWindow(QDialog):
     def __init__(self, config, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(600)
         self.config = config
         self.binding_in_progress = None
 
@@ -24,7 +24,7 @@ class SettingsWindow(QDialog):
         # --- Display & Physics Tab ---
         display_physics_widget = QWidget()
         display_physics_layout = QVBoxLayout(display_physics_widget)
-        self.tabs.addTab(display_physics_widget, "Display & Physics")
+        self.tabs.addTab(display_physics_widget, "General")
 
         # --- Display Section ---
         display_group = QGroupBox("")
@@ -78,7 +78,7 @@ class SettingsWindow(QDialog):
         self.shortcut_buttons = {}
         shortcut_actions = [
             "apply_texture", "Clone Brush", "Delete Brush",
-            "reset_layout", "save_layout"
+            "reset_layout", "save_layout", "Hide Brush", "Unhide All Brushes"
         ]
         for action_name in shortcut_actions:
             label_text = action_name.replace('_', ' ').title()
@@ -99,28 +99,22 @@ class SettingsWindow(QDialog):
         self.load_settings()
 
     def load_settings(self):
-        """Loads settings from the config object into the UI widgets."""
-        self.show_fps_checkbox.setChecked(self.config.getboolean('Display', 'show_fps', fallback=False))
+        # Display settings
+        self.show_fps_checkbox.setChecked(self.config.getboolean('Display', 'show_fps', fallback=True))
         self.dpi_scaling_checkbox.setChecked(self.config.getboolean('Display', 'high_dpi_scaling', fallback=False))
         self.show_caulk_checkbox.setChecked(self.config.getboolean('Display', 'show_caulk', fallback=True))
         self.font_size_spinbox.setValue(self.config.getint('Display', 'font_size', fallback=10))
+
+        # Physics settings
         self.physics_checkbox.setChecked(self.config.getboolean('Settings', 'physics', fallback=True))
+
+        # Controls settings
         self.invert_mouse_checkbox.setChecked(self.config.getboolean('Controls', 'invert_mouse', fallback=False))
         self.middle_click_drag_checkbox.setChecked(self.config.getboolean('Controls', 'MiddleClickDrag', fallback=False))
-        
+
+        # Shortcut settings
         for action, button in self.shortcut_buttons.items():
-            fallback_key = ''
-            if action == 'apply_texture':
-                fallback_key = 'Shift+T'
-            elif action == 'Clone Brush':
-                fallback_key = 'Space'
-            elif action == 'Delete Brush':
-                fallback_key = 'Del'
-            elif action == 'reset_layout':
-                fallback_key = 'Ctrl+Shift+R'
-            elif action == 'save_layout':
-                fallback_key = 'Ctrl+Shift+S'
-            shortcut = self.config.get('Controls', action, fallback=fallback_key)
+            shortcut = self.config.get('Controls', action.replace(" ", "_").lower(), fallback="")
             button.setText(shortcut)
 
 
