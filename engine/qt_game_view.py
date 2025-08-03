@@ -5,7 +5,7 @@ import ctypes
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication
 from PyQt5.QtCore import Qt, QTimer, QPoint
 from PyQt5.QtGui import QPainter, QColor, QFont, QCursor
-from OpenGL.GL import *
+import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
 from engine.camera import Camera
@@ -17,6 +17,7 @@ def perspective_projection(fov, aspect, near, far):
     if aspect == 0: return glm.mat4(1.0)
     return glm.perspective(glm.radians(fov), aspect, near, far)
 
+# (Your existing shader code remains the same)
 VERTEX_SHADER_SIMPLE = """
 #version 330
 layout(location = 0) in vec3 a_position;
@@ -221,12 +222,12 @@ class QtGameView(QOpenGLWidget):
         self.update()
 
     def initializeGL(self):
-        glClearColor(0.1, 0.1, 0.15, 1.0)
+        gl.glClearColor(0.1, 0.1, 0.15, 1.0)
         try:
-            self.shader_simple = compileProgram(compileShader(VERTEX_SHADER_SIMPLE, GL_VERTEX_SHADER), compileShader(FRAGMENT_SHADER_SIMPLE, GL_FRAGMENT_SHADER))
-            self.shader_lit = compileProgram(compileShader(VERTEX_SHADER_LIT, GL_VERTEX_SHADER), compileShader(FRAGMENT_SHADER_LIT, GL_FRAGMENT_SHADER))
-            self.shader_textured = compileProgram(compileShader(VERTEX_SHADER_TEXTURED, GL_VERTEX_SHADER), compileShader(FRAGMENT_SHADER_TEXTURED, GL_FRAGMENT_SHADER))
-            self.shader_sprite = compileProgram(compileShader(VERTEX_SHADER_SPRITE, GL_VERTEX_SHADER), compileShader(FRAGMENT_SHADER_SPRITE, GL_FRAGMENT_SHADER))
+            self.shader_simple = compileProgram(compileShader(VERTEX_SHADER_SIMPLE, gl.GL_VERTEX_SHADER), compileShader(FRAGMENT_SHADER_SIMPLE, gl.GL_FRAGMENT_SHADER))
+            self.shader_lit = compileProgram(compileShader(VERTEX_SHADER_LIT, gl.GL_VERTEX_SHADER), compileShader(FRAGMENT_SHADER_LIT, gl.GL_FRAGMENT_SHADER))
+            self.shader_textured = compileProgram(compileShader(VERTEX_SHADER_TEXTURED, gl.GL_VERTEX_SHADER), compileShader(FRAGMENT_SHADER_TEXTURED, gl.GL_FRAGMENT_SHADER))
+            self.shader_sprite = compileProgram(compileShader(VERTEX_SHADER_SPRITE, gl.GL_VERTEX_SHADER), compileShader(FRAGMENT_SHADER_SPRITE, gl.GL_FRAGMENT_SHADER))
         except Exception as e: print(f"Shader Error: {e}"); return
 
         self.create_cube_buffers()
@@ -285,35 +286,35 @@ class QtGameView(QOpenGLWidget):
             -0.5,  0.5, -0.5,  0.0,  1.0,  0.0,  0.0, 1.0
         ], dtype=np.float32)
         # fmt: on
-        self.vao_cube = glGenVertexArrays(1); glBindVertexArray(self.vao_cube)
-        vbo = glGenBuffers(1); glBindBuffer(GL_ARRAY_BUFFER, vbo)
-        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 32, ctypes.c_void_p(0)); glEnableVertexAttribArray(0)
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 32, ctypes.c_void_p(12)); glEnableVertexAttribArray(1)
-        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 32, ctypes.c_void_p(24)); glEnableVertexAttribArray(2)
-        glBindVertexArray(0)
+        self.vao_cube = gl.glGenVertexArrays(1); gl.glBindVertexArray(self.vao_cube)
+        vbo = gl.glGenBuffers(1); gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, vertices.nbytes, vertices, gl.GL_STATIC_DRAW)
+        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(0)); gl.glEnableVertexAttribArray(0)
+        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(12)); gl.glEnableVertexAttribArray(1)
+        gl.glVertexAttribPointer(2, 2, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(24)); gl.glEnableVertexAttribArray(2)
+        gl.glBindVertexArray(0)
 
     def create_sprite_buffers(self):
         vertices = np.array([-0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, 0.5], dtype=np.float32)
-        self.vao_sprite = glGenVertexArrays(1); glBindVertexArray(self.vao_sprite)
-        vbo = glGenBuffers(1); glBindBuffer(GL_ARRAY_BUFFER, vbo)
-        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, None); glEnableVertexAttribArray(0)
-        glBindVertexArray(0)
+        self.vao_sprite = gl.glGenVertexArrays(1); gl.glBindVertexArray(self.vao_sprite)
+        vbo = gl.glGenBuffers(1); gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, vertices.nbytes, vertices, gl.GL_STATIC_DRAW)
+        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None); gl.glEnableVertexAttribArray(0)
+        gl.glBindVertexArray(0)
 
     def create_grid_buffers(self):
         if self.grid_size <= 0: return
-        if hasattr(self, 'vao_grid') and self.vao_grid is not None: glDeleteVertexArrays(1, [self.vao_grid])
-        if hasattr(self, 'vbo_grid') and self.vbo_grid is not None: glDeleteBuffers(1, [self.vbo_grid])
+        if hasattr(self, 'vao_grid') and self.vao_grid is not None: gl.glDeleteVertexArrays(1, [self.vao_grid])
+        if hasattr(self, 'vbo_grid') and self.vbo_grid is not None: gl.glDeleteBuffers(1, [self.vbo_grid])
         s, g = self.world_size, self.grid_size
         lines = [[-s,0,i, s,0,i, i,0,-s, i,0,s] for i in range(-s, s + 1, g)]
         grid_vertices = np.array(lines, dtype=np.float32).flatten()
         self.grid_indices_count = len(grid_vertices) // 3
-        self.vao_grid = glGenVertexArrays(1); glBindVertexArray(self.vao_grid)
-        self.vbo_grid = glGenBuffers(1); glBindBuffer(GL_ARRAY_BUFFER, self.vbo_grid)
-        glBufferData(GL_ARRAY_BUFFER, grid_vertices.nbytes, grid_vertices, GL_STATIC_DRAW)
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, None); glEnableVertexAttribArray(0)
-        glBindVertexArray(0)
+        self.vao_grid = gl.glGenVertexArrays(1); gl.glBindVertexArray(self.vao_grid)
+        self.vbo_grid = gl.glGenBuffers(1); gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.vbo_grid)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, grid_vertices.nbytes, grid_vertices, gl.GL_STATIC_DRAW)
+        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None); gl.glEnableVertexAttribArray(0)
+        gl.glBindVertexArray(0)
         self.grid_dirty = False
 
     def update_grid(self):
@@ -323,27 +324,27 @@ class QtGameView(QOpenGLWidget):
         tex_cache_name = os.path.join(subfolder, texture_name)
         if tex_cache_name in self.texture_manager: return self.texture_manager[tex_cache_name]
         if texture_name == 'default.png':
-            tex_id = glGenTextures(1); self.texture_manager[tex_cache_name] = tex_id
-            glBindTexture(GL_TEXTURE_2D, tex_id); pixels = [255, 255, 255, 255]
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, (GLubyte * 4)(*pixels))
+            tex_id = gl.glGenTextures(1); self.texture_manager[tex_cache_name] = tex_id
+            gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id); pixels = [255, 255, 255, 255]
+            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, 1, 1, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, (gl.GLubyte * 4)(*pixels))
             return tex_id
         if texture_name == 'caulk':
-            tex_id = glGenTextures(1); self.texture_manager[tex_cache_name] = tex_id
-            glBindTexture(GL_TEXTURE_2D, tex_id); pixels = [255,0,255,255, 0,0,0,255, 0,0,0,255, 255,0,255,255]
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, (GLubyte * 16)(*pixels))
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+            tex_id = gl.glGenTextures(1); self.texture_manager[tex_cache_name] = tex_id
+            gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id); pixels = [255,0,255,255, 0,0,0,255, 0,0,0,255, 255,0,255,255]
+            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, 2, 2, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, (gl.GLubyte * 16)(*pixels))
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
             return tex_id
         texture_path = os.path.join('assets', subfolder, texture_name)
         if not os.path.exists(texture_path): return self.load_texture('default.png', 'textures')
         try:
             img = Image.open(texture_path).convert("RGBA"); img_data = img.tobytes()
-            tex_id = glGenTextures(1); self.texture_manager[tex_cache_name] = tex_id
-            glBindTexture(GL_TEXTURE_2D, tex_id)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width, img.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, img_data)
-            glGenerateMipmap(GL_TEXTURE_2D)
+            tex_id = gl.glGenTextures(1); self.texture_manager[tex_cache_name] = tex_id
+            gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT); gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR); gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, img.width, img.height, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, img_data)
+            gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
             return tex_id
         except Exception as e: print(f"Error loading texture '{texture_name}': {e}"); return self.load_texture('default.png', 'textures')
 
@@ -354,10 +355,9 @@ class QtGameView(QOpenGLWidget):
             if tex_id: self.sprite_textures[class_name] = tex_id
 
     def paintGL(self):
-        glEnable(GL_DEPTH_TEST)
-        # Revert to the default depth function to avoid z-fighting issues
-        glDepthFunc(GL_LESS) 
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glDepthFunc(gl.GL_LESS) 
+        gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
 
         if self.grid_dirty:
             self.create_grid_buffers()
@@ -379,6 +379,11 @@ class QtGameView(QOpenGLWidget):
         for brush in self.editor.brushes:
             if brush.get('hidden', False):
                 continue
+            
+            # --- MODIFICATION: Invisible triggers in play mode ---
+            if self.play_mode and brush.get('is_trigger', False):
+                continue
+
             if brush.get('is_trigger', False):
                 transparent_objects.append(brush)
             else:
@@ -388,12 +393,12 @@ class QtGameView(QOpenGLWidget):
             transparent_objects.extend(self.editor.things)
 
         # Opaque Pass
-        glDepthMask(GL_TRUE)
-        glDisable(GL_BLEND)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glDisable(gl.GL_BLEND)
         if self.culling_enabled:
-            glEnable(GL_CULL_FACE)
+            gl.glEnable(gl.GL_CULL_FACE)
         else:
-            glDisable(GL_CULL_FACE)
+            gl.glDisable(gl.GL_CULL_FACE)
 
         if self.brush_display_mode == "Textured":
             self.draw_brushes_textured(view, proj, opaque_brushes)
@@ -404,16 +409,16 @@ class QtGameView(QOpenGLWidget):
         if transparent_objects:
             camera_pos = self.camera.pos
             transparent_objects.sort(key=lambda obj: -glm.distance(glm.vec3(obj['pos'] if isinstance(obj, dict) else obj.pos), camera_pos))
-            glEnable(GL_BLEND)
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-            glDepthMask(GL_FALSE)
+            gl.glEnable(gl.GL_BLEND)
+            gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+            gl.glDepthMask(gl.GL_FALSE)
             
             self.draw_sprites(view, proj, [o for o in transparent_objects if isinstance(o, Thing)])
             self.draw_brushes_lit(view, proj, [o for o in transparent_objects if isinstance(o, dict)], is_transparent_pass=True)
             
         # Reset State
-        glDepthMask(GL_TRUE)
-        glDisable(GL_BLEND)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glDisable(gl.GL_BLEND)
 
         # UI
         if self.editor.config.getboolean('Display', 'show_fps', fallback=False):
@@ -429,98 +434,97 @@ class QtGameView(QOpenGLWidget):
 
     def draw_grid(self, view, projection):
         if not self.shader_simple or self.vao_grid is None: return
-        glUseProgram(self.shader_simple)
-        # Use GL_FALSE for transpose with glm matrices
-        glUniformMatrix4fv(glGetUniformLocation(self.shader_simple, "projection"), 1, GL_FALSE, glm.value_ptr(projection))
-        glUniformMatrix4fv(glGetUniformLocation(self.shader_simple, "view"), 1, GL_FALSE, glm.value_ptr(view))
-        glUniformMatrix4fv(glGetUniformLocation(self.shader_simple, "model"), 1, GL_FALSE, glm.value_ptr(glm.mat4(1.0)))
-        glUniform3f(glGetUniformLocation(self.shader_simple, "color"), 0.2, 0.2, 0.2)
-        glBindVertexArray(self.vao_grid)
-        glDrawArrays(GL_LINES, 0, self.grid_indices_count)
-        glBindVertexArray(0)
-        glUseProgram(0)
+        gl.glUseProgram(self.shader_simple)
+        gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_simple, "projection"), 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_simple, "view"), 1, gl.GL_FALSE, glm.value_ptr(view))
+        gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_simple, "model"), 1, gl.GL_FALSE, glm.value_ptr(glm.mat4(1.0)))
+        gl.glUniform3f(gl.glGetUniformLocation(self.shader_simple, "color"), 0.2, 0.2, 0.2)
+        gl.glBindVertexArray(self.vao_grid)
+        gl.glDrawArrays(gl.GL_LINES, 0, self.grid_indices_count)
+        gl.glBindVertexArray(0)
+        gl.glUseProgram(0)
 
     def draw_brushes_lit(self, view, projection, brushes, is_transparent_pass=False):
         if not self.shader_lit or not brushes: return
-        glUseProgram(self.shader_lit)
-        glUniformMatrix4fv(glGetUniformLocation(self.shader_lit, "projection"), 1, GL_FALSE, glm.value_ptr(projection))
-        glUniformMatrix4fv(glGetUniformLocation(self.shader_lit, "view"), 1, GL_FALSE, glm.value_ptr(view))
+        gl.glUseProgram(self.shader_lit)
+        gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_lit, "projection"), 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_lit, "view"), 1, gl.GL_FALSE, glm.value_ptr(view))
         lights = [t for t in self.editor.things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
-        glUniform1i(glGetUniformLocation(self.shader_lit, "active_lights"), len(lights))
+        gl.glUniform1i(gl.glGetUniformLocation(self.shader_lit, "active_lights"), len(lights))
         for i, light in enumerate(lights):
-            glUniform3fv(glGetUniformLocation(self.shader_lit, f"lights[{i}].position"), 1, light.pos)
-            glUniform3fv(glGetUniformLocation(self.shader_lit, f"lights[{i}].color"), 1, light.get_color())
-            glUniform1f(glGetUniformLocation(self.shader_lit, f"lights[{i}].intensity"), light.get_intensity())
-            glUniform1f(glGetUniformLocation(self.shader_lit, f"lights[{i}].radius"), light.get_radius())
-        glBindVertexArray(self.vao_cube)
-        original_polygon_mode = glGetIntegerv(GL_POLYGON_MODE)[0]
+            gl.glUniform3fv(gl.glGetUniformLocation(self.shader_lit, f"lights[{i}].position"), 1, light.pos)
+            gl.glUniform3fv(gl.glGetUniformLocation(self.shader_lit, f"lights[{i}].color"), 1, light.get_color())
+            gl.glUniform1f(gl.glGetUniformLocation(self.shader_lit, f"lights[{i}].intensity"), light.get_intensity())
+            gl.glUniform1f(gl.glGetUniformLocation(self.shader_lit, f"lights[{i}].radius"), light.get_radius())
+        gl.glBindVertexArray(self.vao_cube)
+        original_polygon_mode = gl.glGetIntegerv(gl.GL_POLYGON_MODE)[0]
         for brush in brushes:
             if brush.get('hidden', False):
                 continue
-            if is_transparent_pass: glPolygonMode(GL_FRONT_AND_BACK, GL_LINE if not self.show_triggers_as_solid else GL_FILL)
-            else: glPolygonMode(GL_FRONT_AND_BACK, GL_LINE if self.brush_display_mode == "Wireframe" else GL_FILL)
+            if is_transparent_pass: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE if not self.show_triggers_as_solid else gl.GL_FILL)
+            else: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE if self.brush_display_mode == "Wireframe" else gl.GL_FILL)
             model_matrix = glm.translate(glm.mat4(1.0), glm.vec3(brush['pos'])) * glm.scale(glm.mat4(1.0), glm.vec3(brush['size']))
-            glUniformMatrix4fv(glGetUniformLocation(self.shader_lit, "model"), 1, GL_FALSE, glm.value_ptr(model_matrix))
+            gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_lit, "model"), 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
             is_selected, is_subtract = (brush == self.editor.selected_object), (brush.get('operation') == 'subtract')
             color, alpha = [0.8, 0.8, 0.8], 1.0
             if brush.get('is_trigger', False): color, alpha = [0.0, 1.0, 1.0], 0.3
             elif is_selected: color = [1.0, 1.0, 0.0]
             elif is_subtract: color = [1.0, 0.0, 0.0]
-            glUniform3fv(glGetUniformLocation(self.shader_lit, "object_color"), 1, color)
-            glUniform1f(glGetUniformLocation(self.shader_lit, "alpha"), alpha)
-            glDrawArrays(GL_TRIANGLES, 0, 36)
-        glPolygonMode(GL_FRONT_AND_BACK, original_polygon_mode)
-        glBindVertexArray(0)
-        glUseProgram(0)
+            gl.glUniform3fv(gl.glGetUniformLocation(self.shader_lit, "object_color"), 1, color)
+            gl.glUniform1f(gl.glGetUniformLocation(self.shader_lit, "alpha"), alpha)
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, original_polygon_mode)
+        gl.glBindVertexArray(0)
+        gl.glUseProgram(0)
 
     def draw_brushes_textured(self, view, projection, brushes):
         if not self.shader_textured or not brushes: return
-        glUseProgram(self.shader_textured)
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
-        glUniformMatrix4fv(glGetUniformLocation(self.shader_textured, "projection"), 1, GL_FALSE, glm.value_ptr(projection))
-        glUniformMatrix4fv(glGetUniformLocation(self.shader_textured, "view"), 1, GL_FALSE, glm.value_ptr(view))
+        gl.glUseProgram(self.shader_textured)
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_textured, "projection"), 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_textured, "view"), 1, gl.GL_FALSE, glm.value_ptr(view))
         lights = [t for t in self.editor.things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
-        glUniform1i(glGetUniformLocation(self.shader_textured, "active_lights"), len(lights))
+        gl.glUniform1i(gl.glGetUniformLocation(self.shader_textured, "active_lights"), len(lights))
         for i, light in enumerate(lights):
-            glUniform3fv(glGetUniformLocation(self.shader_textured, f"lights[{i}].position"), 1, light.pos)
-            glUniform3fv(glGetUniformLocation(self.shader_textured, f"lights[{i}].color"), 1, light.get_color())
-            glUniform1f(glGetUniformLocation(self.shader_textured, f"lights[{i}].intensity"), light.get_intensity())
-            glUniform1f(glGetUniformLocation(self.shader_textured, f"lights[{i}].radius"), light.get_radius())
-        glActiveTexture(GL_TEXTURE0)
-        glUniform1i(glGetUniformLocation(self.shader_textured, "texture_diffuse"), 0)
-        glBindVertexArray(self.vao_cube)
+            gl.glUniform3fv(gl.glGetUniformLocation(self.shader_textured, f"lights[{i}].position"), 1, light.pos)
+            gl.glUniform3fv(gl.glGetUniformLocation(self.shader_textured, f"lights[{i}].color"), 1, light.get_color())
+            gl.glUniform1f(gl.glGetUniformLocation(self.shader_textured, f"lights[{i}].intensity"), light.get_intensity())
+            gl.glUniform1f(gl.glGetUniformLocation(self.shader_textured, f"lights[{i}].radius"), light.get_radius())
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(gl.glGetUniformLocation(self.shader_textured, "texture_diffuse"), 0)
+        gl.glBindVertexArray(self.vao_cube)
         show_caulk = self.editor.config.getboolean('Display', 'show_caulk', fallback=True)
         for brush in brushes:
             if brush.get('hidden', False):
                 continue
             model_matrix = glm.translate(glm.mat4(1.0), glm.vec3(brush['pos'])) * glm.scale(glm.mat4(1.0), glm.vec3(brush['size']))
-            glUniformMatrix4fv(glGetUniformLocation(self.shader_textured, "model"), 1, GL_FALSE, glm.value_ptr(model_matrix))
+            gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_textured, "model"), 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
             textures, face_keys = brush.get('textures', {}), ['south', 'north', 'west', 'east', 'bottom', 'top']
             for i, face_key in enumerate(face_keys):
                 tex_name = textures.get(face_key, 'default.png')
                 if tex_name == 'caulk' and not show_caulk: continue
-                glBindTexture(GL_TEXTURE_2D, self.load_texture(tex_name, 'textures'))
-                glDrawArrays(GL_TRIANGLES, i * 6, 6)
-        glBindVertexArray(0)
-        glUseProgram(0)
+                gl.glBindTexture(gl.GL_TEXTURE_2D, self.load_texture(tex_name, 'textures'))
+                gl.glDrawArrays(gl.GL_TRIANGLES, i * 6, 6)
+        gl.glBindVertexArray(0)
+        gl.glUseProgram(0)
 
     def draw_sprites(self, view, projection, things_to_draw):
         if not self.shader_sprite or not self.vao_sprite or not things_to_draw: return
-        glUseProgram(self.shader_sprite)
-        glUniformMatrix4fv(glGetUniformLocation(self.shader_sprite, "projection"), 1, GL_FALSE, glm.value_ptr(projection))
-        glUniformMatrix4fv(glGetUniformLocation(self.shader_sprite, "view"), 1, GL_FALSE, glm.value_ptr(view))
-        glBindVertexArray(self.vao_sprite)
-        glActiveTexture(GL_TEXTURE0)
-        glUniform1i(glGetUniformLocation(self.shader_sprite, "sprite_texture"), 0)
+        gl.glUseProgram(self.shader_sprite)
+        gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_sprite, "projection"), 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(gl.glGetUniformLocation(self.shader_sprite, "view"), 1, gl.GL_FALSE, glm.value_ptr(view))
+        gl.glBindVertexArray(self.vao_sprite)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(gl.glGetUniformLocation(self.shader_sprite, "sprite_texture"), 0)
         for thing in things_to_draw:
             if (thing_type := thing.__class__.__name__) in self.sprite_textures:
-                glBindTexture(GL_TEXTURE_2D, self.sprite_textures[thing_type])
-                glUniform3fv(glGetUniformLocation(self.shader_sprite, "sprite_pos_world"), 1, thing.pos)
+                gl.glBindTexture(gl.GL_TEXTURE_2D, self.sprite_textures[thing_type])
+                gl.glUniform3fv(gl.glGetUniformLocation(self.shader_sprite, "sprite_pos_world"), 1, thing.pos)
                 size = 16.0 if isinstance(thing, Light) else 32.0
-                glUniform2f(glGetUniformLocation(self.shader_sprite, "sprite_size"), size, size)
-                glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
-        glBindVertexArray(0)
-        glUseProgram(0)
+                gl.glUniform2f(gl.glGetUniformLocation(self.shader_sprite, "sprite_size"), size, size)
+                gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
+        gl.glBindVertexArray(0)
+        gl.glUseProgram(0)
 
     def update_loop(self):
         current_time = time.time()
