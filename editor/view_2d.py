@@ -411,7 +411,11 @@ class View2D(QWidget):
             if self.last_pan_pos.isNull(): self.last_pan_pos = event.pos()
             delta = event.pos() - self.last_pan_pos
             self.last_pan_pos = event.pos()
-            self.pan_offset -= QPointF(delta.x() / self.zoom_factor, delta.y() / self.zoom_factor)
+            # Invert the Y-axis panning for the 'front' view
+            if self.view_type == 'front':
+                self.pan_offset -= QPointF(delta.x() / self.zoom_factor, -delta.y() / self.zoom_factor)
+            else:
+                self.pan_offset -= QPointF(delta.x() / self.zoom_factor, delta.y() / self.zoom_factor)
         
         elif self.is_drawing_brush:
             self.draw_current_pos = self.snap_to_grid(world_pos)
@@ -429,7 +433,7 @@ class View2D(QWidget):
         elif self.is_resizing_brush:
             obj = self.editor.selected_object
             if obj:
-                self.resize_brush(world_pos) # Call the specific resize_brush
+                self.resize_brush(world_pos)
         
         self.update()
 
