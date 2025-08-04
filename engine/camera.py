@@ -20,8 +20,7 @@ class Camera:
         """
         Setter for the camera's position.
         Checks if the assigned value is a glm.vec3. If not, attempts conversion
-        from list/tuple and prints a traceback to help identify the source of
-        incorrect assignments.
+        from list/tuple and prints a traceback
         """
         if not isinstance(value, glm.vec3):
             import traceback
