@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QHBoxLayout, QColorDialog)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
-from editor.things import Thing, Light
+from editor.things import Thing, Light, Pickup, Monster, Model
 
 class PropertyEditor(QWidget):
     def __init__(self, editor):
@@ -133,41 +133,47 @@ class PropertyEditor(QWidget):
         layout = QFormLayout()
         
         # Special handling for colour picker at the top
-        if isinstance(thing, Light):
+        if isinstance(thing, Light): #
             self.add_color_picker_widget(layout, thing, 'colour')
 
         for key, value in sorted(thing.properties.items()):
-            if isinstance(thing, Light) and key == 'colour':
+            if isinstance(thing, Light) and key == 'colour': #
                 continue
 
             label_text = key.replace('_', ' ').title() + ":"
             
-            if isinstance(thing, Light) and key == 'state':
+            if isinstance(thing, Light) and key == 'state': #
                 widget = QComboBox()
                 widget.addItems(['on', 'off'])
                 widget.setCurrentText(value)
                 widget.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
                 layout.addRow(label_text, widget)
-            elif isinstance(value, bool):
+            elif isinstance(thing, Pickup) and key == 'item_type':
+                widget = QComboBox()
+                # PICKUP TYPES
+                item_types = ['health', 'ammo', 'armour', 'powerup', 'key', 'message', 'weapon']
+                widget.addItems(item_types)
+                widget.setCurrentText(value)
+                widget.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
+                layout.addRow(label_text, widget)
+            elif isinstance(value, bool): #
                 widget = QCheckBox(); widget.setChecked(value)
                 widget.stateChanged.connect(lambda state, k=key: self.update_object_prop(k, state == Qt.Checked))
                 layout.addRow(label_text, widget)
-            elif isinstance(value, int):
+            elif isinstance(value, int): #
                 widget = QSpinBox(); widget.setRange(-99999, 99999); widget.setValue(value)
                 widget.valueChanged.connect(lambda v, k=key: self.update_object_prop(k, v))
                 layout.addRow(label_text, widget)
-            elif isinstance(value, float):
+            elif isinstance(value, float): #
                 widget = QLineEdit(str(value))
-                # --- FIX ---
                 # Use editingFinished to avoid updating on every keystroke
                 widget.editingFinished.connect(
                     lambda le=widget, k=key: self.update_object_prop(k, float(le.text()) if le.text() and le.text().replace('.', '', 1).isdigit() else 0.0)
                 )
                 layout.addRow(label_text, widget)
-            else:
+            else: #
                 widget = QLineEdit(str(value))
-                # --- FIX ---
-                # Use editingFinished for strings as well
+                # Use editingFinished for strings
                 widget.editingFinished.connect(lambda le=widget, k=key: self.update_object_prop(k, le.text()))
                 layout.addRow(label_text, widget)
                 
@@ -181,7 +187,7 @@ class PropertyEditor(QWidget):
 
         current_color_rgb = thing.properties.get(key, [255, 255, 255])
         color_swatch = QPushButton()
-        color_swatch.setFixedSize(24, 24)
+        color_swatch.setFixedSize(200, 32)
         
         def update_swatch():
             rgb = thing.properties.get(key, [255, 255, 255])

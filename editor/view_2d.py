@@ -32,13 +32,17 @@ class View2D(QWidget):
         self.drag_start_pos = QPointF()
         self.drag_offset = QPointF()
 
+        # initial_brush_rect is not needed for the original resize_brush
+        # but leaving it initialized as it doesn't harm
+        self.initial_brush_rect = QRectF() 
+
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.ClickFocus)
 
-        # Initialize color icons from SceneHierarchy
+        # Initialize color tag icons from SceneHierarchy
         self.color_pixmaps = {}
         for color_name, qicon in SceneHierarchy(main_window).color_icons.items():
-            self.color_pixmaps[color_name] = qicon.pixmap(16, 16) # Render QIcon to QPixmap
+            self.color_pixmaps[color_name] = qicon.pixmap(18, 18) # Render QIcon to QPixmap
 
     def reset_state(self):
         """
@@ -59,13 +63,25 @@ class View2D(QWidget):
     def world_to_screen(self, p):
         center_x, center_y = self.width() / 2, self.height() / 2
         screen_x = center_x + (p.x() - self.pan_offset.x()) * self.zoom_factor
-        screen_y = center_y + (p.y() - self.pan_offset.y()) * self.zoom_factor
+        
+        # Apply Y-axis inversion for 'front' view
+        if self.view_type == 'front':
+            screen_y = center_y - (p.y() - self.pan_offset.y()) * self.zoom_factor
+        else:
+            screen_y = center_y + (p.y() - self.pan_offset.y()) * self.zoom_factor
+            
         return QPointF(screen_x, screen_y)
 
     def screen_to_world(self, p):
         center_x, center_y = self.width() / 2, self.height() / 2
         world_x = (p.x() - center_x) / self.zoom_factor + self.pan_offset.x()
-        world_y = (p.y() - center_y) / self.zoom_factor + self.pan_offset.y()
+        
+        # Apply Y-axis inversion for 'front' view when converting back
+        if self.view_type == 'front':
+            world_y = (center_y - p.y()) / self.zoom_factor + self.pan_offset.y()
+        else:
+            world_y = (p.y() - center_y) / self.zoom_factor + self.pan_offset.y()
+            
         return QPointF(world_x, world_y)
 
     def snap_to_grid(self, pos):
@@ -339,6 +355,19 @@ class View2D(QWidget):
             if handle_ix != -1:
                 self.is_resizing_brush = True
                 self.resize_handle_ix = handle_ix
+                # Store the initial brush rectangle for reference during resize
+                # This is important for the original resize_brush to know the fixed opposite point.
+                brush = self.editor.selected_object
+                ax1, ax2 = self.get_axes()
+                ax_map = {'x': 0, 'y': 1, 'z': 2}
+                pos = brush['pos']
+                size = brush['size']
+                self.initial_brush_rect = QRectF(
+                    pos[ax_map[ax1]] - size[ax_map[ax1]]/2,
+                    pos[ax_map[ax2]] - size[ax_map[ax2]]/2,
+                    size[ax_map[ax1]],
+                    size[ax_map[ax2]]
+                ).normalized()
                 self.update()
                 return
 
@@ -400,7 +429,7 @@ class View2D(QWidget):
         elif self.is_resizing_brush:
             obj = self.editor.selected_object
             if obj:
-                self.resize_brush(world_pos)
+                self.resize_brush(world_pos) # Call the specific resize_brush
         
         self.update()
 
@@ -525,23 +554,49 @@ class View2D(QWidget):
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
         ix1, ix2 = ax_map[ax1], ax_map[ax2]
-        
+
         old_pos, old_size = list(brush['pos']), list(brush['size'])
         min_x, max_x = old_pos[ix1] - old_size[ix1]/2, old_pos[ix1] + old_size[ix1]/2
         min_y, max_y = old_pos[ix2] - old_size[ix2]/2, old_pos[ix2] + old_size[ix2]/2
 
-        if self.resize_handle_ix in [0, 2, 6]: min_x = snapped_pos.x()
-        if self.resize_handle_ix in [1, 3, 7]: max_x = snapped_pos.x()
-        if self.resize_handle_ix in [0, 1, 4]: min_y = snapped_pos.y()
-        if self.resize_handle_ix in [2, 3, 5]: max_y = snapped_pos.y()
+        # Invert the mapping for the Y axis if in 'front' view
+        is_front_view = self.view_type == 'front'
+        
+        # Update min/max based on which handle is being dragged
+        if self.resize_handle_ix in [0, 2, 6]:
+            min_x = snapped_pos.x()
+        if self.resize_handle_ix in [1, 3, 7]:
+            max_x = snapped_pos.x()
+        
+        if is_front_view:
+            if self.resize_handle_ix in [0, 1, 4]: # These are 'top' handles on the screen
+                max_y = snapped_pos.y()
+            if self.resize_handle_ix in [2, 3, 5]: # These are 'bottom' handles on the screen
+                min_y = snapped_pos.y()
+        else:
+            if self.resize_handle_ix in [0, 1, 4]: # These are 'top' handles on the screen
+                min_y = snapped_pos.y()
+            if self.resize_handle_ix in [2, 3, 5]: # These are 'bottom' handles on the screen
+                max_y = snapped_pos.y()
 
+        # Ensure min is always less than or equal to max (handle cross-over)
         if max_x < min_x: min_x, max_x = max_x, min_x
         if max_y < min_y: min_y, max_y = max_y, min_y
+
+        # For middle handles, ensure the other dimension doesn't change
+        if self.resize_handle_ix in [4, 5]: # Top/Bottom center handles
+            min_x, max_x = old_pos[ix1] - old_size[ix1]/2, old_pos[ix1] + old_size[ix1]/2
+        if self.resize_handle_ix in [6, 7]: # Left/Right center handles
+            min_y, max_y = old_pos[ix2] - old_size[ix2]/2, old_pos[ix2] + old_size[ix2]/2
         
-        new_size_x, new_size_y = max_x - min_x, max_y - min_y
+        new_size_x = max_x - min_x
+        new_size_y = max_y - min_y
+        
+        # Enforce minimum grid size
         if new_size_x < self.grid_size: new_size_x = self.grid_size
         if new_size_y < self.grid_size: new_size_y = self.grid_size
         
+        # Update brush position and size
         brush['pos'][ix1] = min_x + new_size_x / 2
         brush['pos'][ix2] = min_y + new_size_y / 2
         brush['size'][ix1] = new_size_x

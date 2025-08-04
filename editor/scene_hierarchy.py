@@ -25,6 +25,7 @@ class SceneHierarchy(QTreeWidget):
         # Load color icons
         self.color_icons = {
             'blue': QIcon("assets/circ_blue.png"),
+            'yellow': QIcon("assets/circ_yellow.png"),
             'green': QIcon("assets/circ_green.png"),
             'orange': QIcon("assets/circ_orange.png"),
             'pink': QIcon("assets/circ_pink.png"),
@@ -33,6 +34,7 @@ class SceneHierarchy(QTreeWidget):
         }
         self.color_names = {
             "circ_blue.png": "blue",
+            "circ_yellow.png": "yellow",
             "circ_green.png": "green",
             "circ_orange.png": "orange",
             "circ_pink.png": "pink",
