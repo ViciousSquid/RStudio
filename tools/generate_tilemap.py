@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
 from PyQt5.QtCore import Qt, QRectF, QTimer, QPropertyAnimation, QEasingCurve
 from PyQt5.QtGui import QColor, QBrush, QPen, QPainter, QFont, QImage, QPixmap
 
-# Constants (ensure these match your RStudio-dev/engine/constants.py)
+# Constants (ensure these match /engine/constants.py)
 TILE_SIZE = 50.0
 WALL_TILE = 0
 FLOOR_TILE = 1
@@ -18,25 +18,25 @@ class TilemapGenerator:
     def __init__(self):
         self.brushes = []
         self.tile_map = None
-        # These will store the world coordinates of the overall map's extent
+        # Store the world coordinates of the overall map's extent
         self.min_x_world = float('inf')
         self.max_x_world = float('-inf')
         self.min_z_world = float('inf')
         self.max_z_world = float('-inf')
 
-        # These will store the padded world coordinates that define the tilemap grid
+        # Store the padded world coordinates that define the tilemap grid
         self.padded_min_x = 0
         self.padded_max_x = 0
         self.padded_min_z = 0
         self.padded_max_z = 0
 
-        # These will store the tile indices for the map's extent
+        # Store the tile indices for the map's extent
         self.min_x_tile_idx = 0
         self.min_z_tile_idx = 0
 
         self.current_step = 0 # Step counter for visualization
-        self.map_width_tiles = 0 # Initialize here
-        self.map_depth_tiles = 0 # Initialize here
+        self.map_width_tiles = 0
+        self.map_depth_tiles = 0
 
     def load_level_data(self, json_file_path):
         """Loads brush data from a JSON level file."""
