@@ -195,6 +195,9 @@ class QtGameView(QOpenGLWidget):
         self.tile_map = None
         self.selected_object = None
 
+        self.player_in_triggers = set()
+        self.fired_once_triggers = set()
+
         timer = QTimer(self); timer.setInterval(16); timer.timeout.connect(self.update_loop); timer.start()
         self.setFocusPolicy(Qt.ClickFocus)
         self.setMouseTracking(True)
@@ -213,6 +216,8 @@ class QtGameView(QOpenGLWidget):
                 np.radians(player_start_angle)
             )
             self.player.pos.y = player_start_pos[1]
+            self.player_in_triggers.clear()
+            self.fired_once_triggers.clear()
         else:
             self.mouselook_active = False
             self.setCursor(Qt.ArrowCursor)
@@ -586,9 +591,80 @@ class QtGameView(QOpenGLWidget):
             self.last_fps_time = current_time
         if self.play_mode and self.player:
             self.player.update(self.editor.keys_pressed, self.tile_map, delta)
+            self.handle_triggers()
         elif self.hasFocus():
             self.handle_keyboard_input(delta)
         self.update()
+
+    def handle_triggers(self):
+        """
+        Checks for player collision with trigger volumes and activates them.
+        """
+        if not self.player:
+            return
+
+        player_pos = self.player.pos
+        
+        # A set to keep track of the triggers the player is inside THIS frame.
+        currently_colliding_triggers = set()
+
+        for i, brush in enumerate(self.editor.brushes):
+            # A trigger must be a dictionary and have the 'is_trigger' key set to True
+            if not isinstance(brush, dict) or not brush.get('is_trigger'):
+                continue
+
+            pos = glm.vec3(brush['pos'])
+            size = glm.vec3(brush['size'])
+            half_size = size / 2.0
+            min_bounds = pos - half_size
+            max_bounds = pos + half_size
+
+            # AABB collision check
+            if (min_bounds.x <= player_pos.x <= max_bounds.x and
+                min_bounds.y <= player_pos.y <= max_bounds.y and
+                min_bounds.z <= player_pos.z <= max_bounds.z):
+                
+                trigger_id = i # Use the brush's list index as its unique ID
+                currently_colliding_triggers.add(trigger_id)
+
+                # If the player was NOT in this trigger last frame, it's an "on_enter" event.
+                if trigger_id not in self.player_in_triggers:
+                    self.activate_trigger(brush, trigger_id)
+
+        # Update the state for the next frame.
+        self.player_in_triggers = currently_colliding_triggers
+        
+    def activate_trigger(self, brush, trigger_id):
+        """
+        Executes the action associated with a trigger.
+        """
+        # Respect the 'once' property. If it has fired, do nothing.
+        trigger_frequency = brush.get('trigger_type', 'multiple') # Default to 'multiple'
+        if trigger_frequency == 'once' and trigger_id in self.fired_once_triggers:
+            return
+
+        target_name = brush.get('target')
+        if not target_name:
+            return # No target to activate.
+
+        # Find the target object by its name.
+        target_thing = next((t for t in self.editor.things if hasattr(t, 'name') and t.name == target_name), None)
+
+        if not target_thing:
+            print(f"Play mode warning: Trigger target '{target_name}' not found.")
+            return
+
+        # Perform the action. For now, we only handle toggling lights.
+        # This can be expanded with an 'action' property on the brush.
+        if isinstance(target_thing, Light):
+            current_state = target_thing.properties.get('state', 'on')
+            new_state = 'off' if current_state == 'on' else 'on'
+            target_thing.properties['state'] = new_state
+            # No need to call update(), as the main loop will do it.
+            
+        # If the trigger is 'once', record that it has been fired.
+        if trigger_frequency == 'once':
+            self.fired_once_triggers.add(trigger_id)
 
     def handle_keyboard_input(self, delta):
         speed, keys = 300 * delta, self.editor.keys_pressed
