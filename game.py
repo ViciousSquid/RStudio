@@ -30,7 +30,7 @@ class GameWindow(QMainWindow):
         # Load the level data
         self.load_level(level_file)
         
-        # Find player start and launch directly into play mode
+        # Find player start and launch into play mode
         player_start = None
         for thing in self.things:
             if isinstance(thing, PlayerStart):

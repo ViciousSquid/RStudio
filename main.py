@@ -9,7 +9,7 @@ from editor.main_window import MainWindow
 def clean_pycache():
     """
     Finds and deletes all '__pycache__' folders recursively
-    from the script's root directory.
+    from the root directory.
     """
     project_root = os.path.dirname(os.path.abspath(__file__))
     print(f"🧹 Starting cleanup from root: {project_root}")
