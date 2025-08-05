@@ -3,13 +3,14 @@ import os
 import numpy as np
 import ctypes
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication
-from PyQt5.QtCore import Qt, QTimer, QPoint
+from PyQt5.QtCore import Qt, QTimer, QPoint, QUrl
 from PyQt5.QtGui import QPainter, QColor, QFont, QCursor
+from PyQt5.QtMultimedia import QSoundEffect
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
 from engine.camera import Camera
-from editor.things import Thing, Light, PlayerStart, Monster, Pickup
+from editor.things import Thing, Light, PlayerStart, Monster, Pickup, Speaker
 from engine.player import Player
 from PIL import Image
 
@@ -178,6 +179,8 @@ class QtGameView(QOpenGLWidget):
 
         self.texture_manager = {}
         self.sprite_textures = {}
+        self.active_sounds = {}
+        self.played_once_sounds = set()
 
         self.shader_simple = None; self.shader_lit = None
         self.shader_textured = None; self.shader_sprite = None
@@ -218,10 +221,13 @@ class QtGameView(QOpenGLWidget):
             self.player.pos.y = player_start_pos[1]
             self.player_in_triggers.clear()
             self.fired_once_triggers.clear()
+            self.played_once_sounds.clear()
+            self.initialize_sounds()
         else:
             self.mouselook_active = False
             self.setCursor(Qt.ArrowCursor)
             self.player = None
+            self.stop_all_sounds()
 
     def set_culling(self, enabled):
         self.culling_enabled = enabled
@@ -355,7 +361,7 @@ class QtGameView(QOpenGLWidget):
         except Exception as e: print(f"Error loading texture '{texture_name}': {e}"); return self.load_texture('default.png', 'textures')
 
     def load_all_sprite_textures(self):
-        things_with_sprites = {'PlayerStart': 'player.png', 'Light': 'light.png', 'Monster': 'monster.png', 'Pickup': 'pickup.png'}
+        things_with_sprites = {'PlayerStart': 'player.png', 'Light': 'light.png', 'Monster': 'monster.png', 'Pickup': 'pickup.png', 'Speaker': 'speaker.png'}
         for class_name, filename in things_with_sprites.items():
             tex_id = self.load_texture(filename, '')
             if tex_id: self.sprite_textures[class_name] = tex_id
@@ -592,6 +598,7 @@ class QtGameView(QOpenGLWidget):
         if self.play_mode and self.player:
             self.player.update(self.editor.keys_pressed, self.tile_map, delta)
             self.handle_triggers()
+            self.update_speaker_sounds()
         elif self.hasFocus():
             self.handle_keyboard_input(delta)
         self.update()
@@ -654,17 +661,96 @@ class QtGameView(QOpenGLWidget):
             print(f"Play mode warning: Trigger target '{target_name}' not found.")
             return
 
-        # Perform the action. For now, we only handle toggling lights.
-        # This can be expanded with an 'action' property on the brush.
+        # Perform the action. This can be expanded with an 'action' property on the brush.
         if isinstance(target_thing, Light):
             current_state = target_thing.properties.get('state', 'on')
             new_state = 'off' if current_state == 'on' else 'on'
             target_thing.properties['state'] = new_state
-            # No need to call update(), as the main loop will do it.
+        elif isinstance(target_thing, Speaker):
+            if target_thing.name in self.active_sounds:
+                self.stop_sound_for_speaker(target_thing.name)
+            else:
+                self.play_sound_for_speaker(target_thing)
             
         # If the trigger is 'once', record that it has been fired.
         if trigger_frequency == 'once':
             self.fired_once_triggers.add(trigger_id)
+
+    def initialize_sounds(self):
+        for thing in self.editor.things:
+            if isinstance(thing, Speaker):
+                is_global = thing.properties.get('global', False)
+                play_on_start = thing.properties.get('play_on_start', True)
+                if is_global and play_on_start:
+                    self.play_sound_for_speaker(thing)
+
+    def stop_all_sounds(self):
+        for sound in self.active_sounds.values():
+            sound.stop()
+        self.active_sounds.clear()
+
+    def play_sound_for_speaker(self, speaker):
+        if speaker.name in self.played_once_sounds:
+            return
+        if speaker.name in self.active_sounds:
+            return
+        
+        sound_file_rel = speaker.properties.get('sound_file')
+        if not sound_file_rel:
+            return
+        sound_path = os.path.join('assets', sound_file_rel)
+        if not os.path.exists(sound_path):
+            print(f"Audio Error: Sound file not found at '{sound_path}'")
+            return
+
+        sound_effect = QSoundEffect(self)
+        sound_effect.setSource(QUrl.fromLocalFile(sound_path))
+        sound_effect.setLoopCount(QSoundEffect.Infinite if speaker.properties.get('looping', False) else 1)
+        sound_effect.setVolume(speaker.properties.get('volume', 1.0))
+
+        if speaker.properties.get('play_once', False):
+            def on_status_changed(status):
+                if status == QSoundEffect.StoppedState:
+                    self.played_once_sounds.add(speaker.name)
+                    try:
+                        sound_effect.statusChanged.disconnect()
+                    except TypeError:
+                        pass
+            sound_effect.statusChanged.connect(on_status_changed)
+        
+        self.active_sounds[speaker.name] = sound_effect
+        sound_effect.play()
+
+    def stop_sound_for_speaker(self, speaker_name):
+        if speaker_name in self.active_sounds:
+            self.active_sounds[speaker_name].stop()
+            del self.active_sounds[speaker_name]
+
+    def update_speaker_sounds(self):
+        if not self.player: return
+        player_pos = self.player.pos
+        for thing in self.editor.things:
+            if isinstance(thing, Speaker):
+                if thing.properties.get('global', False):
+                    continue
+                
+                speaker_pos = glm.vec3(thing.pos)
+                radius = thing.get_radius()
+                distance = glm.distance(player_pos, speaker_pos)
+                is_playing = thing.name in self.active_sounds
+
+                if distance <= radius:
+                    if not is_playing and thing.properties.get('play_on_start', True):
+                        self.play_sound_for_speaker(thing)
+                        is_playing = thing.name in self.active_sounds
+                    
+                    if is_playing:
+                        attenuation = (1.0 - (distance / radius))**2
+                        final_volume = thing.properties.get('volume', 1.0) * attenuation
+                        self.active_sounds[thing.name].setVolume(final_volume)
+                else:
+                    if is_playing:
+                        self.stop_sound_for_speaker(thing.name)
 
     def handle_keyboard_input(self, delta):
         speed, keys = 300 * delta, self.editor.keys_pressed
