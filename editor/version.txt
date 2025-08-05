@@ -1,1 +1,1 @@
-Version 1.0.0.0rc2
+Version 1.0.0.0rc3__stable

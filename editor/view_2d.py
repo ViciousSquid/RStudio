@@ -2,7 +2,7 @@ import numpy as np
 from PyQt5.QtWidgets import QWidget, QMenu
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint
-from editor.things import Thing, Light, PlayerStart, Pickup
+from editor.things import Thing, Light, PlayerStart, Pickup, Speaker
 from editor.scene_hierarchy import SceneHierarchy # Import SceneHierarchy to access color_icons
 
 class View2D(QWidget):
@@ -221,13 +221,20 @@ class View2D(QWidget):
             w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
             s_pos = self.world_to_screen(w_pos)
 
-            # Special case for drawing light radius ONLY.
-            # The light's icon will be drawn by the generic code below.
+            # Special case for drawing light radius
             if isinstance(thing, Light) and thing.properties.get('show_radius', False):
                 r, g, b = thing.properties.get('colour', [255, 255, 255])
                 light_color = QColor(r, g, b, 60)
                 painter.setBrush(QBrush(light_color))
                 painter.setPen(QPen(light_color.darker(120), 1))
+                radius = thing.get_radius() * self.zoom_factor
+                painter.drawEllipse(s_pos, radius, radius)
+            
+            # Special case for drawing speaker radius
+            if isinstance(thing, Speaker) and thing.properties.get('show_radius', False) and not thing.properties.get('global', False):
+                speaker_color = QColor(100, 100, 255, 60) # A bluish color for sound
+                painter.setBrush(QBrush(speaker_color))
+                painter.setPen(QPen(speaker_color.darker(120), 1, Qt.DotLine))
                 radius = thing.get_radius() * self.zoom_factor
                 painter.drawEllipse(s_pos, radius, radius)
 
@@ -481,6 +488,7 @@ class View2D(QWidget):
         add_light_action = menu.addAction("Add Light")
         add_player_start_action = menu.addAction("Add Player Start")
         add_pickup_action = menu.addAction("Add Pickup")
+        add_speaker_action = menu.addAction("Add Speaker")
 
         action = menu.exec_(self.mapToGlobal(event.pos()))
         
@@ -497,6 +505,7 @@ class View2D(QWidget):
         if action == add_light_action: new_thing = Light(pos=pos_3d)
         elif action == add_player_start_action: new_thing = PlayerStart(pos=pos_3d)
         elif action == add_pickup_action: new_thing = Pickup(pos=pos_3d)
+        elif action == add_speaker_action: new_thing = Speaker(pos=pos_3d)
 
         if new_thing:
             self.main_window.save_state()

@@ -1,9 +1,10 @@
+import os
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFormLayout, QCheckBox, QComboBox, QPushButton,
-                             QHBoxLayout, QColorDialog)
+                             QHBoxLayout, QColorDialog, QFileDialog)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
-from editor.things import Thing, Light, Pickup, Monster, Model
+from editor.things import Thing, Light, Pickup, Monster, Model, Speaker
 
 class PropertyEditor(QWidget):
     def __init__(self, editor):
@@ -61,7 +62,9 @@ class PropertyEditor(QWidget):
 
         # Create Widgets and store them as instance variables
         self.locked_checkbox = QCheckBox()
+        self.locked_checkbox.setStyleSheet("QCheckBox::indicator { width: 20px; height: 20px; }")
         self.trigger_checkbox = QCheckBox()
+        self.trigger_checkbox.setStyleSheet("QCheckBox::indicator { width: 20px; height: 20px; }")
         self.target_label = QLabel("Target:")
         self.target_input = QLineEdit(brush.get('target', ''))
         self.type_label = QLabel("Trigger Type:")
@@ -137,17 +140,19 @@ class PropertyEditor(QWidget):
             self.add_color_picker_widget(layout, thing, 'colour')
 
         for key, value in sorted(thing.properties.items()):
-            if isinstance(thing, Light) and key == 'colour': #
+            if isinstance(thing, Light) and key == 'colour':
                 continue
 
             label_text = key.replace('_', ' ').title() + ":"
             
-            if isinstance(thing, Light) and key == 'state': #
+            if isinstance(thing, Light) and key == 'state':
                 widget = QComboBox()
                 widget.addItems(['on', 'off'])
                 widget.setCurrentText(value)
                 widget.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
                 layout.addRow(label_text, widget)
+            elif isinstance(thing, Speaker) and key == 'sound_file':
+                self.add_sound_file_widget(layout, thing, key, value)
             elif isinstance(thing, Pickup) and key == 'item_type':
                 widget = QComboBox()
                 # PICKUP TYPES
@@ -156,28 +161,59 @@ class PropertyEditor(QWidget):
                 widget.setCurrentText(value)
                 widget.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
                 layout.addRow(label_text, widget)
-            elif isinstance(value, bool): #
-                widget = QCheckBox(); widget.setChecked(value)
+            elif isinstance(value, bool):
+                widget = QCheckBox()
+                widget.setStyleSheet("QCheckBox::indicator { width: 20px; height: 20px; }")
+                widget.setChecked(value)
                 widget.stateChanged.connect(lambda state, k=key: self.update_object_prop(k, state == Qt.Checked))
                 layout.addRow(label_text, widget)
-            elif isinstance(value, int): #
+            elif isinstance(value, int):
                 widget = QSpinBox(); widget.setRange(-99999, 99999); widget.setValue(value)
                 widget.valueChanged.connect(lambda v, k=key: self.update_object_prop(k, v))
                 layout.addRow(label_text, widget)
-            elif isinstance(value, float): #
+            elif isinstance(value, float):
                 widget = QLineEdit(str(value))
-                # Use editingFinished to avoid updating on every keystroke
                 widget.editingFinished.connect(
                     lambda le=widget, k=key: self.update_object_prop(k, float(le.text()) if le.text() and le.text().replace('.', '', 1).isdigit() else 0.0)
                 )
                 layout.addRow(label_text, widget)
-            else: #
+            else:
                 widget = QLineEdit(str(value))
-                # Use editingFinished for strings
                 widget.editingFinished.connect(lambda le=widget, k=key: self.update_object_prop(k, le.text()))
                 layout.addRow(label_text, widget)
                 
         self.main_layout.addLayout(layout)
+
+    def add_sound_file_widget(self, form_layout, thing, key, value):
+        """Creates a sound file selector widget."""
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        line_edit = QLineEdit(str(value))
+        line_edit.setReadOnly(True)
+        button = QPushButton("...")
+        button.setFixedWidth(30)
+
+        def open_dialog():
+            start_path = os.path.join('assets', 'sounds')
+            if not os.path.exists(start_path):
+                os.makedirs(start_path)
+            
+            filepath, _ = QFileDialog.getOpenFileName(self, "Select Sound File", start_path, "Sound Files (*.wav *.mp3)")
+            if filepath:
+                try:
+                    relative_path = os.path.relpath(filepath, 'assets').replace('\\', '/')
+                except ValueError:
+                    relative_path = os.path.basename(filepath)
+                
+                self.update_object_prop(key, relative_path)
+                line_edit.setText(relative_path)
+
+        button.clicked.connect(open_dialog)
+        layout.addWidget(line_edit)
+        layout.addWidget(button)
+        form_layout.addRow(key.replace('_', ' ').title() + ":", widget)
 
     def add_color_picker_widget(self, form_layout, thing, key):
         """Creates a color picker widget for light color properties."""

@@ -135,6 +135,22 @@ class Light(Thing):
     def get_radius(self):
         return float(self.properties.get('radius', 512.0))
 
+class Speaker(Thing):
+    pixmap_path = "assets/speaker.png"
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties.setdefault('type', 'speaker')
+        self.properties.setdefault('sound_file', "")
+        self.properties.setdefault('radius', 512.0)
+        self.properties.setdefault('global', False)
+        self.properties.setdefault('show_radius', False)
+        self.properties.setdefault('volume', 1.0)
+        self.properties.setdefault('looping', False)
+        self.properties.setdefault('play_on_start', False)
+
+    def get_radius(self):
+        return float(self.properties.get('radius', 512.0))
+
 class Monster(Thing):
     pixmap_path = "assets/monster.png"
     def __init__(self, pos=None, properties=None):
@@ -148,7 +164,7 @@ class Pickup(Thing):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'pickup')
         self.properties.setdefault('item_type', 'health')
-        self.properties.setdefault('amount', 25)
+        self.properties.setdefault('value', 25)
 
 class Trigger(Thing):
     pixmap_path = None
