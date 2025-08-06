@@ -63,8 +63,9 @@ class Renderer:
                 if display_mode == "Textured":
                     self.draw_selected_brush_outline(projection, view, selected_object)
                 
-                # Draw gizmo for any selected brush
-                self.render_gizmo(projection, view, selected_object['pos'])
+                # Draw gizmo ONLY if the selected brush is NOT locked
+                if not selected_object.get('lock', False):
+                    self.render_gizmo(projection, view, selected_object['pos'])
             
             elif isinstance(selected_object, Thing): # It's a Thing
                 # Things don't have a wireframe outline, just the gizmo

@@ -545,6 +545,9 @@ class QtGameView(QOpenGLWidget):
     def mousePressEvent(self, event):
         # Handle left-click for gizmo dragging
         if event.button() == Qt.LeftButton and self.editor.state.selected_object and not self.play_mode:
+            if isinstance(self.editor.state.selected_object, dict) and self.editor.state.selected_object.get('lock', False):
+                return
+
             obj_pos = self.get_selected_object_pos()
             if obj_pos is None: return
 
