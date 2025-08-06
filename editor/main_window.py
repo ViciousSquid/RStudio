@@ -20,6 +20,7 @@ from editor.SettingsWindow import SettingsWindow
 from editor.ui import Ui_MainWindow, GenerateTilemapDialog
 from engine.constants import TILE_SIZE, WALL_TILE, FLOOR_TILE
 from editor.view_2d import View2D
+from editor.editor_state import EditorState
 
 class MainWindow(QMainWindow):
     def __init__(self, root_dir):
@@ -33,27 +34,21 @@ class MainWindow(QMainWindow):
         self.config_path = 'settings.ini'
         self.load_config()
 
-        self.brushes = []
-        self.things = []
-        self.selected_object = None
+        self.state = EditorState()
         self.keys_pressed = set()
         self.file_path = None
-
-        self.undo_stack = []
-        self.redo_stack = []
         
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
 
         self.setFocus()
         self.update_global_font()
-        self.save_state()
         self.load_layout()
 
     def add_model_to_scene(self, filepath, rotation, scale):
         self.save_state()
         new_model = Model(pos=[0, 0, 0], model_path=filepath, rotation=rotation, scale=scale)
-        self.things.append(new_model)
+        self.state.things.append(new_model)
         self.set_selected_object(new_model)
         QMessageBox.information(self, "Model Added", 
             f"'{os.path.basename(filepath)}' has been added to the scene.\n\n"
@@ -61,15 +56,15 @@ class MainWindow(QMainWindow):
             "A 3D transform gizmo in the 3D view is the next step for direct manipulation.")
 
     def set_selected_object(self, obj):
-        self.selected_object = obj
+        self.state.set_selected_object(obj)
         if self.config.getboolean('Display', 'sync_selection', fallback=True):
-            self.view_3d.selected_object = obj
+            self.view_3d.selected_object = self.state.selected_object
         else:
             self.view_3d.selected_object = None
         self.update_all_ui()
 
     def update_all_ui(self):
-        self.property_editor.set_object(self.selected_object)
+        self.property_editor.set_object(self.state.selected_object)
         self.scene_hierarchy.refresh_list()
         self.update_views()
 
@@ -80,7 +75,7 @@ class MainWindow(QMainWindow):
         self.view_side.reset_state()
 
     def update_scene_hierarchy(self):
-        self.scene_hierarchy.refresh_list(self.brushes, self.things, self.selected_object)
+        self.scene_hierarchy.refresh_list(self.state.brushes, self.state.things, self.state.selected_object)
     
     def select_object(self, obj):
         self.set_selected_object(obj)
@@ -125,18 +120,18 @@ class MainWindow(QMainWindow):
                                               "High DPI scaling setting has been changed.\nPlease restart the application for the change to take effect.")
 
     def apply_caulk_to_brush(self):
-        if not isinstance(self.selected_object, dict):
+        if not isinstance(self.state.selected_object, dict):
             QMessageBox.warning(self, "No Brush Selected", "Please select a brush to apply caulk to.")
             return
         self.save_state()
-        if 'textures' not in self.selected_object:
-            self.selected_object['textures'] = {}
+        if 'textures' not in self.state.selected_object:
+            self.state.selected_object['textures'] = {}
         for face in ['north','south','east','west','top','down']:
-            self.selected_object['textures'][face] = 'caulk'
+            self.state.selected_object['textures'][face] = 'caulk'
         self.update_views()
 
     def apply_texture_to_brush(self):
-        if not isinstance(self.selected_object, dict):
+        if not isinstance(self.state.selected_object, dict):
             QMessageBox.warning(self, "No Brush Selected", "Please select a brush to apply the texture to.")
             return
         texture_path = self.asset_browser.get_selected_filepath()
@@ -145,21 +140,21 @@ class MainWindow(QMainWindow):
             return
         texture_name = os.path.basename(texture_path)
         self.save_state()
-        if 'textures' not in self.selected_object:
-            self.selected_object['textures'] = {}
+        if 'textures' not in self.state.selected_object:
+            self.state.selected_object['textures'] = {}
         for face in ['south', 'north', 'west', 'east', 'down', 'top']:
-            self.selected_object['textures'][face] = texture_name
+            self.state.selected_object['textures'][face] = texture_name
         self.update_views()
 
     def generate_collision_map(self):
-        if not self.brushes:
+        if not self.state.brushes:
             return None
 
         min_x_world, max_x_world = float('inf'), float('-inf')
         min_z_world, max_z_world = float('inf'), float('-inf')
 
         solid_brushes_exist = False
-        for brush in self.brushes:
+        for brush in self.state.brushes:
             if not brush.get('is_trigger', False) and not brush.get('operation') == 'subtract':
                 solid_brushes_exist = True
                 pos, size = np.array(brush['pos']), np.array(brush['size'])
@@ -192,7 +187,7 @@ class MainWindow(QMainWindow):
 
         collision_tile_map = np.full((map_depth_tiles, map_width_tiles), FLOOR_TILE, dtype=int)
 
-        for brush in self.brushes:
+        for brush in self.state.brushes:
             if brush.get('is_trigger', False) or brush.get('operation') == 'subtract':
                 continue
 
@@ -222,7 +217,7 @@ class MainWindow(QMainWindow):
 
     def enter_play_mode(self):
         player_start = None
-        for thing in self.things:
+        for thing in self.state.things:
             if isinstance(thing, PlayerStart):
                 player_start = thing
                 break
@@ -314,37 +309,15 @@ class MainWindow(QMainWindow):
             current_view.zoom_out()
 
     def save_state(self):
-        state = {'brushes': self.brushes, 'things': [t.to_dict() for t in self.things]}
-        self.undo_stack.append(json.dumps(state))
-        self.redo_stack.clear()
-        if len(self.undo_stack) > 50:
-            self.undo_stack.pop(0)
-
-    def restore_state(self, state_json):
-        state = json.loads(state_json)
-        self.brushes = state.get('brushes', [])
-        things_data = state.get('things', [])
-        new_things = []
-        for t_data in things_data:
-            if t_data.get('type') == 'Model':
-                model_kwargs = {k: v for k, v in t_data.items() if k != 'type'}
-                new_things.append(Model(**model_kwargs))
-            else:
-                new_things.append(Thing.from_dict(t_data))
-        self.things = new_things
-        self.set_selected_object(None)
+        self.state.save_state()
 
     def undo(self):
-        if len(self.undo_stack) > 1:
-            current_state_json = self.undo_stack.pop()
-            self.redo_stack.append(current_state_json)
-            self.restore_state(self.undo_stack[-1])
+        if self.state.undo():
+            self.update_all_ui()
 
     def redo(self):
-        if self.redo_stack:
-            state_json = self.redo_stack.pop()
-            self.undo_stack.append(state_json)
-            self.restore_state(state_json)
+        if self.state.redo():
+            self.update_all_ui()
 
     def set_render_mode(self, mode):
         self.view_3d.render_mode = mode
@@ -381,18 +354,18 @@ class MainWindow(QMainWindow):
         msg_box.exec_()
 
     def new_map(self):
-        self.save_state()
-        self.brushes.clear()
-        self.things.clear()
+        self.state.clear_scene()
         self.file_path = None
-        self.set_selected_object(None)
+        self.update_all_ui()
 
     def show_random_map_dialog(self):
         dialog = RandomMapGeneratorDialog(self)
         if dialog.exec_():
             params = dialog.get_parameters()
             map_grid = generate(method=params['style'], width=params['width'], height=params['length'], seed=params.get('seed'))
-            self.brushes, self.things = self.convert_grid_to_level(map_grid)
+            brushes, things = self.convert_grid_to_level(map_grid)
+            self.state.brushes = brushes
+            self.state.things = things
             self.view_3d.camera.pos = [0, 150, 400]
             self.set_selected_object(None)
             self.save_state()
@@ -440,14 +413,14 @@ class MainWindow(QMainWindow):
         return brushes, things
 
     def perform_subtraction(self):
-        if not isinstance(self.selected_object, dict):
+        if not isinstance(self.state.selected_object, dict):
             QMessageBox.warning(self, "Invalid Selection", "Please select a brush to make it subtractive.")
             return
 
         self.save_state()
         
-        self.selected_object['operation'] = 'subtract'
-        subtract_brush = self.selected_object
+        self.state.selected_object['operation'] = 'subtract'
+        subtract_brush = self.state.selected_object
         
         sub_pos = subtract_brush['pos']
         sub_size = subtract_brush['size']
@@ -455,7 +428,7 @@ class MainWindow(QMainWindow):
         sub_max = [sub_pos[0] + sub_size[0]/2, sub_pos[1] + sub_size[1]/2, sub_pos[2] + sub_size[2]/2]
         
         new_brushes = []
-        for brush in self.brushes:
+        for brush in self.state.brushes:
             if brush is subtract_brush:
                 continue
                 
@@ -551,12 +524,12 @@ class MainWindow(QMainWindow):
             new_brushes.extend(fragments)
         
         new_brushes.append(subtract_brush)
-        self.brushes = new_brushes
+        self.state.brushes = new_brushes
         
         self.update_all_ui()
 
     def rotate_selected_brush(self):
-        if not isinstance(self.selected_object, dict):
+        if not isinstance(self.state.selected_object, dict):
             QMessageBox.warning(self, "Invalid Selection", "Please select a brush to rotate.")
             return
 
@@ -566,7 +539,7 @@ class MainWindow(QMainWindow):
             return
 
         self.save_state()
-        size = self.selected_object['size']
+        size = self.state.selected_object['size']
         view_type = current_view.view_type
 
         if view_type == 'top':
@@ -591,31 +564,31 @@ class MainWindow(QMainWindow):
             super().keyPressEvent(event)
             return
 
-        if self.selected_object:
+        if self.state.selected_object:
             if event.key() == Qt.Key_Delete:
                 self.save_state()
-                if isinstance(self.selected_object, dict):
-                    self.brushes.remove(self.selected_object)
+                if isinstance(self.state.selected_object, dict):
+                    self.state.brushes.remove(self.state.selected_object)
                 else:
-                    self.things.remove(self.selected_object)
+                    self.state.things.remove(self.state.selected_object)
                 self.set_selected_object(None)
                 return
 
             if event.key() == Qt.Key_H:
                 if event.modifiers() == Qt.ShiftModifier:
                     self.unhide_all_brushes()
-                elif isinstance(self.selected_object, dict):
+                elif isinstance(self.state.selected_object, dict):
                     self.hide_selected_brush()
                 return
 
             if event.key() == Qt.Key_Space:
                 self.save_state()
-                if isinstance(self.selected_object, dict):
-                    new_obj = copy.deepcopy(self.selected_object)
-                    self.brushes.append(new_obj)
+                if isinstance(self.state.selected_object, dict):
+                    new_obj = copy.deepcopy(self.state.selected_object)
+                    self.state.brushes.append(new_obj)
                 else:
-                    new_obj = copy.copy(self.selected_object)
-                    self.things.append(new_obj)
+                    new_obj = copy.copy(self.state.selected_object)
+                    self.state.things.append(new_obj)
 
                 current_view = self.right_tabs.currentWidget()
                 if isinstance(current_view, View2D):
@@ -630,7 +603,7 @@ class MainWindow(QMainWindow):
                 self.set_selected_object(new_obj)
                 return
 
-        if event.key() == Qt.Key_Escape and self.selected_object:
+        if event.key() == Qt.Key_Escape and self.state.selected_object:
             self.set_selected_object(None)
             return
 
@@ -638,14 +611,14 @@ class MainWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def hide_selected_brush(self):
-        if isinstance(self.selected_object, dict):
+        if isinstance(self.state.selected_object, dict):
             self.save_state()
-            self.selected_object['hidden'] = True
+            self.state.selected_object['hidden'] = True
             self.update_all_ui()
 
     def unhide_all_brushes(self):
         self.save_state()
-        for brush in self.brushes:
+        for brush in self.state.brushes:
             if 'hidden' in brush:
                 brush['hidden'] = False
         self.update_all_ui()
@@ -661,9 +634,6 @@ class MainWindow(QMainWindow):
         for view in [self.view_top, self.view_side, self.view_front]:
             view.snap_to_grid_enabled = enabled
 
-    def _get_level_data(self):
-        return {'brushes': self.brushes, 'things': [t.to_dict() for t in self.things]}
-
     def save_level_as(self):
         filePath, _ = QFileDialog.getSaveFileName(self, "Save Level As", "maps", "JSON Files (*.json)")
         if filePath:
@@ -676,7 +646,7 @@ class MainWindow(QMainWindow):
             return
         try:
             with open(self.file_path, 'w') as f:
-                json.dump(self._get_level_data(), f, indent=4)
+                json.dump(self.state.get_level_data(), f, indent=4)
             print(f"Level saved to {self.file_path}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not save level to {self.file_path}:\n{e}")
@@ -693,19 +663,10 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Could not load level from {filePath}:\n{e}")
             return
 
-        self.brushes = level_data.get('brushes', [])
-        things_data = level_data.get('things', [])
-        new_things = []
-        for t_data in things_data:
-            if t_data.get('type') == 'Model':
-                model_kwargs = {k: v for k, v in t_data.items() if k != 'type'}
-                new_things.append(Model(**model_kwargs))
-            else:
-                new_things.append(Thing.from_dict(t_data))
-        self.things = new_things
+        self.state.load_from_data(level_data)
 
         player_start_pos = None
-        for t in self.things:
+        for t in self.state.things:
             if isinstance(t, PlayerStart):
                 player_start_pos = t.pos
                 break
@@ -716,9 +677,6 @@ class MainWindow(QMainWindow):
             self.view_3d.camera.yaw = -90
 
         self.file_path = filePath
-        self.undo_stack.clear()
-        self.redo_stack.clear()
-        self.save_state()
         self.set_selected_object(None)
         print(f"Level loaded from {filePath}")
 
@@ -730,7 +688,7 @@ class MainWindow(QMainWindow):
         quicksave_path = os.path.join(maps_dir, "quick_save.json")
         try:
             with open(quicksave_path, 'w') as f:
-                json.dump(self._get_level_data(), f, indent=4)
+                json.dump(self.state.get_level_data(), f, indent=4)
             print(f"Quicksave successful: {quicksave_path}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not quicksave level:\n{e}")

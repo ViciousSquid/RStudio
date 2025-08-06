@@ -150,10 +150,10 @@ class View2D(QWidget):
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
         
-        for brush in self.editor.brushes:
+        for brush in self.editor.state.brushes:
             if brush.get('hidden', False):
                 continue
-            is_selected = (brush is self.editor.selected_object)
+            is_selected = (brush is self.editor.state.selected_object)
             is_trigger = brush.get('is_trigger', False)
             is_subtractive = brush.get('operation') == 'subtract'
             is_locked = brush.get('lock', False)
@@ -217,7 +217,7 @@ class View2D(QWidget):
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
         
-        for thing in self.editor.things:
+        for thing in self.editor.state.things:
             w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
             s_pos = self.world_to_screen(w_pos)
 
@@ -253,7 +253,7 @@ class View2D(QWidget):
             painter.drawPixmap(draw_rect.toRect(), pixmap)
 
             # Draw selection outline if the thing is selected.
-            if thing == self.editor.selected_object:
+            if thing == self.editor.state.selected_object:
                 painter.setPen(QPen(QColor(255, 255, 0), 2, Qt.DotLine))
                 painter.setBrush(Qt.NoBrush)
                 # Adjust the rectangle to be drawn around the pixmap
@@ -320,10 +320,10 @@ class View2D(QWidget):
         pen = QPen(QColor(139, 69, 19), 2, Qt.DotLine)
         painter.setPen(pen)
 
-        for brush in self.editor.brushes:
+        for brush in self.editor.state.brushes:
             if brush.get('is_trigger') and brush.get('target'):
                 target_name = brush.get('target')
-                target_thing = next((t for t in self.editor.things if hasattr(t, 'name') and t.name == target_name), None)
+                target_thing = next((t for t in self.editor.state.things if hasattr(t, 'name') and t.name == target_name), None)
 
                 if target_thing:
                     brush_pos_3d = brush['pos']
@@ -364,7 +364,7 @@ class View2D(QWidget):
                 self.resize_handle_ix = handle_ix
                 # Store the initial brush rectangle for reference during resize
                 # This is important for the original resize_brush to know the fixed opposite point.
-                brush = self.editor.selected_object
+                brush = self.editor.state.selected_object
                 ax1, ax2 = self.get_axes()
                 ax_map = {'x': 0, 'y': 1, 'z': 2}
                 pos = brush['pos']
@@ -428,7 +428,7 @@ class View2D(QWidget):
             self.draw_current_pos = self.snap_to_grid(world_pos)
 
         elif self.is_dragging_object:
-            obj = self.editor.selected_object
+            obj = self.editor.state.selected_object
             if obj:
                 ax1, ax2 = self.get_axes()
                 ax_map = {'x': 0, 'y': 1, 'z': 2}
@@ -438,7 +438,7 @@ class View2D(QWidget):
                 pos_ref[ax_map[ax2]] = new_obj_pos.y()
         
         elif self.is_resizing_brush:
-            obj = self.editor.selected_object
+            obj = self.editor.state.selected_object
             if obj:
                 self.resize_brush(world_pos)
         
@@ -474,7 +474,7 @@ class View2D(QWidget):
                     size[ax_map[ax2]] = rect.height()
 
                     new_brush = {'pos': pos, 'size': size, 'textures': {f: 'default.png' for f in ['north','south','east','west','top','down']}}
-                    self.editor.brushes.append(new_brush)
+                    self.editor.state.brushes.append(new_brush)
                     self.editor.set_selected_object(new_brush)
             
             if action_taken:
@@ -509,7 +509,7 @@ class View2D(QWidget):
 
         if new_thing:
             self.main_window.save_state()
-            self.editor.things.append(new_thing)
+            self.editor.state.things.append(new_thing)
             self.editor.set_selected_object(new_thing)
             self.update()
 
@@ -521,14 +521,14 @@ class View2D(QWidget):
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
 
-        for thing in reversed(self.editor.things):
+        for thing in reversed(self.editor.state.things):
             w_2d, h_2d = 24, 24 
             thing_w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
             thing_rect = QRectF(thing_w_pos.x() - w_2d/2, thing_w_pos.y() - h_2d/2, w_2d, h_2d)
             if thing_rect.contains(world_pos):
                 return thing
                 
-        for brush in reversed(self.editor.brushes):
+        for brush in reversed(self.editor.state.brushes):
             pos = brush['pos']
             size = brush['size']
             p1 = QPointF(pos[ax_map[ax1]] - size[ax_map[ax1]]/2, pos[ax_map[ax2]] - size[ax_map[ax2]]/2)
@@ -540,7 +540,7 @@ class View2D(QWidget):
         return None
 
     def get_handle_at(self, screen_pos):
-        brush = self.editor.selected_object
+        brush = self.editor.state.selected_object
         if not isinstance(brush, dict) or brush.get('lock', False): return -1
 
         ax1, ax2 = self.get_axes()
@@ -560,7 +560,7 @@ class View2D(QWidget):
         return -1
         
     def resize_brush(self, world_pos):
-        brush = self.editor.selected_object
+        brush = self.editor.state.selected_object
         if not brush: return
         
         snapped_pos = self.snap_to_grid(world_pos)

@@ -59,7 +59,7 @@ class SceneHierarchy(QTreeWidget):
         brushes_header.setExpanded(True)
         
         # Add Brushes
-        for i, brush_dict in enumerate(self.main_window.brushes):
+        for i, brush_dict in enumerate(self.main_window.state.brushes):
             item_text = brush_dict.get('name', f'Brush {i+1}')
             item = QTreeWidgetItem(brushes_header, [item_text, ""]) # Add an empty string for the second column
             item.setData(0, Qt.UserRole, ('brush', i))
@@ -74,7 +74,7 @@ class SceneHierarchy(QTreeWidget):
             if 'color' in brush_dict and brush_dict['color'] in self.color_icons:
                 item.setIcon(1, self.color_icons[brush_dict['color']]) # Set icon in the second column
             
-            if self.main_window.selected_object is brush_dict:
+            if self.main_window.state.selected_object is brush_dict:
                 item.setSelected(True)
 
         # Add Things Header
@@ -85,12 +85,12 @@ class SceneHierarchy(QTreeWidget):
         things_header.setExpanded(True)
         
         # Add Things
-        for i, thing_obj in enumerate(self.main_window.things):
+        for i, thing_obj in enumerate(self.main_window.state.things):
             item_text = thing_obj.name if thing_obj.name else f'Thing {i+1}'
             item = QTreeWidgetItem(things_header, [item_text, ""]) # Add an empty string for the second column
             item.setData(0, Qt.UserRole, ('thing', i))
 
-            if self.main_window.selected_object is thing_obj:
+            if self.main_window.state.selected_object is thing_obj:
                 item.setSelected(True)
                 
         self.blockSignals(False)
@@ -106,9 +106,9 @@ class SceneHierarchy(QTreeWidget):
         if data:
             obj_type, obj_index = data
             if obj_type == 'brush':
-                self.main_window.set_selected_object(self.main_window.brushes[obj_index])
+                self.main_window.set_selected_object(self.main_window.state.brushes[obj_index])
             elif obj_type == 'thing':
-                self.main_window.set_selected_object(self.main_window.things[obj_index])
+                self.main_window.set_selected_object(self.main_window.state.things[obj_index])
         else:
              self.main_window.set_selected_object(None)
 
@@ -122,7 +122,7 @@ class SceneHierarchy(QTreeWidget):
         item = selected_items[0]
         data = item.data(0, Qt.UserRole)
         if data and data[0] == 'brush':
-            brush_dict = self.main_window.brushes[data[1]]
+            brush_dict = self.main_window.state.brushes[data[1]]
             
             # Lock/Unlock Action
             is_locked = brush_dict.get('lock', False)
@@ -177,7 +177,7 @@ class SceneHierarchy(QTreeWidget):
         else: # If unchecked
             if 'color' in brush_dict and brush_dict['color'] == color_name:
                 del brush_dict['color']
-            # If the "None" option is unchecked, it implies a color *should* be selected, but since this is
+            # If the "None" option is unchecked, it implies a colour *should* be selected, but since this is
             # about unsetting, we only act if 'color_name' is None
             elif color_name is None and 'color' not in brush_dict:
                 # If "None" was unchecked and no color was set, do nothing.
