@@ -47,13 +47,25 @@ class MainWindow(QMainWindow):
 
     def add_model_to_scene(self, filepath, rotation, scale):
         self.save_state()
-        new_model = Model(pos=[0, 0, 0], model_path=filepath, rotation=rotation, scale=scale)
+        
+        # We should store a relative path if possible
+        relative_path = os.path.relpath(filepath, self.root_dir)
+        
+        # Create properties dict for the new model
+        model_props = {
+            'model_path': relative_path,
+            'rotation': rotation,
+            'scale': scale
+        }
+        
+        new_model = Model(pos=[0, 0, 0], properties=model_props)
         self.state.things.append(new_model)
         self.set_selected_object(new_model)
+        
         QMessageBox.information(self, "Model Added", 
-            f"'{os.path.basename(filepath)}' has been added to the scene.\n\n"
+            f"'{os.path.basename(filepath)}' has been added to the scene as a 'Model' Thing.\n\n"
             "You can now use the 2D views or the property editor to position it.\n"
-            "A 3D transform gizmo in the 3D view is the next step for direct manipulation.")
+            "Note: 3D rendering for models is not yet implemented.")
 
     def set_selected_object(self, obj):
         self.state.set_selected_object(obj)

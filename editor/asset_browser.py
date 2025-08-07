@@ -33,7 +33,7 @@ class AssetBrowser(QWidget):
         left_pane_tree_layout.setContentsMargins(0, 0, 0, 0)
 
         # --- Textures Button ---
-        self.textures_button = QPushButton("Textures")
+        self.textures_button = QPushButton("Assets Root")
         self.textures_button.clicked.connect(self.reset_to_default_path)
         self.textures_button.setStyleSheet("""
             QPushButton {
@@ -128,6 +128,11 @@ class AssetBrowser(QWidget):
         self.details_layout.addWidget(self.preview_label)
         self.details_layout.addWidget(self.name_label)
         self.details_layout.addWidget(self.type_label)
+        
+        self.add_model_button = QPushButton("Add to Scene")
+        self.add_model_button.clicked.connect(self._add_selected_model_to_scene)
+        self.details_layout.addWidget(self.add_model_button)
+
         self.details_layout.addStretch()
 
         # Add panes to nested splitter
@@ -145,6 +150,14 @@ class AssetBrowser(QWidget):
         right_pane_nested.setStretchFactor(1, 1)
 
         self.refresh_assets()
+
+    def _add_selected_model_to_scene(self):
+        if not self.editor or not self.selected_item:
+            return
+        
+        filepath = self.get_selected_filepath()
+        if filepath and filepath.lower().endswith('.obj'):
+            self.editor.add_model_to_scene(filepath, rotation=[0,0,0], scale=[1,1,1])
 
     def reset_to_default_path(self):
         """Resets the asset browser to the base asset folder."""
@@ -190,7 +203,7 @@ class AssetBrowser(QWidget):
         num_columns = 4
 
         for filename in sorted(os.listdir(textures_path)):
-            if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
+            if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.obj')):
                 filepath = os.path.join(textures_path, filename)
                 item_widget = AssetItem(filepath, self)
                 self.asset_layout.addWidget(item_widget, row, col)
@@ -203,6 +216,7 @@ class AssetBrowser(QWidget):
         self.preview_label.setText("Select an asset")
         self.name_label.setText("Name: ")
         self.type_label.setText("Type: ")
+        self.add_model_button.hide()
         self.selected_item = None
 
 
@@ -213,17 +227,35 @@ class AssetBrowser(QWidget):
         self.selected_item.select()
 
         filepath = item.filepath
-        try:
-            pixmap = QPixmap(filepath)
-            if not pixmap.isNull():
-                self.preview_label.setPixmap(pixmap.scaled(256, 256, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            else:
-                self.preview_label.setText("Preview\nNot Available")
-        except Exception:
-            self.preview_label.setText("Preview\nError")
+        is_model = filepath.lower().endswith('.obj')
 
-        self.name_label.setText(f"Name: {os.path.basename(filepath)}")
-        self.type_label.setText("Type: Texture")
+        if is_model:
+            self.add_model_button.show()
+            self.preview_label.show()
+            # Assuming a generic model icon exists at this path
+            model_icon_pixmap = QPixmap("assets/model_icon.png")
+            if not model_icon_pixmap.isNull():
+                 self.preview_label.setPixmap(model_icon_pixmap.scaled(256, 256, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            else:
+                 self.preview_label.setText("Model") # Fallback text
+            
+            self.name_label.setText(f"Name: {os.path.basename(filepath)}")
+            self.type_label.setText("Type: 3D Model (.obj)")
+
+        else: # Is a texture
+            self.add_model_button.hide()
+            self.preview_label.show()
+            try:
+                pixmap = QPixmap(filepath)
+                if not pixmap.isNull():
+                    self.preview_label.setPixmap(pixmap.scaled(256, 256, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                else:
+                    self.preview_label.setText("Preview\nNot Available")
+            except Exception:
+                self.preview_label.setText("Preview\nError")
+            
+            self.name_label.setText(f"Name: {os.path.basename(filepath)}")
+            self.type_label.setText("Type: Texture")
 
     def get_selected_filepath(self):
         """Returns the path of the currently selected file, or None if invalid/not selected"""
@@ -265,6 +297,9 @@ class AssetItem(QWidget):
         self.thumbnail.setStyleSheet("background-color: #4a4a4a; border-radius: 4px;")
 
         pixmap = QPixmap(filepath)
+        if pixmap.isNull():
+            pixmap = QPixmap("assets/model_icon.png")
+
         if not pixmap.isNull():
             self.thumbnail.setPixmap(pixmap.scaled(self.THUMBNAIL_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 

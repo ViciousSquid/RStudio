@@ -106,9 +106,9 @@ class Ui_MainWindow(object):
         # Asset Browser Setup
         MainWindow.asset_browser_dock = QDockWidget("Asset Browser", MainWindow)
 
-        texture_path = os.path.join(MainWindow.root_dir, "assets", "textures")
+        asset_path = os.path.join(MainWindow.root_dir, "assets")
         
-        MainWindow.asset_browser = AssetBrowser(texture_path, editor=MainWindow)
+        MainWindow.asset_browser = AssetBrowser(asset_path, editor=MainWindow)
         MainWindow.asset_browser.main_window = MainWindow
 
         MainWindow.asset_browser_dock.setWidget(MainWindow.asset_browser)
