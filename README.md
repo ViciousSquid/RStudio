@@ -10,8 +10,8 @@
 * Fully modular and open source (MIT License)
   
 ### Roadmap:
-* Quake/Half-life map support
-* OBJ model support
+* Quake/Quake2/Quake3/Half-life map support
+* OBJ model support (currently being tested in `dev` branch)
 * Physics
 * Visual scripting
 * Support for multiple genres of game
