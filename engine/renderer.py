@@ -2,7 +2,7 @@ import glm
 import numpy as np
 import OpenGL.GL as gl
 import ctypes
-from editor.things import Thing, Light
+from editor.things import Thing, Light, Model
 
 class Renderer:
     """Handles all modern OpenGL drawing operations for the editor."""
@@ -23,7 +23,7 @@ class Renderer:
         self.draw_grid(projection, view, config['grid_indices_count'])
 
         # --- Prepare object lists for rendering ---
-        opaque_brushes, transparent_brushes, sprites = self._sort_objects(brushes, things, config)
+        opaque_brushes, transparent_brushes, sprites, models = self._sort_objects(brushes, things, config)
 
         # --- 1. Opaque Pass ---
         gl.glDepthMask(gl.GL_TRUE)
@@ -38,6 +38,7 @@ class Renderer:
         display_mode = config.get('brush_display_mode', 'Textured')
         if display_mode == "Textured":
             self.draw_textured_brushes(projection, view, opaque_brushes, lights, config)
+            self.draw_models(projection, view, models, lights, config)
         else: # Lit or Wireframe
             self.draw_lit_brushes(projection, view, opaque_brushes, lights, config)
 
@@ -82,6 +83,7 @@ class Renderer:
         opaque_brushes = []
         transparent_brushes = []
         sprites = []
+        models = []
 
         is_play_mode = config.get('play_mode', False)
 
@@ -99,9 +101,10 @@ class Renderer:
                 opaque_brushes.append(brush)
         
         if not is_play_mode:
-            sprites.extend([t for t in things if isinstance(t, Thing)])
+            sprites.extend([t for t in things if isinstance(t, Thing) and not isinstance(t, Model)])
+            models.extend([t for t in things if isinstance(t, Model)])
         
-        return opaque_brushes, transparent_brushes, sprites
+        return opaque_brushes, transparent_brushes, sprites, models
 
     def draw_grid(self, projection, view, grid_indices_count):
         """Draws the editor grid."""
@@ -191,6 +194,48 @@ class Renderer:
                 tex_id = self.load_texture(tex_name, 'textures')
                 gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                 gl.glDrawArrays(gl.GL_TRIANGLES, i * 6, 6)
+
+        gl.glBindVertexArray(0)
+
+    def draw_models(self, projection, view, models, lights, config):
+        """Draws all Model Things in the scene."""
+        if not models: return
+        
+        shader = self.shaders['textured']
+        gl.glUseProgram(shader)
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+
+        self._set_light_uniforms(shader, lights)
+        gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "projection"), 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "view"), 1, gl.GL_FALSE, glm.value_ptr(view))
+
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(gl.glGetUniformLocation(shader, "texture_diffuse"), 0)
+
+        model_loader = config['model_loader']
+
+        for model_instance in models:
+            model_path = model_instance.properties.get('model_path')
+            if not model_path: continue
+            
+            model_data = model_loader(model_path)
+            if not model_data: continue
+
+            pos = model_instance.pos
+            rot = model_instance.properties.get('rotation', [0, 0, 0])
+            scale = model_instance.properties.get('scale', [1, 1, 1])
+
+            model_matrix = glm.translate(glm.mat4(1.0), pos)
+            model_matrix = glm.rotate(model_matrix, glm.radians(rot[2]), glm.vec3(0, 0, 1))
+            model_matrix = glm.rotate(model_matrix, glm.radians(rot[1]), glm.vec3(0, 1, 0))
+            model_matrix = glm.rotate(model_matrix, glm.radians(rot[0]), glm.vec3(1, 0, 0))
+            model_matrix = glm.scale(model_matrix, glm.vec3(scale))
+            
+            gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "model"), 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+
+            gl.glBindTexture(gl.GL_TEXTURE_2D, model_data['texture_id'])
+            gl.glBindVertexArray(model_data['vao'])
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, model_data['vertex_count'])
 
         gl.glBindVertexArray(0)
 

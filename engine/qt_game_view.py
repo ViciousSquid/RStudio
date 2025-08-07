@@ -41,6 +41,7 @@ class QtGameView(QOpenGLWidget):
         # Resource management
         self.texture_manager = {}
         self.sprite_textures = {}
+        self.model_manager = {}
 
         # Rendering backend
         self.renderer = None
@@ -147,6 +148,7 @@ class QtGameView(QOpenGLWidget):
             "selected_object": self.selected_object,
             "sprite_textures": self.sprite_textures,
             "grid_indices_count": self.grid_indices_count,
+            "model_loader": self._load_and_buffer_model,
         }
 
         # --- 3. Render the Scene ---
@@ -279,15 +281,104 @@ class QtGameView(QOpenGLWidget):
         self.grid_dirty = True
         self.update()
 
+    def _parse_simple_obj(self, file_path):
+        """A very basic obj parser that returns an interleaved numpy array."""
+        v, vt, vn = [], [], []
+        final_buffer = []
+
+        with open(file_path, 'r') as f:
+            for line in f:
+                parts = line.split()
+                if not parts: continue
+                if parts[0] == 'v':
+                    v.append([float(x) for x in parts[1:4]])
+                elif parts[0] == 'vt':
+                    vt.append([float(x) for x in parts[1:3]])
+                elif parts[0] == 'vn':
+                    vn.append([float(x) for x in parts[1:4]])
+                elif parts[0] == 'f':
+                    # Assumes triangulated faces like f v1/vt1/vn1 v2/vt2/vn2 v3/vt3/vn3
+                    for i in range(1, 4):
+                        face_indices = parts[i].split('/')
+                        # OBJ indices are 1-based
+                        final_buffer.extend(vt[int(face_indices[1]) - 1])
+                        final_buffer.extend(vn[int(face_indices[2]) - 1])
+                        final_buffer.extend(v[int(face_indices[0]) - 1])
+        return np.array(final_buffer, dtype=np.float32)
+
+    def _load_and_buffer_model(self, model_rel_path):
+        """Loads model data from a file, creates GL buffers, and caches them."""
+        if model_rel_path in self.model_manager:
+            return self.model_manager[model_rel_path]
+
+        full_model_path = os.path.join(self.editor.root_dir, model_rel_path)
+        if not os.path.exists(full_model_path):
+            print(f"Error: Model file not found at {full_model_path}")
+            return None
+
+        try:
+            interleaved_data = self._parse_simple_obj(full_model_path)
+            if interleaved_data is None or interleaved_data.size == 0:
+                print(f"Error: Failed to parse model {model_rel_path}")
+                return None
+
+            vao = gl.glGenVertexArrays(1)
+            gl.glBindVertexArray(vao)
+            vbo = gl.glGenBuffers(1)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, interleaved_data.nbytes, interleaved_data, gl.GL_STATIC_DRAW)
+            # Stride is 8 floats (32 bytes): T2F, N3F, V3F
+            stride = 8 * interleaved_data.itemsize
+            # Tex Coords (2F)
+            gl.glVertexAttribPointer(2, 2, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(0))
+            gl.glEnableVertexAttribArray(2)
+            # Normals (3F)
+            gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(2 * interleaved_data.itemsize))
+            gl.glEnableVertexAttribArray(1)
+            # Positions (3F)
+            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(5 * interleaved_data.itemsize))
+            gl.glEnableVertexAttribArray(0)
+            gl.glBindVertexArray(0)
+
+            # Try to load an associated texture (e.g., model.obj -> model.png)
+            tex_path, _ = os.path.splitext(full_model_path)
+            tex_path += ".png"
+            if os.path.exists(tex_path):
+                # We need the relative path of the texture for the loader cache key
+                tex_rel_path = os.path.relpath(tex_path, os.path.join(self.editor.root_dir, 'assets'))
+                tex_id = self.load_texture(tex_rel_path, '')
+            else:
+                tex_id = self.load_texture('default.png', 'textures')
+            
+            model_data = {
+                'vao': vao,
+                'vertex_count': len(interleaved_data) // 8, # 8 floats per vertex
+                'texture_id': tex_id
+            }
+            self.model_manager[model_rel_path] = model_data
+            return model_data
+
+        except Exception as e:
+            print(f"Error processing model file {model_rel_path}: {e}")
+            return None
+
     def load_texture(self, texture_name, subfolder):
-        # (Same as original load_texture)
-        tex_cache_name = os.path.join(subfolder, texture_name)
-        if tex_cache_name in self.texture_manager: return self.texture_manager[tex_cache_name]
+        """Loads a texture from file into the GPU and caches it."""
+        # Check if texture_name is already a relative path from assets
+        if subfolder == '':
+            tex_cache_name = texture_name
+        else:
+            tex_cache_name = os.path.join(subfolder, texture_name)
+
+        if tex_cache_name in self.texture_manager: 
+            return self.texture_manager[tex_cache_name]
+
         if texture_name == 'default.png':
             tex_id = gl.glGenTextures(1); self.texture_manager[tex_cache_name] = tex_id
             gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id); pixels = [255, 255, 255, 255]
             gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, 1, 1, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, (gl.GLubyte * 4)(*pixels))
             return tex_id
+            
         if texture_name == 'caulk':
             tex_id = gl.glGenTextures(1); self.texture_manager[tex_cache_name] = tex_id
             gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id); pixels = [255,0,255,255, 0,0,0,255, 0,0,0,255, 255,0,255,255]
@@ -295,7 +386,13 @@ class QtGameView(QOpenGLWidget):
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
             return tex_id
-        texture_path = os.path.join('assets', subfolder, texture_name)
+
+        # If subfolder is empty, texture_name is the path relative to 'assets'
+        if subfolder == '':
+            texture_path = os.path.join('assets', texture_name)
+        else:
+            texture_path = os.path.join('assets', subfolder, texture_name)
+
         if not os.path.exists(texture_path): return self.load_texture('default.png', 'textures')
         try:
             img = Image.open(texture_path).convert("RGBA"); img_data = img.tobytes()
