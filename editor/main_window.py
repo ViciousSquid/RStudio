@@ -62,10 +62,6 @@ class MainWindow(QMainWindow):
         self.state.things.append(new_model)
         self.set_selected_object(new_model)
         
-        QMessageBox.information(self, "Model Added", 
-            f"'{os.path.basename(filepath)}' has been added to the scene as a 'Model' Thing.\n\n"
-            "You can now use the 2D views or the property editor to position it.\n"
-            "Note: 3D rendering for models is not yet implemented.")
 
     def set_selected_object(self, obj):
         self.state.set_selected_object(obj)
