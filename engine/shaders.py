@@ -181,3 +181,71 @@ void main()
     // No color output is needed, we only care about the stencil buffer
 }
 """
+
+VERTEX_SHADER_FOG = """
+#version 330 core
+layout (location = 0) in vec3 a_pos;
+layout (location = 1) in vec3 a_normal;
+
+out vec3 FragPos;
+out vec3 Normal;
+
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+
+void main() {
+    FragPos = vec3(model * vec4(a_pos, 1.0));
+    Normal = mat3(transpose(inverse(model))) * a_normal;
+    gl_Position = projection * view * vec4(FragPos, 1.0);
+}
+"""
+
+FRAGMENT_SHADER_FOG = """
+#version 330 core
+out vec4 FragColor;
+
+in vec3 FragPos;
+in vec3 Normal;
+
+struct Light {
+    vec3 position;
+    vec3 color;
+    float intensity;
+    float radius;
+};
+
+#define MAX_LIGHTS 16
+uniform Light lights[MAX_LIGHTS];
+uniform int active_lights;
+uniform vec3 viewPos;
+uniform float density;
+uniform bool emitLight;
+
+void main() {
+    vec3 norm = normalize(Normal);
+    vec3 total_light = vec3(0.0);
+
+    for (int i = 0; i < active_lights; i++) {
+        vec3 light_dir = lights[i].position - FragPos;
+        float distance = length(light_dir);
+        if(distance < lights[i].radius){
+            light_dir = normalize(light_dir);
+            float diff = max(dot(norm, light_dir), 0.0);
+            float attenuation = 1.0 - (distance / lights[i].radius);
+            total_light += lights[i].color * diff * lights[i].intensity * attenuation;
+        }
+    }
+
+    if (emitLight) {
+        total_light += vec3(1.0, 1.0, 1.0);
+    }
+    
+    float dist = length(viewPos - FragPos);
+    float fogFactor = exp(-density * dist);
+    
+    vec3 fogColor = vec3(0.5, 0.6, 0.7); // A cool grey fog color
+    
+    FragColor = vec4(mix(fogColor, total_light, fogFactor), 1.0 - fogFactor);
+}
+"""

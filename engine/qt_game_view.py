@@ -87,12 +87,14 @@ class QtGameView(QOpenGLWidget):
             shader_textured = compileProgram(compileShader(shaders.VERTEX_SHADER_TEXTURED, gl.GL_VERTEX_SHADER), compileShader(shaders.FRAGMENT_SHADER_TEXTURED, gl.GL_FRAGMENT_SHADER))
             shader_sprite = compileProgram(compileShader(shaders.VERTEX_SHADER_SPRITE, gl.GL_VERTEX_SHADER), compileShader(shaders.FRAGMENT_SHADER_SPRITE, gl.GL_FRAGMENT_SHADER))
             shader_shadow_volume = compileProgram(compileShader(shaders.SHADOW_VOLUME_VERTEX_SHADER, gl.GL_VERTEX_SHADER), compileShader(shaders.SHADOW_VOLUME_FRAGMENT_SHADER, gl.GL_FRAGMENT_SHADER))
+            shader_fog = compileProgram(compileShader(shaders.VERTEX_SHADER_FOG, gl.GL_VERTEX_SHADER), compileShader(shaders.FRAGMENT_SHADER_FOG, gl.GL_FRAGMENT_SHADER))
             self.shaders = {
                 'simple': shader_simple,
                 'lit': shader_lit,
                 'textured': shader_textured,
                 'sprite': shader_sprite,
                 'shadow_volume': shader_shadow_volume,
+                'fog': shader_fog,
             }
         except Exception as e:
             print(f"FATAL: Shader Compilation Error: {e}")

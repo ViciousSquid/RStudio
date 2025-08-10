@@ -24,7 +24,8 @@ class Renderer:
         self.draw_grid(projection, view, config['grid_indices_count'])
 
         # --- Prepare object lists for rendering ---
-        opaque_brushes, transparent_brushes, sprites = self._sort_objects(brushes, things, config)
+        opaque_brushes, transparent_brushes, sprites, fog_volumes = self._sort_objects(brushes, things, config)
+
 
         # --- 1. Opaque Pass ---
         gl.glDepthMask(gl.GL_TRUE)
@@ -54,6 +55,8 @@ class Renderer:
         # Sort transparent objects from back to front
         transparent_brushes.sort(key=lambda b: -glm.distance(glm.vec3(b['pos']), camera_pos))
         sprites.sort(key=lambda s: -glm.distance(glm.vec3(s.pos), camera_pos))
+        fog_volumes.sort(key=lambda b: -glm.distance(glm.vec3(b['pos']), camera_pos))
+
         
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
@@ -61,6 +64,8 @@ class Renderer:
 
         self.draw_sprites(projection, view, sprites, config['sprite_textures'])
         self.draw_lit_brushes(projection, view, transparent_brushes, lights, config, is_transparent_pass=True)
+        self.draw_fog_volumes(projection, view, fog_volumes, lights, camera_pos)
+
 
         # --- 3. Overlays (Gizmo, selection outline) ---
         gl.glDepthMask(gl.GL_TRUE) # Restore depth mask for gizmo/outlines
@@ -170,6 +175,7 @@ class Renderer:
         opaque_brushes = []
         transparent_brushes = []
         sprites = []
+        fog_volumes = []
 
         is_play_mode = config.get('play_mode', False)
 
@@ -183,13 +189,16 @@ class Renderer:
 
             if is_trigger:
                 transparent_brushes.append(brush)
+            elif brush.get('is_fog', False):
+                fog_volumes.append(brush)
             else:
                 opaque_brushes.append(brush)
         
         if not is_play_mode:
             sprites.extend([t for t in things if isinstance(t, Thing)])
         
-        return opaque_brushes, transparent_brushes, sprites
+        return opaque_brushes, transparent_brushes, sprites, fog_volumes
+
 
     def draw_grid(self, projection, view, grid_indices_count):
         """Draws the editor grid."""
@@ -281,6 +290,36 @@ class Renderer:
                 gl.glDrawArrays(gl.GL_TRIANGLES, i * 6, 6)
 
         gl.glBindVertexArray(0)
+
+    def draw_fog_volumes(self, projection, view, brushes, lights, camera_pos):
+        """Draws brushes as fog volumes."""
+        if not brushes: return
+
+        shader = self.shaders['fog']
+        gl.glUseProgram(shader)
+
+        # Set uniforms for the fog shader
+        self._set_light_uniforms(shader, lights)
+        gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "projection"), 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "view"), 1, gl.GL_FALSE, glm.value_ptr(view))
+        gl.glUniform3fv(gl.glGetUniformLocation(shader, "viewPos"), 1, glm.value_ptr(camera_pos))
+
+        gl.glBindVertexArray(self.vaos['cube'])
+
+        for brush in brushes:
+            model_matrix = glm.translate(glm.mat4(1.0), glm.vec3(brush['pos'])) * glm.scale(glm.mat4(1.0), glm.vec3(brush['size']))
+            gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "model"), 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+            
+            density = brush.get('fog_density', 0.1)
+            emit_light = brush.get('fog_emit_light', False)
+
+            gl.glUniform1f(gl.glGetUniformLocation(shader, "density"), density)
+            gl.glUniform1i(gl.glGetUniformLocation(shader, "emitLight"), emit_light)
+
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+
+        gl.glBindVertexArray(0)
+
 
     def draw_selected_brush_outline(self, projection, view, brush):
         """Draws a yellow wireframe outline over a selected brush, ignoring depth."""
