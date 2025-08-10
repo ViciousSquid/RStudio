@@ -23,6 +23,11 @@ class PropertyEditor(QWidget):
         self.target_input = None
         self.type_label = None
         self.type_combo = None
+        self.fog_checkbox = None
+        self.fog_density_label = None
+        self.fog_density_input = None
+        self.fog_emit_light_label = None
+        self.fog_emit_light_checkbox = None
 
         self.set_object(None)
 
@@ -59,6 +64,7 @@ class PropertyEditor(QWidget):
         layout = QFormLayout()
         is_locked = brush.get('lock', False)
         is_trigger = brush.get('is_trigger', False)
+        is_fog = brush.get('is_fog', False)
 
         # Create Widgets and store them as instance variables
         self.locked_checkbox = QCheckBox()
@@ -70,23 +76,41 @@ class PropertyEditor(QWidget):
         self.type_label = QLabel("Trigger Type:")
         self.type_combo = QComboBox()
         self.type_combo.addItems(['Once', 'Multiple'])
+        self.fog_checkbox = QCheckBox()
+        self.fog_checkbox.setStyleSheet("QCheckBox::indicator { width: 20px; height: 20px; }")
+        self.fog_density_label = QLabel("Density:")
+        self.fog_density_input = QLineEdit(str(brush.get('fog_density', 0.1)))
+        self.fog_emit_light_label = QLabel("Emit Light:")
+        self.fog_emit_light_checkbox = QCheckBox()
+        self.fog_emit_light_checkbox.setStyleSheet("QCheckBox::indicator { width: 20px; height: 20px; }")
         
         # Set initial state from brush properties
         self.locked_checkbox.setChecked(is_locked)
         self.trigger_checkbox.setChecked(is_trigger)
         self.type_combo.setCurrentText(brush.get('trigger_type', 'Once'))
+        self.fog_checkbox.setChecked(is_fog)
+        self.fog_emit_light_checkbox.setChecked(brush.get('fog_emit_light', False))
+
 
         # Add to Layout
         layout.addRow("Lock:", self.locked_checkbox)
         layout.addRow("Is Trigger:", self.trigger_checkbox)
         layout.addRow(self.target_label, self.target_input)
         layout.addRow(self.type_label, self.type_combo)
+        layout.addRow("Fog Volume:", self.fog_checkbox)
+        layout.addRow(self.fog_density_label, self.fog_density_input)
+        layout.addRow(self.fog_emit_light_label, self.fog_emit_light_checkbox)
+
 
         # Connect Signals to dedicated handlers
         self.locked_checkbox.toggled.connect(self.on_lock_changed)
         self.trigger_checkbox.toggled.connect(self.on_trigger_changed)
         self.target_input.editingFinished.connect(lambda: self.update_object_prop('target', self.target_input.text()))
         self.type_combo.currentTextChanged.connect(lambda t: self.update_object_prop('trigger_type', t))
+        self.fog_checkbox.toggled.connect(self.on_fog_changed)
+        self.fog_density_input.editingFinished.connect(lambda: self.update_object_prop('fog_density', float(self.fog_density_input.text()) if self.fog_density_input.text() else 0.1))
+        self.fog_emit_light_checkbox.toggled.connect(self.on_fog_emit_light_changed)
+
         
         self.main_layout.addLayout(layout)
         
@@ -100,6 +124,8 @@ class PropertyEditor(QWidget):
             
         is_locked = self.current_object.get('lock', False)
         is_trigger = self.current_object.get('is_trigger', False)
+        is_fog = self.current_object.get('is_fog', False)
+
         
         self.trigger_checkbox.setEnabled(not is_locked)
         
@@ -108,6 +134,13 @@ class PropertyEditor(QWidget):
         self.target_input.setVisible(show_trigger_fields)
         self.type_label.setVisible(show_trigger_fields)
         self.type_combo.setVisible(show_trigger_fields)
+
+        show_fog_fields = is_fog and not is_locked
+        self.fog_density_label.setVisible(show_fog_fields)
+        self.fog_density_input.setVisible(show_fog_fields)
+        self.fog_emit_light_label.setVisible(show_fog_fields)
+        self.fog_emit_light_checkbox.setVisible(show_fog_fields)
+
 
     def on_lock_changed(self, is_locked):
         """Handler for when the lock checkbox is toggled."""
@@ -129,6 +162,21 @@ class PropertyEditor(QWidget):
             for face in ['north','south','east','west','top','down']:
                 self.current_object['textures'][face] = 'trigger.jpg'
         self.update_brush_ui_state()
+        self.editor.update_all_ui()
+
+    def on_fog_changed(self, is_fog):
+        """Handler for when the fog checkbox is toggled."""
+        if self.current_object is None: return
+        
+        self.current_object['is_fog'] = is_fog
+        self.update_brush_ui_state()
+        self.editor.update_all_ui()
+
+    def on_fog_emit_light_changed(self, emit_light):
+        """Handler for when the fog emit light checkbox is toggled."""
+        if self.current_object is None: return
+        
+        self.current_object['fog_emit_light'] = emit_light
         self.editor.update_all_ui()
 
     def populate_for_thing(self, thing):

@@ -157,6 +157,7 @@ class View2D(QWidget):
             is_trigger = brush.get('is_trigger', False)
             is_subtractive = brush.get('operation') == 'subtract'
             is_locked = brush.get('lock', False)
+            is_fog = brush.get('is_fog', False)
 
             if is_locked:
                 pen_color = QColor(0, 0, 139)
@@ -171,12 +172,16 @@ class View2D(QWidget):
             elif is_subtractive:
                 pen_color = QColor(255, 0, 0)
                 fill_color = QColor(255, 0, 0, 30)
+            elif is_fog:
+                pen_color = QColor(255, 0, 255, 150)
+                fill_color = QColor(255, 0, 255, 30)
+
 
             if is_selected:
                 pen_color = QColor(255, 255, 0)
             
             pen = QPen(pen_color, 2 if is_selected else 1)
-            if is_trigger and not is_selected: pen.setStyle(Qt.DashLine)
+            if (is_trigger or is_fog) and not is_selected: pen.setStyle(Qt.DashLine)
             painter.setPen(pen)
             painter.setBrush(QBrush(fill_color))
 
@@ -196,6 +201,13 @@ class View2D(QWidget):
                 font.setPointSize(10)
                 painter.setFont(font)
                 painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, "t r i g g e r")
+
+            if is_fog:
+                painter.setPen(QColor(255, 255, 255, 180))
+                font = painter.font()
+                font.setPointSize(10)
+                painter.setFont(font)
+                painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, "F O G")
 
             if is_selected and not is_locked:
                 self.draw_resize_handles(painter, screen_rect)
