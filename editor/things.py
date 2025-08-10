@@ -124,6 +124,7 @@ class Light(Thing):
         self.properties.setdefault('radius', 512.0)
         self.properties.setdefault('state', 'on')
         self.properties.setdefault('show_radius', False)
+        self.properties.setdefault('casts_shadows', False)
 
     def get_color(self):
         color = self.properties.get('colour', [255, 255, 255])
@@ -176,19 +177,10 @@ class Trigger(Thing):
 
 class Model(Thing):
     """Represents a 3D model placed in the world."""
-    def __init__(self, pos=[0,0,0], model_path="", rotation=[0,0,0], scale=[1,1,1]):
-        super().__init__(pos)
-        self.type = 'Model'
-        self.model_path = model_path
-        self.rotation = rotation
-        self.scale = scale
-
-    def to_dict(self):
-        # Extends the base Thing's dictionary representation
-        data = super().to_dict()
-        data.update({
-            'model_path': self.model_path,
-            'rotation': self.rotation,
-            'scale': self.scale
-        })
-        return data
+    pixmap_path = "assets/model_icon.png"
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties.setdefault('type', 'model')
+        self.properties.setdefault('model_path', "")
+        self.properties.setdefault('rotation', [0, 0, 0])
+        self.properties.setdefault('scale', [1, 1, 1])
