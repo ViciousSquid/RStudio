@@ -15,9 +15,10 @@ class Renderer:
 
     def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config):
         """Main entry point to render a complete scene."""
+        print("--- Beginning render_scene ---")
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDepthFunc(gl.GL_LESS)
-        gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+        gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
 
         # Draw Grid
         self.draw_grid(projection, view, config['grid_indices_count'])
@@ -34,12 +35,20 @@ class Renderer:
             gl.glDisable(gl.GL_CULL_FACE)
 
         lights = [t for t in things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
+        print(f"Total lights in scene: {len(lights)}")
         
         display_mode = config.get('brush_display_mode', 'Textured')
         if display_mode == "Textured":
             self.draw_textured_brushes(projection, view, opaque_brushes, lights, config)
         else: # Lit or Wireframe
             self.draw_lit_brushes(projection, view, opaque_brushes, lights, config)
+
+        # --- Shadow Pass ---
+        shadow_casting_lights = [light for light in lights if light.properties.get('casts_shadows')]
+        print(f"Found {len(shadow_casting_lights)} shadow-casting lights.")
+        if shadow_casting_lights:
+            print("Initiating shadow pass.")
+            self.render_shadows(projection, view, opaque_brushes, shadow_casting_lights)
 
         # --- 2. Transparent Pass ---
         # Sort transparent objects from back to front
@@ -76,6 +85,85 @@ class Renderer:
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         gl.glDisable(gl.GL_BLEND)
         gl.glUseProgram(0)
+        print("--- Finished render_scene ---")
+
+    def render_shadows(self, projection, view, brushes, lights):
+        print("\n--- render_shadows called ---")
+        gl.glEnable(gl.GL_STENCIL_TEST)
+        gl.glEnable(gl.GL_DEPTH_CLAMP)
+        gl.glDisable(gl.GL_CULL_FACE) # We need to render both front and back faces for the stencil volume
+
+        for light in lights:
+            print(f"\nProcessing shadows for light at position: {light.pos}")
+            # Clear the stencil buffer for each light
+            gl.glClear(gl.GL_STENCIL_BUFFER_BIT)
+            
+            # 1. Stencil Pass: Render shadow volumes to stencil buffer
+            print("--- Stencil Pass ---")
+            print("Setting stencil state for shadow volume rendering.")
+            gl.glColorMask(gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE)
+            gl.glDepthMask(gl.GL_FALSE)
+            gl.glStencilFunc(gl.GL_ALWAYS, 0, 0xFF)
+            gl.glStencilOpSeparate(gl.GL_BACK, gl.GL_KEEP, gl.GL_INCR_WRAP, gl.GL_KEEP)
+            gl.glStencilOpSeparate(gl.GL_FRONT, gl.GL_KEEP, gl.GL_DECR_WRAP, gl.GL_KEEP)
+
+            shader = self.shaders['shadow_volume']
+            gl.glUseProgram(shader)
+            print(f"Using shadow volume shader: {shader}")
+            gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "projection"), 1, gl.GL_FALSE, glm.value_ptr(projection))
+            gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "view"), 1, gl.GL_FALSE, glm.value_ptr(view))
+            
+            # Correctly convert light.pos (list) to a glm.vec3 before passing to the shader
+            light_pos_vec3 = glm.vec3(light.pos)
+            gl.glUniform3fv(gl.glGetUniformLocation(shader, "light_pos"), 1, glm.value_ptr(light_pos_vec3))
+            print(f"Light position uniform: {light.pos}")
+            
+            gl.glBindVertexArray(self.vaos['cube'])
+            shadow_casters = [b for b in brushes if not b.get('is_trigger', False)]
+            print(f"Rendering shadow volumes for {len(shadow_casters)} brushes.")
+            for brush in shadow_casters:
+                model_matrix = glm.translate(glm.mat4(1.0), glm.vec3(brush['pos'])) * glm.scale(glm.mat4(1.0), glm.vec3(brush['size']))
+                gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "model"), 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+            
+            # 2. Render Pass: Render shadowed areas
+            print("\n--- Shadow Render Pass ---")
+            print("Setting stencil state for drawing shadows.")
+            gl.glDepthMask(gl.GL_TRUE)
+            gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
+            gl.glStencilFunc(gl.GL_NOTEQUAL, 0, 0xFF)
+            gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
+
+            # NEW: Enable blending for transparent shadow color
+            gl.glEnable(gl.GL_BLEND)
+            gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+            # NEW: Adjust depth function to prevent z-fighting
+            gl.glDepthFunc(gl.GL_LEQUAL)
+
+            # Use the lit shader to draw the shadows
+            shader = self.shaders['lit']
+            gl.glUseProgram(shader)
+            # Render with only ambient light to create the shadow effect
+            gl.glUniform1i(gl.glGetUniformLocation(shader, "active_lights"), 0) # No lights for shadow pass
+            gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "projection"), 1, gl.GL_FALSE, glm.value_ptr(projection))
+            gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "view"), 1, gl.GL_FALSE, glm.value_ptr(view))
+
+            print("Drawing shadowed areas.")
+            gl.glBindVertexArray(self.vaos['cube'])
+            for brush in shadow_casters:
+                model_matrix = glm.translate(glm.mat4(1.0), glm.vec3(brush['pos'])) * glm.scale(glm.mat4(1.0), glm.vec3(brush['size']))
+                gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "model"), 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+                gl.glUniform3fv(gl.glGetUniformLocation(shader, "object_color"), 1, [0.0, 0.0, 0.0]) # Black for shadows
+                gl.glUniform1f(gl.glGetUniformLocation(shader, "alpha"), 0.5) # Semi-transparent shadows
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+                
+            # NEW: Restore OpenGL state
+            gl.glDepthFunc(gl.GL_LESS)
+            gl.glDisable(gl.GL_BLEND)
+
+        gl.glDisable(gl.GL_STENCIL_TEST)
+        gl.glDisable(gl.GL_DEPTH_CLAMP)
+        print("\n--- Finished render_shadows ---")
 
     def _sort_objects(self, brushes, things, config):
         """Sorts scene objects into opaque, transparent, and sprite lists."""

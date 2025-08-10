@@ -86,11 +86,13 @@ class QtGameView(QOpenGLWidget):
             shader_lit = compileProgram(compileShader(shaders.VERTEX_SHADER_LIT, gl.GL_VERTEX_SHADER), compileShader(shaders.FRAGMENT_SHADER_LIT, gl.GL_FRAGMENT_SHADER))
             shader_textured = compileProgram(compileShader(shaders.VERTEX_SHADER_TEXTURED, gl.GL_VERTEX_SHADER), compileShader(shaders.FRAGMENT_SHADER_TEXTURED, gl.GL_FRAGMENT_SHADER))
             shader_sprite = compileProgram(compileShader(shaders.VERTEX_SHADER_SPRITE, gl.GL_VERTEX_SHADER), compileShader(shaders.FRAGMENT_SHADER_SPRITE, gl.GL_FRAGMENT_SHADER))
+            shader_shadow_volume = compileProgram(compileShader(shaders.SHADOW_VOLUME_VERTEX_SHADER, gl.GL_VERTEX_SHADER), compileShader(shaders.SHADOW_VOLUME_FRAGMENT_SHADER, gl.GL_FRAGMENT_SHADER))
             self.shaders = {
                 'simple': shader_simple,
                 'lit': shader_lit,
                 'textured': shader_textured,
                 'sprite': shader_sprite,
+                'shadow_volume': shader_shadow_volume,
             }
         except Exception as e:
             print(f"FATAL: Shader Compilation Error: {e}")
@@ -165,11 +167,19 @@ class QtGameView(QOpenGLWidget):
         """Renders the FPS counter using QPainter."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        font = QFont(); font.setPointSize(8)
+        font = QFont()
+        font.setPointSize(8)
         painter.setFont(font)
         painter.setPen(QColor(255, 255, 255))
-        painter.fillRect(5, 5, 70, 20, QColor(0, 0, 0, 128))
-        painter.drawText(10, 20, f"FPS: {self.fps:.0f}")
+        
+        # Position the counter in the top-right corner
+        rect_width = 70
+        padding = 5
+        rect_x = self.width() - rect_width - padding
+        text_x = self.width() - rect_width
+        
+        painter.fillRect(rect_x, padding, rect_width, 20, QColor(0, 0, 0, 128))
+        painter.drawText(text_x, 20, f"FPS: {self.fps:.0f}")
         painter.end()
 
     # -------------------------------------------------------------------------
