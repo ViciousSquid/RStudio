@@ -17,7 +17,7 @@ class GameWindow(QMainWindow):
 
         # Load config.ini
         self.config = configparser.ConfigParser()
-        self.config.read('config.ini')
+        self.config.read('settings.ini')
 
         self.brushes = []
         self.things = []
@@ -37,7 +37,8 @@ class GameWindow(QMainWindow):
                 player_start = thing
                 break
         if player_start:
-            self.game_view.toggle_play_mode(player_start.pos, player_start.get_angle())
+            physics_enabled = self.config.getboolean('Settings', 'physics', fallback=True)
+            self.game_view.toggle_play_mode(player_start.pos, player_start.get_angle(), physics_enabled)
         else:
             print("Warning: No Player Start found in the map.")
 
