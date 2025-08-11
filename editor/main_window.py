@@ -127,7 +127,7 @@ class MainWindow(QMainWindow):
         if 'textures' not in self.state.selected_object:
             self.state.selected_object['textures'] = {}
         for face in ['north','south','east','west','top','down']:
-            self.state.selected_object['textures'][face] = 'caulk'
+            self.state.selected_object['textures'][face] = 'caulk.jpg'
         self.update_views()
 
     def apply_texture_to_brush(self):
@@ -144,6 +144,24 @@ class MainWindow(QMainWindow):
             self.state.selected_object['textures'] = {}
         for face in ['south', 'north', 'west', 'east', 'down', 'top']:
             self.state.selected_object['textures'][face] = texture_name
+        self.update_views()
+
+    def apply_texture_to_selected_face(self, face_name):
+        if not isinstance(self.state.selected_object, dict):
+            return
+
+        texture_path = self.asset_browser.get_selected_filepath()
+        if not texture_path:
+            QMessageBox.warning(self, "No Texture Selected", "Please select a texture from the Asset Browser.")
+            return
+
+        texture_name = os.path.basename(texture_path)
+        self.save_state()
+        
+        if 'textures' not in self.state.selected_object:
+            self.state.selected_object['textures'] = {}
+
+        self.state.selected_object['textures'][face_name] = texture_name
         self.update_views()
 
     def generate_collision_map(self):

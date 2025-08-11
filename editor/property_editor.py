@@ -16,7 +16,6 @@ class PropertyEditor(QWidget):
         self.main_layout.setContentsMargins(5, 5, 5, 5)
         self.setLayout(self.main_layout)
         
-        # Define widget instance variables
         self.locked_checkbox = None
         self.trigger_checkbox = None
         self.target_label = None
@@ -28,6 +27,9 @@ class PropertyEditor(QWidget):
         self.fog_density_input = None
         self.fog_emit_light_label = None
         self.fog_emit_light_checkbox = None
+
+        self.fog_color_label = None
+        self.fog_color_button = None
 
         self.set_object(None)
 
@@ -80,16 +82,18 @@ class PropertyEditor(QWidget):
         self.fog_checkbox.setStyleSheet("QCheckBox::indicator { width: 20px; height: 20px; }")
         self.fog_density_label = QLabel("Density:")
         self.fog_density_input = QLineEdit(str(brush.get('fog_density', 0.1)))
-        self.fog_emit_light_label = QLabel("Emit Light:")
-        self.fog_emit_light_checkbox = QCheckBox()
-        self.fog_emit_light_checkbox.setStyleSheet("QCheckBox::indicator { width: 20px; height: 20px; }")
-        
+        self.fog_color_label = QLabel("Color:")
+        self.fog_color_button = QPushButton()
+        self.fog_color_button.setFixedSize(200, 20)
+        self.update_fog_color_button(brush.get('fog_color', [0.5, 0.6, 0.7]))
+
+
         # Set initial state from brush properties
         self.locked_checkbox.setChecked(is_locked)
         self.trigger_checkbox.setChecked(is_trigger)
         self.type_combo.setCurrentText(brush.get('trigger_type', 'Once'))
         self.fog_checkbox.setChecked(is_fog)
-        self.fog_emit_light_checkbox.setChecked(brush.get('fog_emit_light', False))
+
 
 
         # Add to Layout
@@ -99,7 +103,8 @@ class PropertyEditor(QWidget):
         layout.addRow(self.type_label, self.type_combo)
         layout.addRow("Fog Volume:", self.fog_checkbox)
         layout.addRow(self.fog_density_label, self.fog_density_input)
-        layout.addRow(self.fog_emit_light_label, self.fog_emit_light_checkbox)
+        layout.addRow(self.fog_color_label, self.fog_color_button)
+
 
 
         # Connect Signals to dedicated handlers
@@ -109,26 +114,39 @@ class PropertyEditor(QWidget):
         self.type_combo.currentTextChanged.connect(lambda t: self.update_object_prop('trigger_type', t))
         self.fog_checkbox.toggled.connect(self.on_fog_changed)
         self.fog_density_input.editingFinished.connect(lambda: self.update_object_prop('fog_density', float(self.fog_density_input.text()) if self.fog_density_input.text() else 0.1))
-        self.fog_emit_light_checkbox.toggled.connect(self.on_fog_emit_light_changed)
+        self.fog_color_button.clicked.connect(self.on_fog_color_changed)
 
-        
+
         self.main_layout.addLayout(layout)
-        
+
         # Set the initial UI state based on properties
         self.update_brush_ui_state()
+
+    def on_fog_color_changed(self):
+        if self.current_object is None:
+            return
+        color = QColorDialog.getColor()
+        if color.isValid():
+            self.current_object['fog_color'] = [color.redF(), color.greenF(), color.blueF()]
+            self.update_fog_color_button(self.current_object['fog_color'])
+            self.editor.update_all_ui()
+
+    def update_fog_color_button(self, color_rgb):
+        qcolor = QColor.fromRgbF(*color_rgb)
+        self.fog_color_button.setStyleSheet(f"background-color: {qcolor.name()}")
 
     def update_brush_ui_state(self):
         """Updates the enabled/visible state of brush property widgets."""
         if self.current_object is None:
             return
-            
+
         is_locked = self.current_object.get('lock', False)
         is_trigger = self.current_object.get('is_trigger', False)
         is_fog = self.current_object.get('is_fog', False)
 
-        
+
         self.trigger_checkbox.setEnabled(not is_locked)
-        
+
         show_trigger_fields = is_trigger and not is_locked
         self.target_label.setVisible(show_trigger_fields)
         self.target_input.setVisible(show_trigger_fields)
@@ -138,8 +156,8 @@ class PropertyEditor(QWidget):
         show_fog_fields = is_fog and not is_locked
         self.fog_density_label.setVisible(show_fog_fields)
         self.fog_density_input.setVisible(show_fog_fields)
-        self.fog_emit_light_label.setVisible(show_fog_fields)
-        self.fog_emit_light_checkbox.setVisible(show_fog_fields)
+        self.fog_color_label.setVisible(show_fog_fields)
+        self.fog_color_button.setVisible(show_fog_fields)
 
 
     def on_lock_changed(self, is_locked):
@@ -157,11 +175,12 @@ class PropertyEditor(QWidget):
         self.current_object['is_trigger'] = is_trigger
         # Automatically assign trigger texture when a brush is set as a trigger
         if is_trigger:
+            self.current_object['is_fog'] = False
             if 'textures' not in self.current_object:
                 self.current_object['textures'] = {}
             for face in ['north','south','east','west','top','down']:
                 self.current_object['textures'][face] = 'trigger.jpg'
-        self.update_brush_ui_state()
+        self.set_object(self.current_object)
         self.editor.update_all_ui()
 
     def on_fog_changed(self, is_fog):
@@ -169,7 +188,9 @@ class PropertyEditor(QWidget):
         if self.current_object is None: return
         
         self.current_object['is_fog'] = is_fog
-        self.update_brush_ui_state()
+        if is_fog:
+            self.current_object['is_trigger'] = False
+        self.set_object(self.current_object)
         self.editor.update_all_ui()
 
     def on_fog_emit_light_changed(self, emit_light):
