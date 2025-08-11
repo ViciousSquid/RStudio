@@ -324,6 +324,7 @@ class Renderer:
         """Sorts scene objects into opaque, transparent, and sprite lists."""
         opaque_brushes, transparent_brushes, sprites, fog_volumes = [], [], [], []
         is_play_mode = config.get('play_mode', False)
+        show_sprites_in_play_mode = config.get('show_sprites_in_play_mode', False)
 
         for brush in brushes:
             if brush.get('hidden', False): continue
@@ -332,7 +333,9 @@ class Renderer:
                 if not is_play_mode: transparent_brushes.append(brush)
             else: opaque_brushes.append(brush)
         
-        sprites.extend([t for t in things if isinstance(t, Thing)])
+        if not is_play_mode or show_sprites_in_play_mode:
+            sprites.extend([t for t in things if isinstance(t, Thing)])
+            
         return opaque_brushes, transparent_brushes, sprites, fog_volumes
 
     def draw_grid(self, projection, view, grid_indices_count):

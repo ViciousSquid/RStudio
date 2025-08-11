@@ -33,6 +33,7 @@ class QtGameView(QOpenGLWidget):
         self.grid_dirty = True
         self.culling_enabled = False
         self.selected_object = None
+        self.show_sprites_in_play_mode = False
 
         # Input state
         self.mouselook_active, self.last_mouse_pos = False, QPoint()
@@ -112,6 +113,7 @@ class QtGameView(QOpenGLWidget):
             "play_mode": self.play_mode,
             "selected_object": self.selected_object,
             "time": time.time() - self.start_time,
+            "show_sprites_in_play_mode": self.show_sprites_in_play_mode,
         }
 
         # --- 3. Render the Scene ---
@@ -125,6 +127,28 @@ class QtGameView(QOpenGLWidget):
         # --- 4. Draw UI Overlays ---
         if self.editor.config.getboolean('Display', 'show_fps', fallback=False):
             self._draw_fps_counter()
+
+        if self.play_mode and self.show_sprites_in_play_mode:
+            self._draw_sprites_text()
+
+    def _draw_sprites_text(self):
+        """Renders the "Sprites" text using QPainter."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        font = QFont()
+        font.setPointSize(10)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor(255, 105, 180)) # Pink text
+        
+        rect_width = 80
+        padding = 5
+        rect_x = padding
+        text_x = padding + 5
+        
+        painter.fillRect(rect_x, padding, rect_width, 25, QColor(0, 0, 0, 128)) # Black background
+        painter.drawText(text_x, 20, "Sprites")
+        painter.end()
 
     def _draw_fps_counter(self):
         """Renders the FPS counter using QPainter."""
@@ -194,7 +218,7 @@ class QtGameView(QOpenGLWidget):
             self.frame_count = 0
             self.last_fps_time = current_time
         if self.play_mode and self.player:
-            self.player.update(self.editor.keys_pressed, self.tile_map, delta)
+            self.player.update(self.editor.keys_pressed, self.editor.state.brushes, delta)
             self.handle_triggers()
             self.update_speaker_sounds()
         elif self.hasFocus():
@@ -204,7 +228,7 @@ class QtGameView(QOpenGLWidget):
     def set_tile_map(self, tile_map):
         self.tile_map = tile_map
 
-    def toggle_play_mode(self, player_start_pos, player_start_angle):
+    def toggle_play_mode(self, player_start_pos, player_start_angle, physics_enabled=True):
         self.play_mode = not self.play_mode
         if self.play_mode:
             self.selected_object = None
@@ -214,7 +238,8 @@ class QtGameView(QOpenGLWidget):
             self.player = Player(
                 player_start_pos[0],
                 player_start_pos[2],
-                np.radians(player_start_angle)
+                np.radians(player_start_angle),
+                physics_enabled=physics_enabled
             )
             self.player.pos.y = player_start_pos[1]
             self.player_in_triggers.clear()
