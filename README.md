@@ -7,7 +7,7 @@
 * Custom OpenGL/PyGame engine _supports immediate "drop-in and play" (like CryEngine Editor)_
 * Custom physics engine with configurable parameters
 * Real-time lighting with optional stencil shadows
-* Includes 28 royalty-free textures
+* Includes 28 textures & 8 sound effects
 * `json` level format :-)
 * Volumetric fog
 
