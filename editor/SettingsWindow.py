@@ -55,7 +55,7 @@ class SettingsWindow(QDialog):
         # --- Physics Section ---
         physics_group = QGroupBox("")
         physics_layout = QVBoxLayout()
-        self.physics_checkbox = QCheckBox("Enable Physics (not working yet)")
+        self.physics_checkbox = QCheckBox("Physics in Play mode")
         physics_layout.addWidget(self.physics_checkbox)
         physics_group.setLayout(physics_layout)
         display_physics_layout.addWidget(physics_group)
@@ -89,7 +89,8 @@ class SettingsWindow(QDialog):
             "reset_layout": "Ctrl+Shift+R",
             "save_layout": "Ctrl+Shift+S",
             "Hide Brush": "H",
-            "Unhide All Brushes": "Shift+H"
+            "Unhide All Brushes": "Shift+H",
+            "Toggle play mode": "F5",
         }
         
         self.shortcut_labels = {}
@@ -110,6 +111,14 @@ class SettingsWindow(QDialog):
         
         self.load_settings()
 
+        # --- Style Sheet to make checkboxes 25px square ---
+        self.setStyleSheet("""
+            QCheckBox::indicator {
+                width: 25px;
+                height: 25px;
+            }
+        """)
+
     def load_settings(self):
         # Display settings
         self.show_fps_checkbox.setChecked(self.config.getboolean('Display', 'show_fps', fallback=True))
@@ -125,9 +134,7 @@ class SettingsWindow(QDialog):
         self.invert_mouse_checkbox.setChecked(self.config.getboolean('Controls', 'invert_mouse', fallback=False))
         self.middle_click_drag_checkbox.setChecked(self.config.getboolean('Controls', 'MiddleClickDrag', fallback=False))
 
-        # Shortcut settings (no longer loading from config for hardcoded shortcuts)
         pass
-
 
     def accept(self):
         """Saves the current UI state back to the config object."""
@@ -144,17 +151,15 @@ class SettingsWindow(QDialog):
         if not self.config.has_section('Controls'): self.config.add_section('Controls')
         self.config.set('Controls', 'invert_mouse', str(self.invert_mouse_checkbox.isChecked()))
         self.config.set('Controls', 'MiddleClickDrag', str(self.middle_click_drag_checkbox.isChecked()))
-
-        # No longer saving shortcut settings as they are hardcoded
         
         super().accept()
 
     def change_key(self, control_name):
         """Prepares to capture the next key press for a specific control."""
-        # This method is no longer needed as there are no buttons to change keys
+        # This method is here for future use
         pass
 
     def keyPressEvent(self, event):
         """Captures the key press if a binding is in progress."""
-        # This method is no longer needed as there are no key bindings in progress
+        # This method is here for future use
         super().keyPressEvent(event)

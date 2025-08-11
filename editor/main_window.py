@@ -1,3 +1,4 @@
+# editor/main_window.py
 import sys
 import json
 import os
@@ -50,10 +51,6 @@ class MainWindow(QMainWindow):
         new_model = Model(pos=[0, 0, 0], model_path=filepath, rotation=rotation, scale=scale)
         self.state.things.append(new_model)
         self.set_selected_object(new_model)
-        QMessageBox.information(self, "Model Added", 
-            f"'{os.path.basename(filepath)}' has been added to the scene.\n\n"
-            "You can now use the 2D views or the property editor to position it.\n"
-            "A 3D transform gizmo in the 3D view is the next step for direct manipulation.")
 
     def set_selected_object(self, obj):
         self.state.set_selected_object(obj)
@@ -244,8 +241,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Player Start", "Please add a Player Start object to the scene before entering play mode.")
             return
 
+        physics_enabled = self.config.getboolean('Settings', 'physics', fallback=True)
         self.view_3d.set_tile_map(None)
-        self.view_3d.toggle_play_mode(player_start.pos, player_start.get_angle())
+        self.view_3d.toggle_play_mode(player_start.pos, player_start.get_angle(), physics_enabled)
+        self.view_3d.setFocus() # Explicitly set focus to the 3D view
 
 
     def show_generate_tilemap_dialog(self):
@@ -577,11 +576,15 @@ class MainWindow(QMainWindow):
         if self.view_3d.play_mode:
             if event.key() == Qt.Key_Escape:
                 self.view_3d.toggle_play_mode(None, None)
+                self.setFocus() # Give focus back to the main window
+            elif event.key() == Qt.Key_F3:
+                self.view_3d.show_sprites_in_play_mode = not self.view_3d.show_sprites_in_play_mode
+                self.view_3d.update()
             else:
                 self.keys_pressed.add(event.key())
-            super().keyPressEvent(event)
-            return
+            return # Consume the event completely in play mode
 
+        # Editor mode key presses below
         if self.state.selected_object:
             if event.key() == Qt.Key_Delete:
                 self.save_state()
@@ -642,6 +645,12 @@ class MainWindow(QMainWindow):
         self.update_all_ui()
 
     def keyReleaseEvent(self, event):
+        if self.view_3d.play_mode:
+            if event.key() in self.keys_pressed:
+                self.keys_pressed.remove(event.key())
+            return # Consume the event completely in play mode
+
+        # Editor mode key releases below
         if event.key() in self.keys_pressed:
             self.keys_pressed.remove(event.key())
         self.update_views()

@@ -70,21 +70,21 @@ class PropertyEditor(QWidget):
 
         # Create Widgets and store them as instance variables
         self.locked_checkbox = QCheckBox()
-        self.locked_checkbox.setStyleSheet("QCheckBox::indicator { width: 20px; height: 20px; }")
+        self.locked_checkbox.setStyleSheet("QCheckBox::indicator { width: 25px; height: 25px; }")
         self.trigger_checkbox = QCheckBox()
-        self.trigger_checkbox.setStyleSheet("QCheckBox::indicator { width: 20px; height: 20px; }")
+        self.trigger_checkbox.setStyleSheet("QCheckBox::indicator { width: 25px; height: 25px; }")
         self.target_label = QLabel("Target:")
         self.target_input = QLineEdit(brush.get('target', ''))
         self.type_label = QLabel("Trigger Type:")
         self.type_combo = QComboBox()
         self.type_combo.addItems(['Once', 'Multiple'])
         self.fog_checkbox = QCheckBox()
-        self.fog_checkbox.setStyleSheet("QCheckBox::indicator { width: 20px; height: 20px; }")
+        self.fog_checkbox.setStyleSheet("QCheckBox::indicator { width: 25px; height: 25px; }")
         self.fog_density_label = QLabel("Density:")
-        self.fog_density_input = QLineEdit(str(brush.get('fog_density', 0.1)))
-        self.fog_color_label = QLabel("Color:")
+        self.fog_density_input = QLineEdit(str(brush.get('fog_density', 2.0)))
+        self.fog_color_label = QLabel("Colour:")
         self.fog_color_button = QPushButton()
-        self.fog_color_button.setFixedSize(200, 20)
+        self.fog_color_button.setFixedSize(200, 32)
         self.update_fog_color_button(brush.get('fog_color', [0.5, 0.6, 0.7]))
 
 
@@ -232,7 +232,7 @@ class PropertyEditor(QWidget):
                 layout.addRow(label_text, widget)
             elif isinstance(value, bool):
                 widget = QCheckBox()
-                widget.setStyleSheet("QCheckBox::indicator { width: 20px; height: 20px; }")
+                widget.setStyleSheet("QCheckBox::indicator { width: 25px; height: 25px; }")
                 widget.setChecked(value)
                 widget.stateChanged.connect(lambda state, k=key: self.update_object_prop(k, state == Qt.Checked))
                 layout.addRow(label_text, widget)

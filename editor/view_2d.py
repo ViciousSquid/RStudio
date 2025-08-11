@@ -173,8 +173,9 @@ class View2D(QWidget):
                 pen_color = QColor(255, 0, 0)
                 fill_color = QColor(255, 0, 0, 30)
             elif is_fog:
-                pen_color = QColor(255, 0, 255, 150)
-                fill_color = QColor(255, 0, 255, 30)
+                fog_color_rgb = brush.get('fog_color', [0.5, 0.6, 0.7])
+                pen_color = QColor.fromRgbF(fog_color_rgb[0], fog_color_rgb[1], fog_color_rgb[2])
+                fill_color = QColor.fromRgbF(fog_color_rgb[0], fog_color_rgb[1], fog_color_rgb[2], 0.3)
 
 
             if is_selected:

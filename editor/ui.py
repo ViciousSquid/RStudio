@@ -231,7 +231,8 @@ class Ui_MainWindow(object):
         top_toolbar.addAction(apply_caulk_action)
         top_toolbar.addSeparator()
         play_button = QPushButton(QIcon("assets/b_test.png"),"Play")
-        play_button.setToolTip("Drop in and play the level")
+        play_button.setToolTip("Drop in and play the level (F5)")
+        play_button.setShortcut("f5")
         play_button.clicked.connect(MainWindow.enter_play_mode)
         top_toolbar.addWidget(play_button)
 
