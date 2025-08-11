@@ -5,15 +5,16 @@
 #### A brush-based CSG world editor inspired by QeRadiant and Worldcraft (from the old times!)
 
 * Custom OpenGL/PyGame engine supports immediate "drop-in and play" (like CryEngine Editor)
-* Real-time lighting
+* Real-time lighting with optional stencil shadows
+* Volumetric fog
 * `json` level format :-)
+* Custom physics engine with configurable parameters
 * Fully modular and open source (MIT License)
   
 ### Roadmap:
 * Quake/Quake2/Quake3/Half-life map support
-* OBJ model support (currently being tested in `dev` branch)
-* Physics
+* OBJ model support (currently partially implemented)
 * Visual scripting
-* Support for multiple genres of game
+* Terrain generation
 
 
