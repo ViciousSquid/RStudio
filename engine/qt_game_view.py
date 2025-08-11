@@ -7,7 +7,6 @@ from PyQt5.QtCore import Qt, QTimer, QPoint, QUrl
 from PyQt5.QtGui import QPainter, QColor, QFont, QCursor
 from PyQt5.QtMultimedia import QSoundEffect
 import OpenGL.GL as gl
-from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
 from engine.camera import Camera
 from editor.things import Thing, Light, PlayerStart, Monster, Pickup, Speaker
@@ -41,6 +40,7 @@ class QtGameView(QOpenGLWidget):
         # Resource management
         self.texture_manager = {}
         self.sprite_textures = {}
+        self.noise_texture_id = 0
 
         # Rendering backend
         self.renderer = None
@@ -59,6 +59,7 @@ class QtGameView(QOpenGLWidget):
         self.frame_count = 0
         self.last_time = time.time()
         self.last_fps_time = time.time()
+        self.start_time = time.time()
 
         # Gizmo dragging state
         self.is_dragging_gizmo = False
@@ -77,57 +78,18 @@ class QtGameView(QOpenGLWidget):
         self.setMouseTracking(True)
 
     def initializeGL(self):
-        """Initializes OpenGL, shaders, buffers, and the renderer."""
+        """Initializes OpenGL and the Renderer."""
         gl.glClearColor(0.1, 0.1, 0.15, 1.0)
-        
-        # --- 1. Compile Shaders ---
-        try:
-            shader_simple = compileProgram(compileShader(shaders.VERTEX_SHADER_SIMPLE, gl.GL_VERTEX_SHADER), compileShader(shaders.FRAGMENT_SHADER_SIMPLE, gl.GL_FRAGMENT_SHADER))
-            shader_lit = compileProgram(compileShader(shaders.VERTEX_SHADER_LIT, gl.GL_VERTEX_SHADER), compileShader(shaders.FRAGMENT_SHADER_LIT, gl.GL_FRAGMENT_SHADER))
-            shader_textured = compileProgram(compileShader(shaders.VERTEX_SHADER_TEXTURED, gl.GL_VERTEX_SHADER), compileShader(shaders.FRAGMENT_SHADER_TEXTURED, gl.GL_FRAGMENT_SHADER))
-            shader_sprite = compileProgram(compileShader(shaders.VERTEX_SHADER_SPRITE, gl.GL_VERTEX_SHADER), compileShader(shaders.FRAGMENT_SHADER_SPRITE, gl.GL_FRAGMENT_SHADER))
-            shader_shadow_volume = compileProgram(compileShader(shaders.SHADOW_VOLUME_VERTEX_SHADER, gl.GL_VERTEX_SHADER), compileShader(shaders.SHADOW_VOLUME_FRAGMENT_SHADER, gl.GL_FRAGMENT_SHADER))
-            shader_fog = compileProgram(compileShader(shaders.VERTEX_SHADER_FOG, gl.GL_VERTEX_SHADER), compileShader(shaders.FRAGMENT_SHADER_FOG, gl.GL_FRAGMENT_SHADER))
-            self.shaders = {
-                'simple': shader_simple,
-                'lit': shader_lit,
-                'textured': shader_textured,
-                'sprite': shader_sprite,
-                'shadow_volume': shader_shadow_volume,
-                'fog': shader_fog,
-            }
-        except Exception as e:
-            print(f"FATAL: Shader Compilation Error: {e}")
-            return
-
-        # --- 2. Create Vertex Buffers (VAOs) ---
-        self.vaos = {
-            'cube': self._create_cube_vao(),
-            'sprite': self._create_sprite_vao(),
-            'grid': self._create_grid_vao(),
-        }
-        self.grid_dirty = False # create_grid_vao sets it to false
-
-        # --- 3. Load Essential Textures ---
-        self.load_texture('default.png', 'textures')
-        self.load_texture('caulk', 'textures')
+        self.renderer = Renderer(self.load_texture, self.grid_size, self.world_size)
         self.load_all_sprite_textures()
-
-        # --- 4. Initialize the Renderer ---
-        # Pass shader programs, VAOs, and a reference to the texture loading method.
-        self.renderer = Renderer(self.shaders, self.vaos, self.load_texture)
-
+        
     def paintGL(self):
         """The main drawing callback. Delegates all rendering to the Renderer."""
         if not self.renderer:
             return
 
         if self.grid_dirty:
-            # Recreate grid buffers if size changed
-            if 'grid' in self.vaos and self.vaos['grid']:
-                gl.glDeleteVertexArrays(1, [self.vaos['grid']])
-                # Assuming the VBO is tied to the VAO lifecycle for simplicity here.
-            self.vaos['grid'] = self._create_grid_vao()
+            self.renderer.update_grid_buffers(self.world_size, self.grid_size)
             self.grid_dirty = False
 
         # --- 1. Determine Camera and Projection ---
@@ -149,8 +111,7 @@ class QtGameView(QOpenGLWidget):
             "show_caulk": self.editor.config.getboolean('Display', 'show_caulk', fallback=True),
             "play_mode": self.play_mode,
             "selected_object": self.selected_object,
-            "sprite_textures": self.sprite_textures,
-            "grid_indices_count": self.grid_indices_count,
+            "time": time.time() - self.start_time,
         }
 
         # --- 3. Render the Scene ---
@@ -184,115 +145,11 @@ class QtGameView(QOpenGLWidget):
         painter.drawText(text_x, 20, f"FPS: {self.fps:.0f}")
         painter.end()
 
-    # -------------------------------------------------------------------------
-    # VBO/VAO Creation
-    # -------------------------------------------------------------------------
-    def _create_cube_vao(self):
-        # (Same as original create_cube_buffers)
-        # fmt: off
-        vertices = np.array([
-            # Positions           # Normals           # Tex Coords
-            # Back Face (-Z) - South
-            -0.5, -0.5, -0.5,  0.0,  0.0, -1.0,  0.0, 0.0,
-             0.5, -0.5, -0.5,  0.0,  0.0, -1.0,  1.0, 0.0,
-             0.5,  0.5, -0.5,  0.0,  0.0, -1.0,  1.0, 1.0,
-             0.5,  0.5, -0.5,  0.0,  0.0, -1.0,  1.0, 1.0,
-            -0.5,  0.5, -0.5,  0.0,  0.0, -1.0,  0.0, 1.0,
-            -0.5, -0.5, -0.5,  0.0,  0.0, -1.0,  0.0, 0.0,
-            # Front Face (+Z) - North
-            -0.5, -0.5,  0.5,  0.0,  0.0,  1.0,  0.0, 0.0,
-             0.5,  0.5,  0.5,  0.0,  0.0,  1.0,  1.0, 1.0,
-             0.5, -0.5,  0.5,  0.0,  0.0,  1.0,  1.0, 0.0,
-             0.5,  0.5,  0.5,  0.0,  0.0,  1.0,  1.0, 1.0,
-            -0.5, -0.5,  0.5,  0.0,  0.0,  1.0,  0.0, 0.0,
-            -0.5,  0.5,  0.5,  0.0,  0.0,  1.0,  0.0, 1.0,
-            # Left Face (-X) - West
-            -0.5,  0.5,  0.5, -1.0,  0.0,  0.0,  1.0, 0.0,
-            -0.5, -0.5, -0.5, -1.0,  0.0,  0.0,  0.0, 1.0,
-            -0.5,  0.5, -0.5, -1.0,  0.0,  0.0,  1.0, 1.0,
-            -0.5, -0.5, -0.5, -1.0,  0.0,  0.0,  0.0, 1.0,
-            -0.5,  0.5,  0.5, -1.0,  0.0,  0.0,  1.0, 0.0,
-            -0.5, -0.5,  0.5, -1.0,  0.0,  0.0,  0.0, 0.0,
-            # Right Face (+X) - East
-             0.5,  0.5,  0.5,  1.0,  0.0,  0.0,  1.0, 0.0,
-             0.5,  0.5, -0.5,  1.0,  0.0,  0.0,  1.0, 1.0,
-             0.5, -0.5, -0.5,  1.0,  0.0,  0.0,  0.0, 1.0,
-             0.5, -0.5, -0.5,  1.0,  0.0,  0.0,  0.0, 1.0,
-             0.5, -0.5,  0.5,  1.0,  0.0,  0.0,  0.0, 0.0,
-             0.5,  0.5,  0.5,  1.0,  0.0,  0.0,  1.0, 0.0,
-            # Bottom Face (-Y)
-            -0.5, -0.5, -0.5,  0.0, -1.0,  0.0,  0.0, 1.0,
-             0.5, -0.5,  0.5,  0.0, -1.0,  0.0,  1.0, 0.0,
-             0.5, -0.5, -0.5,  0.0, -1.0,  0.0,  1.0, 1.0,
-             0.5, -0.5,  0.5,  0.0, -1.0,  0.0,  1.0, 0.0,
-            -0.5, -0.5, -0.5,  0.0, -1.0,  0.0,  0.0, 1.0,
-            -0.5, -0.5,  0.5,  0.0, -1.0,  0.0,  0.0, 0.0,
-            # Top Face (+Y)
-            -0.5,  0.5, -0.5,  0.0,  1.0,  0.0,  0.0, 1.0,
-             0.5,  0.5, -0.5,  0.0,  1.0,  0.0,  1.0, 1.0,
-             0.5,  0.5,  0.5,  0.0,  1.0,  0.0,  1.0, 0.0,
-             0.5,  0.5,  0.5,  0.0,  1.0,  0.0,  1.0, 0.0,
-            -0.5,  0.5,  0.5,  0.0,  1.0,  0.0,  0.0, 0.0,
-            -0.5,  0.5, -0.5,  0.0,  1.0,  0.0,  0.0, 1.0
-        ], dtype=np.float32)
-        # fmt: on
-        vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao)
-        vbo = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
-        gl.glBufferData(gl.GL_ARRAY_BUFFER, vertices.nbytes, vertices, gl.GL_STATIC_DRAW)
-        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(0))
-        gl.glEnableVertexAttribArray(0)
-        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(12))
-        gl.glEnableVertexAttribArray(1)
-        gl.glVertexAttribPointer(2, 2, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(24))
-        gl.glEnableVertexAttribArray(2)
-        gl.glBindVertexArray(0)
-        return vao
-
-    def _create_sprite_vao(self):
-        # (Same as original create_sprite_buffers)
-        vertices = np.array([-0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, 0.5], dtype=np.float32)
-        vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao)
-        vbo = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
-        gl.glBufferData(gl.GL_ARRAY_BUFFER, vertices.nbytes, vertices, gl.GL_STATIC_DRAW)
-        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-        gl.glEnableVertexAttribArray(0)
-        gl.glBindVertexArray(0)
-        return vao
-
-    def _create_grid_vao(self):
-        # (Same as original create_grid_buffers)
-        if self.grid_size <= 0: return None
-        
-        s, g = self.world_size, self.grid_size
-        lines = [[-s, 0, i, s, 0, i, i, 0, -s, i, 0, s] for i in range(-s, s + 1, g)]
-        grid_vertices = np.array(lines, dtype=np.float32).flatten()
-        self.grid_indices_count = len(grid_vertices) // 3
-        
-        vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao)
-        vbo = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
-        gl.glBufferData(gl.GL_ARRAY_BUFFER, grid_vertices.nbytes, grid_vertices, gl.GL_STATIC_DRAW)
-        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-        gl.glEnableVertexAttribArray(0)
-        gl.glBindVertexArray(0)
-        return vao
-
-    # -------------------------------------------------------------------------
-    # Resource Loading & Management
-    # -------------------------------------------------------------------------
-
     def update_grid(self):
-        """Flags that the grid needs to be rebuilt."""
         self.grid_dirty = True
         self.update()
 
     def load_texture(self, texture_name, subfolder):
-        # (Same as original load_texture)
         tex_cache_name = os.path.join(subfolder, texture_name)
         if tex_cache_name in self.texture_manager: return self.texture_manager[tex_cache_name]
         if texture_name == 'default.png':
@@ -320,20 +177,14 @@ class QtGameView(QOpenGLWidget):
             return tex_id
         except Exception as e: print(f"Error loading texture '{texture_name}': {e}"); return self.load_texture('default.png', 'textures')
 
-
     def load_all_sprite_textures(self):
-        # (Same as original load_all_sprite_textures)
         things_with_sprites = {'PlayerStart': 'player.png', 'Light': 'light.png', 'Monster': 'monster.png', 'Pickup': 'pickup.png', 'Speaker': 'speaker.png'}
         for class_name, filename in things_with_sprites.items():
             tex_id = self.load_texture(filename, '')
             if tex_id: self.sprite_textures[class_name] = tex_id
-    
-    # -------------------------------------------------------------------------
-    # Update Loop and Game Logic
-    # -------------------------------------------------------------------------
+        self.renderer.set_sprite_textures(self.sprite_textures)
 
     def update_loop(self):
-        # (Same as original update_loop)
         current_time = time.time()
         delta = current_time - self.last_time
         self.last_time = current_time
@@ -348,21 +199,16 @@ class QtGameView(QOpenGLWidget):
             self.update_speaker_sounds()
         elif self.hasFocus():
             self.handle_keyboard_input(delta)
-        self.update() # Triggers paintGL
+        self.update()
 
-    # -------------------------------------------------------------------------
-    # Play Mode, Triggers, and Sound
-    # (These methods remain as they are tightly coupled with the editor state)
-    # -------------------------------------------------------------------------
-    
     def set_tile_map(self, tile_map):
-        # (Same as original)
         self.tile_map = tile_map
 
     def toggle_play_mode(self, player_start_pos, player_start_angle):
-        # (Same as original)
         self.play_mode = not self.play_mode
         if self.play_mode:
+            self.selected_object = None
+            self.editor.set_selected_object(None)
             self.mouselook_active = True
             self.setCursor(Qt.BlankCursor)
             self.player = Player(
@@ -382,12 +228,10 @@ class QtGameView(QOpenGLWidget):
             self.stop_all_sounds()
 
     def set_culling(self, enabled):
-        # (Same as original)
         self.culling_enabled = enabled
         self.update()
         
     def handle_triggers(self):
-        # (Same as original)
         if not self.player:
             return
         player_pos = self.player.pos
@@ -410,7 +254,6 @@ class QtGameView(QOpenGLWidget):
         self.player_in_triggers = currently_colliding_triggers
         
     def activate_trigger(self, brush, trigger_id):
-        # (Same as original)
         trigger_frequency = brush.get('trigger_type', 'multiple')
         if trigger_frequency == 'once' and trigger_id in self.fired_once_triggers:
             return
@@ -433,7 +276,6 @@ class QtGameView(QOpenGLWidget):
         if trigger_frequency == 'once':
             self.fired_once_triggers.add(trigger_id)
 
-    # (All sound methods: initialize_sounds, stop_all_sounds, play_sound_for_speaker, etc. remain the same)
     def initialize_sounds(self):
         for thing in self.editor.state.things:
             if isinstance(thing, Speaker):
@@ -487,63 +329,41 @@ class QtGameView(QOpenGLWidget):
                 elif is_playing:
                     self.stop_sound_for_speaker(thing.name)
 
-    # -------------------------------------------------------------------------
-    # Input Handling & Gizmo Logic
-    # -------------------------------------------------------------------------
-    
     def get_selected_object_pos(self):
-        """Helper to safely get the position of the selected object (Thing or brush)."""
-        if not self.editor.state.selected_object:
-            return None
+        if not self.editor.state.selected_object: return None
         if isinstance(self.editor.state.selected_object, dict):
             return glm.vec3(self.editor.state.selected_object['pos'])
         return glm.vec3(self.editor.state.selected_object.pos)
 
     def set_selected_object_pos(self, new_pos_vec):
-        """Helper to safely set the position of the selected object, with grid snapping."""
-        if not self.editor.state.selected_object:
-            return
-        
+        if not self.editor.state.selected_object: return
         grid = self.editor.grid_size_spinbox.value()
         snapped_pos_list = [round(c / grid) * grid for c in new_pos_vec]
-
         if isinstance(self.editor.state.selected_object, dict):
             self.editor.state.selected_object['pos'] = snapped_pos_list
         else:
             self.editor.state.selected_object.pos = snapped_pos_list
 
     def get_ray_from_mouse(self, x, y):
-        """Calculates a world space ray from the camera through the mouse coordinates."""
         win_x, win_y = float(x), float(self.height() - y)
-        
         viewport = glm.vec4(0, 0, self.width(), self.height())
-
         near_point = glm.unProject(glm.vec3(win_x, win_y, 0.0), self.view_matrix, self.projection_matrix, viewport)
         far_point = glm.unProject(glm.vec3(win_x, win_y, 1.0), self.view_matrix, self.projection_matrix, viewport)
-        
         ray_dir = glm.normalize(far_point - near_point)
         return near_point, ray_dir
 
     def intersect_ray_with_axis(self, ray_origin, ray_dir, axis_origin, axis_dir):
-        """Finds the closest point on an axis line to a ray and the distance between them."""
         cross_axis_ray = glm.cross(axis_dir, ray_dir)
         denominator = glm.dot(cross_axis_ray, cross_axis_ray)
-
-        if abs(denominator) < 1e-6:
-            return None, float('inf')
-
+        if abs(denominator) < 1e-6: return None, float('inf')
         t = glm.dot(glm.cross(ray_origin - axis_origin, ray_dir), cross_axis_ray) / denominator
-        
         point_on_axis = axis_origin + t * axis_dir
-        
         t_ray = glm.dot(point_on_axis - ray_origin, ray_dir)
         point_on_ray = ray_origin + t_ray * ray_dir
-        
         distance = glm.distance(point_on_axis, point_on_ray)
         return point_on_axis, distance
 
     def handle_keyboard_input(self, delta):
-        # (Same as original)
         speed, keys = 300 * delta, self.editor.keys_pressed
         if any(key in keys for key in [Qt.Key_W, Qt.Key_S, Qt.Key_A, Qt.Key_D, Qt.Key_Space, Qt.Key_C]):
             if Qt.Key_W in keys: self.camera.move_forward(speed)
@@ -554,33 +374,83 @@ class QtGameView(QOpenGLWidget):
             if Qt.Key_C in keys: self.camera.move_up(-speed)
             self.editor.update_views()
 
-    def mousePressEvent(self, event):
-        # Handle left-click for gizmo dragging
-        if event.button() == Qt.LeftButton and self.editor.state.selected_object and not self.play_mode:
-            if isinstance(self.editor.state.selected_object, dict) and self.editor.state.selected_object.get('lock', False):
-                return
+    def get_face_at(self, mouse_pos):
+        if not isinstance(self.editor.state.selected_object, dict):
+            return None
 
+        brush = self.editor.state.selected_object
+        ray_origin, ray_dir = self.get_ray_from_mouse(mouse_pos.x(), mouse_pos.y())
+
+        pos = glm.vec3(brush['pos'])
+        size = glm.vec3(brush['size'])
+        min_b = pos - size / 2.0
+        max_b = pos + size / 2.0
+
+        tmin = 0.0
+        tmax = float('inf')
+
+        for i in range(3):
+            if abs(ray_dir[i]) < 1e-6:
+                if ray_origin[i] < min_b[i] or ray_origin[i] > max_b[i]:
+                    return None
+            else:
+                t1 = (min_b[i] - ray_origin[i]) / ray_dir[i]
+                t2 = (max_b[i] - ray_origin[i]) / ray_dir[i]
+                
+                if t1 > t2: t1, t2 = t2, t1
+                
+                tmin = max(tmin, t1)
+                tmax = min(tmax, t2)
+
+        if tmin > tmax:
+            return None
+
+        intersection_point = ray_origin + ray_dir * tmin
+        
+        local_point = intersection_point - pos
+        abs_local = abs(local_point)
+        
+        face_map = {
+            'x': ['west', 'east'],
+            'y': ['bottom', 'top'],
+            'z': ['south', 'north']
+        }
+        
+        max_coord = max(abs_local.x / size.x, abs_local.y / size.y, abs_local.z / size.z)
+
+        face = ""
+        if max_coord == abs_local.x / size.x:
+            face = face_map['x'][1] if local_point.x > 0 else face_map['x'][0]
+        elif max_coord == abs_local.y / size.y:
+            face = face_map['y'][1] if local_point.y > 0 else face_map['y'][0]
+        else:
+            face = face_map['z'][1] if local_point.z > 0 else face_map['z'][0]
+            
+        return face
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ShiftModifier and not self.play_mode:
+            face_name = self.get_face_at(event.pos())
+            if face_name:
+                self.editor.apply_texture_to_selected_face(face_name)
+                return
+                
+        if event.button() == Qt.LeftButton and self.editor.state.selected_object and not self.play_mode:
+            if isinstance(self.editor.state.selected_object, dict) and self.editor.state.selected_object.get('lock', False): return
             obj_pos = self.get_selected_object_pos()
             if obj_pos is None: return
-
             ray_origin, ray_dir = self.get_ray_from_mouse(event.x(), event.y())
-            
             axes = {'x': glm.vec3(1, 0, 0), 'y': glm.vec3(0, 1, 0), 'z': glm.vec3(0, 0, 1)}
             gizmo_render_size = 32.0
-            
             cam_dist = glm.distance(self.camera.pos, obj_pos)
             click_threshold = max(1.0, cam_dist * 0.025)
-
             min_dist_to_axis, hit_axis, hit_point = float('inf'), None, None
-
             for name, axis_dir in axes.items():
                 point_on_axis, dist = self.intersect_ray_with_axis(ray_origin, ray_dir, obj_pos, axis_dir)
                 if point_on_axis is not None:
                     dist_from_origin = glm.distance(point_on_axis, obj_pos)
                     if dist < click_threshold and dist_from_origin <= gizmo_render_size * 1.2:
-                        if dist < min_dist_to_axis:
-                            min_dist_to_axis, hit_axis, hit_point = dist, name, point_on_axis
-
+                        if dist < min_dist_to_axis: min_dist_to_axis, hit_axis, hit_point = dist, name, point_on_axis
             if hit_axis:
                 self.editor.save_state()
                 self.is_dragging_gizmo = True
@@ -589,33 +459,25 @@ class QtGameView(QOpenGLWidget):
                 self.drag_start_on_axis = hit_point
                 self.setCursor(Qt.ClosedHandCursor)
                 return
-
-        # Handle right-click for mouselook
         if not self.play_mode and event.button() == Qt.RightButton:
             self.mouselook_active, self.last_mouse_pos = True, event.pos()
             self.setCursor(Qt.BlankCursor)
-
         super().mousePressEvent(event)
-
 
     def mouseMoveEvent(self, event):
         if self.is_dragging_gizmo:
             ray_origin, ray_dir = self.get_ray_from_mouse(event.x(), event.y())
-            axis_dir = {'x': glm.vec3(1, 0, 0), 'y': glm.vec3(0, 1, 0), 'z': glm.vec3(0, 0, 1)}[self.gizmo_drag_axis]
-            
+            axis_dir = {'x': glm.vec3(1,0,0), 'y': glm.vec3(0,1,0), 'z': glm.vec3(0,0,1)}[self.gizmo_drag_axis]
             current_point_on_axis, _ = self.intersect_ray_with_axis(ray_origin, ray_dir, self.gizmo_object_start_pos, axis_dir)
-            
             if current_point_on_axis is not None:
                 displacement = current_point_on_axis - self.drag_start_on_axis
                 new_pos = self.gizmo_object_start_pos + displacement
                 self.set_selected_object_pos(new_pos)
                 self.editor.update_all_ui()
             return
-            
         if not self.mouselook_active:
             super().mouseMoveEvent(event)
             return
-
         dx, dy = event.x() - self.last_mouse_pos.x(), event.y() - self.last_mouse_pos.y()
         if self.play_mode and self.player:
             self.player.update_angle(dx, dy)
@@ -632,11 +494,9 @@ class QtGameView(QOpenGLWidget):
             self.editor.save_state()
             self.setCursor(Qt.ArrowCursor)
             return
-            
         if event.button() == Qt.RightButton and self.mouselook_active and not self.play_mode:
             self.mouselook_active = False
             self.setCursor(Qt.ArrowCursor)
-        
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event):
