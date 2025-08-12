@@ -33,6 +33,15 @@ class EditorState:
         """Serializes the current scene state into a dictionary."""
         return {'brushes': self.brushes, 'things': [t.to_dict() for t in self.things]}
 
+    def get_unique_mover_name(self):
+        """Generates a unique name for a new mover brush."""
+        i = 1
+        while True:
+            name = f"Mover{i:02d}"
+            if not any(brush.get('name') == name for brush in self.brushes):
+                return name
+            i += 1
+
     def load_from_data(self, level_data):
         """Populates the scene from a dictionary."""
         self.brushes = level_data.get('brushes', [])

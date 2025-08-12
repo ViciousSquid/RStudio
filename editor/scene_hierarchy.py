@@ -61,6 +61,9 @@ class SceneHierarchy(QTreeWidget):
         # Add Brushes
         for i, brush_dict in enumerate(self.main_window.state.brushes):
             item_text = brush_dict.get('name', f'Brush {i+1}')
+            if brush_dict.get('is_mover'):
+                item_text = brush_dict.get('name', f'Mover {i+1}')
+
             item = QTreeWidgetItem(brushes_header, [item_text, ""]) # Add an empty string for the second column
             item.setData(0, Qt.UserRole, ('brush', i))
             

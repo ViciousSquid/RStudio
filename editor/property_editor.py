@@ -1,7 +1,7 @@
 import os
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFormLayout, QCheckBox, QComboBox, QPushButton,
-                             QHBoxLayout, QColorDialog, QFileDialog)
+                             QHBoxLayout, QColorDialog, QFileDialog, QSlider)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 from editor.things import Thing, Light, Pickup, Monster, Model, Speaker
@@ -30,6 +30,11 @@ class PropertyEditor(QWidget):
 
         self.fog_color_label = None
         self.fog_color_button = None
+
+        self.fog_noise_label = None
+        self.fog_noise_checkbox = None
+        self.fog_noise_speed_label = None
+        self.fog_noise_speed_slider = None
 
         self.set_object(None)
 
@@ -64,9 +69,11 @@ class PropertyEditor(QWidget):
     def populate_for_brush(self, brush):
         """Populates the UI with properties for a brush object."""
         layout = QFormLayout()
+        layout.setVerticalSpacing(2)
         is_locked = brush.get('lock', False)
         is_trigger = brush.get('is_trigger', False)
         is_fog = brush.get('is_fog', False)
+        is_mover = brush.get('is_mover', False)
 
         # Create Widgets and store them as instance variables
         self.locked_checkbox = QCheckBox()
@@ -86,26 +93,91 @@ class PropertyEditor(QWidget):
         self.fog_color_button = QPushButton()
         self.fog_color_button.setFixedSize(200, 32)
         self.update_fog_color_button(brush.get('fog_color', [0.5, 0.6, 0.7]))
+        self.fog_noise_label = QLabel("Noise:")
+        self.fog_noise_checkbox = QCheckBox()
+        self.fog_noise_checkbox.setStyleSheet("QCheckBox::indicator { width: 25px; height: 25px; }")
+        self.fog_noise_speed_label = QLabel("Amount:")
+        self.fog_noise_speed_slider = QSlider(Qt.Horizontal)
+        self.fog_noise_speed_slider.setRange(0, 100)
+        self.fog_noise_speed_slider.setValue(brush.get('fog_noise_speed', 50))
 
+
+        self.mover_checkbox = QCheckBox()
+        self.mover_checkbox.setStyleSheet("QCheckBox::indicator { width: 25px; height: 25px; }")
+        self.mover_checkbox.setChecked(is_mover)
+
+        self.direction_label = QLabel("Direction:")
+        self.direction_combo = QComboBox()
+        self.direction_combo.addItems(["Up", "Down", "North", "South", "East", "West"])
+        
+        direction_map = {
+            "Up": [0, 1, 0], "Down": [0, -1, 0],
+            "North": [0, 0, 1], "South": [0, 0, -1],
+            "East": [1, 0, 0], "West": [-1, 0, 0]
+        }
+        
+        current_dir = brush.get('direction', [0, 1, 0])
+        for name, vec in direction_map.items():
+            if vec == current_dir:
+                self.direction_combo.setCurrentText(name)
+                break
+
+        self.distance_label = QLabel("Distance:")
+        self.distance_spin = QSpinBox()
+        self.distance_spin.setRange(0, 1024)
+        self.distance_spin.setValue(brush.get('distance', 128))
+
+        self.speed_label = QLabel("Speed:")
+        self.speed_spin = QSpinBox()
+        self.speed_spin.setRange(1, 512)
+        self.speed_spin.setValue(brush.get('speed', 32))
+
+        self.solid_label = QLabel("Solid:")
+        self.solid_check = QCheckBox()
+        self.solid_check.setStyleSheet("QCheckBox::indicator { width: 25px; height: 25px; }")
+        self.solid_check.setChecked(brush.get('solid', True))
+        
+        self.start_on_label = QLabel("Start On:")
+        self.start_on_check = QCheckBox()
+        self.start_on_check.setStyleSheet("QCheckBox::indicator { width: 25px; height: 25px; }")
+        self.start_on_check.setChecked(brush.get('start_on', False))
+
+        self.move_once_label = QLabel("Move Once:")
+        self.move_once_check = QCheckBox()
+        self.move_once_check.setStyleSheet("QCheckBox::indicator { width: 25px; height: 25px; }")
+        self.move_once_check.setChecked(brush.get('move_once', False))
+
+        self.preview_button = QPushButton("Preview Movement")
+        self.preview_button.clicked.connect(self.editor.preview_mover_movement)
 
         # Set initial state from brush properties
         self.locked_checkbox.setChecked(is_locked)
         self.trigger_checkbox.setChecked(is_trigger)
         self.type_combo.setCurrentText(brush.get('trigger_type', 'Once'))
         self.fog_checkbox.setChecked(is_fog)
+        self.fog_noise_checkbox.setChecked(brush.get('fog_noise', False))
 
+        # Add to Layout in the desired order
+        layout.addRow("LOCK:", self.locked_checkbox)
 
+        layout.addRow("Mover:", self.mover_checkbox)
+        layout.addRow(self.direction_label, self.direction_combo)
+        layout.addRow(self.distance_label, self.distance_spin)
+        layout.addRow(self.speed_label, self.speed_spin)
+        layout.addRow(self.solid_label, self.solid_check)
+        layout.addRow(self.start_on_label, self.start_on_check)
+        layout.addRow(self.move_once_label, self.move_once_check)
+        layout.addRow(self.preview_button)
 
-        # Add to Layout
-        layout.addRow("Lock:", self.locked_checkbox)
-        layout.addRow("Is Trigger:", self.trigger_checkbox)
+        layout.addRow("Trigger:", self.trigger_checkbox)
         layout.addRow(self.target_label, self.target_input)
         layout.addRow(self.type_label, self.type_combo)
+        
         layout.addRow("Fog Volume:", self.fog_checkbox)
         layout.addRow(self.fog_density_label, self.fog_density_input)
         layout.addRow(self.fog_color_label, self.fog_color_button)
-
-
+        layout.addRow(self.fog_noise_label, self.fog_noise_checkbox)
+        layout.addRow(self.fog_noise_speed_label, self.fog_noise_speed_slider)
 
         # Connect Signals to dedicated handlers
         self.locked_checkbox.toggled.connect(self.on_lock_changed)
@@ -115,12 +187,32 @@ class PropertyEditor(QWidget):
         self.fog_checkbox.toggled.connect(self.on_fog_changed)
         self.fog_density_input.editingFinished.connect(lambda: self.update_object_prop('fog_density', float(self.fog_density_input.text()) if self.fog_density_input.text() else 0.1))
         self.fog_color_button.clicked.connect(self.on_fog_color_changed)
+        self.fog_noise_checkbox.toggled.connect(self.on_fog_noise_changed)
+        self.fog_noise_speed_slider.valueChanged.connect(lambda v: self.update_object_prop('fog_noise_speed', v))
+        self.mover_checkbox.toggled.connect(self.on_mover_changed)
+        self.direction_combo.currentTextChanged.connect(lambda t: self.update_object_prop('direction', direction_map.get(t)))
+        self.distance_spin.valueChanged.connect(lambda v: self.update_object_prop('distance', v))
+        self.speed_spin.valueChanged.connect(lambda v: self.update_object_prop('speed', v))
+        self.solid_check.stateChanged.connect(lambda state: self.update_object_prop('solid', state == Qt.Checked))
+        self.start_on_check.stateChanged.connect(lambda state: self.update_object_prop('start_on', state == Qt.Checked))
+        self.move_once_check.stateChanged.connect(lambda state: self.update_object_prop('move_once', state == Qt.Checked))
 
 
         self.main_layout.addLayout(layout)
 
         # Set the initial UI state based on properties
         self.update_brush_ui_state()
+
+    def on_mover_changed(self, is_mover):
+        if self.current_object is None: return
+        self.current_object['is_mover'] = is_mover
+        if is_mover:
+            self.current_object['is_trigger'] = False
+            self.current_object['lock'] = False
+            if 'name' not in self.current_object or not self.current_object['name']:
+                self.current_object['name'] = self.editor.state.get_unique_mover_name()
+        self.set_object(self.current_object)
+        self.editor.update_all_ui()
 
     def on_fog_color_changed(self):
         if self.current_object is None:
@@ -135,6 +227,10 @@ class PropertyEditor(QWidget):
         qcolor = QColor.fromRgbF(*color_rgb)
         self.fog_color_button.setStyleSheet(f"background-color: {qcolor.name()}")
 
+    def on_fog_noise_changed(self, state):
+        self.update_object_prop('fog_noise', state)
+        self.update_brush_ui_state()
+
     def update_brush_ui_state(self):
         """Updates the enabled/visible state of brush property widgets."""
         if self.current_object is None:
@@ -143,9 +239,13 @@ class PropertyEditor(QWidget):
         is_locked = self.current_object.get('lock', False)
         is_trigger = self.current_object.get('is_trigger', False)
         is_fog = self.current_object.get('is_fog', False)
+        is_mover = self.current_object.get('is_mover', False)
+        is_noise_enabled = self.current_object.get('fog_noise', False)
 
 
-        self.trigger_checkbox.setEnabled(not is_locked)
+        self.trigger_checkbox.setEnabled(not is_locked and not is_mover)
+        self.locked_checkbox.setEnabled(not is_mover)
+        self.mover_checkbox.setEnabled(not is_trigger)
 
         show_trigger_fields = is_trigger and not is_locked
         self.target_label.setVisible(show_trigger_fields)
@@ -158,6 +258,26 @@ class PropertyEditor(QWidget):
         self.fog_density_input.setVisible(show_fog_fields)
         self.fog_color_label.setVisible(show_fog_fields)
         self.fog_color_button.setVisible(show_fog_fields)
+        self.fog_noise_label.setVisible(show_fog_fields)
+        self.fog_noise_checkbox.setVisible(show_fog_fields)
+        self.fog_noise_speed_label.setVisible(show_fog_fields and is_noise_enabled)
+        self.fog_noise_speed_slider.setVisible(show_fog_fields and is_noise_enabled)
+
+
+        show_mover_fields = is_mover and not is_locked
+        self.direction_label.setVisible(show_mover_fields)
+        self.direction_combo.setVisible(show_mover_fields)
+        self.distance_label.setVisible(show_mover_fields)
+        self.distance_spin.setVisible(show_mover_fields)
+        self.speed_label.setVisible(show_mover_fields)
+        self.speed_spin.setVisible(show_mover_fields)
+        self.solid_label.setVisible(show_mover_fields)
+        self.solid_check.setVisible(show_mover_fields)
+        self.preview_button.setVisible(show_mover_fields)
+        self.start_on_label.setVisible(show_mover_fields)
+        self.start_on_check.setVisible(show_mover_fields)
+        self.move_once_label.setVisible(show_mover_fields)
+        self.move_once_check.setVisible(show_mover_fields)
 
 
     def on_lock_changed(self, is_locked):
@@ -173,8 +293,8 @@ class PropertyEditor(QWidget):
         if self.current_object is None: return
         
         self.current_object['is_trigger'] = is_trigger
-        # Automatically assign trigger texture when a brush is set as a trigger
         if is_trigger:
+            self.current_object['is_mover'] = False
             self.current_object['is_fog'] = False
             if 'textures' not in self.current_object:
                 self.current_object['textures'] = {}
@@ -190,6 +310,8 @@ class PropertyEditor(QWidget):
         self.current_object['is_fog'] = is_fog
         if is_fog:
             self.current_object['is_trigger'] = False
+            if 'fog_density' not in self.current_object:
+                self.current_object['fog_density'] = 2.0
         self.set_object(self.current_object)
         self.editor.update_all_ui()
 

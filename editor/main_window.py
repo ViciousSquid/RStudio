@@ -1,4 +1,3 @@
-# editor/main_window.py
 import sys
 import json
 import os
@@ -8,10 +7,11 @@ import numpy as np
 import configparser
 import math
 import copy
+import time
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QMessageBox, QFileDialog, QWidget, QLabel, QVBoxLayout
 )
-from PyQt5.QtCore import Qt, QByteArray
+from PyQt5.QtCore import Qt, QByteArray, QTimer
 from PyQt5.QtGui import QKeySequence, QPixmap
 
 from editor.things import Light, PlayerStart, Thing, Pickup, Monster, Model
@@ -358,7 +358,7 @@ class MainWindow(QMainWindow):
         splash_label.setPixmap(pixmap.scaled(512, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         layout.addWidget(splash_label)
 
-        version_label = QLabel(f"{version}<br>https://github.com/ViciousSquid/RStudio")
+        version_label = QLabel(f"{version}<br>by Rufus Pearce (ViciousSquid)<br><a href='https://github.com/ViciousSquid/RStudio' style='color: #ADD8E6;'>https://github.com/ViciousSquid/RStudio</a>")
         version_label.setTextFormat(Qt.RichText)
         version_label.setAlignment(Qt.AlignCenter)
         version_label.setOpenExternalLinks(True)
@@ -630,6 +630,43 @@ class MainWindow(QMainWindow):
 
         self.keys_pressed.add(event.key())
         super().keyPressEvent(event)
+    def preview_mover_movement(self):
+        if not isinstance(self.state.selected_object, dict) or not self.state.selected_object.get('is_mover'):
+            QMessageBox.warning(self, "No Mover Selected", "Please select a mover brush to preview its movement.")
+            return
+
+        mover_brush = self.state.selected_object
+        original_pos = list(mover_brush['pos'])
+        direction = np.array(mover_brush.get('direction', [0, 1, 0]))
+        distance = mover_brush.get('distance', 128)
+        speed = mover_brush.get('speed', 32)
+        
+        if np.linalg.norm(direction) == 0:
+            return
+
+        direction = direction / np.linalg.norm(direction)
+        start_time = time.time()
+        duration = distance / speed if speed > 0 else 0
+
+        def animate():
+            elapsed = time.time() - start_time
+            if elapsed >= duration:
+                mover_brush['pos'] = original_pos
+                self.update_views()
+                self.preview_timer.stop()
+                return
+            
+            offset = (np.sin(elapsed / duration * np.pi * 2) + 1) / 2 * distance
+            mover_brush['pos'] = [
+                original_pos[0] + direction[0] * offset,
+                original_pos[1] + direction[1] * offset,
+                original_pos[2] + direction[2] * offset,
+            ]
+            self.update_views()
+
+        self.preview_timer = QTimer(self)
+        self.preview_timer.timeout.connect(animate)
+        self.preview_timer.start(16)
 
     def hide_selected_brush(self):
         if isinstance(self.state.selected_object, dict):

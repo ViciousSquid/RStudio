@@ -13,8 +13,8 @@ class AssetBrowser(QWidget):
     """
     def __init__(self, asset_folder, editor=None):
         super().__init__()
-        self.base_asset_folder = asset_folder # Store the base folder
-        self.current_asset_folder = asset_folder
+        self.base_asset_folder = asset_folder
+        self.current_asset_folder = os.path.join(asset_folder, "textures")
         self.editor = editor
         self.selected_item = None
 
@@ -148,10 +148,10 @@ class AssetBrowser(QWidget):
 
     def reset_to_default_path(self):
         """Resets the asset browser to the base asset folder."""
-        self.current_asset_folder = self.base_asset_folder
+        self.current_asset_folder = os.path.join(self.base_asset_folder, "textures")
         self.browse_button.setText(os.path.abspath(self.current_asset_folder))
         self.refresh_assets()
-        self.tree.setCurrentIndex(self.model.index(self.base_asset_folder))
+        self.tree.setCurrentIndex(self.model.index(self.current_asset_folder))
 
 
     def on_tree_selection_changed(self, index):
@@ -338,7 +338,7 @@ if __name__ == '__main__':
     """)
 
     main_window = QMainWindow()
-    main_window.setWindowTitle("Asset Browser Standalone Test")
+    main_window.setWindowTitle("Asset Browser")
     main_window.setGeometry(100, 100, 1280, 768)
 
     # Pass the base asset path to the browser
