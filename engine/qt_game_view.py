@@ -285,10 +285,30 @@ class QtGameView(QOpenGLWidget):
         target_name = brush.get('target')
         if not target_name:
             return
+
+        target_brush = next((b for b in self.editor.state.brushes if b.get('name') == target_name), None)
+
+        if target_brush and target_brush.get('is_mover'):
+            if target_brush.get('move_once', False):
+                # Toggle between start and end positions
+                if 'original_pos' not in target_brush:
+                    target_brush['original_pos'] = list(target_brush['pos'])
+                
+                direction = np.array(target_brush.get('direction', [0, 1, 0]))
+                distance = target_brush.get('distance', 128)
+                
+                if list(target_brush['pos']) == target_brush['original_pos']:
+                    target_brush['pos'] = (np.array(target_brush['original_pos']) + direction * distance).tolist()
+                else:
+                    target_brush['pos'] = target_brush['original_pos']
+            else: # Original mover behavior
+                target_brush['start_on'] = not target_brush.get('start_on', False)
+        
         target_thing = next((t for t in self.editor.state.things if hasattr(t, 'name') and t.name == target_name), None)
-        if not target_thing:
+        if not target_thing and not target_brush:
             print(f"Play mode warning: Trigger target '{target_name}' not found.")
             return
+
         if isinstance(target_thing, Light):
             current_state = target_thing.properties.get('state', 'on')
             new_state = 'off' if current_state == 'on' else 'on'
@@ -298,6 +318,7 @@ class QtGameView(QOpenGLWidget):
                 self.stop_sound_for_speaker(target_thing.name)
             else:
                 self.play_sound_for_speaker(target_thing)
+
         if trigger_frequency == 'once':
             self.fired_once_triggers.add(trigger_id)
 

@@ -243,10 +243,15 @@ class Renderer:
             density = brush.get('fog_density', 0.01)
             fog_color = brush.get('fog_color', [0.5, 0.6, 0.7])
             noise_scale = brush.get('fog_noise_scale', 0.01)
+            use_noise = brush.get('fog_noise', False)
+            noise_speed = brush.get('fog_noise_speed', 50) / 100.0
 
             gl.glUniform1f(gl.glGetUniformLocation(shader, "density"), density)
             gl.glUniform3fv(gl.glGetUniformLocation(shader, "fogColor"), 1, fog_color)
             gl.glUniform1f(gl.glGetUniformLocation(shader, "noiseScale"), noise_scale)
+            gl.glUniform1i(gl.glGetUniformLocation(shader, "use_noise"), use_noise)
+            gl.glUniform1f(gl.glGetUniformLocation(shader, "noise_speed"), noise_speed)
+
 
             # 1. First Pass: Draw the back faces of the cube
             gl.glCullFace(gl.GL_FRONT)
@@ -328,10 +333,15 @@ class Renderer:
 
         for brush in brushes:
             if brush.get('hidden', False): continue
-            if brush.get('is_fog', False): fog_volumes.append(brush)
-            elif brush.get('is_trigger', False):
+            
+            is_non_solid_mover = brush.get('is_mover', False) and not brush.get('solid', True)
+
+            if brush.get('is_fog', False):
+                 fog_volumes.append(brush)
+            elif brush.get('is_trigger', False) or is_non_solid_mover:
                 if not is_play_mode: transparent_brushes.append(brush)
-            else: opaque_brushes.append(brush)
+            else: 
+                opaque_brushes.append(brush)
         
         if not is_play_mode or show_sprites_in_play_mode:
             sprites.extend([t for t in things if isinstance(t, Thing)])
@@ -374,9 +384,11 @@ class Renderer:
             gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "model"), 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
 
             is_selected, is_subtract = (brush is config.get('selected_object')), (brush.get('operation') == 'subtract')
+            is_locked = brush.get('lock', False)
             color, alpha = [0.8, 0.8, 0.8], 1.0
             if brush.get('is_trigger', False): color, alpha = [0.0, 1.0, 1.0], 0.3
-            elif is_selected: color = [1.0, 1.0, 0.0]
+            elif is_selected:
+                color = [1.0, 0.0, 0.0] if is_locked else [1.0, 1.0, 0.0]
             elif is_subtract: color = [1.0, 0.0, 0.0]
 
             gl.glUniform3fv(gl.glGetUniformLocation(shader, "object_color"), 1, color)
@@ -425,7 +437,8 @@ class Renderer:
         gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "view"), 1, gl.GL_FALSE, glm.value_ptr(view))
         model_matrix = glm.translate(glm.mat4(1.0), glm.vec3(brush['pos'])) * glm.scale(glm.mat4(1.0), glm.vec3(brush['size']))
         gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "model"), 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-        gl.glUniform3f(gl.glGetUniformLocation(shader, "color"), 1.0, 1.0, 0.0)
+        color = [1.0, 0.0, 0.0] if brush.get('lock', False) else [1.0, 1.0, 0.0]
+        gl.glUniform3f(gl.glGetUniformLocation(shader, "color"), *color)
 
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
         gl.glLineWidth(1)

@@ -63,6 +63,8 @@ class Player:
         self.on_ground = False
         player_rect = pygame.Rect(new_pos.x - self.width / 2, new_pos.z - self.depth / 2, self.width, self.depth)
 
+        mover_velocity = glm.vec3(0,0,0)
+
         for brush in brushes:
             if brush.get('is_trigger'):
                 continue
@@ -82,8 +84,15 @@ class Player:
                     new_pos.y = brush_top + self.height / 2
                     self.velocity.y = 0
                     self.on_ground = True
+                    
+                    if brush.get('is_mover') and brush.get('solid', True):
+                        direction = np.array(brush.get('direction', [0,1,0]))
+                        speed = brush.get('speed', 32)
+                        if np.linalg.norm(direction) > 0:
+                            mover_velocity = glm.vec3(*(direction / np.linalg.norm(direction) * speed))
 
-        self.pos = new_pos
+
+        self.pos = new_pos + mover_velocity * (1/60)
 
 
     def get_position(self):
