@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import QApplication, QSplashScreen
 from PyQt5.QtGui import QPixmap, QSurfaceFormat
 from editor.main_window import MainWindow
 
+print("--- RStudio Starting up....  ---")
 def clean_pycache():
     """
     Finds and deletes all '__pycache__' folders recursively
@@ -156,13 +157,18 @@ if __name__ == "__main__":
     
     app.setStyleSheet(dark_stylesheet)
     
-    splash_pixmap = QPixmap('assets/splash.png')
+    # --- MODIFICATION: Determine the root directory of the project ---
+    if getattr(sys, 'frozen', False):
+        # The application is frozen
+        root_directory = os.path.dirname(sys.executable)
+    else:
+        # The application is not frozen
+        root_directory = os.path.dirname(os.path.abspath(__file__))
+
+    splash_pixmap = QPixmap(os.path.join(root_directory, 'assets/splash.png'))
     splash = QSplashScreen(splash_pixmap)
     splash.show()
     app.processEvents()
-    
-    # --- MODIFICATION: Determine the root directory of the project ---
-    root_directory = os.path.dirname(os.path.abspath(__file__))
     
     # --- MODIFICATION: Pass the root directory to the MainWindow ---
     main_win = MainWindow(root_dir=root_directory)
