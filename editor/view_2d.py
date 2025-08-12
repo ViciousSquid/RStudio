@@ -160,8 +160,8 @@ class View2D(QWidget):
             is_fog = brush.get('is_fog', False)
 
             if is_locked:
-                pen_color = QColor(0, 0, 139)
-                fill_color = QColor(0, 0, 139, 70)
+                pen_color = QColor(211, 211, 211)
+                fill_color = QColor(139, 0, 0, 70)  # Dark red
             else:
                 pen_color = QColor(211, 211, 211)
                 fill_color = QColor(200, 200, 200, 30)
@@ -542,6 +542,10 @@ class View2D(QWidget):
                 return thing
                 
         for brush in reversed(self.editor.state.brushes):
+            # Check if the brush is locked or hidden. If so, skip it.
+            if brush.get('lock', False) or brush.get('hidden', False):
+                continue
+                
             pos = brush['pos']
             size = brush['size']
             p1 = QPointF(pos[ax_map[ax1]] - size[ax_map[ax1]]/2, pos[ax_map[ax2]] - size[ax_map[ax2]]/2)
