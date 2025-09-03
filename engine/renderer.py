@@ -414,6 +414,12 @@ class Renderer:
         gl.glBindVertexArray(self.vaos['cube'])
         show_caulk = config.get('show_caulk', True)
         face_keys = ['south', 'north', 'west', 'east', 'bottom', 'top']
+        
+        tex_scale_loc = gl.glGetUniformLocation(shader, "tex_scale")
+        tex_rotation_loc = gl.glGetUniformLocation(shader, "tex_rotation")
+        
+        is_face_selected_loc = gl.glGetUniformLocation(shader, "is_face_selected")
+
 
         for brush in brushes:
             model_matrix = glm.translate(glm.mat4(1.0), glm.vec3(brush['pos'])) * glm.scale(glm.mat4(1.0), glm.vec3(brush['size']))
@@ -421,9 +427,24 @@ class Renderer:
 
             textures = brush.get('textures', {})
             for i, face_key in enumerate(face_keys):
-                tex_name = textures.get(face_key, 'default.png')
-                if tex_name == 'caulk.jpg':
-                    continue # Skip rendering this face
+                face_props = textures.get(face_key, {})
+                if isinstance(face_props, str):
+                    face_props = {'texture': face_props}
+                
+                tex_name = face_props.get('texture', 'default.png')
+                if tex_name == 'caulk.jpg' and not show_caulk:
+                    continue
+                
+                is_selected_face = (brush is config.get('selected_object') and config.get('selected_face') == face_key)
+                gl.glUniform1i(is_face_selected_loc, is_selected_face)
+                
+                scale_x = face_props.get('scale_x', 1.0)
+                scale_y = face_props.get('scale_y', 1.0)
+                rotation = face_props.get('rotation', 0.0)
+
+                gl.glUniform2f(tex_scale_loc, scale_x, scale_y)
+                gl.glUniform1f(tex_rotation_loc, np.radians(rotation))
+
                 tex_id = self.load_texture_callback(tex_name, 'textures')
                 gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                 gl.glDrawArrays(gl.GL_TRIANGLES, i * 6, 6)

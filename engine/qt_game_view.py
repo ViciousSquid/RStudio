@@ -475,10 +475,11 @@ class QtGameView(QOpenGLWidget):
         return face
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ShiftModifier and not self.play_mode:
+        if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ControlModifier and not self.play_mode:
             face_name = self.get_face_at(event.pos())
             if face_name:
-                self.editor.apply_texture_to_selected_face(face_name)
+                self.editor.selected_face = face_name
+                self.update()
                 return
                 
         if event.button() == Qt.LeftButton and self.editor.state.selected_object and not self.play_mode:
