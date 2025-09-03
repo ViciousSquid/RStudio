@@ -9,7 +9,7 @@ import math
 import copy
 import time
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QMessageBox, QFileDialog, QWidget, QLabel, QVBoxLayout
+    QApplication, QMainWindow, QMessageBox, QFileDialog, QWidget, QLabel, QVBoxLayout, QAction, QMenu
 )
 from PyQt5.QtCore import Qt, QByteArray, QTimer
 from PyQt5.QtGui import QKeySequence, QPixmap
@@ -38,6 +38,7 @@ class MainWindow(QMainWindow):
         self.state = EditorState()
         self.keys_pressed = set()
         self.file_path = None
+        self.selected_face = None
         
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
@@ -45,6 +46,31 @@ class MainWindow(QMainWindow):
         self.setFocus()
         self.update_global_font()
         self.load_layout()
+        
+        # Add Export option to file menu
+        file_menu = self.menuBar().findChild(QMenu, 'File')
+        if file_menu:
+            export_action = QAction('Export as package...', self)
+            export_action.triggered.connect(self.export_as_package)
+            file_menu.addAction(export_action)
+
+
+    def export_as_package(self):
+        if not self.file_path:
+            QMessageBox.warning(self, "Save required", "Please save the map before exporting.")
+            return
+
+        default_name = os.path.splitext(os.path.basename(self.file_path))[0] + ".gamepackage"
+        output_path, _ = QFileDialog.getSaveFileName(self, "Export Game Package", default_name, "Game Packages (*.gamepackage)")
+
+        if not output_path:
+            return
+
+        try:
+            subprocess.run([sys.executable, "tools/package_game.py", self.file_path, output_path], check=True)
+            QMessageBox.information(self, "Export Successful", f"Successfully exported to {output_path}")
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            QMessageBox.critical(self, "Export Failed", f"Failed to export package: {e}")
 
     def add_model_to_scene(self, filepath, rotation, scale):
         self.save_state()
@@ -143,13 +169,24 @@ class MainWindow(QMainWindow):
             self.state.selected_object['textures'][face] = texture_name
         self.update_views()
 
-    def apply_texture_to_selected_face(self, face_name):
+    def apply_texture_to_selected_face(self, face_name=None):
         if not isinstance(self.state.selected_object, dict):
             return
 
         texture_path = self.asset_browser.get_selected_filepath()
         if not texture_path:
             QMessageBox.warning(self, "No Texture Selected", "Please select a texture from the Asset Browser.")
+            return
+        
+        if not face_name and self.selected_face:
+            face_name = self.selected_face
+
+        if not face_name:
+            # If no face is provided (e.g., from the button), try to get it from the 3D view
+            face_name = self.view_3d.get_face_at(self.view_3d.mapFromGlobal(self.cursor().pos()))
+        
+        if not face_name:
+            QMessageBox.warning(self, "No Face Selected", "Could not determine which face to apply the texture to. Try shift-clicking on a face.")
             return
 
         texture_name = os.path.basename(texture_path)
@@ -626,6 +663,8 @@ class MainWindow(QMainWindow):
 
         if event.key() == Qt.Key_Escape and self.state.selected_object:
             self.set_selected_object(None)
+            self.selected_face = None
+            self.update_views()
             return
 
         self.keys_pressed.add(event.key())
@@ -715,8 +754,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not save level to {self.file_path}:\n{e}")
 
-    def load_level(self):
-        filePath, _ = QFileDialog.getOpenFileName(self, "Load Level", "maps", "JSON Files (*.json)")
+    def load_level(self, filePath=None):
+        if not filePath:
+            filePath, _ = QFileDialog.getOpenFileName(self, "Load Level", "maps", "JSON Files (*.json)")
         if not filePath:
             return
 
