@@ -9,7 +9,9 @@
 * Real-time lighting with optional stencil shadows
 * Audio engine plays WAV files
 * `json` level format :-)
+* Moving platforms
 * Volumetric fog
+* Triggers
 
 ### Roadmap:
 * Quake/Quake2/Quake3/Half-life map support
