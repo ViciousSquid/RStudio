@@ -243,15 +243,10 @@ class Renderer:
             density = brush.get('fog_density', 0.01)
             fog_color = brush.get('fog_color', [0.5, 0.6, 0.7])
             noise_scale = brush.get('fog_noise_scale', 0.01)
-            use_noise = brush.get('fog_noise', False)
-            noise_speed = brush.get('fog_noise_speed', 50) / 100.0
 
             gl.glUniform1f(gl.glGetUniformLocation(shader, "density"), density)
             gl.glUniform3fv(gl.glGetUniformLocation(shader, "fogColor"), 1, fog_color)
             gl.glUniform1f(gl.glGetUniformLocation(shader, "noiseScale"), noise_scale)
-            gl.glUniform1i(gl.glGetUniformLocation(shader, "use_noise"), use_noise)
-            gl.glUniform1f(gl.glGetUniformLocation(shader, "noise_speed"), noise_speed)
-
 
             # 1. First Pass: Draw the back faces of the cube
             gl.glCullFace(gl.GL_FRONT)
@@ -333,15 +328,10 @@ class Renderer:
 
         for brush in brushes:
             if brush.get('hidden', False): continue
-            
-            is_non_solid_mover = brush.get('is_mover', False) and not brush.get('solid', True)
-
-            if brush.get('is_fog', False):
-                 fog_volumes.append(brush)
-            elif brush.get('is_trigger', False) or is_non_solid_mover:
+            if brush.get('is_fog', False): fog_volumes.append(brush)
+            elif brush.get('is_trigger', False):
                 if not is_play_mode: transparent_brushes.append(brush)
-            else: 
-                opaque_brushes.append(brush)
+            else: opaque_brushes.append(brush)
         
         if not is_play_mode or show_sprites_in_play_mode:
             sprites.extend([t for t in things if isinstance(t, Thing)])
@@ -384,11 +374,9 @@ class Renderer:
             gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "model"), 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
 
             is_selected, is_subtract = (brush is config.get('selected_object')), (brush.get('operation') == 'subtract')
-            is_locked = brush.get('lock', False)
             color, alpha = [0.8, 0.8, 0.8], 1.0
             if brush.get('is_trigger', False): color, alpha = [0.0, 1.0, 1.0], 0.3
-            elif is_selected:
-                color = [1.0, 0.0, 0.0] if is_locked else [1.0, 1.0, 0.0]
+            elif is_selected: color = [1.0, 1.0, 0.0]
             elif is_subtract: color = [1.0, 0.0, 0.0]
 
             gl.glUniform3fv(gl.glGetUniformLocation(shader, "object_color"), 1, color)
@@ -414,12 +402,6 @@ class Renderer:
         gl.glBindVertexArray(self.vaos['cube'])
         show_caulk = config.get('show_caulk', True)
         face_keys = ['south', 'north', 'west', 'east', 'bottom', 'top']
-        
-        tex_scale_loc = gl.glGetUniformLocation(shader, "tex_scale")
-        tex_rotation_loc = gl.glGetUniformLocation(shader, "tex_rotation")
-        
-        is_face_selected_loc = gl.glGetUniformLocation(shader, "is_face_selected")
-
 
         for brush in brushes:
             model_matrix = glm.translate(glm.mat4(1.0), glm.vec3(brush['pos'])) * glm.scale(glm.mat4(1.0), glm.vec3(brush['size']))
@@ -427,24 +409,9 @@ class Renderer:
 
             textures = brush.get('textures', {})
             for i, face_key in enumerate(face_keys):
-                face_props = textures.get(face_key, {})
-                if isinstance(face_props, str):
-                    face_props = {'texture': face_props}
-                
-                tex_name = face_props.get('texture', 'default.png')
-                if tex_name == 'caulk.jpg' and not show_caulk:
-                    continue
-                
-                is_selected_face = (brush is config.get('selected_object') and config.get('selected_face') == face_key)
-                gl.glUniform1i(is_face_selected_loc, is_selected_face)
-                
-                scale_x = face_props.get('scale_x', 1.0)
-                scale_y = face_props.get('scale_y', 1.0)
-                rotation = face_props.get('rotation', 0.0)
-
-                gl.glUniform2f(tex_scale_loc, scale_x, scale_y)
-                gl.glUniform1f(tex_rotation_loc, np.radians(rotation))
-
+                tex_name = textures.get(face_key, 'default.png')
+                if tex_name == 'caulk.jpg':
+                    continue # Skip rendering this face
                 tex_id = self.load_texture_callback(tex_name, 'textures')
                 gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                 gl.glDrawArrays(gl.GL_TRIANGLES, i * 6, 6)
@@ -458,8 +425,7 @@ class Renderer:
         gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "view"), 1, gl.GL_FALSE, glm.value_ptr(view))
         model_matrix = glm.translate(glm.mat4(1.0), glm.vec3(brush['pos'])) * glm.scale(glm.mat4(1.0), glm.vec3(brush['size']))
         gl.glUniformMatrix4fv(gl.glGetUniformLocation(shader, "model"), 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-        color = [1.0, 0.0, 0.0] if brush.get('lock', False) else [1.0, 1.0, 0.0]
-        gl.glUniform3f(gl.glGetUniformLocation(shader, "color"), *color)
+        gl.glUniform3f(gl.glGetUniformLocation(shader, "color"), 1.0, 1.0, 0.0)
 
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
         gl.glLineWidth(1)
