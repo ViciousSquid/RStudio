@@ -106,9 +106,9 @@ class Ui_MainWindow(object):
         # Asset Browser Setup
         MainWindow.asset_browser_dock = QDockWidget("Asset Browser", MainWindow)
 
-        asset_path = os.path.join(MainWindow.root_dir, "assets")
+        texture_path = os.path.join(MainWindow.root_dir, "assets", "textures")
         
-        MainWindow.asset_browser = AssetBrowser(asset_path, editor=MainWindow)
+        MainWindow.asset_browser = AssetBrowser(texture_path, editor=MainWindow)
         MainWindow.asset_browser.main_window = MainWindow
 
         MainWindow.asset_browser_dock.setWidget(MainWindow.asset_browser)
@@ -225,7 +225,9 @@ class Ui_MainWindow(object):
         redo_action = QAction(QIcon("assets/b_redo.png"),"",MainWindow,shortcut="Ctrl+Y",toolTip="Redo",triggered=MainWindow.redo)
         top_toolbar.addActions([undo_action, redo_action])
         top_toolbar.addSeparator()
+        MainWindow.apply_texture_action = QAction(QIcon("assets/b_applytex.png"),"",MainWindow,toolTip="Apply selected texture to brush",triggered=MainWindow.apply_texture_to_brush)
         apply_caulk_action = QAction(QIcon("assets/b_caulk.png"),"",MainWindow,toolTip="Apply caulk texture to brush",triggered=MainWindow.apply_caulk_to_brush)
+        top_toolbar.addAction(MainWindow.apply_texture_action)
         top_toolbar.addAction(apply_caulk_action)
         top_toolbar.addSeparator()
         play_button = QPushButton(QIcon("assets/b_test.png"),"Play")

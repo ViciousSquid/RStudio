@@ -158,11 +158,10 @@ class View2D(QWidget):
             is_subtractive = brush.get('operation') == 'subtract'
             is_locked = brush.get('lock', False)
             is_fog = brush.get('is_fog', False)
-            is_mover = brush.get('is_mover', False)
 
             if is_locked:
-                pen_color = QColor(211, 211, 211)
-                fill_color = QColor(100, 100, 100, 50)
+                pen_color = QColor(0, 0, 139)
+                fill_color = QColor(0, 0, 139, 70)
             else:
                 pen_color = QColor(211, 211, 211)
                 fill_color = QColor(200, 200, 200, 30)
@@ -177,13 +176,10 @@ class View2D(QWidget):
                 fog_color_rgb = brush.get('fog_color', [0.5, 0.6, 0.7])
                 pen_color = QColor.fromRgbF(fog_color_rgb[0], fog_color_rgb[1], fog_color_rgb[2])
                 fill_color = QColor.fromRgbF(fog_color_rgb[0], fog_color_rgb[1], fog_color_rgb[2], 0.3)
-            elif is_mover:
-                pen_color = QColor(255, 255, 0)
-                fill_color = QColor(255, 255, 0, 30)
 
 
             if is_selected:
-                pen_color = QColor(255, 0, 0) if is_locked else QColor(255, 255, 0)
+                pen_color = QColor(255, 255, 0)
             
             pen = QPen(pen_color, 2 if is_selected else 1)
             if (is_trigger or is_fog) and not is_selected: pen.setStyle(Qt.DashLine)
@@ -206,9 +202,6 @@ class View2D(QWidget):
                 font.setPointSize(10)
                 painter.setFont(font)
                 painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, "t r i g g e r")
-            
-            if is_mover:
-                self.draw_mover_visuals(painter, brush, screen_rect)
 
             if is_fog:
                 painter.setPen(QColor(255, 255, 255, 180))
@@ -221,49 +214,6 @@ class View2D(QWidget):
                 self.draw_resize_handles(painter, screen_rect)
             
             self.draw_brush_color_tag(painter, brush, screen_rect) # Draw color tag
-
-    def draw_mover_visuals(self, painter, brush, screen_rect):
-        painter.setPen(QColor(255, 255, 255, 180))
-        font = painter.font()
-        font.setPointSize(10)
-        painter.setFont(font)
-        painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, "m o v e r")
-        
-        ax1, ax2 = self.get_axes()
-        ax_map = {'x': 0, 'y': 1, 'z': 2}
-        
-        direction = np.array(brush.get('direction', [0,1,0]))
-        distance = brush.get('distance', 128)
-        
-        dir_2d = np.array([direction[ax_map[ax1]], direction[ax_map[ax2]]])
-        
-        if np.linalg.norm(dir_2d) == 0 and self.view_type != 'top':
-            return
-        
-        start_pos = screen_rect.center()
-        end_pos_world = QPointF(
-            brush['pos'][ax_map[ax1]] + direction[ax_map[ax1]] * distance,
-            brush['pos'][ax_map[ax2]] + direction[ax_map[ax2]] * distance
-        )
-        end_pos_screen = self.world_to_screen(end_pos_world)
-
-        # Draw movement boundary line
-        pen = QPen(QColor(255, 165, 0), 2, Qt.DashLine)
-        painter.setPen(pen)
-        painter.drawLine(start_pos, end_pos_screen)
-
-        # Draw arrow
-        arrow_size = 10
-        angle = np.arctan2(end_pos_screen.y() - start_pos.y(), end_pos_screen.x() - start_pos.x())
-        p1 = end_pos_screen
-        p2 = QPointF(end_pos_screen.x() - arrow_size * np.cos(angle - np.pi / 6),
-                     end_pos_screen.y() - arrow_size * np.sin(angle - np.pi / 6))
-        p3 = QPointF(end_pos_screen.x() - arrow_size * np.cos(angle + np.pi / 6),
-                     end_pos_screen.y() - arrow_size * np.sin(angle + np.pi / 6))
-        
-        painter.setBrush(QColor(255, 165, 0))
-        painter.drawPolygon(QPolygonF([p1,p2,p3]))
-
 
     def draw_brush_color_tag(self, painter, brush, screen_rect):
         if 'color' in brush and brush['color'] in self.color_pixmaps:
@@ -592,10 +542,6 @@ class View2D(QWidget):
                 return thing
                 
         for brush in reversed(self.editor.state.brushes):
-            # Check if the brush is locked or hidden. If so, skip it.
-            if brush.get('lock', False) or brush.get('hidden', False):
-                continue
-                
             pos = brush['pos']
             size = brush['size']
             p1 = QPointF(pos[ax_map[ax1]] - size[ax_map[ax1]]/2, pos[ax_map[ax2]] - size[ax_map[ax2]]/2)
