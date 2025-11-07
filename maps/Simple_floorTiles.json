@@ -1,0 +1,332 @@
+{
+    "brushes": [
+        {
+            "pos": [
+                128.0,
+                -24.0,
+                128.0
+            ],
+            "size": [
+                256.0,
+                80.0,
+                256.0
+            ],
+            "textures": {
+                "north": "Tile_03-512x512.png",
+                "south": "Tile_03-512x512.png",
+                "east": "Tile_03-512x512.png",
+                "west": "Tile_03-512x512.png",
+                "top": "Tile_03-512x512.png",
+                "down": "Tile_03-512x512.png"
+            },
+            "lock": true
+        },
+        {
+            "pos": [
+                128.0,
+                -24.0,
+                -128.0
+            ],
+            "size": [
+                256.0,
+                80.0,
+                256.0
+            ],
+            "textures": {
+                "north": "Tile_03-512x512.png",
+                "south": "Tile_03-512x512.png",
+                "east": "Tile_03-512x512.png",
+                "west": "Tile_03-512x512.png",
+                "top": "Tile_03-512x512.png",
+                "down": "Tile_03-512x512.png"
+            },
+            "lock": true
+        },
+        {
+            "pos": [
+                128.0,
+                -24.0,
+                -384.0
+            ],
+            "size": [
+                256.0,
+                80.0,
+                256.0
+            ],
+            "textures": {
+                "north": "Tile_03-512x512.png",
+                "south": "Tile_03-512x512.png",
+                "east": "Tile_03-512x512.png",
+                "west": "Tile_03-512x512.png",
+                "top": "Tile_03-512x512.png",
+                "down": "Tile_03-512x512.png"
+            },
+            "lock": true
+        },
+        {
+            "pos": [
+                128.0,
+                -24.0,
+                -640.0
+            ],
+            "size": [
+                256.0,
+                80.0,
+                256.0
+            ],
+            "textures": {
+                "north": "Tile_03-512x512.png",
+                "south": "Tile_03-512x512.png",
+                "east": "Tile_03-512x512.png",
+                "west": "Tile_03-512x512.png",
+                "top": "Tile_03-512x512.png",
+                "down": "Tile_03-512x512.png"
+            },
+            "lock": true
+        },
+        {
+            "pos": [
+                128.0,
+                -24.0,
+                -896.0
+            ],
+            "size": [
+                256.0,
+                80.0,
+                256.0
+            ],
+            "textures": {
+                "north": "Tile_03-512x512.png",
+                "south": "Tile_03-512x512.png",
+                "east": "Tile_03-512x512.png",
+                "west": "Tile_03-512x512.png",
+                "top": "Tile_03-512x512.png",
+                "down": "Tile_03-512x512.png"
+            },
+            "lock": true
+        },
+        {
+            "pos": [
+                128.0,
+                -24.0,
+                -1152.0
+            ],
+            "size": [
+                256.0,
+                80.0,
+                256.0
+            ],
+            "textures": {
+                "north": "Tile_03-512x512.png",
+                "south": "Tile_03-512x512.png",
+                "east": "Tile_03-512x512.png",
+                "west": "Tile_03-512x512.png",
+                "top": "Tile_03-512x512.png",
+                "down": "Tile_03-512x512.png"
+            },
+            "lock": true
+        },
+        {
+            "pos": [
+                -128.0,
+                -24.0,
+                -1152.0
+            ],
+            "size": [
+                256.0,
+                80.0,
+                256.0
+            ],
+            "textures": {
+                "north": "Tile_03-512x512.png",
+                "south": "Tile_03-512x512.png",
+                "east": "Tile_03-512x512.png",
+                "west": "Tile_03-512x512.png",
+                "top": "Tile_03-512x512.png",
+                "down": "Tile_03-512x512.png"
+            },
+            "lock": true
+        },
+        {
+            "pos": [
+                -128.0,
+                -24.0,
+                -896.0
+            ],
+            "size": [
+                256.0,
+                80.0,
+                256.0
+            ],
+            "textures": {
+                "north": "Tile_03-512x512.png",
+                "south": "Tile_03-512x512.png",
+                "east": "Tile_03-512x512.png",
+                "west": "Tile_03-512x512.png",
+                "top": "Tile_03-512x512.png",
+                "down": "Tile_03-512x512.png"
+            },
+            "lock": true
+        },
+        {
+            "pos": [
+                -128.0,
+                -24.0,
+                -640.0
+            ],
+            "size": [
+                256.0,
+                80.0,
+                256.0
+            ],
+            "textures": {
+                "north": "Tile_03-512x512.png",
+                "south": "Tile_03-512x512.png",
+                "east": "Tile_03-512x512.png",
+                "west": "Tile_03-512x512.png",
+                "top": "Tile_03-512x512.png",
+                "down": "Tile_03-512x512.png"
+            },
+            "lock": true
+        },
+        {
+            "pos": [
+                -128.0,
+                -24.0,
+                -384.0
+            ],
+            "size": [
+                256.0,
+                80.0,
+                256.0
+            ],
+            "textures": {
+                "north": "Tile_03-512x512.png",
+                "south": "Tile_03-512x512.png",
+                "east": "Tile_03-512x512.png",
+                "west": "Tile_03-512x512.png",
+                "top": "Tile_03-512x512.png",
+                "down": "Tile_03-512x512.png"
+            },
+            "lock": true
+        },
+        {
+            "pos": [
+                -128.0,
+                -24.0,
+                -128.0
+            ],
+            "size": [
+                256.0,
+                80.0,
+                256.0
+            ],
+            "textures": {
+                "north": "Tile_03-512x512.png",
+                "south": "Tile_03-512x512.png",
+                "east": "Tile_03-512x512.png",
+                "west": "Tile_03-512x512.png",
+                "top": "Tile_03-512x512.png",
+                "down": "Tile_03-512x512.png"
+            },
+            "lock": true
+        },
+        {
+            "pos": [
+                -128.0,
+                -24.0,
+                128.0
+            ],
+            "size": [
+                256.0,
+                80.0,
+                256.0
+            ],
+            "textures": {
+                "north": "Tile_03-512x512.png",
+                "south": "Tile_03-512x512.png",
+                "east": "Tile_03-512x512.png",
+                "west": "Tile_03-512x512.png",
+                "top": "Tile_03-512x512.png",
+                "down": "Tile_03-512x512.png"
+            },
+            "lock": true
+        },
+        {
+            "pos": [
+                -192.0,
+                80.0,
+                -832.0
+            ],
+            "size": [
+                128.0,
+                128,
+                128.0
+            ],
+            "textures": {
+                "north": "WoodenCrate_512.jpg",
+                "south": "WoodenCrate_512.jpg",
+                "east": "WoodenCrate_512.jpg",
+                "west": "WoodenCrate_512.jpg",
+                "top": "WoodenCrate_512.jpg",
+                "down": "WoodenCrate_512.jpg"
+            }
+        }
+    ],
+    "things": [
+        {
+            "type": "light",
+            "pos": [
+                0.0,
+                160.0,
+                -80.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "colour": "[255, 255, 255]",
+                "intensity": "1.0",
+                "radius": "512.0",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
+        },
+        {
+            "type": "light",
+            "pos": [
+                0.0,
+                160.0,
+                -528.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_2",
+                "colour": "[255, 255, 255]",
+                "intensity": "1.0",
+                "radius": "512.0",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
+        },
+        {
+            "type": "light",
+            "pos": [
+                0.0,
+                160.0,
+                -1088.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_3",
+                "colour": "[255, 255, 255]",
+                "intensity": "1.0",
+                "radius": "512.0",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
+        }
+    ]
+}
