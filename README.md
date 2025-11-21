@@ -10,6 +10,10 @@
 * `json` level format :-)
 * Custom physics engine with configurable parameters
 * Fully modular and open source (MIT License)
+
+* Lights can cast stencil shadows (buggy)
+* Physics in Play Mode
+* Volumetric Fog
   
 ### Roadmap:
 * Quake/Quake2/Quake3/Half-life map support
