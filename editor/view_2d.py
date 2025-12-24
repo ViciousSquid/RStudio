@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import QWidget, QMenu
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint
 from editor.things import Thing, Light, PlayerStart, Pickup, Speaker
-from editor.scene_hierarchy import SceneHierarchy # Import SceneHierarchy to access color_icons
+from editor.scene_hierarchy import SceneHierarchy 
 
 class View2D(QWidget):
     def __init__(self, editor, main_window, view_type):
@@ -14,12 +14,7 @@ class View2D(QWidget):
         
         self.zoom_factor = 1.0
         self.pan_offset = QPointF(0.0, 0.0)
-        self.last_pan_pos = QPoint()
         
-        self.grid_size = 16
-        self.world_size = 1024
-        self.snap_to_grid_enabled = True
-
         # State variables for mouse actions
         self.is_panning = False
         self.is_drawing_brush = False
@@ -27,27 +22,34 @@ class View2D(QWidget):
         self.is_resizing_brush = False
         self.resize_handle_ix = -1
         
+        # Coordinates for tracking mouse movement
+        self.last_pan_pos = QPoint()      # Last frame's mouse position (for delta)
+        self.pan_start_pos = QPoint()     # Position where the mouse button was pressed (for threshold)
+        
         self.draw_start_pos = QPointF()
         self.draw_current_pos = QPointF()
         self.drag_start_pos = QPointF()
         self.drag_offset = QPointF()
 
-        # initial_brush_rect is not needed for the original resize_brush
-        # but leaving it initialized as it doesn't harm
         self.initial_brush_rect = QRectF() 
+        self.grid_size = 16
+        self.world_size = 1024
+        self.snap_to_grid_enabled = True
 
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.ClickFocus)
+        
+        # DISABLE automatic context menu. We will trigger it manually in mouseReleaseEvent.
+        self.setContextMenuPolicy(Qt.NoContextMenu)
 
         # Initialize color tag icons from SceneHierarchy
         self.color_pixmaps = {}
         for color_name, qicon in SceneHierarchy(main_window).color_icons.items():
-            self.color_pixmaps[color_name] = qicon.pixmap(18, 18) # Render QIcon to QPixmap
+            self.color_pixmaps[color_name] = qicon.pixmap(18, 18) 
 
     def reset_state(self):
         """
-        Resets the internal state of the view. This is crucial for forcing
-        the view to re-evaluate brush states (like 'lock') after a property change.
+        Resets the internal state of the view.
         """
         self.is_dragging_object = False
         self.is_resizing_brush = False
@@ -64,7 +66,6 @@ class View2D(QWidget):
         center_x, center_y = self.width() / 2, self.height() / 2
         screen_x = center_x + (p.x() - self.pan_offset.x()) * self.zoom_factor
         
-        # Apply Y-axis inversion for 'front' view
         if self.view_type == 'front':
             screen_y = center_y - (p.y() - self.pan_offset.y()) * self.zoom_factor
         else:
@@ -76,7 +77,6 @@ class View2D(QWidget):
         center_x, center_y = self.width() / 2, self.height() / 2
         world_x = (p.x() - center_x) / self.zoom_factor + self.pan_offset.x()
         
-        # Apply Y-axis inversion for 'front' view when converting back
         if self.view_type == 'front':
             world_y = (center_y - p.y()) / self.zoom_factor + self.pan_offset.y()
         else:
@@ -213,17 +213,14 @@ class View2D(QWidget):
             if is_selected and not is_locked:
                 self.draw_resize_handles(painter, screen_rect)
             
-            self.draw_brush_color_tag(painter, brush, screen_rect) # Draw color tag
+            self.draw_brush_color_tag(painter, brush, screen_rect)
 
     def draw_brush_color_tag(self, painter, brush, screen_rect):
         if 'color' in brush and brush['color'] in self.color_pixmaps:
             pixmap = self.color_pixmaps[brush['color']]
-            tag_size = 16 # Size of the color tag icon
-            
-            # Position the tag in the bottom-right corner of the brush
-            tag_x = int(screen_rect.bottomRight().x() - tag_size - 2) # 2 pixels padding
-            tag_y = int(screen_rect.bottomRight().y() - tag_size - 2) # 2 pixels padding
-            
+            tag_size = 16 
+            tag_x = int(screen_rect.bottomRight().x() - tag_size - 2) 
+            tag_y = int(screen_rect.bottomRight().y() - tag_size - 2) 
             painter.drawPixmap(tag_x, tag_y, pixmap)
 
     def draw_things(self, painter):
@@ -234,7 +231,6 @@ class View2D(QWidget):
             w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
             s_pos = self.world_to_screen(w_pos)
 
-            # Special case for drawing light radius
             if isinstance(thing, Light) and thing.properties.get('show_radius', False):
                 r, g, b = thing.properties.get('colour', [255, 255, 255])
                 light_color = QColor(r, g, b, 60)
@@ -243,21 +239,17 @@ class View2D(QWidget):
                 radius = thing.get_radius() * self.zoom_factor
                 painter.drawEllipse(s_pos, radius, radius)
             
-            # Special case for drawing speaker radius
             if isinstance(thing, Speaker) and thing.properties.get('show_radius', False) and not thing.properties.get('global', False):
-                speaker_color = QColor(100, 100, 255, 60) # A bluish color for sound
+                speaker_color = QColor(100, 100, 255, 60) 
                 painter.setBrush(QBrush(speaker_color))
                 painter.setPen(QPen(speaker_color.darker(120), 1, Qt.DotLine))
                 radius = thing.get_radius() * self.zoom_factor
                 painter.drawEllipse(s_pos, radius, radius)
 
-            # Generic pixmap drawing for ALL things.
             pixmap = thing.get_pixmap()
-            if not pixmap: 
-                continue # Skip if no pixmap is defined for this Thing class.
+            if not pixmap: continue
 
             pixmap_size = pixmap.size()
-            # Center the pixmap on the thing's position
             draw_rect = QRectF(s_pos.x() - pixmap_size.width() / 2, 
                                s_pos.y() - pixmap_size.height() / 2,
                                pixmap_size.width(), 
@@ -265,11 +257,9 @@ class View2D(QWidget):
             
             painter.drawPixmap(draw_rect.toRect(), pixmap)
 
-            # Draw selection outline if the thing is selected.
             if thing == self.editor.state.selected_object:
                 painter.setPen(QPen(QColor(255, 255, 0), 2, Qt.DotLine))
                 painter.setBrush(Qt.NoBrush)
-                # Adjust the rectangle to be drawn around the pixmap
                 painter.drawRect(draw_rect.adjusted(-2, -2, 2, 2))
     
     def draw_camera(self, painter):
@@ -361,12 +351,17 @@ class View2D(QWidget):
         middle_click_pan_enabled = self.main_window.config.getboolean('Controls', 'MiddleClickDrag', fallback=False)
 
         if event.button() == Qt.RightButton:
-            self.is_panning = True
-            self.last_pan_pos = event.pos()
+            # Init dragging state. 
+            # pan_start_pos is the anchor to check if we moved far enough.
+            # last_pan_pos is initialized but not used until drag starts.
+            self.is_panning = False 
+            self.pan_start_pos = event.pos()
+            self.last_pan_pos = event.pos() 
             return
         
         if event.button() == Qt.MiddleButton and middle_click_pan_enabled:
-            self.is_panning = True
+            self.is_panning = False
+            self.pan_start_pos = event.pos()
             self.last_pan_pos = event.pos()
             return
 
@@ -375,8 +370,6 @@ class View2D(QWidget):
             if handle_ix != -1:
                 self.is_resizing_brush = True
                 self.resize_handle_ix = handle_ix
-                # Store the initial brush rectangle for reference during resize
-                # This is important for the original resize_brush to know the fixed opposite point.
                 brush = self.editor.state.selected_object
                 ax1, ax2 = self.get_axes()
                 ax_map = {'x': 0, 'y': 1, 'z': 2}
@@ -427,15 +420,23 @@ class View2D(QWidget):
 
         elif (event.buttons() & Qt.RightButton) or \
              (event.buttons() & Qt.MiddleButton and middle_click_pan_enabled):
-            self.is_panning = True
-            if self.last_pan_pos.isNull(): self.last_pan_pos = event.pos()
-            delta = event.pos() - self.last_pan_pos
-            self.last_pan_pos = event.pos()
-            # Invert the Y-axis panning for the 'front' view
-            if self.view_type == 'front':
-                self.pan_offset -= QPointF(delta.x() / self.zoom_factor, -delta.y() / self.zoom_factor)
-            else:
-                self.pan_offset -= QPointF(delta.x() / self.zoom_factor, delta.y() / self.zoom_factor)
+            
+            # If not yet panning, check if we crossed the threshold from the START position
+            if not self.is_panning:
+                if (event.pos() - self.pan_start_pos).manhattanLength() > 5:
+                    self.is_panning = True
+                    # Reset last_pan_pos to current so the delta is smooth from this point
+                    self.last_pan_pos = event.pos() 
+
+            # If we ARE panning (either just started or continuing)
+            if self.is_panning:
+                delta = event.pos() - self.last_pan_pos
+                self.last_pan_pos = event.pos()
+                
+                if self.view_type == 'front':
+                    self.pan_offset -= QPointF(delta.x() / self.zoom_factor, -delta.y() / self.zoom_factor)
+                else:
+                    self.pan_offset -= QPointF(delta.x() / self.zoom_factor, delta.y() / self.zoom_factor)
         
         elif self.is_drawing_brush:
             self.draw_current_pos = self.snap_to_grid(world_pos)
@@ -460,12 +461,13 @@ class View2D(QWidget):
     def mouseReleaseEvent(self, event):
         action_taken = self.is_dragging_object or self.is_resizing_brush
         
+        # We manually trigger context menu ONLY if we did not pan.
+        # Qt.NoContextMenu policy prevents system double-fire.
         if event.button() == Qt.RightButton and not self.is_panning:
             self.contextMenuEvent(event)
         
         self.is_panning = False
-        self.last_pan_pos = QPoint()
-
+        
         if event.button() == Qt.LeftButton:
             if self.is_dragging_object: self.is_dragging_object = False
             if self.is_resizing_brush: self.is_resizing_brush = False
@@ -585,44 +587,38 @@ class View2D(QWidget):
         min_x, max_x = old_pos[ix1] - old_size[ix1]/2, old_pos[ix1] + old_size[ix1]/2
         min_y, max_y = old_pos[ix2] - old_size[ix2]/2, old_pos[ix2] + old_size[ix2]/2
 
-        # Invert the mapping for the Y axis if in 'front' view
         is_front_view = self.view_type == 'front'
         
-        # Update min/max based on which handle is being dragged
         if self.resize_handle_ix in [0, 2, 6]:
             min_x = snapped_pos.x()
         if self.resize_handle_ix in [1, 3, 7]:
             max_x = snapped_pos.x()
         
         if is_front_view:
-            if self.resize_handle_ix in [0, 1, 4]: # These are 'top' handles on the screen
+            if self.resize_handle_ix in [0, 1, 4]: 
                 max_y = snapped_pos.y()
-            if self.resize_handle_ix in [2, 3, 5]: # These are 'bottom' handles on the screen
+            if self.resize_handle_ix in [2, 3, 5]: 
                 min_y = snapped_pos.y()
         else:
-            if self.resize_handle_ix in [0, 1, 4]: # These are 'top' handles on the screen
+            if self.resize_handle_ix in [0, 1, 4]: 
                 min_y = snapped_pos.y()
-            if self.resize_handle_ix in [2, 3, 5]: # These are 'bottom' handles on the screen
+            if self.resize_handle_ix in [2, 3, 5]: 
                 max_y = snapped_pos.y()
 
-        # Ensure min is always less than or equal to max (handle cross-over)
         if max_x < min_x: min_x, max_x = max_x, min_x
         if max_y < min_y: min_y, max_y = max_y, min_y
 
-        # For middle handles, ensure the other dimension doesn't change
-        if self.resize_handle_ix in [4, 5]: # Top/Bottom center handles
+        if self.resize_handle_ix in [4, 5]:
             min_x, max_x = old_pos[ix1] - old_size[ix1]/2, old_pos[ix1] + old_size[ix1]/2
-        if self.resize_handle_ix in [6, 7]: # Left/Right center handles
+        if self.resize_handle_ix in [6, 7]: 
             min_y, max_y = old_pos[ix2] - old_size[ix2]/2, old_pos[ix2] + old_size[ix2]/2
         
         new_size_x = max_x - min_x
         new_size_y = max_y - min_y
         
-        # Enforce minimum grid size
         if new_size_x < self.grid_size: new_size_x = self.grid_size
         if new_size_y < self.grid_size: new_size_y = self.grid_size
         
-        # Update brush position and size
         brush['pos'][ix1] = min_x + new_size_x / 2
         brush['pos'][ix2] = min_y + new_size_y / 2
         brush['size'][ix1] = new_size_x
