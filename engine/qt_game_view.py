@@ -14,6 +14,8 @@ from engine.player import Player
 from PIL import Image
 from .renderer import Renderer
 from engine import shaders
+from engine.threaded_game_state import ThreadedGameState
+from engine.logic_thread import LogicThread
 
 def perspective_projection(fov, aspect, near, far):
     if aspect == 0: return glm.mat4(1.0)
@@ -34,6 +36,13 @@ class QtGameView(QOpenGLWidget):
         self.culling_enabled = False
         self.selected_object = None
         self.show_sprites_in_play_mode = False
+        self.visibility_system = None
+        self.show_visibility_debug = False
+
+        # Threading
+        self.game_state = ThreadedGameState()
+        self.logic_thread: Optional[LogicThread] = None
+        self.use_threading = True
 
         # Input state
         self.mouselook_active, self.last_mouse_pos = False, QPoint()
@@ -85,7 +94,6 @@ class QtGameView(QOpenGLWidget):
         self.load_all_sprite_textures()
         
     def paintGL(self):
-        """The main drawing callback. Delegates all rendering to the Renderer."""
         if not self.renderer:
             return
 
@@ -93,7 +101,7 @@ class QtGameView(QOpenGLWidget):
             self.renderer.update_grid_buffers(self.world_size, self.grid_size)
             self.grid_dirty = False
 
-        # --- 1. Determine Camera and Projection ---
+        # Camera setup
         if self.play_mode and self.player:
             self.view_matrix = self.player.get_view_matrix()
             camera_pos = self.player.pos
@@ -101,10 +109,25 @@ class QtGameView(QOpenGLWidget):
             self.view_matrix = self.camera.get_view_matrix()
             camera_pos = self.camera.pos
         
-        aspect_ratio = self.width() / self.height() if self.height() > 0 else 0
+        aspect_ratio = self.width() / self.height() if self.height() > 0 else 1
         self.projection_matrix = perspective_projection(self.camera.fov, aspect_ratio, 0.1, 10000.0)
 
-        # --- 2. Gather Config and Scene Data ---
+        # VISIBILITY CULLING
+        if self.play_mode and self.visibility_system:
+            view_proj = self.projection_matrix * self.view_matrix
+            visible_indices = self.visibility_system.get_visible_brushes(
+                camera_pos, view_proj, max_portal_depth=4)
+            
+            brushes_to_render = [
+                self.editor.state.brushes[i] 
+                for i in visible_indices 
+                if i < len(self.editor.state.brushes)
+            ]
+            things_to_render = self.editor.state.things  # Could also filter
+        else:
+            brushes_to_render = self.editor.state.brushes
+            things_to_render = self.editor.state.things
+
         render_config = {
             "culling_enabled": self.culling_enabled,
             "brush_display_mode": self.brush_display_mode,
@@ -116,18 +139,14 @@ class QtGameView(QOpenGLWidget):
             "show_sprites_in_play_mode": self.show_sprites_in_play_mode,
         }
 
-        # --- 3. Render the Scene ---
         self.renderer.render_scene(
             self.projection_matrix, self.view_matrix, camera_pos,
-            self.editor.state.brushes, self.editor.state.things,
-            self.selected_object,
-            render_config
+            brushes_to_render, things_to_render,
+            self.selected_object, render_config
         )
 
-        # --- 4. Draw UI Overlays ---
         if self.editor.config.getboolean('Display', 'show_fps', fallback=False):
             self._draw_fps_counter()
-
         if self.play_mode and self.show_sprites_in_play_mode:
             self._draw_sprites_text()
 
@@ -209,20 +228,31 @@ class QtGameView(QOpenGLWidget):
         self.renderer.set_sprite_textures(self.sprite_textures)
 
     def update_loop(self):
+        """Modified update loop - rendering only when threading is enabled."""
         current_time = time.time()
         delta = current_time - self.last_time
         self.last_time = current_time
+        
+        # FPS tracking
         self.frame_count += 1
         if current_time - self.last_fps_time > 1:
             self.fps = self.frame_count / (current_time - self.last_fps_time)
             self.frame_count = 0
             self.last_fps_time = current_time
-        if self.play_mode and self.player:
+        
+        if self.play_mode and self.use_threading:
+            # Send current keys to logic thread
+            self.game_state.set_keys(self.editor.keys_pressed)
+            # Swap buffers if logic thread has new data
+            self.game_state.try_swap()
+        elif self.play_mode and self.player:
+            # Non-threaded fallback
             self.player.update(self.editor.keys_pressed, self.editor.state.brushes, delta)
             self.handle_triggers()
             self.update_speaker_sounds()
         elif self.hasFocus():
             self.handle_keyboard_input(delta)
+            
         self.update()
 
     def set_tile_map(self, tile_map):
@@ -230,11 +260,9 @@ class QtGameView(QOpenGLWidget):
 
     def toggle_play_mode(self, player_start_pos, player_start_angle, physics_enabled=True):
         self.play_mode = not self.play_mode
+        
         if self.play_mode:
-            self.selected_object = None
-            self.editor.set_selected_object(None)
-            self.mouselook_active = True
-            self.setCursor(Qt.BlankCursor)
+            # Create player
             self.player = Player(
                 player_start_pos[0],
                 player_start_pos[2],
@@ -242,15 +270,24 @@ class QtGameView(QOpenGLWidget):
                 physics_enabled=physics_enabled
             )
             self.player.pos.y = player_start_pos[1]
-            self.player_in_triggers.clear()
-            self.fired_once_triggers.clear()
-            self.played_once_sounds.clear()
-            self.initialize_sounds()
+            
+            if self.use_threading:
+                # Start logic thread
+                self.logic_thread = LogicThread(
+                    self.game_state,
+                    self.editor.state.brushes,
+                    self.editor.state.things,
+                    self.visibility_system  # Add this later
+                )
+                self.logic_thread.set_player(self.player)
+                self.logic_thread.set_play_mode(True)
+                self.logic_thread.start()
         else:
-            self.mouselook_active = False
-            self.setCursor(Qt.ArrowCursor)
+            if self.logic_thread:
+                self.logic_thread.stop()
+                self.logic_thread.join(timeout=1.0)
+                self.logic_thread = None
             self.player = None
-            self.stop_all_sounds()
 
     def set_culling(self, enabled):
         self.culling_enabled = enabled
@@ -285,10 +322,30 @@ class QtGameView(QOpenGLWidget):
         target_name = brush.get('target')
         if not target_name:
             return
+
+        target_brush = next((b for b in self.editor.state.brushes if b.get('name') == target_name), None)
+
+        if target_brush and target_brush.get('is_mover'):
+            if target_brush.get('move_once', False):
+                # Toggle between start and end positions
+                if 'original_pos' not in target_brush:
+                    target_brush['original_pos'] = list(target_brush['pos'])
+                
+                direction = np.array(target_brush.get('direction', [0, 1, 0]))
+                distance = target_brush.get('distance', 128)
+                
+                if list(target_brush['pos']) == target_brush['original_pos']:
+                    target_brush['pos'] = (np.array(target_brush['original_pos']) + direction * distance).tolist()
+                else:
+                    target_brush['pos'] = target_brush['original_pos']
+            else: # Original mover behavior
+                target_brush['start_on'] = not target_brush.get('start_on', False)
+        
         target_thing = next((t for t in self.editor.state.things if hasattr(t, 'name') and t.name == target_name), None)
-        if not target_thing:
+        if not target_thing and not target_brush:
             print(f"Play mode warning: Trigger target '{target_name}' not found.")
             return
+
         if isinstance(target_thing, Light):
             current_state = target_thing.properties.get('state', 'on')
             new_state = 'off' if current_state == 'on' else 'on'
@@ -298,6 +355,7 @@ class QtGameView(QOpenGLWidget):
                 self.stop_sound_for_speaker(target_thing.name)
             else:
                 self.play_sound_for_speaker(target_thing)
+
         if trigger_frequency == 'once':
             self.fired_once_triggers.add(trigger_id)
 
@@ -454,10 +512,11 @@ class QtGameView(QOpenGLWidget):
         return face
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ShiftModifier and not self.play_mode:
+        if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ControlModifier and not self.play_mode:
             face_name = self.get_face_at(event.pos())
             if face_name:
-                self.editor.apply_texture_to_selected_face(face_name)
+                self.editor.selected_face = face_name
+                self.update()
                 return
                 
         if event.button() == Qt.LeftButton and self.editor.state.selected_object and not self.play_mode:
@@ -502,6 +561,17 @@ class QtGameView(QOpenGLWidget):
             return
         if not self.mouselook_active:
             super().mouseMoveEvent(event)
+            return
+
+        if self.play_mode and self.use_threading:
+            # Send mouse delta to logic thread
+            dx = event.x() - self.last_mouse_pos.x()
+            dy = event.y() - self.last_mouse_pos.y()
+            self.game_state.set_mouse_delta(dx, dy)
+            # Recenter cursor
+            center_pos = self.mapToGlobal(self.rect().center())
+            QCursor.setPos(center_pos)
+            self.last_mouse_pos = self.mapFromGlobal(center_pos)
             return
         dx, dy = event.x() - self.last_mouse_pos.x(), event.y() - self.last_mouse_pos.y()
         if self.play_mode and self.player:
