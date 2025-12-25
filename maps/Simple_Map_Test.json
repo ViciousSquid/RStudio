@@ -242,5 +242,6 @@
                 "casts_shadows": "False"
             }
         }
-    ]
+    ],
+    "fingerprint": "RStudio"
 }

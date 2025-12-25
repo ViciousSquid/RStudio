@@ -186,5 +186,6 @@
                 "casts_shadows": "True"
             }
         }
-    ]
+    ],
+    "fingerprint": "RStudio"
 }

@@ -326,8 +326,9 @@
             "lock": false,
             "name": "Mover01",
             "distance": 120,
-            "start_on": false,
-            "speed": 33
+            "start_on": true,
+            "speed": 33,
+            "color": "yellow"
         },
         {
             "pos": [
@@ -1100,5 +1101,6 @@
                 "casts_shadows": "False"
             }
         }
-    ]
+    ],
+    "fingerprint": "RStudio"
 }
