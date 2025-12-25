@@ -29,7 +29,7 @@ class SceneHierarchy(QTreeWidget):
                 color: black;
             }
             QTreeWidget::item:selected:!active {
-                background-color: #A379D9; /* Keeps colour even when window loses focus */
+                background-color: #B1B97D; /* Keeps colour even when window loses focus */
             }
         """)
 
@@ -62,7 +62,7 @@ class SceneHierarchy(QTreeWidget):
         header_font.setBold(True)
         
         # Header background colour (British spelling in comment)
-        header_brush = QBrush(QColor("#2F0A61"))
+        header_brush = QBrush(QColor("#425F5D"))
 
         # Add Brushes Header with full-width background
         brushes_header = QTreeWidgetItem(self, ["Brushes", ""])
@@ -78,6 +78,11 @@ class SceneHierarchy(QTreeWidget):
             item_text = brush_dict.get('name', f'Brush {i+1}')
             item = QTreeWidgetItem(brushes_header, [item_text, ""])
             item.setData(0, Qt.UserRole, ('brush', i))
+            
+            if brush_dict.get('hidden', False):
+                # Set name color to #FFAC1C if hidden
+                item.setForeground(0, QBrush(QColor("#FFAC1C")))
+
             
             # Get colour icon if present (internal data uses 'color', not 'colour')
             colour_icon = None

@@ -109,11 +109,11 @@ class PropertyEditor(QWidget):
         
         self.mover_direction_label = QLabel("Direction:")
         
-        # Compact Directional Arrow Controls
+        # Directional Arrow Controls
         self.mover_dir_widget = QWidget()
         dir_layout = QGridLayout(self.mover_dir_widget)
         dir_layout.setContentsMargins(0, 0, 0, 0)
-        dir_layout.setSpacing(2) # FIX: Tighten button spacing
+        dir_layout.setSpacing(2)
 
         def create_dir_btn(text, direction):
             btn = QPushButton(text)
@@ -123,19 +123,22 @@ class PropertyEditor(QWidget):
             return btn
 
         # Layout: Vertical movement on the left, Cardinal on the right
-        # Assuming: N=(0,0,1), S=(0,0,-1), E=(1,0,0), W=(-1,0,0) based on typical editors
-        # Adjusting specifically for this engine's Z/X orientation
+        # UP/DOWN (Y-Axis)
+        dir_layout.addWidget(create_dir_btn("UP", [0, 1, 0]), 0, 0)
+        dir_layout.addWidget(create_dir_btn("DN", [0, -1, 0]), 2, 0)
+
+        # COMPASS (X/Z Axes)
+        # N=(0,0,1), S=(0,0,-1), E=(1,0,0), W=(-1,0,0) based on typical editors
         dir_layout.addWidget(create_dir_btn("N", [0, 0, 1]), 0, 3) 
         dir_layout.addWidget(create_dir_btn("W", [-1, 0, 0]), 1, 2)
         dir_layout.addWidget(create_dir_btn("E", [1, 0, 0]), 1, 4)
         dir_layout.addWidget(create_dir_btn("S", [0, 0, -1]), 2, 3)
 
-        # --- NEW: Preview Button ---
-        self.preview_btn = QPushButton("Preview Movement")
+        self.preview_btn = QPushButton("Preview")
         self.preview_btn.setCheckable(True)
         self.preview_btn.setStyleSheet("""
             QPushButton {
-                background-color: #007bff; 
+                background-color: #6C3BAA; 
                 color: white; 
                 border-radius: 4px; 
                 padding: 6px;

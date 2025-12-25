@@ -83,7 +83,7 @@ class Ui_MainWindow(object):
         MainWindow.resizeDocks([MainWindow.right_dock, MainWindow.properties_dock], [600, 300], Qt.Vertical)
 
         MainWindow.right_tabs.setStyleSheet("""
-            QTabBar::tab:selected { background: #0078d7; color: white; }
+            QTabBar::tab:selected { background: #425F5D; color: white; }
             QTabBar::tab { background: #444; color: #ccc; padding: 5px; border: 1px solid #222; }
         """)
 
@@ -132,6 +132,15 @@ class Ui_MainWindow(object):
 
     def create_menu_bar(self, MainWindow):
         menubar = MainWindow.menuBar()
+        menubar.setStyleSheet("""
+            QMenuBar::item:selected {
+                background-color: #425F5D;
+            }
+            QMenu::item:selected {
+                background-color: #425F5D;
+            }
+        """)
+        
         file_menu = menubar.addMenu('File')
         edit_menu = menubar.addMenu('Edit')
         view_menu = menubar.addMenu('View')

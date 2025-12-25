@@ -8,10 +8,12 @@ import numpy as np
 import configparser
 import math
 import copy
+
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QMessageBox, QFileDialog, QWidget, QLabel, QVBoxLayout,
     QGraphicsOpacityEffect
 )
+from PyQt5.QtWidgets import QShortcut
 from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, QRect
 from PyQt5.QtGui import QKeySequence, QPixmap, QCursor
 
@@ -109,10 +111,24 @@ class MainWindow(QMainWindow):
         self.preview_data = {} 
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
+        self.ctrl_tab_shortcut = QShortcut(QKeySequence("Ctrl+Tab"), self)
+        self.ctrl_tab_shortcut.activated.connect(self.cycle_2d_view)
         self.setFocus()
         self.update_global_font()
         self.load_layout()
         self.toast = Toast(self)
+
+    def cycle_2d_view(self):
+        """Cycles through the 2D view tabs (Top, Side, Front) unless in play mode."""
+        if self.view_3d.play_mode:
+            return
+        
+        # Access the tab widget created in ui.py
+        if hasattr(self, 'right_tabs'):
+            count = self.right_tabs.count()
+            if count > 0:
+                next_index = (self.right_tabs.currentIndex() + 1) % count
+                self.right_tabs.setCurrentIndex(next_index)
 
     def show_toast(self, message, is_error=False, duration=None):
         """Displays a toast notification with optional custom duration."""
