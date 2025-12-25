@@ -190,6 +190,13 @@ class PropertyEditor(QWidget):
         self.current_object['is_fog'] = is_fog
         if is_fog:
             self.current_object['is_trigger'] = False
+            
+            # Initialize defaults immediately so the renderer sees them
+            if 'fog_density' not in self.current_object:
+                self.current_object['fog_density'] = 2.0
+            if 'fog_color' not in self.current_object:
+                self.current_object['fog_color'] = [0.5, 0.6, 0.7]
+
         self.set_object(self.current_object)
         self.editor.update_all_ui()
 
