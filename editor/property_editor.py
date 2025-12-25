@@ -100,6 +100,8 @@ class PropertyEditor(QWidget):
 
         # Mover widgets
         self.mover_checkbox = QCheckBox()
+        self.mover_checkbox.setStyleSheet("QCheckBox::indicator { width: 25px; height: 25px; }")
+        
         self.mover_speed_label = QLabel("Speed:")
         self.mover_speed_input = QLineEdit(str(brush.get('speed', 64.0)))
         self.mover_distance_label = QLabel("Distance:")
@@ -107,12 +109,12 @@ class PropertyEditor(QWidget):
         
         self.mover_direction_label = QLabel("Direction:")
         
-        # --- NEW: Directional Arrow Controls ---
+        # Compact Directional Arrow Controls
         self.mover_dir_widget = QWidget()
         dir_layout = QGridLayout(self.mover_dir_widget)
-        dir_layout.setContentsMargins(0,0,0,0)
+        dir_layout.setContentsMargins(0, 0, 0, 0)
+        dir_layout.setSpacing(2) # FIX: Tighten button spacing
 
-        # Helper to create direction buttons
         def create_dir_btn(text, direction):
             btn = QPushButton(text)
             btn.setFixedSize(30, 30)
@@ -120,17 +122,7 @@ class PropertyEditor(QWidget):
             btn.clicked.connect(lambda: self.update_object_prop('direction', direction))
             return btn
 
-        # Layout: 
-        #       [Up]    [N]
-        #       [Dn] [W]   [E]
-        #               [S]
-        
-        # Y-Axis (Vertical)
-        dir_layout.addWidget(create_dir_btn("▲", [0, 1, 0]), 0, 0) # Up
-        dir_layout.addWidget(QLabel("Y"), 1, 0, alignment=Qt.AlignCenter)
-        dir_layout.addWidget(create_dir_btn("▼", [0, -1, 0]), 2, 0) # Down
-        
-        # X/Z Axis (Cardinal)
+        # Layout: Vertical movement on the left, Cardinal on the right
         # Assuming: N=(0,0,1), S=(0,0,-1), E=(1,0,0), W=(-1,0,0) based on typical editors
         # Adjusting specifically for this engine's Z/X orientation
         dir_layout.addWidget(create_dir_btn("N", [0, 0, 1]), 0, 3) 

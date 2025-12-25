@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStatusBar, QToolBar,
     QLabel, QSpinBox, QCheckBox, QComboBox, QAction, QMessageBox, QFrame,
     QDockWidget, QTabWidget, QPushButton, QActionGroup, QDialog,
-    QDialogButtonBox, QApplication
+    QDialogButtonBox, QApplication, QSizePolicy
 )
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QFont, QIcon, QKeySequence, QPixmap
@@ -195,6 +195,12 @@ class Ui_MainWindow(object):
         toggle_triggers_action.triggered.connect(MainWindow.toggle_trigger_display)
         view_menu.addAction(toggle_triggers_action)
 
+        # New System Monitor Toggle
+        system_monitor_action = QAction('System Monitor', MainWindow, checkable=True)
+        system_monitor_action.setShortcut('F3')
+        system_monitor_action.triggered.connect(MainWindow.toggle_system_monitor)
+        view_menu.addAction(system_monitor_action)
+
         #tools_menu.addAction(QAction('Generate Collision Tilemap...', MainWindow, triggered=MainWindow.show_generate_tilemap_dialog))
 
         modern_action = QAction('Modern (Shaders)', MainWindow, checkable=True, checked=True)
@@ -229,6 +235,34 @@ class Ui_MainWindow(object):
         play_button.setShortcut("f5")
         play_button.clicked.connect(MainWindow.enter_play_mode)
         top_toolbar.addWidget(play_button)
+
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        top_toolbar.addWidget(spacer)
+
+        # Mode Label
+        MainWindow.mode_label = QLabel("EDITOR MODE")
+        MainWindow.mode_label.setObjectName("modeLabel")
+        
+        # Default (Editor) Style
+        # EDIT HERE TO CHANGE DEFAULT APPEARANCE
+        MainWindow.mode_label.setStyleSheet("""
+            QLabel {
+                background-color: #333333;   /* Background Color */
+                color: #888888;              /* Text Color */
+                padding: 5px 10px;           /* Spacing around text */
+                border-radius: 4px;          /* Rounded corners */
+                font-weight: bold;           /* Bold text */
+                font-size: 11px;             /* Font Size */
+                border: 1px solid #444;      /* Optional Border */
+            }
+        """)
+        top_toolbar.addWidget(MainWindow.mode_label)
+        
+        right_margin = QWidget()
+        right_margin.setFixedWidth(5)
+        top_toolbar.addWidget(right_margin)
+        
 
     def create_status_bar(self, MainWindow):
         status_bar = QStatusBar()

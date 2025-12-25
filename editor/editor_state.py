@@ -30,11 +30,18 @@ class EditorState:
         self.save_state()
 
     def get_level_data(self):
-        """Serializes the current scene state into a dictionary."""
-        return {'brushes': self.brushes, 'things': [t.to_dict() for t in self.things]}
+        """Serializes the current scene state into a dictionary with a fingerprint."""
+        return {
+            'fingerprint': 'RStudio', # The magic number
+            'brushes': self.brushes, 
+            'things': [t.to_dict() for t in self.things]
+        }
 
     def load_from_data(self, level_data):
-        """Populates the scene from a dictionary."""
+        """Populates the scene from a dictionary after validating the fingerprint."""
+        if level_data.get('fingerprint') != 'RStudio':
+            raise ValueError("Not a valid save file: Missing 'RStudio' fingerprint.") # Refuse to load
+            
         self.brushes = level_data.get('brushes', [])
         
         things_data = level_data.get('things', [])

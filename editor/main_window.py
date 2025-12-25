@@ -9,10 +9,11 @@ import configparser
 import math
 import copy
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QMessageBox, QFileDialog, QWidget, QLabel, QVBoxLayout
+    QApplication, QMainWindow, QMessageBox, QFileDialog, QWidget, QLabel, QVBoxLayout,
+    QGraphicsOpacityEffect
 )
-from PyQt5.QtCore import Qt, QByteArray, QTimer
-from PyQt5.QtGui import QKeySequence, QPixmap
+from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, QRect
+from PyQt5.QtGui import QKeySequence, QPixmap, QCursor
 
 from editor.things import Light, PlayerStart, Thing, Pickup, Monster, Model
 from editor.rand_map_gen_dial import RandomMapGeneratorDialog
@@ -22,6 +23,72 @@ from editor.ui import Ui_MainWindow, GenerateTilemapDialog
 from engine.constants import TILE_SIZE, WALL_TILE, FLOOR_TILE
 from editor.view_2d import View2D
 from editor.editor_state import EditorState
+
+class Toast(QLabel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.SubWindow)
+        self.setAlignment(Qt.AlignCenter)
+        self.hide()
+        
+        self.opacity_effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self.opacity_effect)
+        
+        self.anim = QPropertyAnimation(self.opacity_effect, b"opacity")
+        self.anim.setDuration(600)
+        self.anim.setEasingCurve(QEasingCurve.OutCubic)
+        
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.fade_out)
+
+    def show_message(self, text, parent_widget, is_error=False, duration=None):
+        bg_color = "#8B0000" if is_error else "#2E6F40"
+        
+        self.setStyleSheet(f"""
+            QLabel {{
+                background-color: {bg_color};
+                color: white;
+                padding: 10px 20px;
+                border-radius: 5px;
+                font-weight: bold;
+                font-size: 22px;
+            }}
+        """)
+        
+        self.setText(text)
+        self.adjustSize()
+        
+        parent_rect = parent_widget.rect()
+        x = parent_rect.width() // 2 - self.width() // 2
+        y = 30 
+        
+        self.move(x, y)
+        self.show()
+        self.raise_()
+        
+        self.opacity_effect.setOpacity(0)
+        self.anim.setDirection(QPropertyAnimation.Forward)
+        self.anim.setStartValue(0)
+        self.anim.setEndValue(1)
+        self.anim.start()
+        
+        # NEW: Handle duration. If duration is 0, do not start the timer.
+        if duration == 0:
+            self.timer.stop()
+        else:
+            final_duration = duration if duration is not None else (4000 if is_error else 2500)
+            self.timer.start(final_duration)
+
+    # Add a dedicated hide method to clear persistent toasts
+    def hide_toast(self):
+        if self.isVisible():
+            self.fade_out()
+
+    def fade_out(self):
+        self.anim.setDirection(QPropertyAnimation.Backward)
+        self.anim.setEndValue(0)
+        self.anim.start()
 
 class MainWindow(QMainWindow):
     def __init__(self, root_dir):
@@ -45,6 +112,11 @@ class MainWindow(QMainWindow):
         self.setFocus()
         self.update_global_font()
         self.load_layout()
+        self.toast = Toast(self)
+
+    def show_toast(self, message, is_error=False, duration=None):
+        """Displays a toast notification with optional custom duration."""
+        self.toast.show_message(message, self, is_error, duration)
 
     def add_model_to_scene(self, filepath, rotation, scale):
         self.save_state()
@@ -312,10 +384,23 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Player Start", "Please add a Player Start object to the scene before entering play mode.")
             return
 
+        self.mode_label.setText("PLAY MODE")
+        self.mode_label.setStyleSheet("""
+            QLabel {
+                background-color: #2E7D32;
+                color: white;
+                padding: 5px 10px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 14px;
+                border: 1px solid #1B5E20;
+            }
+        """)
+
         physics_enabled = self.config.getboolean('Settings', 'physics', fallback=True)
         self.view_3d.set_tile_map(None)
         self.view_3d.toggle_play_mode(player_start.pos, player_start.get_angle(), physics_enabled)
-        self.view_3d.setFocus() # Explicitly set focus to the 3D view
+        self.view_3d.setFocus()
 
 
     def show_generate_tilemap_dialog(self):
@@ -357,6 +442,25 @@ class MainWindow(QMainWindow):
 
     def toggle_culling(self, state):
         self.view_3d.set_culling(state == Qt.Checked)
+    
+    def toggle_system_monitor(self):
+        """Toggles the debug system monitor overlay in the 3D view."""
+        self.view_3d.debug_mode_active = not self.view_3d.debug_mode_active
+        
+        # If in play mode, we need to handle cursor visibility when toggling the menu
+        if self.view_3d.play_mode:
+            if self.view_3d.debug_mode_active:
+                # Show cursor for menu interaction
+                QApplication.restoreOverrideCursor()
+                self.view_3d.setCursor(Qt.ArrowCursor)
+            else:
+                # Hide cursor to resume play
+                center_pos = self.view_3d.mapToGlobal(self.view_3d.rect().center())
+                QCursor.setPos(center_pos)
+                self.view_3d.last_mouse_pos = self.view_3d.mapFromGlobal(center_pos)
+                QApplication.setOverrideCursor(Qt.BlankCursor)
+        
+        self.view_3d.update()
 
     def set_grid_size(self, size):
         snapped_size = self._snap_to_power_of_two(size)
@@ -647,13 +751,27 @@ class MainWindow(QMainWindow):
         if self.view_3d.play_mode:
             if event.key() == Qt.Key_Escape:
                 self.view_3d.toggle_play_mode(None, None)
-                self.setFocus() # Give focus back to the main window
+                
+                self.mode_label.setText("EDITOR MODE")
+                self.mode_label.setStyleSheet("""
+                    QLabel {
+                        background-color: #333333;
+                        color: #888888;
+                        padding: 5px 10px;
+                        border-radius: 4px;
+                        font-weight: bold;
+                        font-size: 14px;
+                        border: 1px solid #444;
+                    }
+                """)
+                
+                self.setFocus() 
             elif event.key() == Qt.Key_F3:
                 self.view_3d.show_sprites_in_play_mode = not self.view_3d.show_sprites_in_play_mode
                 self.view_3d.update()
             else:
                 self.keys_pressed.add(event.key())
-            return # Consume the event completely in play mode
+            return
 
         # Editor mode key presses below
         if self.state.selected_object:
@@ -746,8 +864,12 @@ class MainWindow(QMainWindow):
             with open(self.file_path, 'w') as f:
                 json.dump(self.state.get_level_data(), f, indent=4)
             print(f"Level saved to {self.file_path}")
+            # Success Toast
+            self.show_toast("Saved!")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Could not save level to {self.file_path}:\n{e}")
+            # Error Toast (Dark Red)
+            self.show_toast(f"Error saving: {e}", is_error=True)
+            print(f"Error saving level: {e}")
 
     def load_level(self):
         filePath, _ = QFileDialog.getOpenFileName(self, "Load Level", "maps", "JSON Files (*.json)")
@@ -757,26 +879,33 @@ class MainWindow(QMainWindow):
         try:
             with open(filePath, 'r') as f:
                 level_data = json.load(f)
+            
+            # This triggers the fingerprint validation in EditorState
+            self.state.load_from_data(level_data)
+
+            # Success Path: Initialize camera view based on PlayerStart
+            player_start_pos = None
+            for t in self.state.things:
+                if isinstance(t, PlayerStart):
+                    player_start_pos = t.pos
+                    break
+
+            if player_start_pos:
+                self.view_3d.camera.pos = [player_start_pos[0], player_start_pos[1] + 50, player_start_pos[2] + 200]
+                self.view_3d.camera.pitch = -15
+                self.view_3d.camera.yaw = -90
+
+            self.file_path = filePath
+            self.set_selected_object(None)
+            
+            filename = os.path.basename(filePath)
+            self.show_toast(f"Loaded {filename}") # Success toast
+
+        except ValueError as ve:
+            # Replaces QMessageBox with a persistent red toast
+            self.show_toast(f"Rejected: {ve}", is_error=True)
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Could not load level from {filePath}:\n{e}")
-            return
-
-        self.state.load_from_data(level_data)
-
-        player_start_pos = None
-        for t in self.state.things:
-            if isinstance(t, PlayerStart):
-                player_start_pos = t.pos
-                break
-
-        if player_start_pos:
-            self.view_3d.camera.pos = [player_start_pos[0], player_start_pos[1] + 50, player_start_pos[2] + 200]
-            self.view_3d.camera.pitch = -15
-            self.view_3d.camera.yaw = -90
-
-        self.file_path = filePath
-        self.set_selected_object(None)
-        print(f"Level loaded from {filePath}")
+            self.show_toast(f"Error: {e}", is_error=True)
 
     def quicksave_and_launch(self):
         maps_dir = "maps"
