@@ -2,9 +2,10 @@ import time
 import os
 import numpy as np
 import ctypes
+from collections import deque
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication
-from PyQt5.QtCore import Qt, QTimer, QPoint, QUrl
-from PyQt5.QtGui import QPainter, QColor, QFont, QCursor
+from PyQt5.QtCore import Qt, QTimer, QPoint, QUrl, QRect
+from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QFontDatabase, QPen, QBrush
 from PyQt5.QtMultimedia import QSoundEffect
 import OpenGL.GL as gl
 import glm
@@ -14,7 +15,7 @@ from engine.player import Player
 from PIL import Image
 from .renderer import Renderer
 from engine import shaders
-from engine.threaded_game_state import ThreadedGameState
+from engine.threaded_game_state import ThreadedGameState, RenderState
 from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 
@@ -47,6 +48,15 @@ class QtGameView(QOpenGLWidget):
 
         # Input state
         self.mouselook_active, self.last_mouse_pos = False, QPoint()
+        
+        # Debug Window Manager State
+        self.debug_mode_active = False
+        self.debug_window_rect = QRect(20, 20, 300, 180)
+        self.debug_drag_active = False
+        self.debug_drag_offset = QPoint()
+        self.frame_times = deque(maxlen=100) # History for graph
+        self.console_font = QFont("Courier New", 9)
+        self.console_font.setStyleHint(QFont.Monospace)
         
         # Resource management
         self.texture_manager = {}
@@ -108,15 +118,28 @@ class QtGameView(QOpenGLWidget):
         self.load_all_sprite_textures()
 
     def keyPressEvent(self, event):
+        # F3 Toggle for Debug Window Manager
+        if event.key() == Qt.Key_F3:
+            self.debug_mode_active = not self.debug_mode_active
+            
+            if self.play_mode:
+                if self.debug_mode_active:
+                    # Release mouse control
+                    QApplication.restoreOverrideCursor()
+                    self.setCursor(Qt.ArrowCursor)
+                else:
+                    # Recapture mouse control
+                    center_pos = self.mapToGlobal(self.rect().center())
+                    QCursor.setPos(center_pos)
+                    self.last_mouse_pos = self.mapFromGlobal(center_pos)
+                    QApplication.setOverrideCursor(Qt.BlankCursor)
+            
+            self.update()
+            return
+
         # Only handle these shortcuts if we are currently playing the game
         if self.play_mode:
-            # Toggle the Render Menu with F3
-            if event.key() == Qt.Key_F3:
-                self.show_render_menu = not getattr(self, 'show_render_menu', False)
-                self.update()
-                return
-
-            # If the menu is open, handle mode switching
+            # If the render menu is open, handle mode switching
             if getattr(self, 'show_render_menu', False):
                 if event.key() == Qt.Key_1:
                     self.current_render_mode = RENDER_MODE_LIT
@@ -144,32 +167,43 @@ class QtGameView(QOpenGLWidget):
             self.renderer.update_grid_buffers(self.world_size, self.grid_size)
             self.grid_dirty = False
 
-        # Camera setup
-        if self.play_mode and self.player:
+        # --- SETUP CAMERA & SCENE DATA ---
+        camera_pos = glm.vec3(0,0,0)
+        render_state: Optional[RenderState] = None
+
+        if self.play_mode and self.use_threading:
+            # THREADED RENDER PATH
+            # Use the thread-safe snapshot for EVERYTHING (Camera + Brushes)
+            render_state = self.game_state.get_render_state()
+            self.view_matrix = render_state.camera_view_matrix
+            camera_pos = render_state.player_pos
+            
+            # Use snapshot brushes to ensure position matches camera timestamp
+            brushes_to_render = render_state.visible_brushes
+            things_to_render = render_state.visible_things
+
+        elif self.play_mode and self.player:
+            # NON-THREADED PLAY MODE (Legacy/Fallback)
             self.view_matrix = self.player.get_view_matrix()
             camera_pos = self.player.pos
+            brushes_to_render = self.editor.state.brushes
+            things_to_render = self.editor.state.things
         else:
+            # EDITOR MODE
             self.view_matrix = self.camera.get_view_matrix()
             camera_pos = self.camera.pos
+            brushes_to_render = self.editor.state.brushes
+            things_to_render = self.editor.state.things
         
         aspect_ratio = self.width() / self.height() if self.height() > 0 else 1
         self.projection_matrix = perspective_projection(self.camera.fov, aspect_ratio, 0.1, 10000.0)
 
-        # VISIBILITY CULLING
-        if self.play_mode and self.visibility_system:
+        # Culling (Optional override for large scenes)
+        if self.play_mode and self.visibility_system and not self.use_threading:
             view_proj = self.projection_matrix * self.view_matrix
             visible_indices = self.visibility_system.get_visible_brushes(
                 camera_pos, view_proj, max_portal_depth=4)
-            
-            brushes_to_render = [
-                self.editor.state.brushes[i] 
-                for i in visible_indices 
-                if i < len(self.editor.state.brushes)
-            ]
-            things_to_render = self.editor.state.things  # Could also filter
-        else:
-            brushes_to_render = self.editor.state.brushes
-            things_to_render = self.editor.state.things
+            brushes_to_render = [self.editor.state.brushes[i] for i in visible_indices if i < len(self.editor.state.brushes)]
 
         render_config = {
             "culling_enabled": self.culling_enabled,
@@ -189,59 +223,140 @@ class QtGameView(QOpenGLWidget):
             self.selected_object, render_config
         )
 
-        if self.editor.config.getboolean('Display', 'show_fps', fallback=False):
-            self._draw_fps_counter()
-        
-        if self.play_mode and self.show_sprites_in_play_mode:
-            self._draw_sprites_text()
-
-        # Draw render menu if active in play mode
-        if self.play_mode and getattr(self, 'show_render_menu', False):
-            self._draw_render_menu()
-
-    def _draw_sprites_text(self):
-        """Renders the "Sprites" text using QPainter."""
+        # Draw 2D Overlays
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+
+        if self.editor.config.getboolean('Display', 'show_fps', fallback=False):
+            self._draw_fps_counter(painter)
+        
+        if self.play_mode and self.show_sprites_in_play_mode:
+            self._draw_sprites_text(painter)
+
+        if self.play_mode and getattr(self, 'show_render_menu', False):
+            self._draw_render_menu(painter)
+            
+        if self.debug_mode_active:
+            self._draw_window_manager(painter)
+            
+        painter.end()
+
+    def _draw_sprites_text(self, painter):
         font = QFont()
         font.setPointSize(10)
         font.setBold(True)
         painter.setFont(font)
         painter.setPen(QColor(255, 105, 180)) # Pink text
-        
-        rect_width = 80
-        padding = 5
-        rect_x = padding
-        text_x = padding + 5
-        
-        painter.fillRect(rect_x, padding, rect_width, 25, QColor(0, 0, 0, 128)) # Black background
-        painter.drawText(text_x, 20, "Sprites")
-        painter.end()
+        painter.fillRect(5, 5, 80, 25, QColor(0, 0, 0, 128))
+        painter.drawText(10, 20, "Sprites")
 
-    def _draw_fps_counter(self):
-        """Renders the FPS counter using QPainter."""
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+    def _draw_fps_counter(self, painter):
         font = QFont()
         font.setPointSize(8)
         painter.setFont(font)
         painter.setPen(QColor(255, 255, 255))
-        
-        # Position the counter in the top-right corner
         rect_width = 70
-        padding = 5
-        rect_x = self.width() - rect_width - padding
-        text_x = self.width() - rect_width
-        
-        painter.fillRect(rect_x, padding, rect_width, 20, QColor(0, 0, 0, 128))
-        painter.drawText(text_x, 20, f"FPS: {self.fps:.0f}")
-        painter.end()
+        rect_x = self.width() - rect_width - 5
+        painter.fillRect(rect_x, 5, rect_width, 20, QColor(0, 0, 0, 128))
+        painter.drawText(rect_x + 5, 20, f"FPS: {self.fps:.0f}")
 
-    def _draw_render_menu(self):
-        """Draws the render mode selection menu overlay."""
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+    def _draw_window_manager(self, painter):
+        """Draws the Debug Window Manager system."""
         
+        # Window Style Configuration
+        bg_color = QColor(20, 20, 25, 240)
+        border_color = QColor(80, 80, 90)
+        header_color = QColor(40, 40, 50)
+        text_color = QColor(220, 220, 220)
+        accent_color = QColor(100, 200, 100) # Green for active status
+        graph_color = QColor(0, 255, 255, 150) # Cyan for graph
+        
+        # 1. Main Window Body
+        rect = self.debug_window_rect
+        painter.setPen(QPen(border_color, 1))
+        painter.setBrush(QBrush(bg_color))
+        painter.drawRect(rect)
+        
+        # 2. Header Bar
+        header_rect = QRect(rect.x(), rect.y(), rect.width(), 25)
+        painter.fillRect(header_rect, header_color)
+        painter.drawLine(rect.x(), rect.y() + 25, rect.right(), rect.y() + 25)
+        
+        # 3. Title Text
+        painter.setFont(self.console_font)
+        painter.setPen(text_color)
+        painter.drawText(header_rect.adjusted(10, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, "SYSTEM MONITOR [F3]")
+        
+        # 4. Close Button [X]
+        close_btn_rect = QRect(rect.right() - 25, rect.y(), 25, 25)
+        painter.drawText(close_btn_rect, Qt.AlignCenter, "[X]")
+        
+        # 5. Content Area
+        content_y = rect.y() + 35
+        left_margin = rect.x() + 10
+        
+        # --- Logic Thread Status ---
+        status = "STOPPED"
+        tps = 0.0
+        if self.logic_thread and self.logic_thread.is_alive():
+            status = "RUNNING"
+            tps = getattr(self.logic_thread, 'actual_tps', 0.0)
+            
+        painter.drawText(left_margin, content_y, f"WORKER THREAD: {status}")
+        
+        # TPS Indicator
+        indicator_rect = QRect(left_margin + 160, content_y - 10, 10, 10)
+        painter.setBrush(QBrush(accent_color if status == "RUNNING" else QColor(200, 50, 50)))
+        painter.drawEllipse(indicator_rect)
+        painter.setBrush(Qt.NoBrush) # Reset brush
+        
+        content_y += 20
+        painter.setPen(text_color)
+        painter.drawText(left_margin, content_y, f"LOGIC TICK: {tps:.1f} / 60.0 Hz")
+        
+        # --- Render Stats ---
+        content_y += 20
+        ft_ms = (1.0 / self.fps * 1000.0) if self.fps > 0 else 0
+        painter.drawText(left_margin, content_y, f"RENDER FPS: {self.fps:.1f} ({ft_ms:.1f} ms)")
+        
+        # --- Frame Time Graph ---
+        content_y += 15
+        graph_height = 60
+        graph_rect = QRect(left_margin, content_y, rect.width() - 20, graph_height)
+        
+        # Graph Background
+        painter.fillRect(graph_rect, QColor(0, 0, 0, 100))
+        painter.setPen(QPen(QColor(60, 60, 60), 1))
+        painter.drawRect(graph_rect)
+        
+        # Draw Graph Lines
+        if len(self.frame_times) > 1:
+            painter.setPen(QPen(graph_color, 1))
+            path_step = graph_rect.width() / 100.0
+            max_ms = 33.3 # Scale graph to 30 FPS (33ms) max
+            
+            # Create points for polyline
+            pts = []
+            for i, ms in enumerate(self.frame_times):
+                x = graph_rect.x() + (i * path_step)
+                # Invert Y (height - value)
+                h_norm = min(ms / max_ms, 1.0) * graph_rect.height()
+                y = graph_rect.bottom() - h_norm
+                pts.append(QPoint(int(x), int(y)))
+                
+            if pts:
+                painter.drawPolyline(*pts)
+                
+            # Draw 16.6ms (60fps) reference line
+            ref_y = graph_rect.bottom() - (16.6 / max_ms * graph_rect.height())
+            painter.setPen(QPen(QColor(255, 100, 100, 100), 1, Qt.DashLine))
+            painter.drawLine(graph_rect.left(), int(ref_y), graph_rect.right(), int(ref_y))
+            painter.setPen(QPen(QColor(255, 100, 100, 150), 1))
+            painter.setFont(QFont("Small Fonts", 7))
+            painter.drawText(graph_rect.right() - 25, int(ref_y) - 2, "16ms")
+
+    def _draw_render_menu(self, painter):
+        """Draws the render mode selection menu overlay."""
         # Menu Dimensions
         width, height = 220, 200
         x = (self.width() - width) // 2
@@ -265,7 +380,6 @@ class QtGameView(QOpenGLWidget):
         painter.setFont(font)
         
         # Define options matching the constants in constants.py
-        # 0: Lit, 1: Unlit, 2: Wireframe, 3: Vertex
         options = [
             (0, "[1] Lit (Phong)"),
             (1, "[2] Unlit (Fullbright)"),
@@ -286,8 +400,6 @@ class QtGameView(QOpenGLWidget):
             
             painter.drawText(x + 20, current_y, display_text)
             current_y += 20
-            
-        painter.end()
 
     def update_grid(self):
         self.grid_dirty = True
@@ -334,34 +446,39 @@ class QtGameView(QOpenGLWidget):
         delta = current_time - self.last_time
         self.last_time = current_time
         
-        # FPS tracking
+        # FPS tracking and Frame Time Graph Update
         self.frame_count += 1
         if current_time - self.last_fps_time > 1:
             self.fps = self.frame_count / (current_time - self.last_fps_time)
             self.frame_count = 0
             self.last_fps_time = current_time
         
+        # Record frame time in ms
+        self.frame_times.append(delta * 1000.0)
+
         if self.play_mode and self.use_threading:
             # Send current keys to logic thread
             self.game_state.set_keys(self.editor.keys_pressed)
             # Swap buffers if logic thread has new data
-            self.game_state.try_swap()
+            if self.game_state.try_swap():
+                self.update() # Request redraw with new state
         elif self.play_mode and self.player:
             # Non-threaded fallback
             self.player.update(self.editor.keys_pressed, self.editor.state.brushes, delta)
             self.handle_triggers()
             self.update_movers(delta)
             self.update_speaker_sounds()
+            self.update()
         elif self.hasFocus():
             self.handle_keyboard_input(delta)
-            
-        self.update()
+            self.update()
 
     def set_tile_map(self, tile_map):
         self.tile_map = tile_map
 
     def toggle_play_mode(self, player_start_pos, player_start_angle, physics_enabled=True):
         self.play_mode = not self.play_mode
+        self.debug_mode_active = False # Always close debug on mode switch
         
         if self.play_mode:
             # Center and hide cursor immediately to prevent "jump"
@@ -715,6 +832,36 @@ class QtGameView(QOpenGLWidget):
         return face
 
     def mousePressEvent(self, event):
+        # 1. Debug Window Manager Interaction
+        if self.debug_mode_active and event.button() == Qt.LeftButton:
+            rect = self.debug_window_rect
+            mouse_pos = event.pos()
+            
+            # Check Close Button [X] (Top right 25x25)
+            close_btn_rect = QRect(rect.right() - 25, rect.y(), 25, 25)
+            if close_btn_rect.contains(mouse_pos):
+                self.debug_mode_active = False
+                # Restore Play Mode Cursor if playing
+                if self.play_mode:
+                    center_pos = self.mapToGlobal(self.rect().center())
+                    QCursor.setPos(center_pos)
+                    self.last_mouse_pos = self.mapFromGlobal(center_pos)
+                    QApplication.setOverrideCursor(Qt.BlankCursor)
+                self.update()
+                return
+
+            # Check Header Bar (Dragging)
+            header_rect = QRect(rect.x(), rect.y(), rect.width() - 25, 25)
+            if header_rect.contains(mouse_pos):
+                self.debug_drag_active = True
+                self.debug_drag_offset = mouse_pos - rect.topLeft()
+                return
+                
+            # If clicking inside window body, swallow event (don't shoot/move)
+            if rect.contains(mouse_pos):
+                return
+
+        # 2. Existing Interactions
         if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ControlModifier and not self.play_mode:
             face_name = self.get_face_at(event.pos())
             if face_name:
@@ -752,6 +899,13 @@ class QtGameView(QOpenGLWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        # 1. Debug Window Dragging
+        if self.debug_drag_active:
+            new_top_left = event.pos() - self.debug_drag_offset
+            self.debug_window_rect.moveTopLeft(new_top_left)
+            self.update()
+            return
+            
         if self.is_dragging_gizmo:
             ray_origin, ray_dir = self.get_ray_from_mouse(event.x(), event.y())
             axis_dir = {'x': glm.vec3(1,0,0), 'y': glm.vec3(0,1,0), 'z': glm.vec3(0,0,1)}[self.gizmo_drag_axis]
@@ -765,6 +919,10 @@ class QtGameView(QOpenGLWidget):
         
         # --- Handle Play Mode Mouse Look ---
         if self.play_mode:
+            # Skip mouse look if we are in Debug Mode
+            if self.debug_mode_active:
+                return
+
             current_pos = event.pos()
             dx = current_pos.x() - self.last_mouse_pos.x()
             dy = current_pos.y() - self.last_mouse_pos.y()
@@ -773,18 +931,20 @@ class QtGameView(QOpenGLWidget):
             if dx == 0 and dy == 0:
                 return
 
-            # Direct update to player for instant response
-            if self.player:
+            if self.use_threading:
+                # Threaded Mode: Send inputs to GameState.
+                # Do NOT update self.player directly to avoid race conditions 
+                # between the logic thread and render interpolation.
+                self.game_state.set_mouse_delta(float(dx), float(dy))
+            elif self.player:
+                # Legacy Fallback
                 self.player.update_angle(dx, dy)
 
             # Recenter cursor
             center_pos = self.mapToGlobal(self.rect().center())
             QCursor.setPos(center_pos)
             self.last_mouse_pos = self.mapFromGlobal(center_pos)
-            
-            # No need to send to thread since we updated the player object directly
             return
-        # -----------------------------------
 
         if not self.mouselook_active:
             super().mouseMoveEvent(event)
@@ -800,6 +960,10 @@ class QtGameView(QOpenGLWidget):
             self.editor.update_views()
 
     def mouseReleaseEvent(self, event):
+        if self.debug_drag_active:
+            self.debug_drag_active = False
+            return
+            
         if self.is_dragging_gizmo and event.button() == Qt.LeftButton:
             self.is_dragging_gizmo = False
             self.editor.save_state()
