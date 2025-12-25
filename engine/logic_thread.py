@@ -7,7 +7,6 @@ import math
 from .threaded_game_state import ThreadedGameState, RenderState
 from .player import Player
 
-
 class LogicThread(threading.Thread):
     """
     Separate thread for game logic processing.
@@ -17,12 +16,15 @@ class LogicThread(threading.Thread):
     TICK_RATE = 60  # Logic updates per second
     TICK_DURATION = 1.0 / TICK_RATE
     
+    # [FIX] Added visibility_system argument to match the call in qt_game_view.py
     def __init__(self, game_state: ThreadedGameState, 
-                 brushes: List[Dict], things: List[Any]):
+                 brushes: List[Dict], things: List[Any], 
+                 visibility_system: Optional[Any] = None):
         super().__init__(daemon=True)
         self.game_state = game_state
         self.brushes = brushes
         self.things = things
+        self.visibility_system = visibility_system  # Store it for future use
         
         self.running = False
         self.player: Optional[Player] = None
@@ -150,8 +152,9 @@ class LogicThread(threading.Thread):
             write_state.player_angle = self.player.angle
             write_state.player_pitch = self.player.pitch
             write_state.camera_view_matrix = self.player.get_view_matrix()
-        
-        # Simple fallback: all non-hidden brushes
+
+        # NOTE: You can implement threaded visibility culling here later using self.visibility_system
+        # For now, we use the fallback of all non-hidden brushes.
         write_state.visible_brushes = [
             b for b in self.brushes if not b.get('hidden', False)
         ]

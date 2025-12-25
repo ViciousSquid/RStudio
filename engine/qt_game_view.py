@@ -262,6 +262,12 @@ class QtGameView(QOpenGLWidget):
         self.play_mode = not self.play_mode
         
         if self.play_mode:
+            # Center and hide cursor immediately to prevent "jump"
+            center_pos = self.mapToGlobal(self.rect().center())
+            QCursor.setPos(center_pos)
+            self.last_mouse_pos = self.mapFromGlobal(center_pos)
+            QApplication.setOverrideCursor(Qt.BlankCursor) # Hide cursor
+
             # Create player
             self.player = Player(
                 player_start_pos[0],
@@ -283,11 +289,14 @@ class QtGameView(QOpenGLWidget):
                 self.logic_thread.set_play_mode(True)
                 self.logic_thread.start()
         else:
+            QApplication.restoreOverrideCursor() # Show cursor
+
             if self.logic_thread:
                 self.logic_thread.stop()
                 self.logic_thread.join(timeout=1.0)
                 self.logic_thread = None
             self.player = None
+            self.update() # Force update to clear visuals
 
     def set_culling(self, enabled):
         self.culling_enabled = enabled
@@ -559,29 +568,42 @@ class QtGameView(QOpenGLWidget):
                 self.set_selected_object_pos(new_pos)
                 self.editor.update_all_ui()
             return
-        if not self.mouselook_active:
-            super().mouseMoveEvent(event)
-            return
+        
+        # --- Handle Play Mode Mouse Look ---
+        if self.play_mode:
+            current_pos = event.pos()
+            dx = current_pos.x() - self.last_mouse_pos.x()
+            dy = current_pos.y() - self.last_mouse_pos.y()
+            
+            # Ignore 0,0 movements (caused by recentering)
+            if dx == 0 and dy == 0:
+                return
 
-        if self.play_mode and self.use_threading:
-            # Send mouse delta to logic thread
-            dx = event.x() - self.last_mouse_pos.x()
-            dy = event.y() - self.last_mouse_pos.y()
-            self.game_state.set_mouse_delta(dx, dy)
+            # Direct update to player for instant response
+            if self.player:
+                self.player.update_angle(dx, dy)
+
             # Recenter cursor
             center_pos = self.mapToGlobal(self.rect().center())
             QCursor.setPos(center_pos)
             self.last_mouse_pos = self.mapFromGlobal(center_pos)
+            
+            # No need to send to thread since we updated the player object directly
             return
-        dx, dy = event.x() - self.last_mouse_pos.x(), event.y() - self.last_mouse_pos.y()
-        if self.play_mode and self.player:
-            self.player.update_angle(dx, dy)
-        else:
+        # -----------------------------------
+
+        if not self.mouselook_active:
+            super().mouseMoveEvent(event)
+            return
+
+        # Editor Camera Look (Legacy behavior for editor)
+        if not self.play_mode:
+            dx, dy = event.x() - self.last_mouse_pos.x(), event.y() - self.last_mouse_pos.y()
             self.camera.rotate(dx, dy)
-        center_pos = self.mapToGlobal(self.rect().center())
-        QCursor.setPos(center_pos)
-        self.last_mouse_pos = self.mapFromGlobal(center_pos)
-        self.editor.update_views()
+            center_pos = self.mapToGlobal(self.rect().center())
+            QCursor.setPos(center_pos)
+            self.last_mouse_pos = self.mapFromGlobal(center_pos)
+            self.editor.update_views()
 
     def mouseReleaseEvent(self, event):
         if self.is_dragging_gizmo and event.button() == Qt.LeftButton:
