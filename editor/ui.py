@@ -148,17 +148,21 @@ class Ui_MainWindow(object):
         file_menu.addSeparator()
         file_menu.addAction(QAction('Exit', MainWindow, shortcut='Ctrl+Q', triggered=MainWindow.close))
 
-        undo_action = QAction('Undo', MainWindow)
-        undo_action.setShortcut('Ctrl+Z')
-        undo_action.setObjectName('undo_action')
-        undo_action.triggered.connect(MainWindow.undo)
-        edit_menu.addAction(undo_action)
+        # --- FIX: Create Undo/Redo actions once and store them on MainWindow ---
+        MainWindow.undo_action = QAction(QIcon("assets/b_undo.png"), 'Undo', MainWindow)
+        MainWindow.undo_action.setShortcut('Ctrl+Z')
+        MainWindow.undo_action.setObjectName('undo_action')
+        MainWindow.undo_action.setToolTip("Undo last action")
+        MainWindow.undo_action.triggered.connect(MainWindow.undo)
+        edit_menu.addAction(MainWindow.undo_action)
         
-        redo_action = QAction('Redo', MainWindow)
-        redo_action.setShortcut('Ctrl+Y')
-        redo_action.setObjectName('redo_action')
-        redo_action.triggered.connect(MainWindow.redo)
-        edit_menu.addAction(redo_action)
+        MainWindow.redo_action = QAction(QIcon("assets/b_redo.png"), 'Redo', MainWindow)
+        MainWindow.redo_action.setShortcut('Ctrl+Y')
+        MainWindow.redo_action.setObjectName('redo_action')
+        MainWindow.redo_action.setToolTip("Redo last action")
+        MainWindow.redo_action.triggered.connect(MainWindow.redo)
+        edit_menu.addAction(MainWindow.redo_action)
+        # -----------------------------------------------------------------------
 
         edit_menu.addSeparator()
         edit_menu.addAction(QAction('Hide Brush', MainWindow, shortcut='H', triggered=MainWindow.hide_selected_brush))
@@ -221,9 +225,12 @@ class Ui_MainWindow(object):
         display_mode_layout.addWidget(MainWindow.display_mode_combobox)
         top_toolbar.addWidget(display_mode_widget)
         top_toolbar.addSeparator()
-        undo_action = QAction(QIcon("assets/b_undo.png"),"",MainWindow,shortcut="Ctrl+Z",toolTip="Undo",triggered=MainWindow.undo)
-        redo_action = QAction(QIcon("assets/b_redo.png"),"",MainWindow,shortcut="Ctrl+Y",toolTip="Redo",triggered=MainWindow.redo)
-        top_toolbar.addActions([undo_action, redo_action])
+
+        # --- FIX: Reuse the shared actions created in create_menu_bar ---
+        top_toolbar.addAction(MainWindow.undo_action)
+        top_toolbar.addAction(MainWindow.redo_action)
+        # ----------------------------------------------------------------
+
         top_toolbar.addSeparator()
         MainWindow.apply_texture_action = QAction(QIcon("assets/b_applytex.png"),"",MainWindow,toolTip="Apply selected texture to brush",triggered=MainWindow.apply_texture_to_brush)
         apply_caulk_action = QAction(QIcon("assets/b_caulk.png"),"",MainWindow,toolTip="Apply caulk texture to brush",triggered=MainWindow.apply_caulk_to_brush)
