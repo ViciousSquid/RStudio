@@ -138,7 +138,7 @@ class PropertyEditor(QWidget):
         self.preview_btn.setCheckable(True)
         self.preview_btn.setStyleSheet("""
             QPushButton {
-                background-color: #6C3BAA; 
+                background-color: #425F5D; 
                 color: white; 
                 border-radius: 4px; 
                 padding: 6px;
