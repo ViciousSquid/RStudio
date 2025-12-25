@@ -75,6 +75,9 @@ class QtGameView(QOpenGLWidget):
         self.active_sounds = {}
         self.played_once_sounds = set()
         
+        # Mover animation state
+        self.mover_states = {}  # brush_index -> {'progress': 0.0, 'forward': True}
+        
         # Performance tracking
         self.fps = 0
         self.frame_count = 0
@@ -347,6 +350,7 @@ class QtGameView(QOpenGLWidget):
             # Non-threaded fallback
             self.player.update(self.editor.keys_pressed, self.editor.state.brushes, delta)
             self.handle_triggers()
+            self.update_movers(delta)
             self.update_speaker_sounds()
         elif self.hasFocus():
             self.handle_keyboard_input(delta)
@@ -365,6 +369,9 @@ class QtGameView(QOpenGLWidget):
             QCursor.setPos(center_pos)
             self.last_mouse_pos = self.mapFromGlobal(center_pos)
             QApplication.setOverrideCursor(Qt.BlankCursor) # Hide cursor
+
+            # Initialize mover states
+            self.init_mover_states()
 
             # Create player
             self.player = Player(
@@ -388,6 +395,9 @@ class QtGameView(QOpenGLWidget):
                 self.logic_thread.start()
         else:
             QApplication.restoreOverrideCursor() # Show cursor
+
+            # Reset movers to original positions
+            self.reset_mover_states()
 
             if self.logic_thread:
                 self.logic_thread.stop()
@@ -518,6 +528,92 @@ class QtGameView(QOpenGLWidget):
                         self.active_sounds[thing.name].setVolume(final_volume)
                 elif is_playing:
                     self.stop_sound_for_speaker(thing.name)
+
+    def init_mover_states(self):
+        """Initialize mover states when entering play mode."""
+        self.mover_states = {}
+        for i, brush in enumerate(self.editor.state.brushes):
+            if brush.get('is_mover') and not brush.get('move_once', False):
+                # Store original position if not already stored
+                if 'original_pos' not in brush:
+                    brush['original_pos'] = list(brush['pos'])
+                # Initialize animation state
+                self.mover_states[i] = {
+                    'progress': 0.0,
+                    'forward': True
+                }
+
+    def reset_mover_states(self):
+        """Reset movers to original positions when exiting play mode."""
+        for i, brush in enumerate(self.editor.state.brushes):
+            if brush.get('is_mover') and 'original_pos' in brush:
+                brush['pos'] = list(brush['original_pos'])
+        self.mover_states = {}
+
+    def update_movers(self, delta):
+        """Update all active movers. Call this every frame during play mode."""
+        for i, brush in enumerate(self.editor.state.brushes):
+            # Skip non-movers and move_once movers (they teleport, don't animate)
+            if not brush.get('is_mover') or brush.get('move_once', False):
+                continue
+            
+            # Skip movers that aren't turned on
+            if not brush.get('start_on', False):
+                continue
+            
+            # Get or create mover state
+            if i not in self.mover_states:
+                if 'original_pos' not in brush:
+                    brush['original_pos'] = list(brush['pos'])
+                self.mover_states[i] = {'progress': 0.0, 'forward': True}
+            
+            state = self.mover_states[i]
+            
+            # Get mover properties
+            speed = brush.get('speed', 64.0)  # units per second
+            distance = brush.get('distance', 128.0)
+            direction = np.array(brush.get('direction', [0, 1, 0]), dtype=float)
+            
+            # Normalize direction
+            dir_length = np.linalg.norm(direction)
+            if dir_length > 0:
+                direction = direction / dir_length
+            
+            # Calculate progress change this frame
+            if distance > 0:
+                progress_delta = (speed * delta) / distance
+            else:
+                progress_delta = 0
+            
+            # Update progress based on direction of travel
+            if state['forward']:
+                state['progress'] += progress_delta
+                if state['progress'] >= 1.0:
+                    state['progress'] = 1.0
+                    state['forward'] = False  # Reverse direction (ping-pong)
+            else:
+                state['progress'] -= progress_delta
+                if state['progress'] <= 0.0:
+                    state['progress'] = 0.0
+                    state['forward'] = True  # Reverse direction (ping-pong)
+            
+            # Apply eased position (smooth start/stop)
+            eased_progress = self._ease_in_out(state['progress'])
+            
+            # Calculate new position
+            original = np.array(brush['original_pos'])
+            offset = direction * distance * eased_progress
+            new_pos = original + offset
+            
+            brush['pos'] = new_pos.tolist()
+
+    def _ease_in_out(self, t):
+        """Smooth easing function for natural movement."""
+        # Cubic ease-in-out
+        if t < 0.5:
+            return 4 * t * t * t
+        else:
+            return 1 - pow(-2 * t + 2, 3) / 2
 
     def get_selected_object_pos(self):
         if not self.editor.state.selected_object: return None
