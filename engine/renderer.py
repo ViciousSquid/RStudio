@@ -5,6 +5,7 @@ import ctypes
 from editor.things import Thing, Light
 from engine import shaders
 from OpenGL.GL.shaders import compileProgram, compileShader
+from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from PIL import Image
 import os
 import time
@@ -139,72 +140,89 @@ class Renderer:
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDepthFunc(gl.GL_LESS)
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
+        gl.glEnable(gl.GL_PROGRAM_POINT_SIZE) # Enable resizing points for Vertex mode
 
-        # Draw Grid
+        # --- Determine Render Mode ---
+        # Default to Lit if not specified
+        current_mode = config.get('render_mode', RENDER_MODE_LIT)
+
+        # Handle global Polygon Modes (Wireframe/Vertex)
+        if current_mode == RENDER_MODE_WIREFRAME:
+            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
+        elif current_mode == RENDER_MODE_VERTEX:
+            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_POINT)
+            gl.glPointSize(4.0) # Make vertices visible
+        else:
+            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+
+        # Draw Grid (Always visible unless explicitly hidden, handled internally)
         self.draw_grid(projection, view, self.grid_indices_count)
 
-        # --- Prepare object lists for rendering ---
+        # --- Prepare object lists ---
         opaque_brushes, transparent_brushes, sprites, fog_volumes = self._sort_objects(brushes, things, config)
         
-        # Correctly get the play_mode from the config dictionary
-        is_play_mode = config.get('play_mode', False)
+        lights = [t for t in things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
 
         # --- 1. Opaque Pass ---
         gl.glDepthMask(gl.GL_TRUE)
         gl.glDisable(gl.GL_BLEND)
-        if config.get('culling_enabled', False):
-            gl.glEnable(gl.GL_CULL_FACE)
-        else:
-            gl.glDisable(gl.GL_CULL_FACE)
-
-        lights = [t for t in things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
         
-        display_mode = config.get('brush_display_mode', 'Textured')
-        if display_mode == "Textured":
+        # Select drawing method based on mode
+        if current_mode == RENDER_MODE_UNLIT:
+            # Fullbright (Textured, no lighting calculations)
             self.draw_textured_brushes(projection, view, opaque_brushes, lights, config)
-        else: # Lit or Wireframe
+        elif current_mode == RENDER_MODE_LIT:
+            # Phong (Lit)
+            self.draw_lit_brushes(projection, view, opaque_brushes, lights, config)
+        else:
+            # For Wireframe/Vertex, we generally want a simple color or the Lit shader without filling
+            # Using 'Lit' shader usually looks best for wireframe geometry
             self.draw_lit_brushes(projection, view, opaque_brushes, lights, config)
 
-        # --- Shadow Pass ---
-        shadow_casting_lights = [light for light in lights if light.properties.get('casts_shadows')]
-        if shadow_casting_lights:
-            self.render_shadows(projection, view, opaque_brushes, shadow_casting_lights)
+        # --- Shadow Pass (Only relevant in Lit mode) ---
+        if current_mode == RENDER_MODE_LIT:
+            shadow_casting_lights = [light for light in lights if light.properties.get('casts_shadows')]
+            if shadow_casting_lights:
+                self.render_shadows(projection, view, opaque_brushes, shadow_casting_lights)
 
         # --- 2. Transparent Pass ---
-        # Sort transparent objects from back to front
+        # Sort back-to-front
         transparent_brushes.sort(key=lambda b: -glm.distance(glm.vec3(b['pos']), camera_pos))
         sprites.sort(key=lambda s: -glm.distance(glm.vec3(s.pos), camera_pos))
-        fog_volumes.sort(key=lambda b: -glm.distance(glm.vec3(b['pos']), camera_pos))
-
         
         gl.glEnable(gl.GL_BLEND)
-        gl.glDepthMask(gl.GL_FALSE) # Don't write to depth buffer
+        gl.glDepthMask(gl.GL_FALSE)
 
+        # Draw Sprites (Always unlit/textured usually)
         self.draw_sprites(projection, view, sprites, self.sprite_textures)
-        self.draw_lit_brushes(projection, view, transparent_brushes, lights, config, is_transparent_pass=True)
-        self.draw_fog_volumes(projection, view, fog_volumes, lights, camera_pos, config)
+        
+        # Transparent brushes
+        if current_mode == RENDER_MODE_UNLIT:
+            self.draw_textured_brushes(projection, view, transparent_brushes, lights, config)
+        else:
+            self.draw_lit_brushes(projection, view, transparent_brushes, lights, config, is_transparent_pass=True)
 
-        # --- 3. Overlays (Gizmo, selection outline) ---
-        gl.glDepthMask(gl.GL_TRUE) # Restore depth mask for gizmo/outlines
-        gl.glDisable(gl.GL_DEPTH_TEST) # Draw on top of everything
+        if current_mode == RENDER_MODE_LIT:
+            self.draw_fog_volumes(projection, view, fog_volumes, lights, camera_pos, config)
+
+        # --- 3. Overlays ---
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glDisable(gl.GL_DEPTH_TEST)
+        
+        # Ensure we return to Fill mode for Gizmos/UI if we were in Wireframe
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
 
         if selected_object:
-            if isinstance(selected_object, dict): # It's a brush
-                # Draw wireframe for textured mode, as lit mode handles selection color
-                if display_mode == "Textured":
-                    self.draw_selected_brush_outline(projection, view, selected_object)
-                
-                # Draw gizmo ONLY if the selected brush is NOT locked
-                if not selected_object.get('lock', False):
-                    self.render_gizmo(projection, view, selected_object['pos'])
-            
-            elif isinstance(selected_object, Thing): # It's a Thing
-                # Things don't have a wireframe outline, just the gizmo
-                self.render_gizmo(projection, view, selected_object.pos)
+             # Logic for selection outlines remains...
+             if isinstance(selected_object, dict):
+                 self.draw_selected_brush_outline(projection, view, selected_object)
+                 if not selected_object.get('lock', False):
+                     self.render_gizmo(projection, view, selected_object['pos'])
+             elif isinstance(selected_object, Thing):
+                 self.render_gizmo(projection, view, selected_object.pos)
 
         # --- Reset GL State ---
         gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         gl.glDisable(gl.GL_BLEND)
         gl.glUseProgram(0)
 

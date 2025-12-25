@@ -16,6 +16,7 @@ from .renderer import Renderer
 from engine import shaders
 from engine.threaded_game_state import ThreadedGameState
 from engine.logic_thread import LogicThread
+from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 
 def perspective_projection(fov, aspect, near, far):
     if aspect == 0: return glm.mat4(1.0)
@@ -55,6 +56,16 @@ class QtGameView(QOpenGLWidget):
         # Rendering backend
         self.renderer = None
 
+        # Render Menu states
+        self.show_render_menu = False
+        self.current_render_mode = RENDER_MODE_LIT
+        self.render_mode_names = {
+            RENDER_MODE_LIT: "Lit (Phong)",
+            RENDER_MODE_UNLIT: "Unlit (Fullbright)",
+            RENDER_MODE_WIREFRAME: "Wireframe",
+            RENDER_MODE_VERTEX: "Vertex"
+        }
+
         # Game mode state
         self.play_mode = False
         self.player = None
@@ -92,6 +103,35 @@ class QtGameView(QOpenGLWidget):
         gl.glClearColor(0.1, 0.1, 0.15, 1.0)
         self.renderer = Renderer(self.load_texture, self.grid_size, self.world_size)
         self.load_all_sprite_textures()
+
+    def keyPressEvent(self, event):
+        # Only handle these shortcuts if we are currently playing the game
+        if self.play_mode:
+            # Toggle the Render Menu with F3
+            if event.key() == Qt.Key_F3:
+                self.show_render_menu = not getattr(self, 'show_render_menu', False)
+                self.update()
+                return
+
+            # If the menu is open, handle mode switching
+            if getattr(self, 'show_render_menu', False):
+                if event.key() == Qt.Key_1:
+                    self.current_render_mode = RENDER_MODE_LIT
+                elif event.key() == Qt.Key_2:
+                    self.current_render_mode = RENDER_MODE_UNLIT
+                elif event.key() == Qt.Key_3:
+                    self.current_render_mode = RENDER_MODE_WIREFRAME
+                elif event.key() == Qt.Key_4:
+                    self.current_render_mode = RENDER_MODE_VERTEX
+                elif event.key() == Qt.Key_Escape:
+                    self.show_render_menu = False
+                
+                # Force a redraw to show the change immediately
+                self.update()
+                return 
+
+        # Pass other events (like movement keys) to the default handler
+        super().keyPressEvent(event)
         
     def paintGL(self):
         if not self.renderer:
@@ -131,6 +171,7 @@ class QtGameView(QOpenGLWidget):
         render_config = {
             "culling_enabled": self.culling_enabled,
             "brush_display_mode": self.brush_display_mode,
+            "render_mode": getattr(self, 'current_render_mode', 0), # Default to LIT (0) if not set
             "show_triggers_as_solid": self.show_triggers_as_solid,
             "show_caulk": self.editor.config.getboolean('Display', 'show_caulk', fallback=True),
             "play_mode": self.play_mode,
@@ -147,8 +188,13 @@ class QtGameView(QOpenGLWidget):
 
         if self.editor.config.getboolean('Display', 'show_fps', fallback=False):
             self._draw_fps_counter()
+        
         if self.play_mode and self.show_sprites_in_play_mode:
             self._draw_sprites_text()
+
+        # Draw render menu if active in play mode
+        if self.play_mode and getattr(self, 'show_render_menu', False):
+            self._draw_render_menu()
 
     def _draw_sprites_text(self):
         """Renders the "Sprites" text using QPainter."""
@@ -186,6 +232,58 @@ class QtGameView(QOpenGLWidget):
         
         painter.fillRect(rect_x, padding, rect_width, 20, QColor(0, 0, 0, 128))
         painter.drawText(text_x, 20, f"FPS: {self.fps:.0f}")
+        painter.end()
+
+    def _draw_render_menu(self):
+        """Draws the render mode selection menu overlay."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Menu Dimensions
+        width, height = 220, 200
+        x = (self.width() - width) // 2
+        y = (self.height() - height) // 2
+        
+        # Draw Background (Semi-transparent black)
+        painter.fillRect(x, y, width, height, QColor(0, 0, 0, 200))
+        painter.setPen(QColor(255, 255, 255))
+        painter.drawRect(x, y, width, height)
+        
+        # Draw Title
+        font = QFont()
+        font.setBold(True)
+        font.setPointSize(10)
+        painter.setFont(font)
+        painter.drawText(x, y + 25, width, 25, Qt.AlignCenter, "Render Mode")
+        
+        # Draw Options
+        font.setBold(False)
+        font.setPointSize(10)
+        painter.setFont(font)
+        
+        # Define options matching the constants in constants.py
+        # 0: Lit, 1: Unlit, 2: Wireframe, 3: Vertex
+        options = [
+            (0, "[1] Lit (Phong)"),
+            (1, "[2] Unlit (Fullbright)"),
+            (2, "[3] Wireframe"),
+            (3, "[4] Vertex")
+        ]
+        
+        current_y = y + 55
+        active_mode = getattr(self, 'current_render_mode', 0)
+
+        for mode_id, text in options:
+            if active_mode == mode_id:
+                painter.setPen(QColor(100, 255, 100)) # Green for active
+                display_text = "> " + text
+            else:
+                painter.setPen(QColor(200, 200, 200)) # Grey for inactive
+                display_text = "  " + text
+            
+            painter.drawText(x + 20, current_y, display_text)
+            current_y += 20
+            
         painter.end()
 
     def update_grid(self):

@@ -25,10 +25,8 @@ class Player:
     def update(self, keys, brushes, delta):
         forward_input = (1 if Qt.Key_W in keys or Qt.Key_Up in keys else 0) - \
                         (1 if Qt.Key_S in keys or Qt.Key_Down in keys else 0)
-        # --- THIS IS THE CORRECTED LINE ---
         strafe_input = (1 if Qt.Key_A in keys or Qt.Key_Left in keys else 0) - \
                        (1 if Qt.Key_D in keys or Qt.Key_Right in keys else 0)
-        # --- END OF CORRECTION ---
         is_fast = Qt.Key_Shift in keys
 
         speed = self.speed * 3 if is_fast else self.speed
