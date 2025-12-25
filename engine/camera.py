@@ -25,7 +25,7 @@ class Camera:
         if not isinstance(value, glm.vec3):
             import traceback
             #print(f"WARNING: Camera position being set to non-glm.vec3 type: {type(value)} - Value: {value}")
-            traceback.print_stack() # Print traceback to show where the assignment happened
+
             if isinstance(value, (list, tuple)):
                 try:
                     self._pos = glm.vec3(*value)

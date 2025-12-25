@@ -12,11 +12,15 @@ class RenderState:
     player_pos: glm.vec3 = field(default_factory=lambda: glm.vec3(0, 0, 0))
     player_angle: float = 0.0
     player_pitch: float = 0.0
+    player_health: int = 100
+    player_max_health: int = 100
     visible_brushes: List[Dict] = field(default_factory=list)
     visible_things: List[Any] = field(default_factory=list)
     active_lights: List[Any] = field(default_factory=list)
     camera_view_matrix: glm.mat4 = field(default_factory=lambda: glm.mat4(1.0))
     timestamp: float = 0.0
+    total_brushes: int = 0
+    culled_brushes: int = 0
 
 
 class ThreadedGameState:
@@ -38,6 +42,7 @@ class ThreadedGameState:
         self._input_lock = threading.Lock()
         self._keys_pressed: Set[int] = set()
         self._mouse_delta = (0.0, 0.0)
+        self._use_key_pressed = False  # Single-shot use key
         
     def request_swap(self):
         """Called by logic thread when a frame is complete."""
@@ -80,3 +85,15 @@ class ThreadedGameState:
             delta = self._mouse_delta
             self._mouse_delta = (0.0, 0.0)
             return delta
+
+    def set_use_key_pressed(self):
+        """Signal that the use key was pressed (single-shot)."""
+        with self._input_lock:
+            self._use_key_pressed = True
+
+    def consume_use_key(self) -> bool:
+        """Check and clear the use key state."""
+        with self._input_lock:
+            pressed = self._use_key_pressed
+            self._use_key_pressed = False
+            return pressed

@@ -8,6 +8,14 @@ import math
 from .threaded_game_state import ThreadedGameState, RenderState
 from .player import Player
 
+# Import Thing subclasses for type checking
+try:
+    from editor.things import Speaker, Pickup, Light
+except ImportError:
+    Speaker = None
+    Pickup = None
+    Light = None
+
 class LogicThread(threading.Thread):
     """
     Separate thread for game logic processing.
@@ -30,9 +38,19 @@ class LogicThread(threading.Thread):
         self.player: Optional[Player] = None
         self.play_mode = False
         
+        # Player stats
+        self.player_health = 100
+        self.player_max_health = 100
+        
         # Trigger state
         self.player_in_triggers: set = set()
         self.fired_once_triggers: set = set()
+        
+        # Pickup state
+        self.collected_pickups: set = set()
+        
+        # Speaker state (for triggered speakers)
+        self.active_speakers: set = set()
         
         # Mover Animation State
         self.mover_states = {} 
@@ -51,9 +69,21 @@ class LogicThread(threading.Thread):
         self.play_mode = enabled
         if enabled:
             self._init_movers()
+            # Reset player stats
+            self.player_health = 100
+            self.player_max_health = 100
+            # Reset pickup state
+            self.collected_pickups.clear()
+            for thing in self.things:
+                if Pickup and isinstance(thing, Pickup):
+                    thing.properties['collected'] = False
+            # Reset speaker state
+            self.active_speakers.clear()
         else:
             self.player_in_triggers.clear()
             self.fired_once_triggers.clear()
+            self.collected_pickups.clear()
+            self.active_speakers.clear()
             self._reset_movers()
 
     def _init_movers(self):
@@ -121,6 +151,7 @@ class LogicThread(threading.Thread):
         # 2. Get Input
         keys = self.game_state.get_keys()
         mouse_delta = self.game_state.consume_mouse_delta()
+        use_key_pressed = self.game_state.consume_use_key()
         
         # 3. Update Player Physics
         if mouse_delta != (0.0, 0.0):
@@ -130,6 +161,9 @@ class LogicThread(threading.Thread):
         
         # 4. Handle Triggers
         self._handle_triggers()
+        
+        # 5. Handle Pickups
+        self._handle_pickups(use_key_pressed)
 
     def _update_movers(self, delta):
         """Calculate new mover positions and move player if standing on one."""
@@ -215,26 +249,95 @@ class LogicThread(threading.Thread):
                 min_bounds.y <= player_pos.y <= max_bounds.y and
                 min_bounds.z <= player_pos.z <= max_bounds.z):
                 currently_colliding.add(i)
-                if i not in self.player_in_triggers:
-                    self._activate_trigger(brush, i)
+                
+                trigger_type = brush.get('trigger_type', 'multiple').lower()
+                
+                if trigger_type == 'once':
+                    # Only fire once, ever
+                    if i not in self.player_in_triggers and i not in self.fired_once_triggers:
+                        self._activate_trigger(brush, i)
+                        self.fired_once_triggers.add(i)
+                else:
+                    # 'multiple' - fire on entry only (not continuously)
+                    if i not in self.player_in_triggers:
+                        self._activate_trigger(brush, i)
                     
         self.player_in_triggers = currently_colliding
         
     def _activate_trigger(self, brush: Dict, trigger_id: int):
-        trigger_type = brush.get('trigger_type', 'multiple')
-        if trigger_type == 'once' and trigger_id in self.fired_once_triggers:
-            return
-            
         target_name = brush.get('target')
         if not target_name:
             return
-            
+        
+        # Try to find target in brushes (movers)
         for b in self.brushes:
             if b.get('name') == target_name and b.get('is_mover'):
                 b['start_on'] = not b.get('start_on', False)
+                return
+        
+        # Try to find target in things (speakers, lights, etc.)
+        for thing in self.things:
+            if hasattr(thing, 'name') and thing.name == target_name:
+                # Handle Speaker
+                if Speaker and isinstance(thing, Speaker):
+                    # Toggle speaker state
+                    current_state = thing.properties.get('state', 'off')
+                    thing.properties['state'] = 'on' if current_state == 'off' else 'off'
+                    return
+                # Handle Light
+                if Light and isinstance(thing, Light):
+                    current_state = thing.properties.get('state', 'on')
+                    thing.properties['state'] = 'on' if current_state == 'off' else 'off'
+                    return
+            
+    def _handle_pickups(self, use_key_pressed: bool):
+        """Handle pickup collection based on activation type."""
+        if not self.player or not Pickup:
+            return
+            
+        player_pos = self.player.pos
+        pickup_radius = 32.0  # Distance to collect a pickup
+        use_radius = 64.0     # Distance to use a pickup with E key
+        
+        for i, thing in enumerate(self.things):
+            if not isinstance(thing, Pickup):
+                continue
+            if thing.properties.get('collected', False):
+                continue
+            if i in self.collected_pickups:
+                continue
                 
-        if trigger_type == 'once':
-            self.fired_once_triggers.add(trigger_id)
+            thing_pos = glm.vec3(thing.pos)
+            distance = glm.distance(player_pos, thing_pos)
+            
+            activation = thing.properties.get('activation', 'walk_over')
+            
+            should_collect = False
+            if activation == 'walk_over' and distance <= pickup_radius:
+                should_collect = True
+            elif activation == 'use' and use_key_pressed and distance <= use_radius:
+                should_collect = True
+                
+            if should_collect:
+                self._collect_pickup(thing, i)
+    
+    def _collect_pickup(self, pickup, pickup_id: int):
+        """Actually collect a pickup and apply its effect."""
+        item_type = pickup.properties.get('item_type', 'health')
+        value = pickup.properties.get('value', 25)
+        
+        if item_type == 'health':
+            self.player_health = min(self.player_max_health, self.player_health + value)
+        elif item_type == 'armour':
+            # Could add armor system later
+            pass
+        elif item_type == 'ammo':
+            # Could add ammo system later
+            pass
+            
+        # Mark as collected
+        pickup.properties['collected'] = True
+        self.collected_pickups.add(pickup_id)
             
     def _prepare_render_state(self):
         write_state = self.game_state.get_write_state()
@@ -244,23 +347,32 @@ class LogicThread(threading.Thread):
             write_state.player_angle = self.player.angle
             write_state.player_pitch = self.player.pitch
             write_state.camera_view_matrix = self.player.get_view_matrix()
+        
+        # Player stats
+        write_state.player_health = self.player_health
+        write_state.player_max_health = self.player_max_health
 
-        # Build a safe display list of brushes.
-        # We MUST copy brushes that are movers, otherwise the Render thread
-        # might read the dict while LogicThread is modifying 'pos' in the next tick.
+        # Build safe display list of brushes with statistics tracking
         safe_brushes = []
         for b in self.brushes:
             if b.get('hidden', False):
                 continue
             
             if b.get('is_mover', False):
-                # Shallow copy is sufficient because 'pos' is replaced with a new list object
-                # in _update_movers, not mutated in place.
                 safe_brushes.append(b.copy())
             else:
-                # Static brushes can be referenced directly
                 safe_brushes.append(b)
 
         write_state.visible_brushes = safe_brushes
-        write_state.visible_things = list(self.things)
+        write_state.total_brushes = len(self.brushes)
+        write_state.culled_brushes = write_state.total_brushes - len(safe_brushes)
+        
+        # Filter out collected pickups from visible things
+        visible_things = []
+        for i, thing in enumerate(self.things):
+            if Pickup and isinstance(thing, Pickup) and i in self.collected_pickups:
+                continue  # Don't render collected pickups
+            visible_things.append(thing)
+        
+        write_state.visible_things = visible_things
         write_state.timestamp = time.perf_counter()

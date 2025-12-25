@@ -41,6 +41,16 @@ class QtGameView(QOpenGLWidget):
         self.visibility_system = None
         self.show_visibility_debug = False
 
+        self.sysmon_expanded = False
+        self.sysmon_stats = {
+            'visible_brushes': 0,
+            'visible_tris': 0,
+            'visible_surfaces': 0,
+            'culled_brushes': 0,
+            'culled_tris': 0,
+            'culled_surfaces': 0
+        }
+
         # Threading
         self.game_state = ThreadedGameState()
         self.logic_thread: Optional[LogicThread] = None
@@ -223,6 +233,27 @@ class QtGameView(QOpenGLWidget):
             self.selected_object, render_config
         )
 
+        # Capture rendering statistics for SysMon
+        if self.play_mode and self.use_threading and render_state:
+            visible_count = len(render_state.visible_brushes)
+            self.sysmon_stats['visible_brushes'] = visible_count
+            self.sysmon_stats['visible_tris'] = visible_count * 12
+            self.sysmon_stats['visible_surfaces'] = visible_count * 6
+            self.sysmon_stats['culled_brushes'] = render_state.culled_brushes
+            self.sysmon_stats['culled_tris'] = render_state.culled_brushes * 12
+            self.sysmon_stats['culled_surfaces'] = render_state.culled_brushes * 6
+        else:
+            visible_count = len(brushes_to_render)
+            total_count = len(self.editor.state.brushes)
+            culled_count = total_count - visible_count
+            
+            self.sysmon_stats['visible_brushes'] = visible_count
+            self.sysmon_stats['visible_tris'] = visible_count * 12
+            self.sysmon_stats['visible_surfaces'] = visible_count * 6
+            self.sysmon_stats['culled_brushes'] = culled_count
+            self.sysmon_stats['culled_tris'] = culled_count * 12
+            self.sysmon_stats['culled_surfaces'] = culled_count * 6
+
         # Draw 2D Overlays
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
@@ -235,6 +266,9 @@ class QtGameView(QOpenGLWidget):
 
         if self.play_mode and getattr(self, 'show_render_menu', False):
             self._draw_render_menu(painter)
+            
+        if self.play_mode and self.editor.config.getboolean('Display', 'show_hud', fallback=True):
+            self._draw_hud(painter, render_state)
             
         if self.debug_mode_active:
             self._draw_window_manager(painter)
@@ -260,8 +294,60 @@ class QtGameView(QOpenGLWidget):
         painter.fillRect(rect_x, 5, rect_width, 20, QColor(0, 0, 0, 128))
         painter.drawText(rect_x + 5, 20, f"FPS: {self.fps:.0f}")
 
+    def _draw_hud(self, painter, render_state):
+        """Draw the in-game HUD showing health bar and other info."""
+        if not render_state:
+            return
+            
+        health = render_state.player_health
+        max_health = render_state.player_max_health
+        health_ratio = health / max_health if max_health > 0 else 0
+        
+        # HUD positioning
+        hud_margin = 20
+        bar_width = 200
+        bar_height = 20
+        bar_x = hud_margin
+        bar_y = self.height() - hud_margin - bar_height
+        
+        # Background bar
+        painter.setPen(QPen(QColor(60, 60, 60), 2))
+        painter.setBrush(QBrush(QColor(40, 40, 40, 200)))
+        painter.drawRect(bar_x, bar_y, bar_width, bar_height)
+        
+        # Health bar fill
+        if health_ratio > 0.6:
+            fill_color = QColor(50, 200, 50)  # Green
+        elif health_ratio > 0.3:
+            fill_color = QColor(255, 200, 50)  # Yellow
+        else:
+            fill_color = QColor(200, 50, 50)  # Red
+        
+        fill_width = int(bar_width * health_ratio)
+        if fill_width > 0:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(fill_color))
+            painter.drawRect(bar_x, bar_y, fill_width, bar_height)
+        
+        # Health text
+        font = QFont()
+        font.setPointSize(11)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor(255, 255, 255))
+        health_text = f"HEALTH: {health}/{max_health}"
+        painter.drawText(bar_x, bar_y - 5, health_text)
+        
+        # Use key hint (when near usable items)
+        hint_text = "[E] Use"
+        hint_font = QFont()
+        hint_font.setPointSize(9)
+        painter.setFont(hint_font)
+        painter.setPen(QColor(180, 180, 180, 180))
+        painter.drawText(bar_x + bar_width + 20, bar_y + bar_height - 5, hint_text)
+
     def _draw_window_manager(self, painter):
-        """Draws the Debug Window Manager system."""
+        """Draws the Debug Window Manager system with expandable statistics."""
         
         # Window Style Configuration
         bg_color = QColor(20, 20, 25, 240)
@@ -289,7 +375,13 @@ class QtGameView(QOpenGLWidget):
         painter.setPen(QColor(255, 255, 255)) # White text
         painter.drawText(header_rect.adjusted(10, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, "SysMon [F3]")
         
-        # 4. Close Button [X]
+        # 4. Control Buttons
+        # Expand/Collapse Arrow
+        expand_btn_rect = QRect(rect.right() - 50, rect.y(), 25, 25)
+        arrow = "▼" if self.sysmon_expanded else "▶"
+        painter.drawText(expand_btn_rect, Qt.AlignCenter, arrow)
+        
+        # Close Button [X]
         close_btn_rect = QRect(rect.right() - 25, rect.y(), 25, 25)
         painter.drawText(close_btn_rect, Qt.AlignCenter, "[X]")
         
@@ -301,7 +393,7 @@ class QtGameView(QOpenGLWidget):
         status = "STOPPED"
         tps = 0.0
         if self.logic_thread and self.logic_thread.is_alive():
-            status = "unning"
+            status = "running"
             tps = getattr(self.logic_thread, 'actual_tps', 0.0)
             
         painter.setPen(text_color)
@@ -320,9 +412,28 @@ class QtGameView(QOpenGLWidget):
         ft_ms = (1.0 / self.fps * 1000.0) if self.fps > 0 else 0
         painter.drawText(left_margin, content_y, f"Render FPS: {self.fps:.1f} ({ft_ms:.1f} ms)")
         
-        # Frame Time Graph
+        # 6. Expanded Statistics
+        if self.sysmon_expanded:
+            content_y += 20
+            painter.setPen(QColor(150, 255, 150))
+            painter.drawText(left_margin, content_y, f"Visible: {self.sysmon_stats['visible_tris']} tris, {self.sysmon_stats['visible_surfaces']} faces")
+            
+            content_y += 20
+            painter.setPen(QColor(255, 150, 150))
+            painter.drawText(left_margin, content_y, f"Culled:  {self.sysmon_stats['culled_tris']} tris, {self.sysmon_stats['culled_surfaces']} faces")
+            
+            content_y += 20
+            painter.setPen(QColor(150, 150, 255))
+            painter.drawText(left_margin, content_y, f"Brushes: {self.sysmon_stats['visible_brushes']} visible, {self.sysmon_stats['culled_brushes']} culled")
+        
+        # 7. Frame Time Graph
         content_y += 15
-        graph_height = max(40, rect.height() - (content_y - rect.y()) - 15)
+        # Reduce graph height when expanded to fit everything in the same window size
+        base_graph_height = 40
+        if self.sysmon_expanded:
+            base_graph_height = 20  # Make room for 4 lines of stats
+        
+        graph_height = max(base_graph_height, rect.height() - (content_y - rect.y()) - 15)
         graph_rect = QRect(left_margin, content_y, rect.width() - 20, graph_height)
         
         if graph_height > 10: 
@@ -349,7 +460,7 @@ class QtGameView(QOpenGLWidget):
                 painter.setFont(QFont("Small Fonts", 7))
                 painter.drawText(graph_rect.right() - 25, int(ref_y) - 2, "16ms")
 
-        # 6. Resize Grip (Bottom Right)
+        # 8. Resize Grip (Bottom Right)
         painter.setPen(QPen(QColor(100, 100, 100), 1))
         painter.drawLine(rect.right() - 10, rect.bottom() - 2, rect.right() - 2, rect.bottom() - 10)
         painter.drawLine(rect.right() - 6, rect.bottom() - 2, rect.right() - 2, rect.bottom() - 6)
@@ -845,6 +956,13 @@ class QtGameView(QOpenGLWidget):
         if self.debug_mode_active and event.button() == Qt.LeftButton:
             rect = self.debug_window_rect
             mouse_pos = event.pos()
+            
+            # Check Expand/Collapse Arrow
+            expand_btn_rect = QRect(rect.right() - 50, rect.y(), 25, 25)
+            if expand_btn_rect.contains(mouse_pos):
+                self.sysmon_expanded = not self.sysmon_expanded
+                self.update()
+                return
             
             # Check Close Button [X] (Top right 25x25)
             close_btn_rect = QRect(rect.right() - 25, rect.y(), 25, 25)
