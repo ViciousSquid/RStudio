@@ -45,7 +45,7 @@ class View2D(QWidget):
 
         # Initialize color tag icons from SceneHierarchy
         self.color_pixmaps = {}
-        for color_name, qicon in SceneHierarchy(main_window).color_icons.items():
+        for color_name, qicon in SceneHierarchy(main_window).colour_icons.items():
             self.color_pixmaps[color_name] = qicon.pixmap(18, 18) 
 
     def reset_state(self):
@@ -162,8 +162,8 @@ class View2D(QWidget):
             is_mover = brush.get('is_mover', False)
 
             if is_locked:
-                pen_color = QColor(0, 0, 139)
-                fill_color = QColor(0, 0, 139, 70)
+                pen_color = QColor(255, 105, 97) 
+                fill_color = QColor(74,4,4, 20) # 70
             else:
                 pen_color = QColor(211, 211, 211)
                 fill_color = QColor(200, 200, 200, 30)
@@ -447,7 +447,8 @@ class View2D(QWidget):
                 self.update()
                 return
 
-            clicked_object = self.get_object_at(world_pos)
+            # CHANGE: Pass event.pos() (Screen Coordinates) to get_object_at
+            clicked_object = self.get_object_at(event.pos())
             self.editor.set_selected_object(clicked_object)
 
             if clicked_object:
@@ -595,7 +596,10 @@ class View2D(QWidget):
         if event.angleDelta().y() > 0: self.zoom_in()
         else: self.zoom_out()
 
-    def get_object_at(self, world_pos):
+    def get_object_at(self, screen_pos):
+        # We calculate world_pos internally for checking brushes
+        world_pos = self.screen_to_world(screen_pos)
+        
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
         
@@ -603,13 +607,20 @@ class View2D(QWidget):
 
         # 1. Collect all valid 'Thing' candidates under the cursor
         for thing in reversed(self.editor.state.things):
-            w_2d, h_2d = 24, 24 
-            thing_w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
-            thing_rect = QRectF(thing_w_pos.x() - w_2d/2, thing_w_pos.y() - h_2d/2, w_2d, h_2d)
-            if thing_rect.contains(world_pos):
+            # Get the Thing's center in World Space
+            w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
+            # Convert center to Screen Space
+            s_pos = self.world_to_screen(w_pos)
+            
+            # Check a fixed pixel area around the center (e.g., 24x24 pixels)
+            # This ensures they are clickable even when zoomed out.
+            hit_threshold = 12 # Half-size of the hit box in pixels
+            if abs(screen_pos.x() - s_pos.x()) <= hit_threshold and \
+               abs(screen_pos.y() - s_pos.y()) <= hit_threshold:
                 candidates.append(thing)
         
         # 2. Collect all valid 'Brush' candidates under the cursor
+        # Brushes are geometry, so we check them in World Space as before.
         for brush in reversed(self.editor.state.brushes):
             if brush.get('hidden', False):
                 continue # Skip hidden brushes so they don't block selection
@@ -627,6 +638,8 @@ class View2D(QWidget):
 
         # 3. Handle Cycling: If the currently selected object is in the list of candidates,
         # return the NEXT one in the list. Otherwise, return the first one.
+        # Since 'Things' are added to candidates first, they naturally take priority 
+        # on the initial click.
         current_selection = self.editor.state.selected_object
         
         if current_selection in candidates:
