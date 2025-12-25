@@ -1,9 +1,9 @@
 import os
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFormLayout, QCheckBox, QComboBox, QPushButton,
-                             QHBoxLayout, QColorDialog, QFileDialog)
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor
+                             QHBoxLayout, QColorDialog, QFileDialog, QGridLayout, QToolButton)
+from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtGui import QColor, QIcon
 from editor.things import Thing, Light, Pickup, Monster, Model, Speaker
 
 class PropertyEditor(QWidget):
@@ -27,9 +27,20 @@ class PropertyEditor(QWidget):
         self.fog_density_input = None
         self.fog_emit_light_label = None
         self.fog_emit_light_checkbox = None
-
         self.fog_color_label = None
         self.fog_color_button = None
+
+        # Mover properties
+        self.mover_checkbox = None
+        self.mover_speed_label = None
+        self.mover_speed_input = None
+        self.mover_distance_label = None
+        self.mover_distance_input = None
+        self.mover_direction_label = None 
+        self.mover_dir_widget = None
+        self.mover_start_on_label = None
+        self.mover_start_on_checkbox = None
+        self.preview_btn = None
 
         self.set_object(None)
 
@@ -87,12 +98,73 @@ class PropertyEditor(QWidget):
         self.fog_color_button.setFixedSize(200, 32)
         self.update_fog_color_button(brush.get('fog_color', [0.5, 0.6, 0.7]))
 
+        # Mover widgets
+        self.mover_checkbox = QCheckBox()
+        self.mover_speed_label = QLabel("Speed:")
+        self.mover_speed_input = QLineEdit(str(brush.get('speed', 64.0)))
+        self.mover_distance_label = QLabel("Distance:")
+        self.mover_distance_input = QLineEdit(str(brush.get('distance', 128.0)))
+        
+        self.mover_direction_label = QLabel("Direction:")
+        
+        # --- NEW: Directional Arrow Controls ---
+        self.mover_dir_widget = QWidget()
+        dir_layout = QGridLayout(self.mover_dir_widget)
+        dir_layout.setContentsMargins(0,0,0,0)
 
-        # Set initial state from brush properties
+        # Helper to create direction buttons
+        def create_dir_btn(text, direction):
+            btn = QPushButton(text)
+            btn.setFixedSize(30, 30)
+            btn.setToolTip(f"Set direction to {direction}")
+            btn.clicked.connect(lambda: self.update_object_prop('direction', direction))
+            return btn
+
+        # Layout: 
+        #       [Up]    [N]
+        #       [Dn] [W]   [E]
+        #               [S]
+        
+        # Y-Axis (Vertical)
+        dir_layout.addWidget(create_dir_btn("▲", [0, 1, 0]), 0, 0) # Up
+        dir_layout.addWidget(QLabel("Y"), 1, 0, alignment=Qt.AlignCenter)
+        dir_layout.addWidget(create_dir_btn("▼", [0, -1, 0]), 2, 0) # Down
+        
+        # X/Z Axis (Cardinal)
+        # Assuming: N=(0,0,1), S=(0,0,-1), E=(1,0,0), W=(-1,0,0) based on typical editors
+        # Adjusting specifically for this engine's Z/X orientation
+        dir_layout.addWidget(create_dir_btn("N", [0, 0, 1]), 0, 3) 
+        dir_layout.addWidget(create_dir_btn("W", [-1, 0, 0]), 1, 2)
+        dir_layout.addWidget(create_dir_btn("E", [1, 0, 0]), 1, 4)
+        dir_layout.addWidget(create_dir_btn("S", [0, 0, -1]), 2, 3)
+
+        # --- NEW: Preview Button ---
+        self.preview_btn = QPushButton("Preview Movement")
+        self.preview_btn.setCheckable(True)
+        self.preview_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #007bff; 
+                color: white; 
+                border-radius: 4px; 
+                padding: 6px;
+                font-weight: bold;
+            }
+            QPushButton:checked {
+                background-color: #0056b3;
+            }
+        """)
+        self.preview_btn.toggled.connect(self.toggle_preview)
+
+        self.mover_start_on_label = QLabel("Start On:")
+        self.mover_start_on_checkbox = QCheckBox()
+
+        # Set initial state
         self.locked_checkbox.setChecked(is_locked)
         self.trigger_checkbox.setChecked(is_trigger)
         self.type_combo.setCurrentText(brush.get('trigger_type', 'Once'))
         self.fog_checkbox.setChecked(is_fog)
+        self.mover_checkbox.setChecked(brush.get('is_mover', False))
+        self.mover_start_on_checkbox.setChecked(brush.get('start_on', False))
 
 
 
@@ -105,9 +177,17 @@ class PropertyEditor(QWidget):
         layout.addRow(self.fog_density_label, self.fog_density_input)
         layout.addRow(self.fog_color_label, self.fog_color_button)
 
+        # Mover Section
+        layout.addRow("Is Mover:", self.mover_checkbox)
+        layout.addRow(self.mover_speed_label, self.mover_speed_input)
+        layout.addRow(self.mover_distance_label, self.mover_distance_input)
+        layout.addRow(self.mover_direction_label, self.mover_dir_widget)
+        layout.addRow(self.mover_start_on_label, self.mover_start_on_checkbox)
+        layout.addRow("", self.preview_btn) # Add Preview Button at bottom of mover section
 
 
-        # Connect Signals to dedicated handlers
+
+        # Connect Signals
         self.locked_checkbox.toggled.connect(self.on_lock_changed)
         self.trigger_checkbox.toggled.connect(self.on_trigger_changed)
         self.target_input.editingFinished.connect(lambda: self.update_object_prop('target', self.target_input.text()))
@@ -115,12 +195,27 @@ class PropertyEditor(QWidget):
         self.fog_checkbox.toggled.connect(self.on_fog_changed)
         self.fog_density_input.editingFinished.connect(lambda: self.update_object_prop('fog_density', float(self.fog_density_input.text()) if self.fog_density_input.text() else 0.1))
         self.fog_color_button.clicked.connect(self.on_fog_color_changed)
-
+        
+        self.mover_checkbox.toggled.connect(self.on_mover_changed)
+        self.mover_speed_input.editingFinished.connect(
+            lambda: self.update_object_prop('speed', float(self.mover_speed_input.text()) if self.mover_speed_input.text() else 64.0))
+        self.mover_distance_input.editingFinished.connect(
+            lambda: self.update_object_prop('distance', float(self.mover_distance_input.text()) if self.mover_distance_input.text() else 128.0))
+        
+        self.mover_start_on_checkbox.toggled.connect(
+            lambda checked: self.update_object_prop('start_on', checked))
 
         self.main_layout.addLayout(layout)
-
-        # Set the initial UI state based on properties
         self.update_brush_ui_state()
+
+    def toggle_preview(self, checked):
+        if self.editor:
+            if checked:
+                self.preview_btn.setText("Stop Preview")
+                self.editor.start_mover_preview(self.current_object)
+            else:
+                self.preview_btn.setText("Preview Movement")
+                self.editor.stop_mover_preview()
 
     def on_fog_color_changed(self):
         if self.current_object is None:
@@ -130,6 +225,16 @@ class PropertyEditor(QWidget):
             self.current_object['fog_color'] = [color.redF(), color.greenF(), color.blueF()]
             self.update_fog_color_button(self.current_object['fog_color'])
             self.editor.update_all_ui()
+
+    def on_mover_changed(self, is_mover):
+        if self.current_object is None: return
+        self.current_object['is_mover'] = is_mover
+        if is_mover:
+            if 'speed' not in self.current_object: self.current_object['speed'] = 64.0
+            if 'distance' not in self.current_object: self.current_object['distance'] = 128.0
+            if 'direction' not in self.current_object: self.current_object['direction'] = [0, 1, 0]
+        self.set_object(self.current_object)
+        self.editor.update_all_ui()
 
     def update_fog_color_button(self, color_rgb):
         qcolor = QColor.fromRgbF(*color_rgb)
@@ -144,7 +249,6 @@ class PropertyEditor(QWidget):
         is_trigger = self.current_object.get('is_trigger', False)
         is_fog = self.current_object.get('is_fog', False)
 
-
         self.trigger_checkbox.setEnabled(not is_locked)
 
         show_trigger_fields = is_trigger and not is_locked
@@ -158,6 +262,17 @@ class PropertyEditor(QWidget):
         self.fog_density_input.setVisible(show_fog_fields)
         self.fog_color_label.setVisible(show_fog_fields)
         self.fog_color_button.setVisible(show_fog_fields)
+
+        is_mover = self.current_object.get('is_mover', False)
+        show_mover_fields = is_mover and not is_locked
+        self.mover_speed_label.setVisible(show_mover_fields)
+        self.mover_speed_input.setVisible(show_mover_fields)
+        self.mover_distance_label.setVisible(show_mover_fields)
+        self.mover_direction_label.setVisible(show_mover_fields)
+        self.mover_dir_widget.setVisible(show_mover_fields)
+        self.mover_start_on_label.setVisible(show_mover_fields)
+        self.mover_start_on_checkbox.setVisible(show_mover_fields)
+        self.preview_btn.setVisible(show_mover_fields)
 
 
     def on_lock_changed(self, is_locked):

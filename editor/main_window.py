@@ -11,7 +11,7 @@ import copy
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QMessageBox, QFileDialog, QWidget, QLabel, QVBoxLayout
 )
-from PyQt5.QtCore import Qt, QByteArray
+from PyQt5.QtCore import Qt, QByteArray, QTimer
 from PyQt5.QtGui import QKeySequence, QPixmap
 
 from editor.things import Light, PlayerStart, Thing, Pickup, Monster, Model
@@ -34,14 +34,14 @@ class MainWindow(QMainWindow):
         self.config = configparser.ConfigParser()
         self.config_path = 'settings.ini'
         self.load_config()
-
         self.state = EditorState()
         self.keys_pressed = set()
         self.file_path = None
-        
+        self.preview_timer = QTimer()
+        self.preview_timer.timeout.connect(self.update_mover_preview)
+        self.preview_data = {} 
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
-
         self.setFocus()
         self.update_global_font()
         self.load_layout()
@@ -82,6 +82,77 @@ class MainWindow(QMainWindow):
         if n <= 0: return 1
         power = round(math.log2(n))
         return int(2**power)
+
+    def start_mover_preview(self, brush):
+        if not brush or not isinstance(brush, dict) or not brush.get('is_mover', False):
+            return
+
+        self.preview_data = {
+            'obj': brush,
+            'original_pos': list(brush['pos']), # Deep copy coordinate
+            'direction': np.array(brush.get('direction', [0, 1, 0]), dtype=float),
+            'distance': brush.get('distance', 128.0),
+            'speed': brush.get('speed', 64.0),
+            'time': 0.0
+        }
+        
+        # Normalize direction
+        norm = np.linalg.norm(self.preview_data['direction'])
+        if norm > 0:
+            self.preview_data['direction'] /= norm
+
+        self.preview_timer.start(16) # ~60 FPS
+
+    def stop_mover_preview(self):
+        if self.preview_timer.isActive():
+            self.preview_timer.stop()
+            # Restore original position
+            if self.preview_data and self.preview_data.get('obj'):
+                self.preview_data['obj']['pos'] = self.preview_data['original_pos']
+            self.preview_data = {}
+            self.update_views()
+            # If property editor is open, uncheck the button (handled via UI update)
+            if self.property_editor.preview_btn:
+                self.property_editor.preview_btn.setChecked(False)
+                self.property_editor.preview_btn.setText("Preview Movement")
+
+    def update_mover_preview(self):
+        if not self.preview_data:
+            return
+
+        dt = 0.016 # 16ms
+        self.preview_data['time'] += dt
+        
+        # Calculate sine wave movement (0 -> 1 -> 0)
+        # Using speed to determine frequency
+        speed = self.preview_data['speed']
+        distance = self.preview_data['distance']
+        
+        # Simple Ping-Pong logic
+        # d = speed * time
+        # We want to oscillate between 0 and distance
+        
+        if distance == 0: return
+
+        # Cycle duration = (Distance / Speed) * 2
+        cycle_duration = (distance / speed) * 2 if speed > 0 else 1.0
+        
+        # Triangle wave or Sine wave? Mover code in game engines varies.
+        # Let's use a Sine wave for smooth preview: 0 to 1
+        # sin(t) goes -1 to 1. We want 0 to 1.
+        # (sin(t) + 1) / 2
+        
+        progress = (math.sin(self.preview_data['time'] * (speed / distance) * math.pi - (math.pi/2)) + 1) / 2
+        
+        current_offset = progress * distance
+        
+        movement_vector = self.preview_data['direction'] * current_offset
+        original_pos = np.array(self.preview_data['original_pos'])
+        
+        new_pos = original_pos + movement_vector
+        
+        self.preview_data['obj']['pos'] = new_pos.tolist()
+        self.update_views()
 
     def load_config(self):
         self.config.read(self.config_path)

@@ -225,13 +225,6 @@ class Ui_MainWindow(object):
         display_mode_layout.addWidget(MainWindow.display_mode_combobox)
         top_toolbar.addWidget(display_mode_widget)
         top_toolbar.addSeparator()
-
-        # --- FIX: Reuse the shared actions created in create_menu_bar ---
-        top_toolbar.addAction(MainWindow.undo_action)
-        top_toolbar.addAction(MainWindow.redo_action)
-        # ----------------------------------------------------------------
-
-        top_toolbar.addSeparator()
         MainWindow.apply_texture_action = QAction(QIcon("assets/b_applytex.png"),"",MainWindow,toolTip="Apply selected texture to brush",triggered=MainWindow.apply_texture_to_brush)
         apply_caulk_action = QAction(QIcon("assets/b_caulk.png"),"",MainWindow,toolTip="Apply caulk texture to brush",triggered=MainWindow.apply_caulk_to_brush)
         top_toolbar.addAction(MainWindow.apply_texture_action)

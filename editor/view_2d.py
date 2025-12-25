@@ -1,9 +1,10 @@
 import numpy as np
+import math
 from PyQt5.QtWidgets import QWidget, QMenu
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint
 from editor.things import Thing, Light, PlayerStart, Pickup, Speaker
-from editor.scene_hierarchy import SceneHierarchy 
+from editor.scene_hierarchy import SceneHierarchy
 
 class View2D(QWidget):
     def __init__(self, editor, main_window, view_type):
@@ -158,6 +159,7 @@ class View2D(QWidget):
             is_subtractive = brush.get('operation') == 'subtract'
             is_locked = brush.get('lock', False)
             is_fog = brush.get('is_fog', False)
+            is_mover = brush.get('is_mover', False)
 
             if is_locked:
                 pen_color = QColor(0, 0, 139)
@@ -176,6 +178,10 @@ class View2D(QWidget):
                 fog_color_rgb = brush.get('fog_color', [0.5, 0.6, 0.7])
                 pen_color = QColor.fromRgbF(fog_color_rgb[0], fog_color_rgb[1], fog_color_rgb[2])
                 fill_color = QColor.fromRgbF(fog_color_rgb[0], fog_color_rgb[1], fog_color_rgb[2], 0.3)
+            # Mover specific color
+            elif is_mover:
+                pen_color = QColor(0, 120, 255)
+                fill_color = QColor(0, 120, 255, 50)
 
 
             if is_selected:
@@ -209,11 +215,68 @@ class View2D(QWidget):
                 font.setPointSize(10)
                 painter.setFont(font)
                 painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, "F O G")
+                
+            if is_mover:
+                painter.setPen(QColor(255, 255, 255, 180))
+                font = painter.font()
+                font.setPointSize(10)
+                painter.setFont(font)
+                painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, "M O V E R")
+                # Draw Mover Arrow
+                self.draw_mover_arrow(painter, brush, ax1, ax2, ax_map)
 
             if is_selected and not is_locked:
                 self.draw_resize_handles(painter, screen_rect)
             
             self.draw_brush_color_tag(painter, brush, screen_rect)
+
+    def draw_mover_arrow(self, painter, brush, ax1, ax2, ax_map):
+        direction = brush.get('direction', [0, 1, 0])
+        distance = brush.get('distance', 128.0)
+        
+        # We want to visualize the vector of movement
+        # 3D Start Point = brush center
+        start_3d = brush['pos']
+        
+        # 3D End Point = start + (normalized_dir * distance)
+        # However, direction stored might not be normalized. 
+        # Typically physics engines normalize it or use it as offset.
+        # Assuming it's a direction vector, let's normalize it.
+        d_vec = np.array(direction, dtype=float)
+        norm = np.linalg.norm(d_vec)
+        if norm == 0: return # No direction
+        
+        d_vec = d_vec / norm * distance
+        
+        end_3d = [start_3d[0] + d_vec[0], start_3d[1] + d_vec[1], start_3d[2] + d_vec[2]]
+        
+        # Project to 2D
+        p_start = QPointF(start_3d[ax_map[ax1]], start_3d[ax_map[ax2]])
+        p_end = QPointF(end_3d[ax_map[ax1]], end_3d[ax_map[ax2]])
+        
+        # If the arrow is perpendicular to the view (e.g. moving up in Top view), p_start == p_end
+        if (p_start - p_end).manhattanLength() < 2:
+            return 
+
+        s_start = self.world_to_screen(p_start)
+        s_end = self.world_to_screen(p_end)
+        
+        # Draw Line
+        arrow_color = QColor(0, 255, 0) # Green for movement
+        painter.setPen(QPen(arrow_color, 2))
+        painter.drawLine(s_start, s_end)
+        
+        # Draw Arrow Head
+        angle = math.atan2(s_end.y() - s_start.y(), s_end.x() - s_start.x())
+        arrow_size = 10
+        
+        p1 = s_end - QPointF(math.cos(angle - math.pi / 6) * arrow_size,
+                             math.sin(angle - math.pi / 6) * arrow_size)
+        p2 = s_end - QPointF(math.cos(angle + math.pi / 6) * arrow_size,
+                             math.sin(angle + math.pi / 6) * arrow_size)
+                             
+        painter.setBrush(QBrush(arrow_color))
+        painter.drawPolygon(QPolygonF([s_end, p1, p2]))
 
     def draw_brush_color_tag(self, painter, brush, screen_rect):
         if 'color' in brush and brush['color'] in self.color_pixmaps:
@@ -535,24 +598,43 @@ class View2D(QWidget):
     def get_object_at(self, world_pos):
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
+        
+        candidates = []
 
+        # 1. Collect all valid 'Thing' candidates under the cursor
         for thing in reversed(self.editor.state.things):
             w_2d, h_2d = 24, 24 
             thing_w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
             thing_rect = QRectF(thing_w_pos.x() - w_2d/2, thing_w_pos.y() - h_2d/2, w_2d, h_2d)
             if thing_rect.contains(world_pos):
-                return thing
-                
+                candidates.append(thing)
+        
+        # 2. Collect all valid 'Brush' candidates under the cursor
         for brush in reversed(self.editor.state.brushes):
+            if brush.get('hidden', False):
+                continue # Skip hidden brushes so they don't block selection
+
             pos = brush['pos']
             size = brush['size']
             p1 = QPointF(pos[ax_map[ax1]] - size[ax_map[ax1]]/2, pos[ax_map[ax2]] - size[ax_map[ax2]]/2)
             p2 = QPointF(pos[ax_map[ax1]] + size[ax_map[ax1]]/2, pos[ax_map[ax2]] + size[ax_map[ax2]]/2)
             brush_rect = QRectF(p1, p2).normalized()
             if brush_rect.contains(world_pos):
-                return brush
+                candidates.append(brush)
 
-        return None
+        if not candidates:
+            return None
+
+        # 3. Handle Cycling: If the currently selected object is in the list of candidates,
+        # return the NEXT one in the list. Otherwise, return the first one.
+        current_selection = self.editor.state.selected_object
+        
+        if current_selection in candidates:
+            idx = candidates.index(current_selection)
+            next_idx = (idx + 1) % len(candidates)
+            return candidates[next_idx]
+        
+        return candidates[0]
 
     def get_handle_at(self, screen_pos):
         brush = self.editor.state.selected_object
