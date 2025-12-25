@@ -266,7 +266,7 @@ class QtGameView(QOpenGLWidget):
         # Window Style Configuration
         bg_color = QColor(20, 20, 25, 240)
         border_color = QColor(80, 80, 90)
-        header_color = QColor(108,59,170) # Royal Purple
+        header_color = QColor(66, 95, 93) # Muted cyan green
         text_color = QColor(220, 220, 220)
         accent_color = QColor(100, 200, 100) 
         graph_color = QColor(0, 255, 255, 150) 
