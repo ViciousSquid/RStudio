@@ -51,11 +51,11 @@ class QtGameView(QOpenGLWidget):
         
         # Debug Window Manager State
         self.debug_mode_active = False
-        self.debug_window_rect = QRect(20, 20, 300, 180)
+        self.debug_window_rect = QRect(20, 20, 400, 200)
         self.debug_drag_active = False
         self.debug_drag_offset = QPoint()
         self.frame_times = deque(maxlen=100) # History for graph
-        self.console_font = QFont("Courier New", 9)
+        self.console_font = QFont("Arial", 9)
         self.console_font.setStyleHint(QFont.Monospace)
         
         # Resource management
@@ -252,10 +252,10 @@ class QtGameView(QOpenGLWidget):
 
     def _draw_fps_counter(self, painter):
         font = QFont()
-        font.setPointSize(8)
+        font.setPointSize(10)
         painter.setFont(font)
         painter.setPen(QColor(255, 255, 255))
-        rect_width = 70
+        rect_width = 100
         rect_x = self.width() - rect_width - 5
         painter.fillRect(rect_x, 5, rect_width, 20, QColor(0, 0, 0, 128))
         painter.drawText(rect_x + 5, 20, f"FPS: {self.fps:.0f}")
@@ -266,13 +266,14 @@ class QtGameView(QOpenGLWidget):
         # Window Style Configuration
         bg_color = QColor(20, 20, 25, 240)
         border_color = QColor(80, 80, 90)
-        header_color = QColor(40, 40, 50)
+        header_color = QColor(108,59,170) # Royal Purple
         text_color = QColor(220, 220, 220)
-        accent_color = QColor(100, 200, 100) # Green for active status
-        graph_color = QColor(0, 255, 255, 150) # Cyan for graph
+        accent_color = QColor(100, 200, 100) 
+        graph_color = QColor(0, 255, 255, 150) 
+        
+        rect = self.debug_window_rect
         
         # 1. Main Window Body
-        rect = self.debug_window_rect
         painter.setPen(QPen(border_color, 1))
         painter.setBrush(QBrush(bg_color))
         painter.drawRect(rect)
@@ -280,80 +281,79 @@ class QtGameView(QOpenGLWidget):
         # 2. Header Bar
         header_rect = QRect(rect.x(), rect.y(), rect.width(), 25)
         painter.fillRect(header_rect, header_color)
+        painter.setPen(QPen(border_color, 1)) 
         painter.drawLine(rect.x(), rect.y() + 25, rect.right(), rect.y() + 25)
         
         # 3. Title Text
         painter.setFont(self.console_font)
-        painter.setPen(text_color)
-        painter.drawText(header_rect.adjusted(10, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, "SYSTEM MONITOR [F3]")
+        painter.setPen(QColor(255, 255, 255)) # White text
+        painter.drawText(header_rect.adjusted(10, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, "SysMon [F3]")
         
         # 4. Close Button [X]
         close_btn_rect = QRect(rect.right() - 25, rect.y(), 25, 25)
         painter.drawText(close_btn_rect, Qt.AlignCenter, "[X]")
         
         # 5. Content Area
-        content_y = rect.y() + 35
+        content_y = rect.y() + 50 
         left_margin = rect.x() + 10
         
-        # --- Logic Thread Status ---
+        # Logic Thread Status
         status = "STOPPED"
         tps = 0.0
         if self.logic_thread and self.logic_thread.is_alive():
-            status = "RUNNING"
+            status = "unning"
             tps = getattr(self.logic_thread, 'actual_tps', 0.0)
             
-        painter.drawText(left_margin, content_y, f"WORKER THREAD: {status}")
+        painter.setPen(text_color)
+        painter.drawText(left_margin, content_y, f"Worker:   {status}")
         
-        # TPS Indicator
         indicator_rect = QRect(left_margin + 160, content_y - 10, 10, 10)
-        painter.setBrush(QBrush(accent_color if status == "RUNNING" else QColor(200, 50, 50)))
+        painter.setBrush(QBrush(accent_color if status == "running" else QColor(200, 50, 50)))
         painter.drawEllipse(indicator_rect)
-        painter.setBrush(Qt.NoBrush) # Reset brush
+        painter.setBrush(Qt.NoBrush) 
         
         content_y += 20
         painter.setPen(text_color)
         painter.drawText(left_margin, content_y, f"LOGIC TICK: {tps:.1f} / 60.0 Hz")
         
-        # --- Render Stats ---
         content_y += 20
         ft_ms = (1.0 / self.fps * 1000.0) if self.fps > 0 else 0
-        painter.drawText(left_margin, content_y, f"RENDER FPS: {self.fps:.1f} ({ft_ms:.1f} ms)")
+        painter.drawText(left_margin, content_y, f"Render FPS: {self.fps:.1f} ({ft_ms:.1f} ms)")
         
-        # --- Frame Time Graph ---
+        # Frame Time Graph
         content_y += 15
-        graph_height = 60
+        graph_height = max(40, rect.height() - (content_y - rect.y()) - 15)
         graph_rect = QRect(left_margin, content_y, rect.width() - 20, graph_height)
         
-        # Graph Background
-        painter.fillRect(graph_rect, QColor(0, 0, 0, 100))
-        painter.setPen(QPen(QColor(60, 60, 60), 1))
-        painter.drawRect(graph_rect)
-        
-        # Draw Graph Lines
-        if len(self.frame_times) > 1:
-            painter.setPen(QPen(graph_color, 1))
-            path_step = graph_rect.width() / 100.0
-            max_ms = 33.3 # Scale graph to 30 FPS (33ms) max
+        if graph_height > 10: 
+            painter.fillRect(graph_rect, QColor(0, 0, 0, 100))
+            painter.setPen(QPen(QColor(60, 60, 60), 1))
+            painter.drawRect(graph_rect)
             
-            # Create points for polyline
-            pts = []
-            for i, ms in enumerate(self.frame_times):
-                x = graph_rect.x() + (i * path_step)
-                # Invert Y (height - value)
-                h_norm = min(ms / max_ms, 1.0) * graph_rect.height()
-                y = graph_rect.bottom() - h_norm
-                pts.append(QPoint(int(x), int(y)))
-                
-            if pts:
-                painter.drawPolyline(*pts)
-                
-            # Draw 16.6ms (60fps) reference line
-            ref_y = graph_rect.bottom() - (16.6 / max_ms * graph_rect.height())
-            painter.setPen(QPen(QColor(255, 100, 100, 100), 1, Qt.DashLine))
-            painter.drawLine(graph_rect.left(), int(ref_y), graph_rect.right(), int(ref_y))
-            painter.setPen(QPen(QColor(255, 100, 100, 150), 1))
-            painter.setFont(QFont("Small Fonts", 7))
-            painter.drawText(graph_rect.right() - 25, int(ref_y) - 2, "16ms")
+            if len(self.frame_times) > 1:
+                painter.setPen(QPen(graph_color, 1))
+                path_step = graph_rect.width() / 100.0
+                max_ms = 33.3 
+                pts = []
+                for i, ms in enumerate(self.frame_times):
+                    x = graph_rect.x() + (i * path_step)
+                    h_norm = min(ms / max_ms, 1.0) * graph_rect.height()
+                    y = graph_rect.bottom() - h_norm
+                    pts.append(QPoint(int(x), int(y)))
+                if pts: painter.drawPolyline(*pts)
+
+                ref_y = graph_rect.bottom() - (16.6 / max_ms * graph_rect.height())
+                painter.setPen(QPen(QColor(255, 100, 100, 100), 1, Qt.DashLine))
+                painter.drawLine(graph_rect.left(), int(ref_y), graph_rect.right(), int(ref_y))
+                painter.setPen(QPen(QColor(255, 100, 100, 150), 1))
+                painter.setFont(QFont("Small Fonts", 7))
+                painter.drawText(graph_rect.right() - 25, int(ref_y) - 2, "16ms")
+
+        # 6. Resize Grip (Bottom Right)
+        painter.setPen(QPen(QColor(100, 100, 100), 1))
+        painter.drawLine(rect.right() - 10, rect.bottom() - 2, rect.right() - 2, rect.bottom() - 10)
+        painter.drawLine(rect.right() - 6, rect.bottom() - 2, rect.right() - 2, rect.bottom() - 6)
+        painter.drawLine(rect.right() - 2, rect.bottom() - 2, rect.right() - 2, rect.bottom() - 2)
 
     def _draw_render_menu(self, painter):
         """Draws the render mode selection menu overlay."""
@@ -478,8 +478,17 @@ class QtGameView(QOpenGLWidget):
 
     def toggle_play_mode(self, player_start_pos, player_start_angle, physics_enabled=True):
         self.play_mode = not self.play_mode
-        self.debug_mode_active = False # Always close debug on mode switch
+        self.debug_mode_active = False
         
+        if hasattr(self.editor, 'show_toast'):
+            if self.play_mode:
+                self.editor.show_toast("Press ESC to exit play mode", duration=0)
+            else:
+                # Hide the toast when returning to editor
+                if hasattr(self.editor, 'toast'):
+                    self.editor.toast.hide_toast()
+                self.editor.show_toast("Changed to EDITOR mode")
+
         if self.play_mode:
             # Center and hide cursor immediately to prevent "jump"
             center_pos = self.mapToGlobal(self.rect().center())
