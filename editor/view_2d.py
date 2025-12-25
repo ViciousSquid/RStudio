@@ -1,8 +1,9 @@
 import numpy as np
 import math
+import time
 from PyQt5.QtWidgets import QWidget, QMenu
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
-from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint
+from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
 from editor.things import Thing, Light, PlayerStart, Pickup, Speaker
 from editor.scene_hierarchy import SceneHierarchy
 
@@ -36,6 +37,16 @@ class View2D(QWidget):
         self.grid_size = 16
         self.world_size = 1024
         self.snap_to_grid_enabled = True
+        
+        # Connection line animation state
+        # key = (source_id, target_name), value = {'progress': 0.0-1.0, 'growing': True/False}
+        self.connection_animations = {}
+        self.last_connections = set()  # Track which connections existed last frame
+        
+        # Animation timer
+        self.animation_timer = QTimer(self)
+        self.animation_timer.timeout.connect(self._update_connection_animations)
+        self.animation_timer.start(16)  # ~60 FPS
 
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.ClickFocus)
@@ -380,27 +391,162 @@ class View2D(QWidget):
             painter.drawRect(handle_rect)
 
     def draw_trigger_connections(self, painter):
+        """Draw animated connection lines between triggers/movers and their targets."""
+        # Check if connections should be shown
+        show_connections = self.main_window.config.getboolean('Display', 'show_connections', fallback=True)
+        if not show_connections:
+            return
+            
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
-
-        pen = QPen(QColor(139, 69, 19), 2, Qt.DotLine)
-        painter.setPen(pen)
-
-        for brush in self.editor.state.brushes:
-            if brush.get('is_trigger') and brush.get('target'):
-                target_name = brush.get('target')
-                target_thing = next((t for t in self.editor.state.things if hasattr(t, 'name') and t.name == target_name), None)
-
-                if target_thing:
-                    brush_pos_3d = brush['pos']
-                    thing_pos_3d = target_thing.pos
-                    
-                    brush_pos_2d = QPointF(brush_pos_3d[ax_map[ax1]], brush_pos_3d[ax_map[ax2]])
-                    thing_pos_2d = QPointF(thing_pos_3d[ax_map[ax1]], thing_pos_3d[ax_map[ax2]])
-
-                    p1 = self.world_to_screen(brush_pos_2d)
-                    p2 = self.world_to_screen(thing_pos_2d)
-                    painter.drawLine(p1, p2)
+        
+        current_connections = set()
+        
+        # Gather all connections (triggers and movers)
+        connections_to_draw = []
+        
+        for i, brush in enumerate(self.editor.state.brushes):
+            target_name = brush.get('target')
+            if not target_name:
+                continue
+                
+            # Check if this is a trigger or has a name (could be targeted)
+            is_source = brush.get('is_trigger') or brush.get('is_mover')
+            if not is_source:
+                continue
+                
+            source_id = f"brush_{id(brush)}"
+            conn_key = (source_id, target_name)
+            current_connections.add(conn_key)
+            
+            # Find target (could be brush or thing)
+            target_pos = None
+            
+            # Check brushes for target
+            for b in self.editor.state.brushes:
+                if b.get('name') == target_name:
+                    target_pos = b['pos']
+                    break
+            
+            # Check things for target
+            if target_pos is None:
+                for t in self.editor.state.things:
+                    if hasattr(t, 'name') and t.name == target_name:
+                        target_pos = t.pos
+                        break
+            
+            if target_pos:
+                connections_to_draw.append({
+                    'key': conn_key,
+                    'source_pos': brush['pos'],
+                    'target_pos': target_pos,
+                    'is_trigger': brush.get('is_trigger', False)
+                })
+        
+        # Handle new connections (start growing)
+        for conn_key in current_connections - self.last_connections:
+            self.connection_animations[conn_key] = {'progress': 0.0, 'growing': True}
+        
+        # Handle removed connections (start ungrowing)
+        for conn_key in self.last_connections - current_connections:
+            if conn_key in self.connection_animations:
+                self.connection_animations[conn_key]['growing'] = False
+        
+        self.last_connections = current_connections
+        
+        # Draw connections with animation
+        for conn in connections_to_draw:
+            conn_key = conn['key']
+            
+            # Get or create animation state
+            if conn_key not in self.connection_animations:
+                self.connection_animations[conn_key] = {'progress': 1.0, 'growing': True}
+            
+            anim = self.connection_animations[conn_key]
+            progress = anim['progress']
+            
+            if progress <= 0:
+                continue
+            
+            source_pos = conn['source_pos']
+            target_pos = conn['target_pos']
+            
+            source_2d = QPointF(source_pos[ax_map[ax1]], source_pos[ax_map[ax2]])
+            target_2d = QPointF(target_pos[ax_map[ax1]], target_pos[ax_map[ax2]])
+            
+            p1 = self.world_to_screen(source_2d)
+            p2 = self.world_to_screen(target_2d)
+            
+            # Interpolate end point based on progress
+            animated_p2 = QPointF(
+                p1.x() + (p2.x() - p1.x()) * progress,
+                p1.y() + (p2.y() - p1.y()) * progress
+            )
+            
+            # Color based on type
+            if conn['is_trigger']:
+                color = QColor(0, 255, 255, 180)  # Cyan for triggers
+            else:
+                color = QColor(139, 69, 19, 180)  # Brown for movers
+            
+            pen = QPen(color, 2, Qt.DotLine)
+            painter.setPen(pen)
+            painter.drawLine(p1, animated_p2)
+            
+            # Draw arrowhead at the animated end
+            if progress > 0.1:
+                self._draw_connection_arrow(painter, p1, animated_p2, color)
+        
+        # Also draw ungrowing connections that are no longer in current set
+        keys_to_remove = []
+        for conn_key, anim in self.connection_animations.items():
+            if conn_key not in current_connections:
+                if anim['progress'] <= 0:
+                    keys_to_remove.append(conn_key)
+        
+        for key in keys_to_remove:
+            del self.connection_animations[key]
+    
+    def _draw_connection_arrow(self, painter, p1, p2, color):
+        """Draw an arrowhead at p2 pointing from p1."""
+        dx = p2.x() - p1.x()
+        dy = p2.y() - p1.y()
+        length = math.sqrt(dx * dx + dy * dy)
+        if length < 10:
+            return
+            
+        angle = math.atan2(dy, dx)
+        arrow_size = 8
+        
+        arrow_p1 = QPointF(
+            p2.x() - arrow_size * math.cos(angle - math.pi / 6),
+            p2.y() - arrow_size * math.sin(angle - math.pi / 6)
+        )
+        arrow_p2 = QPointF(
+            p2.x() - arrow_size * math.cos(angle + math.pi / 6),
+            p2.y() - arrow_size * math.sin(angle + math.pi / 6)
+        )
+        
+        painter.setBrush(QBrush(color))
+        painter.drawPolygon(QPolygonF([p2, arrow_p1, arrow_p2]))
+    
+    def _update_connection_animations(self):
+        """Update animation progress for all connections."""
+        animation_speed = 0.05  # Progress per frame
+        needs_update = False
+        
+        for conn_key, anim in self.connection_animations.items():
+            if anim['growing']:
+                if anim['progress'] < 1.0:
+                    anim['progress'] = min(1.0, anim['progress'] + animation_speed)
+                    needs_update = True
+            else:
+                if anim['progress'] > 0.0:
+                    anim['progress'] = max(0.0, anim['progress'] - animation_speed)
+                    needs_update = True
+        
+        if needs_update:
+            self.update()
 
     def get_resize_handles(self, rect):
         return [
@@ -514,11 +660,15 @@ class View2D(QWidget):
                 pos_ref = obj['pos'] if isinstance(obj, dict) else obj.pos
                 pos_ref[ax_map[ax1]] = new_obj_pos.x()
                 pos_ref[ax_map[ax2]] = new_obj_pos.y()
+                # Update 3D view in real-time during drag
+                self.main_window.view_3d.update()
         
         elif self.is_resizing_brush:
             obj = self.editor.state.selected_object
             if obj:
                 self.resize_brush(world_pos)
+                # Update 3D view in real-time during resize
+                self.main_window.view_3d.update()
         
         self.update()
 

@@ -148,6 +148,8 @@ class Speaker(Thing):
         self.properties.setdefault('volume', 1.0)
         self.properties.setdefault('looping', False)
         self.properties.setdefault('play_on_start', False)
+        self.properties.setdefault('triggered', False)  # Can be triggered by a trigger brush
+        self.properties.setdefault('state', 'off')  # 'on' or 'off' - current playback state
 
     def get_radius(self):
         return float(self.properties.get('radius', 512.0))
@@ -166,6 +168,8 @@ class Pickup(Thing):
         self.properties.setdefault('type', 'pickup')
         self.properties.setdefault('item_type', 'health')
         self.properties.setdefault('value', 25)
+        self.properties.setdefault('activation', 'walk_over')  # 'walk_over' or 'use'
+        self.properties.setdefault('collected', False)  # Runtime state
 
 class Trigger(Thing):
     pixmap_path = None

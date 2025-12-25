@@ -42,6 +42,12 @@ class SettingsWindow(QDialog):
         self.sync_selection_checkbox = QCheckBox("Highlight selected brushes in 3D view")
         display_layout.addWidget(self.sync_selection_checkbox)
 
+        self.show_connections_checkbox = QCheckBox("Show animated connection lines in 2D views")
+        display_layout.addWidget(self.show_connections_checkbox)
+
+        self.show_hud_checkbox = QCheckBox("Show HUD in play mode (health, etc.)")
+        display_layout.addWidget(self.show_hud_checkbox)
+
         font_layout = QHBoxLayout()
         font_layout.addWidget(QLabel("Font Size:"))
         self.font_size_spinbox = QSpinBox()
@@ -91,6 +97,7 @@ class SettingsWindow(QDialog):
             "Hide Brush": "H",
             "Unhide All Brushes": "Shift+H",
             "Toggle play mode": "F5",
+            "Use (play mode)": "E",
         }
         
         self.shortcut_labels = {}
@@ -126,6 +133,8 @@ class SettingsWindow(QDialog):
         self.show_caulk_checkbox.setChecked(self.config.getboolean('Display', 'show_caulk', fallback=True))
         self.font_size_spinbox.setValue(self.config.getint('Display', 'font_size', fallback=10))
         self.sync_selection_checkbox.setChecked(self.config.getboolean('Display', 'sync_selection', fallback=True))
+        self.show_connections_checkbox.setChecked(self.config.getboolean('Display', 'show_connections', fallback=True))
+        self.show_hud_checkbox.setChecked(self.config.getboolean('Display', 'show_hud', fallback=True))
 
         # Physics settings
         self.physics_checkbox.setChecked(self.config.getboolean('Settings', 'physics', fallback=True))
@@ -144,6 +153,8 @@ class SettingsWindow(QDialog):
         self.config.set('Display', 'show_caulk', str(self.show_caulk_checkbox.isChecked()))
         self.config.set('Display', 'font_size', str(self.font_size_spinbox.value()))
         self.config.set('Display', 'sync_selection', str(self.sync_selection_checkbox.isChecked()))
+        self.config.set('Display', 'show_connections', str(self.show_connections_checkbox.isChecked()))
+        self.config.set('Display', 'show_hud', str(self.show_hud_checkbox.isChecked()))
 
         if not self.config.has_section('Settings'): self.config.add_section('Settings')
         self.config.set('Settings', 'physics', str(self.physics_checkbox.isChecked()))

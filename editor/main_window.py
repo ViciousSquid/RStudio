@@ -785,6 +785,11 @@ class MainWindow(QMainWindow):
             elif event.key() == Qt.Key_F3:
                 self.view_3d.show_sprites_in_play_mode = not self.view_3d.show_sprites_in_play_mode
                 self.view_3d.update()
+            elif event.key() == Qt.Key_E:
+                # Use key - single shot, send to game state
+                if hasattr(self.view_3d, 'game_state') and self.view_3d.game_state:
+                    self.view_3d.game_state.set_use_key_pressed()
+                self.keys_pressed.add(event.key())
             else:
                 self.keys_pressed.add(event.key())
             return

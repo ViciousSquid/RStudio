@@ -30,6 +30,10 @@ class PropertyEditor(QWidget):
         self.fog_color_label = None
         self.fog_color_button = None
 
+        # Brush name (for targeting)
+        self.brush_name_label = None
+        self.brush_name_input = None
+
         # Mover properties
         self.mover_checkbox = None
         self.mover_speed_label = None
@@ -152,6 +156,11 @@ class PropertyEditor(QWidget):
 
         self.mover_start_on_label = QLabel("Start On:")
         self.mover_start_on_checkbox = QCheckBox()
+        self.mover_start_on_checkbox.setStyleSheet("QCheckBox::indicator { width: 25px; height: 25px; }")
+
+        # Brush name (for triggering movers)
+        self.brush_name_label = QLabel("Name:")
+        self.brush_name_input = QLineEdit(brush.get('name', ''))
 
         # Set initial state
         self.locked_checkbox.setChecked(is_locked)
@@ -174,6 +183,7 @@ class PropertyEditor(QWidget):
 
         # Mover Section
         layout.addRow("Is Mover:", self.mover_checkbox)
+        layout.addRow(self.brush_name_label, self.brush_name_input)
         layout.addRow(self.mover_speed_label, self.mover_speed_input)
         layout.addRow(self.mover_distance_label, self.mover_distance_input)
         layout.addRow(self.mover_direction_label, self.mover_dir_widget)
@@ -184,6 +194,7 @@ class PropertyEditor(QWidget):
 
         # Connect Signals
         self.locked_checkbox.toggled.connect(self.on_lock_changed)
+        self.brush_name_input.editingFinished.connect(lambda: self.update_object_prop('name', self.brush_name_input.text()))
         self.trigger_checkbox.toggled.connect(self.on_trigger_changed)
         self.target_input.editingFinished.connect(lambda: self.update_object_prop('target', self.target_input.text()))
         self.type_combo.currentTextChanged.connect(lambda t: self.update_object_prop('trigger_type', t))
@@ -260,6 +271,8 @@ class PropertyEditor(QWidget):
 
         is_mover = self.current_object.get('is_mover', False)
         show_mover_fields = is_mover and not is_locked
+        self.brush_name_label.setVisible(show_mover_fields)
+        self.brush_name_input.setVisible(show_mover_fields)
         self.mover_speed_label.setVisible(show_mover_fields)
         self.mover_speed_input.setVisible(show_mover_fields)
         self.mover_distance_label.setVisible(show_mover_fields)
@@ -344,6 +357,13 @@ class PropertyEditor(QWidget):
                 # PICKUP TYPES
                 item_types = ['health', 'ammo', 'armour', 'powerup', 'key', 'message', 'weapon']
                 widget.addItems(item_types)
+                widget.setCurrentText(value)
+                widget.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
+                layout.addRow(label_text, widget)
+            elif isinstance(thing, Pickup) and key == 'activation':
+                widget = QComboBox()
+                activation_types = ['walk_over', 'use']
+                widget.addItems(activation_types)
                 widget.setCurrentText(value)
                 widget.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
                 layout.addRow(label_text, widget)
