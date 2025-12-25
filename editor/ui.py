@@ -135,8 +135,7 @@ class Ui_MainWindow(object):
         file_menu = menubar.addMenu('File')
         edit_menu = menubar.addMenu('Edit')
         view_menu = menubar.addMenu('View')
-        tools_menu = menubar.addMenu('Tools')
-        render_menu = menubar.addMenu('Render')
+        #tools_menu = menubar.addMenu('Tools')
         help_menu = menubar.addMenu('Help')
 
         file_menu.addAction(QAction('New Map', MainWindow, shortcut='Ctrl+N', triggered=MainWindow.new_map))
@@ -148,7 +147,7 @@ class Ui_MainWindow(object):
         file_menu.addSeparator()
         file_menu.addAction(QAction('Exit', MainWindow, shortcut='Ctrl+Q', triggered=MainWindow.close))
 
-        # --- FIX: Create Undo/Redo actions once and store them on MainWindow ---
+        # Create Undo/Redo actions once and store them on MainWindow
         MainWindow.undo_action = QAction(QIcon("assets/b_undo.png"), 'Undo', MainWindow)
         MainWindow.undo_action.setShortcut('Ctrl+Z')
         MainWindow.undo_action.setObjectName('undo_action')
@@ -162,7 +161,6 @@ class Ui_MainWindow(object):
         MainWindow.redo_action.setToolTip("Redo last action")
         MainWindow.redo_action.triggered.connect(MainWindow.redo)
         edit_menu.addAction(MainWindow.redo_action)
-        # -----------------------------------------------------------------------
 
         edit_menu.addSeparator()
         edit_menu.addAction(QAction('Hide Brush', MainWindow, shortcut='H', triggered=MainWindow.hide_selected_brush))
@@ -192,19 +190,15 @@ class Ui_MainWindow(object):
         view_menu.addAction(MainWindow.reset_layout_action)
         
         view_menu.addSeparator()
-        toggle_triggers_action = QAction('Solid Triggers', MainWindow, checkable=True)
+        toggle_triggers_action = QAction('Opaque Triggers', MainWindow, checkable=True)
         toggle_triggers_action.setChecked(MainWindow.view_3d.show_triggers_as_solid)
         toggle_triggers_action.triggered.connect(MainWindow.toggle_trigger_display)
         view_menu.addAction(toggle_triggers_action)
 
-        tools_menu.addAction(QAction('Generate Collision Tilemap...', MainWindow, triggered=MainWindow.show_generate_tilemap_dialog))
+        #tools_menu.addAction(QAction('Generate Collision Tilemap...', MainWindow, triggered=MainWindow.show_generate_tilemap_dialog))
 
-        render_group = QActionGroup(MainWindow)
         modern_action = QAction('Modern (Shaders)', MainWindow, checkable=True, checked=True)
         immediate_action = QAction('Immediate (Legacy)', MainWindow, checkable=True)
-        render_group.addAction(modern_action)
-        render_group.addAction(immediate_action)
-        render_menu.addActions(render_group.actions())
         modern_action.triggered.connect(lambda: MainWindow.set_render_mode("Modern (Shaders)"))
         immediate_action.triggered.connect(lambda: MainWindow.set_render_mode("Immediate (Legacy)"))
 
