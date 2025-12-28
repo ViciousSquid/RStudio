@@ -3,11 +3,10 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStatusBar, QToolBar,
     QLabel, QSpinBox, QCheckBox, QComboBox, QAction, QMessageBox, QFrame,
     QDockWidget, QTabWidget, QPushButton, QActionGroup, QDialog,
-    QDialogButtonBox, QApplication, QSizePolicy, QInputDialog
+    QDialogButtonBox, QApplication, QSizePolicy
 )
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QFont, QIcon, QKeySequence, QPixmap
-from PyQt5.QtGui import QPalette, QColor
 
 from editor.view_2d import View2D
 from engine.qt_game_view import QtGameView
@@ -65,7 +64,6 @@ class Ui_MainWindow(object):
 
         MainWindow.right_dock = QDockWidget("2D Views", MainWindow)
         MainWindow.right_dock.setObjectName("2DViewsDock")
-        MainWindow.right_dock.setMinimumWidth(610)  # Prevent resizing smaller than 610px when docked
         MainWindow.right_tabs = QTabWidget()
         MainWindow.right_tabs.addTab(MainWindow.view_top, "Top (XZ)")
         MainWindow.right_tabs.addTab(MainWindow.view_side, "Side (YZ)")
@@ -85,12 +83,26 @@ class Ui_MainWindow(object):
         MainWindow.resizeDocks([MainWindow.right_dock, MainWindow.properties_dock], [600, 300], Qt.Vertical)
 
         MainWindow.right_tabs.setStyleSheet("""
-            QTabBar::tab:selected { background: #F08000; color: white; }
-            QTabBar::tab { background: #425f5d; color: #ccc; height: 35px; min-width: 150px; padding: 0px; border: 1px solid #222; }
-            QTabBar::tab:hover { background: #5a7a82; }
-            QTabBar::scroller { width: 0px; }
+            QTabBar::tab:selected { background: #425F5D; color: white; }
+            QTabBar::tab { background: #444; color: #ccc; padding: 5px; border: 1px solid #222; }
         """)
 
+        corner_widget = QWidget()
+        corner_layout = QHBoxLayout(corner_widget)
+        corner_layout.setContentsMargins(0, 0, 0, 0)
+        
+        rotate_button = QPushButton("Rotate")
+        rotate_button.setToolTip("Rotate the selected brush by 90 degrees")
+        rotate_button.clicked.connect(MainWindow.rotate_selected_brush)
+        corner_layout.addWidget(rotate_button)
+        
+        subtract_button = QPushButton("Subtract")
+        subtract_button.setToolTip("Carve intersecting brushes")
+        subtract_button.setStyleSheet("background-color: orange; padding: 2px 8px; color: black;")
+        subtract_button.clicked.connect(MainWindow.perform_subtraction)
+        corner_layout.addWidget(subtract_button)
+        MainWindow.right_tabs.setCornerWidget(corner_widget, Qt.TopRightCorner)
+        
         # Asset Browser Setup
         MainWindow.asset_browser_dock = QDockWidget("Asset Browser", MainWindow)
 
@@ -122,10 +134,10 @@ class Ui_MainWindow(object):
         menubar = MainWindow.menuBar()
         menubar.setStyleSheet("""
             QMenuBar::item:selected {
-                background-color: #F08000;
+                background-color: #425F5D;
             }
             QMenu::item:selected {
-                background-color: #F08000;
+                background-color: #425F5D;
             }
         """)
         
@@ -211,91 +223,50 @@ class Ui_MainWindow(object):
         top_toolbar = QToolBar("Main Tools")
         top_toolbar.setObjectName("MainToolbar")
         MainWindow.addToolBar(top_toolbar)
-
-        # Determine icon size based on config setting
-        big_toolbar_buttons = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
-        icon_size_val = 50 if big_toolbar_buttons else 35
-        
-        room_btn = QPushButton()
-        room_btn.setIcon(QIcon("assets/room.png"))
-        room_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        room_btn.setFixedSize(icon_size_val, icon_size_val)
-        room_btn.setToolTip("Create Room (Hollow + Lights)")
-        room_btn.clicked.connect(MainWindow.create_room_from_brush)
-        
-        hollow_btn = QPushButton()
-        hollow_btn.setIcon(QIcon("assets/hollow.png"))
-        hollow_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        hollow_btn.setFixedSize(icon_size_val, icon_size_val)
-        hollow_btn.setToolTip("Hollow out brush")
-        hollow_btn.clicked.connect(MainWindow.hollow_selected_brush)
-
-        clone_btn = QPushButton()
-        clone_btn.setIcon(QIcon("assets/clone.png"))
-        clone_btn.setIconSize(QSize(50, 50))
-        clone_btn.setFixedSize(50, 50)
-        clone_btn.setToolTip("Clone selected brush (Space)")
-        clone_btn.clicked.connect(MainWindow.clone_selected_object)
-        
-        rotate_btn = QPushButton()
-        rotate_btn.setIcon(QIcon("assets/rotate.png"))
-        rotate_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        rotate_btn.setFixedSize(icon_size_val, icon_size_val)
-        rotate_btn.setToolTip("Rotate 90 degrees")
-        rotate_btn.clicked.connect(MainWindow.rotate_selected_brush)
-        
-        subtract_btn = QPushButton()
-        subtract_btn.setIcon(QIcon("assets/subtract.png"))
-        subtract_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        subtract_btn.setFixedSize(icon_size_val, icon_size_val)
-        subtract_btn.setToolTip("Subtract")
-        subtract_btn.clicked.connect(MainWindow.perform_subtraction)
-
-        tint_btn = QPushButton()
-        tint_btn.setIcon(QIcon("assets/tint.png"))
-        tint_btn.setIconSize(QSize(50, 50))
-        tint_btn.setFixedSize(50, 50)
-        tint_btn.setToolTip("Tint selected brush colour")
-        tint_btn.clicked.connect(MainWindow.tint_selected_brush)
-        
-        top_toolbar.addWidget(room_btn)
-        top_toolbar.addWidget(hollow_btn)
-        top_toolbar.addWidget(clone_btn) 
-        top_toolbar.addWidget(rotate_btn)
-        top_toolbar.addWidget(subtract_btn)
-        top_toolbar.addWidget(tint_btn)
-        
-        play_button = QPushButton(QIcon("assets/b_test.png"),"Play")
-        play_button.setIconSize(QSize(icon_size_val, icon_size_val))
-        play_button.setFixedSize(icon_size_val + 80, icon_size_val)  # Wider for text
-        play_button.setToolTip("Drop in and play (F5)")
-        play_button.setShortcut("f5")
-        play_button.clicked.connect(MainWindow.enter_play_mode)
-        
-        # Style the play button with green background and larger font
-        current_font = play_button.font()
-        current_font.setPointSize(current_font.pointSize() + 1)
-        play_button.setFont(current_font)
-        play_button.setStyleSheet("""
-            QPushButton {
-                background-color: #22b14c;
-                color: white;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #28d157;
-            }
-            QPushButton:pressed {
-                background-color: #1a8f3d;
-            }
-        """)
-        
-        top_toolbar.addWidget(play_button)
-
-        # Display dropdown
         display_mode_widget = QWidget()
         display_mode_layout = QHBoxLayout(display_mode_widget)
         display_mode_layout.setContentsMargins(5,0,5,0)
+        MainWindow.display_mode_combobox = QComboBox()
+        MainWindow.display_mode_combobox.addItems(["Wireframe", "Solid Lit", "Textured"])
+        MainWindow.display_mode_combobox.setCurrentText("Textured")
+        MainWindow.display_mode_combobox.currentTextChanged.connect(MainWindow.set_brush_display_mode)
+        display_mode_layout.addWidget(QLabel("Display:"))
+        display_mode_layout.addWidget(MainWindow.display_mode_combobox)
+        top_toolbar.addWidget(display_mode_widget)
+        top_toolbar.addSeparator()
+        MainWindow.apply_texture_action = QAction(QIcon("assets/b_applytex.png"),"",MainWindow,toolTip="Apply selected texture to brush",triggered=MainWindow.apply_texture_to_brush)
+        apply_caulk_action = QAction(QIcon("assets/b_caulk.png"),"",MainWindow,toolTip="Apply caulk texture to brush",triggered=MainWindow.apply_caulk_to_brush)
+        top_toolbar.addAction(MainWindow.apply_texture_action)
+        top_toolbar.addAction(apply_caulk_action)
+        top_toolbar.addSeparator()
+        play_button = QPushButton(QIcon("assets/b_test.png"),"Play")
+        play_button.setToolTip("Drop in and play the level (F5)")
+        play_button.setShortcut("f5")
+        play_button.clicked.connect(MainWindow.enter_play_mode)
+        top_toolbar.addWidget(play_button)
+
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        top_toolbar.addWidget(spacer)
+
+        # Mode Label
+        MainWindow.mode_label = QLabel("EDITOR MODE")
+        MainWindow.mode_label.setObjectName("modeLabel")
+        
+        # Default (Editor) Style
+        # EDIT HERE TO CHANGE DEFAULT APPEARANCE
+        MainWindow.mode_label.setStyleSheet("""
+            QLabel {
+                background-color: #333333;   /* Background Color */
+                color: #888888;              /* Text Color */
+                padding: 5px 10px;           /* Spacing around text */
+                border-radius: 4px;          /* Rounded corners */
+                font-weight: bold;           /* Bold text */
+                font-size: 11px;             /* Font Size */
+                border: 1px solid #444;      /* Optional Border */
+            }
+        """)
+        top_toolbar.addWidget(MainWindow.mode_label)
         
         right_margin = QWidget()
         right_margin.setFixedWidth(5)
@@ -325,13 +296,10 @@ class Ui_MainWindow(object):
         MainWindow.world_size_spinbox.setSingleStep(1)
         MainWindow.world_size_spinbox.valueChanged.connect(MainWindow.set_world_size)
         
-        # Display mode dropdown (moved from toolbar to status bar)
-        MainWindow.display_mode_combobox = QComboBox()
-        MainWindow.display_mode_combobox.addItems(["Wireframe", "Solid Lit", "Textured"])
-        MainWindow.display_mode_combobox.setCurrentText("Textured")
-        MainWindow.display_mode_combobox.currentTextChanged.connect(MainWindow.set_brush_display_mode)
+        MainWindow.culling_checkbox = QCheckBox("Enable Culling")
+        MainWindow.culling_checkbox.setChecked(False)
+        MainWindow.culling_checkbox.stateChanged.connect(MainWindow.toggle_culling)
         
-        # Layout: Left side - grid controls
         bottom_layout.addWidget(MainWindow.snap_checkbox)
         bottom_layout.addSpacing(20)
         bottom_layout.addWidget(QLabel("Grid Size:"))
@@ -340,11 +308,8 @@ class Ui_MainWindow(object):
         bottom_layout.addWidget(QLabel("World Size:"))
         bottom_layout.addWidget(MainWindow.world_size_spinbox)
         
-        # Stretch to push display mode to the right
         bottom_layout.addStretch(1)
         
-        # Right side - display mode
-        bottom_layout.addWidget(QLabel("Display:"))
-        bottom_layout.addWidget(MainWindow.display_mode_combobox)
+        bottom_layout.addWidget(MainWindow.culling_checkbox)
         
         status_bar.addPermanentWidget(bottom_widget, 1)

@@ -1,17 +1,15 @@
 import numpy as np
 import math
 import time
-import os
-from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog
+from PyQt5.QtWidgets import QWidget, QMenu
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
-from editor.things import Thing, Light, PlayerStart, Pickup, Speaker, Model
+from editor.things import Thing, Light, PlayerStart, Pickup, Speaker
 from editor.scene_hierarchy import SceneHierarchy
 
 class View2D(QWidget):
     def __init__(self, editor, main_window, view_type):
-        # Only pass 'editor' (which acts as the parent widget) to super().__init__
-        super().__init__(editor)
+        super().__init__()
         self.editor = editor
         self.main_window = main_window
         self.view_type = view_type
@@ -27,8 +25,8 @@ class View2D(QWidget):
         self.resize_handle_ix = -1
         
         # Coordinates for tracking mouse movement
-        self.last_pan_pos = QPoint()
-        self.pan_start_pos = QPoint()
+        self.last_pan_pos = QPoint()      # Last frame's mouse position (for delta)
+        self.pan_start_pos = QPoint()     # Position where the mouse button was pressed (for threshold)
         
         self.draw_start_pos = QPointF()
         self.draw_current_pos = QPointF()
@@ -39,202 +37,36 @@ class View2D(QWidget):
         self.grid_size = 16
         self.world_size = 1024
         self.snap_to_grid_enabled = True
-
-        # Add timer-based smooth updating
-        self.smooth_update_timer = QTimer(self)
-        self.smooth_update_timer.setInterval(33)  # ~30 FPS
-        self.smooth_update_timer.timeout.connect(self._smooth_update_tick)
-        self.smooth_update_timer_active = False
-        
-        # Camera tracking for efficient updates
-        self.last_camera_pos = None
-        self.last_camera_yaw = None
         
         # Connection line animation state
+        # key = (source_id, target_name), value = {'progress': 0.0-1.0, 'growing': True/False}
         self.connection_animations = {}
-        self.last_connections = set()
+        self.last_connections = set()  # Track which connections existed last frame
         
-        # Animated arrow state - arrows traveling along connection lines
-        self.arrow_travel_progress = {}  # {conn_key: [arrow_positions]}
-        
+        # Animation timer
         self.animation_timer = QTimer(self)
         self.animation_timer.timeout.connect(self._update_connection_animations)
-        self.animation_timer.start(16)
-        
-        # CTRL+drag connection state
-        self.is_connecting = False
-        self.connection_source = None  # The trigger brush being connected
-        self.connection_drag_pos = QPointF()  # Current mouse position during drag
-        self.connection_snap_target = None  # Target object we're snapping to
-        self.connection_snap_threshold = 30  # Pixels to snap within
+        self.animation_timer.start(16)  # ~60 FPS
 
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.ClickFocus)
+        
+        # DISABLE automatic context menu. We will trigger it manually in mouseReleaseEvent.
         self.setContextMenuPolicy(Qt.NoContextMenu)
 
-        # Initialize color tag icons
+        # Initialize color tag icons from SceneHierarchy
         self.color_pixmaps = {}
-        if hasattr(main_window, 'scene_hierarchy'):
-            for color_name, qicon in SceneHierarchy(main_window).colour_icons.items():
-                self.color_pixmaps[color_name] = qicon.pixmap(18, 18) 
+        for color_name, qicon in SceneHierarchy(main_window).colour_icons.items():
+            self.color_pixmaps[color_name] = qicon.pixmap(18, 18) 
 
     def reset_state(self):
+        """
+        Resets the internal state of the view.
+        """
         self.is_dragging_object = False
         self.is_resizing_brush = False
         self.resize_handle_ix = -1
-        self.is_connecting = False
-        self.connection_source = None
-        self.connection_snap_target = None
         self.update()
-
-    def start_connection_mode(self, source_brush):
-        """Start connection mode programmatically (e.g., from property editor)."""
-        if not source_brush:
-            return
-        
-        self.is_connecting = True
-        self.connection_source = source_brush
-        self.connection_snap_target = None
-        
-        # Set initial drag position to brush center
-        ax1, ax2 = self.get_axes()
-        ax_map = {'x': 0, 'y': 1, 'z': 2}
-        source_pos = source_brush['pos']
-        self.connection_drag_pos = QPointF(source_pos[ax_map[ax1]], source_pos[ax_map[ax2]])
-        
-        self.setCursor(Qt.CrossCursor)
-        self.setFocus()  # Take focus so we can receive key events
-        self.update()
-
-    def keyPressEvent(self, event):
-        """Handle key presses - ESC cancels connection mode."""
-        if event.key() == Qt.Key_Escape and self.is_connecting:
-            self.is_connecting = False
-            self.connection_source = None
-            self.connection_snap_target = None
-            self.setCursor(Qt.ArrowCursor)
-            self.update()
-            event.accept()
-            return
-        
-        # Pass other keys to parent
-        super().keyPressEvent(event)
-
-    def _smooth_update_tick(self):
-        """Check for camera changes and repaint only when needed."""
-        if not self.isVisible():
-            return
-            
-        current_pos, current_yaw = self.get_camera_state_in_2d()
-        
-        # Only repaint if camera moved significantly
-        if (self.last_camera_pos is None or 
-            (self.last_camera_pos - current_pos).manhattanLength() > 0.5 or
-            self.last_camera_yaw != current_yaw):
-            
-            self.last_camera_pos = current_pos
-            self.last_camera_yaw = current_yaw
-            self.update()
-
-    def get_camera_state_in_2d(self):
-        """Get camera position and relevant rotation for this 2D view."""
-        ax1, ax2 = self.get_axes()
-        if not ax1 or not ax2:
-            return QPointF(0, 0), 0
-            
-        ax_map = {'x': 0, 'y': 1, 'z': 2}
-        camera = self.editor.view_3d.camera
-        
-        pos_2d = QPointF(camera.pos[ax_map[ax1]], camera.pos[ax_map[ax2]])
-        
-        # Extract relevant rotation
-        if self.view_type == 'top':
-            rotation = camera.yaw
-        elif self.view_type == 'front':
-            rotation = -camera.yaw
-        elif self.view_type == 'side':
-            rotation = -camera.pitch
-        else:
-            rotation = 0
-            
-        return pos_2d, rotation
-
-    def start_smooth_updates(self):
-        """Enable smooth 30 FPS updates when camera is moving."""
-        if not self.smooth_update_timer_active:
-            self.smooth_update_timer_active = True
-            # Initialize tracking
-            self.last_camera_pos, self.last_camera_yaw = self.get_camera_state_in_2d()
-            self.smooth_update_timer.start()
-
-    def stop_smooth_updates(self):
-        """Disable smooth updates when camera is stationary."""
-        if self.smooth_update_timer_active:
-            self.smooth_update_timer_active = False
-            self.smooth_update_timer.stop()
-            self.last_camera_pos = None
-            self.last_camera_yaw = None
-
-    def get_visible_world_bounds(self):
-        """Returns a QRectF of the visible world area in this 2D view."""
-        width = self.width()
-        height = self.height()
-        
-        # Handle invalid size
-        if width <= 0 or height <= 0 or self.zoom_factor <= 0:
-            return QRectF(0, 0, 0, 0)
-        
-        # Calculate half dimensions in world space
-        half_width_world = width / (2.0 * self.zoom_factor)
-        half_height_world = height / (2.0 * self.zoom_factor)
-        
-        # Create bounds rect centered on pan_offset
-        bounds = QRectF(
-            self.pan_offset.x() - half_width_world,
-            self.pan_offset.y() - half_height_world,
-            half_width_world * 2,
-            half_height_world * 2
-        )
-        
-        return bounds
-
-    def is_brush_visible(self, brush, visible_bounds, axis1_idx, axis2_idx):
-        """Check if a brush's projected bounding box intersects the visible area."""
-        if brush.get('hidden', False):
-            return False
-        
-        # Get brush bounds in the 2D view's coordinate system
-        pos = brush.get('pos', [0, 0, 0])
-        size = brush.get('size', [0, 0, 0])
-        
-        # Skip degenerate brushes
-        if size[axis1_idx] <= 0 or size[axis2_idx] <= 0:
-            return False
-        
-        # Calculate min/max in world coordinates for the two axes
-        min_x = pos[axis1_idx] - size[axis1_idx] / 2.0
-        max_x = pos[axis1_idx] + size[axis1_idx] / 2.0
-        min_y = pos[axis2_idx] - size[axis2_idx] / 2.0
-        max_y = pos[axis2_idx] + size[axis2_idx] / 2.0
-        
-        # Create brush bounds rect
-        brush_bounds = QRectF(min_x, min_y, max_x - min_x, max_y - min_y)
-        
-        # Check for intersection with visible bounds
-        return visible_bounds.intersects(brush_bounds)
-
-    def is_thing_visible(self, thing, visible_bounds, axis1_idx, axis2_idx):
-        """Check if a thing's position is within the visible area (with margin)."""
-        # Get thing position in the 2D view's coordinate system
-        pos = thing.pos
-        x = pos[axis1_idx]
-        y = pos[axis2_idx]
-        
-        # Add margin for sprite size (approximate 32px sprite)
-        margin = 32.0 / self.zoom_factor if self.zoom_factor > 0 else 32.0
-        
-        point_rect = QRectF(x - margin, y - margin, margin * 2, margin * 2)
-        return visible_bounds.intersects(point_rect)
 
     def get_axes(self):
         if self.view_type == 'top': return 'x', 'z'
@@ -274,18 +106,11 @@ class View2D(QWidget):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(50, 50, 50))
         
-        # Calculate visible bounds once for culling
-        visible_bounds = self.get_visible_world_bounds()
-        
-        # Skip drawing if visible bounds are invalid
-        if visible_bounds.width() <= 0 or visible_bounds.height() <= 0:
-            return
-        
         self.draw_grid(painter)
-        self.draw_brushes(painter, visible_bounds)
-        self.draw_things(painter, visible_bounds)
+        self.draw_brushes(painter)
+        self.draw_things(painter)
         self.draw_camera(painter)
-        self.draw_trigger_connections(painter, visible_bounds)
+        self.draw_trigger_connections(painter)
 
         if self.is_drawing_brush:
             pen = QPen(QColor(255, 255, 0), 1, Qt.DashLine)
@@ -294,44 +119,6 @@ class View2D(QWidget):
             start_screen = self.world_to_screen(self.draw_start_pos)
             current_screen = self.world_to_screen(self.draw_current_pos)
             painter.drawRect(QRectF(start_screen, current_screen).normalized())
-        
-        # Draw connection drag line
-        if self.is_connecting and self.connection_source:
-            ax1, ax2 = self.get_axes()
-            ax_map = {'x': 0, 'y': 1, 'z': 2}
-            source_pos = self.connection_source['pos']
-            source_2d = QPointF(source_pos[ax_map[ax1]], source_pos[ax_map[ax2]])
-            
-            p1 = self.world_to_screen(source_2d)
-            p2 = self.world_to_screen(self.connection_drag_pos)
-            
-            # Color based on valid target detection
-            if self.connection_snap_target:
-                # Green = valid target found
-                line_color = QColor(0, 255, 0)
-                pen_width = 3
-            else:
-                # Red = no valid target
-                line_color = QColor(255, 80, 80)
-                pen_width = 2
-            
-            # Draw the connection line
-            pen = QPen(line_color, pen_width)
-            painter.setPen(pen)
-            painter.drawLine(p1, p2)
-            
-            # Draw arrow at end
-            self._draw_connection_arrow(painter, p1, p2, line_color)
-            
-            # Draw circle at source
-            painter.setBrush(QBrush(QColor(line_color.red(), line_color.green(), line_color.blue(), 100)))
-            painter.drawEllipse(p1, 8, 8)
-            
-            # Draw snap indicator at target if snapped
-            if self.connection_snap_target:
-                painter.setPen(QPen(QColor(0, 255, 0), 2))
-                painter.setBrush(QBrush(QColor(0, 255, 0, 80)))
-                painter.drawEllipse(p2, 12, 12)
 
     def draw_grid(self, painter):
         grid_color = QColor(70, 70, 70)
@@ -371,42 +158,28 @@ class View2D(QWidget):
             p2 = self.world_to_screen(QPointF(bottom_right_world.x(), y))
             painter.drawLine(p1, p2)
 
-    def draw_brushes(self, painter, visible_bounds):
+    def draw_brushes(self, painter):
         ax1, ax2 = self.get_axes()
-        if not ax1 or not ax2:
-            return
-            
         ax_map = {'x': 0, 'y': 1, 'z': 2}
-        axis1_idx = ax_map[ax1]
-        axis2_idx = ax_map[ax2]
         
         for brush in self.editor.state.brushes:
-            # CULL brush if not visible
-            if not self.is_brush_visible(brush, visible_bounds, axis1_idx, axis2_idx):
+            if brush.get('hidden', False):
                 continue
-                
-            # Check if brush is in selected_objects list (for multi-select support)
-            is_selected = brush in getattr(self.editor.state, 'selected_objects', []) or brush is self.editor.state.selected_object
+            is_selected = (brush is self.editor.state.selected_object)
             is_trigger = brush.get('is_trigger', False)
             is_subtractive = brush.get('operation') == 'subtract'
             is_locked = brush.get('lock', False)
             is_fog = brush.get('is_fog', False)
             is_mover = brush.get('is_mover', False)
-            
-            # Check for flash effect (takes precedence over other colors)
-            is_flashing = False
-            flash_until = brush.get('_flash_until', 0)
-            if flash_until > time.time():
-                is_flashing = True
-            
-            # Apply colors based on state (flash overrides everything)
-            if is_flashing:
-                pen_color = QColor(255, 105, 180)  # Hot pink
-                fill_color = QColor(255, 105, 180, 60)
-            elif is_locked:
+
+            if is_locked:
                 pen_color = QColor(255, 105, 97) 
-                fill_color = QColor(74,4,4, 20)
-            elif is_trigger:
+                fill_color = QColor(74,4,4, 20) # 70
+            else:
+                pen_color = QColor(211, 211, 211)
+                fill_color = QColor(200, 200, 200, 30)
+
+            if is_trigger:
                 pen_color = QColor(0, 255, 255, 150)
                 fill_color = QColor(0, 255, 255, 30)
             elif is_subtractive:
@@ -416,27 +189,25 @@ class View2D(QWidget):
                 fog_color_rgb = brush.get('fog_color', [0.5, 0.6, 0.7])
                 pen_color = QColor.fromRgbF(fog_color_rgb[0], fog_color_rgb[1], fog_color_rgb[2])
                 fill_color = QColor.fromRgbF(fog_color_rgb[0], fog_color_rgb[1], fog_color_rgb[2], 0.3)
+            # Mover specific color
             elif is_mover:
                 pen_color = QColor(0, 120, 255)
                 fill_color = QColor(0, 120, 255, 50)
-            else:
-                pen_color = QColor(211, 211, 211)
-                fill_color = QColor(200, 200, 200, 30)
 
-            if is_selected and not is_flashing:  # Don't override flash with selection
+
+            if is_selected:
                 pen_color = QColor(255, 255, 0)
             
             pen = QPen(pen_color, 2 if is_selected else 1)
-            if (is_trigger or is_fog) and not is_selected and not is_flashing: 
-                pen.setStyle(Qt.DashLine)
+            if (is_trigger or is_fog) and not is_selected: pen.setStyle(Qt.DashLine)
             painter.setPen(pen)
             painter.setBrush(QBrush(fill_color))
 
             pos = brush['pos']
             size = brush['size']
             
-            w_pos = QPointF(pos[axis1_idx] - size[axis1_idx]/2, pos[axis2_idx] - size[axis2_idx]/2)
-            w_size = QPointF(size[axis1_idx], size[axis2_idx])
+            w_pos = QPointF(pos[ax_map[ax1]] - size[ax_map[ax1]]/2, pos[ax_map[ax2]] - size[ax_map[ax2]]/2)
+            w_size = QPointF(size[ax_map[ax1]], size[ax_map[ax2]])
             p1 = self.world_to_screen(w_pos)
             p2 = self.world_to_screen(w_pos + w_size)
             screen_rect = QRectF(p1, p2).normalized()
@@ -448,17 +219,22 @@ class View2D(QWidget):
                 font.setPointSize(10)
                 painter.setFont(font)
                 painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, "t r i g g e r")
-            
+
+            if is_fog:
+                painter.setPen(QColor(255, 255, 255, 180))
+                font = painter.font()
+                font.setPointSize(10)
+                painter.setFont(font)
+                painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, "F O G")
+                
             if is_mover:
+                painter.setPen(QColor(255, 255, 255, 180))
+                font = painter.font()
+                font.setPointSize(10)
+                painter.setFont(font)
+                painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, "M O V E R")
+                # Draw Mover Arrow
                 self.draw_mover_arrow(painter, brush, ax1, ax2, ax_map)
-            
-            # Draw glow light direction arrow
-            if brush.get('shader') == 'Glow':
-                # Hide arrows in play mode unless F5 toggle is enabled
-                play_mode = getattr(self.main_window.view_3d, 'play_mode', False)
-                show_arrows = getattr(self.main_window.view_3d, 'show_glow_arrows_in_play_mode', False)
-                if not play_mode or show_arrows:
-                    self.draw_glow_light_arrow(painter, brush, ax1, ax2, ax_map)
 
             if is_selected and not is_locked:
                 self.draw_resize_handles(painter, screen_rect)
@@ -468,168 +244,65 @@ class View2D(QWidget):
     def draw_mover_arrow(self, painter, brush, ax1, ax2, ax_map):
         direction = brush.get('direction', [0, 1, 0])
         distance = brush.get('distance', 128.0)
+        
+        # We want to visualize the vector of movement
+        # 3D Start Point = brush center
         start_3d = brush['pos']
+        
+        # 3D End Point = start + (normalized_dir * distance)
+        # However, direction stored might not be normalized. 
+        # Typically physics engines normalize it or use it as offset.
+        # Assuming it's a direction vector, let's normalize it.
         d_vec = np.array(direction, dtype=float)
         norm = np.linalg.norm(d_vec)
-        if norm == 0: return 
+        if norm == 0: return # No direction
+        
         d_vec = d_vec / norm * distance
+        
         end_3d = [start_3d[0] + d_vec[0], start_3d[1] + d_vec[1], start_3d[2] + d_vec[2]]
-        
-        p_start = QPointF(start_3d[ax_map[ax1]], start_3d[ax_map[ax2]])
-        p_end = QPointF(end_3d[ax_map[ax1]], end_3d[ax_map[ax2]])
-        
-        if (p_start - p_end).manhattanLength() < 2: return 
-
-        s_start = self.world_to_screen(p_start)
-        s_end = self.world_to_screen(p_end)
-        
-        arrow_color = QColor(0, 255, 0)
-        painter.setPen(QPen(arrow_color, 2))
-        painter.drawLine(s_start, s_end)
-        
-        angle = math.atan2(s_end.y() - s_start.y(), s_end.x() - s_start.x())
-        arrow_size = 10
-        p1 = s_end - QPointF(math.cos(angle - math.pi / 6) * arrow_size, math.sin(angle - math.pi / 6) * arrow_size)
-        p2 = s_end - QPointF(math.cos(angle + math.pi / 6) * arrow_size, math.sin(angle + math.pi / 6) * arrow_size)
-        painter.setBrush(QBrush(arrow_color))
-        painter.drawPolygon(QPolygonF([s_end, p1, p2]))
-
-    def draw_glow_light_arrow(self, painter, brush, ax1, ax2, ax_map):
-        """Draw a wide colored arrow radiating from the glow brush's light emission face."""
-        light_direction = brush.get('light_direction', 'top')
-        brush_pos = brush['pos']
-        brush_size = brush['size']
-        
-        # Get arrow scale from settings (default 100%)
-        arrow_scale = self.main_window.config.getint('Display', 'glow_arrow_scale', fallback=100) / 100.0
-        
-        # Map face name to direction vector and offset to face center
-        face_directions = {
-            'top':    ([0, 1, 0], [0, brush_size[1]/2, 0]),
-            'bottom': ([0, -1, 0], [0, -brush_size[1]/2, 0]),
-            'north':  ([0, 0, 1], [0, 0, brush_size[2]/2]),
-            'south':  ([0, 0, -1], [0, 0, -brush_size[2]/2]),
-            'east':   ([1, 0, 0], [brush_size[0]/2, 0, 0]),
-            'west':   ([-1, 0, 0], [-brush_size[0]/2, 0, 0]),
-        }
-        
-        if light_direction not in face_directions:
-            return
-        
-        direction, face_offset = face_directions[light_direction]
-        
-        # Calculate start point (center of the emitting face)
-        start_3d = [
-            brush_pos[0] + face_offset[0],
-            brush_pos[1] + face_offset[1],
-            brush_pos[2] + face_offset[2]
-        ]
-        
-        # Arrow length based on brush size and scale setting
-        base_arrow_length = max(brush_size[0], brush_size[1], brush_size[2]) * 0.8
-        arrow_length = base_arrow_length * arrow_scale
-        
-        # Calculate end point
-        end_3d = [
-            start_3d[0] + direction[0] * arrow_length,
-            start_3d[1] + direction[1] * arrow_length,
-            start_3d[2] + direction[2] * arrow_length
-        ]
-        
-        # Cone position - close to the emitting surface (20% along the arrow)
-        cone_3d = [
-            start_3d[0] + direction[0] * arrow_length * 0.2,
-            start_3d[1] + direction[1] * arrow_length * 0.2,
-            start_3d[2] + direction[2] * arrow_length * 0.2
-        ]
         
         # Project to 2D
         p_start = QPointF(start_3d[ax_map[ax1]], start_3d[ax_map[ax2]])
         p_end = QPointF(end_3d[ax_map[ax1]], end_3d[ax_map[ax2]])
-        p_cone = QPointF(cone_3d[ax_map[ax1]], cone_3d[ax_map[ax2]])
         
-        # Skip if arrow is too small in this view
+        # If the arrow is perpendicular to the view (e.g. moving up in Top view), p_start == p_end
         if (p_start - p_end).manhattanLength() < 2:
-            return
-        
+            return 
+
         s_start = self.world_to_screen(p_start)
         s_end = self.world_to_screen(p_end)
-        s_cone = self.world_to_screen(p_cone)
         
-        # Get brush colour for the arrow (use the glow colour)
-        brush_colour = brush.get('colour', [1.0, 0.9, 0.5])  # Default warm glow color
-        arrow_color = QColor(
-            int(min(255, brush_colour[0] * 255 * 1.2)),  # Slightly brighter
-            int(min(255, brush_colour[1] * 255 * 1.2)),
-            int(min(255, brush_colour[2] * 255 * 1.2))
-        )
-        
-        # Draw arrow shaft (from cone to tip)
+        # Draw Line
+        arrow_color = QColor(0, 255, 0) # Green for movement
         painter.setPen(QPen(arrow_color, 2))
-        painter.drawLine(s_cone, s_end)
+        painter.drawLine(s_start, s_end)
         
-        # Draw big arrowhead/cone near the surface
+        # Draw Arrow Head
         angle = math.atan2(s_end.y() - s_start.y(), s_end.x() - s_start.x())
-        arrow_head_size = max(12, 18 * arrow_scale)  # Bigger arrowhead
-        arrow_head_width = math.pi / 2  # Wide arrowhead (60 degrees)
+        arrow_size = 10
         
-        p1 = s_cone - QPointF(
-            math.cos(angle - arrow_head_width) * arrow_head_size,
-            math.sin(angle - arrow_head_width) * arrow_head_size
-        )
-        p2 = s_cone - QPointF(
-            math.cos(angle + arrow_head_width) * arrow_head_size,
-            math.sin(angle + arrow_head_width) * arrow_head_size
-        )
-        
-        # Cone tip extends forward from s_cone
-        cone_tip = s_cone + QPointF(
-            math.cos(angle) * arrow_head_size * 0.6,
-            math.sin(angle) * arrow_head_size * 0.6
-        )
-        
-        painter.setPen(QPen(arrow_color, 2))
+        p1 = s_end - QPointF(math.cos(angle - math.pi / 6) * arrow_size,
+                             math.sin(angle - math.pi / 6) * arrow_size)
+        p2 = s_end - QPointF(math.cos(angle + math.pi / 6) * arrow_size,
+                             math.sin(angle + math.pi / 6) * arrow_size)
+                             
         painter.setBrush(QBrush(arrow_color))
-        painter.drawPolygon(QPolygonF([cone_tip, p1, p2]))
+        painter.drawPolygon(QPolygonF([s_end, p1, p2]))
 
     def draw_brush_color_tag(self, painter, brush, screen_rect):
-        color = brush.get('color')
-        if isinstance(color, str) and color in self.color_pixmaps:
-            pixmap = self.color_pixmaps[color]
-            tag_size = 16 
-            tag_x = int(screen_rect.bottomRight().x() - tag_size - 2) 
-            tag_y = int(screen_rect.bottomRight().y() - tag_size - 2) 
-            painter.drawPixmap(tag_x, tag_y, pixmap)
-    
-    def draw_thing_color_tag(self, painter, thing, screen_rect):
-        """Draw color tag for things (same as brushes)"""
-        color = thing.properties.get('color')
-        if isinstance(color, str) and color in self.color_pixmaps:
-            pixmap = self.color_pixmaps[color]
+        if 'color' in brush and brush['color'] in self.color_pixmaps:
+            pixmap = self.color_pixmaps[brush['color']]
             tag_size = 16 
             tag_x = int(screen_rect.bottomRight().x() - tag_size - 2) 
             tag_y = int(screen_rect.bottomRight().y() - tag_size - 2) 
             painter.drawPixmap(tag_x, tag_y, pixmap)
 
-    def draw_things(self, painter, visible_bounds):
+    def draw_things(self, painter):
         ax1, ax2 = self.get_axes()
-        if not ax1 or not ax2:
-            return
-            
         ax_map = {'x': 0, 'y': 1, 'z': 2}
-        axis1_idx = ax_map[ax1]
-        axis2_idx = ax_map[ax2]
         
         for thing in self.editor.state.things:
-            # Skip hidden things
-            if thing.properties.get('hidden', False):
-                continue
-            
-            # CULL thing if not visible
-            if not self.is_thing_visible(thing, visible_bounds, axis1_idx, axis2_idx):
-                continue
-            
-            w_pos = QPointF(thing.pos[axis1_idx], thing.pos[axis2_idx])
+            w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
             s_pos = self.world_to_screen(w_pos)
 
             if isinstance(thing, Light) and thing.properties.get('show_radius', False):
@@ -639,283 +312,227 @@ class View2D(QWidget):
                 painter.setPen(QPen(light_color.darker(120), 1))
                 radius = thing.get_radius() * self.zoom_factor
                 painter.drawEllipse(s_pos, radius, radius)
+            
+            if isinstance(thing, Speaker) and thing.properties.get('show_radius', False) and not thing.properties.get('global', False):
+                speaker_color = QColor(100, 100, 255, 60) 
+                painter.setBrush(QBrush(speaker_color))
+                painter.setPen(QPen(speaker_color.darker(120), 1, Qt.DotLine))
+                radius = thing.get_radius() * self.zoom_factor
+                painter.drawEllipse(s_pos, radius, radius)
 
             pixmap = thing.get_pixmap()
             if not pixmap: continue
 
             pixmap_size = pixmap.size()
             draw_rect = QRectF(s_pos.x() - pixmap_size.width() / 2, 
-                            s_pos.y() - pixmap_size.height() / 2,
-                            pixmap_size.width(), 
-                            pixmap_size.height())
+                               s_pos.y() - pixmap_size.height() / 2,
+                               pixmap_size.width(), 
+                               pixmap_size.height())
             
             painter.drawPixmap(draw_rect.toRect(), pixmap)
 
-            if isinstance(thing, Model):
-                rotation = thing.properties.get('rotation', [0, 0, 0])
-                yaw_deg = rotation[1]
-                
-                angle_rad = 0.0
-                if self.view_type == 'top':
-                    angle_rad = math.radians(yaw_deg)
-                
-                if self.view_type == 'top':
-                    arrow_len = 25
-                    end_x = s_pos.x() + math.sin(angle_rad) * arrow_len
-                    end_y = s_pos.y() + math.cos(angle_rad) * arrow_len
-                    
-                    painter.setPen(QPen(QColor(0, 255, 255), 2))
-                    painter.drawLine(s_pos, QPointF(end_x, end_y))
-
-            # Draw color tag for things (similar to brushes)
-            self.draw_thing_color_tag(painter, thing, draw_rect)
-
-            # Check if thing is in selected_objects list (for multi-select support)
-            is_selected = thing in getattr(self.editor.state, 'selected_objects', []) or thing == self.editor.state.selected_object
-            if is_selected:
+            if thing == self.editor.state.selected_object:
                 painter.setPen(QPen(QColor(255, 255, 0), 2, Qt.DotLine))
                 painter.setBrush(Qt.NoBrush)
                 painter.drawRect(draw_rect.adjusted(-2, -2, 2, 2))
     
     def draw_camera(self, painter):
-        """Optimized camera drawing with early exit for off-screen cameras."""
         camera = self.editor.view_3d.camera
         ax1, ax2 = self.get_axes()
-        if not ax1 or not ax2:
-            return
-
         ax_map = {'x': 0, 'y': 1, 'z': 2}
-        axis1_idx = ax_map[ax1]
-        axis2_idx = ax_map[ax2]
 
-        cam_pos_2d = QPointF(camera.pos[axis1_idx], camera.pos[axis2_idx])
+        cam_pos_2d = QPointF(camera.pos[ax_map[ax1]], camera.pos[ax_map[ax2]])
         screen_pos = self.world_to_screen(cam_pos_2d)
 
-        # Early exit if camera is far off-screen
-        margin = 100
-        if not self.rect().adjusted(-margin, -margin, margin, margin).contains(screen_pos.toPoint()):
-            return
-
-        # Determine view angle for this 2D projection
         yaw = camera.yaw
         pitch = camera.pitch
         
-        if self.view_type == 'top':
-            angle_deg = yaw
-        elif self.view_type == 'front':
-            angle_deg = -yaw
-        elif self.view_type == 'side':
-            angle_deg = -pitch
+        if self.view_type == 'top': angle_deg = yaw
+        elif self.view_type == 'front': angle_deg = -yaw
+        elif self.view_type == 'side': angle_deg = -pitch
 
         fov = camera.fov
         cone_length = 200
         
-        # Calculate view cone corners
         left_angle_rad = np.radians(angle_deg - fov / 2)
         right_angle_rad = np.radians(angle_deg + fov / 2)
 
         left_point = QPointF(cam_pos_2d.x() + cone_length * np.cos(left_angle_rad),
-                             cam_pos_2d.y() + cone_length * np.sin(left_angle_rad))
+                                 cam_pos_2d.y() + cone_length * np.sin(left_angle_rad))
         right_point = QPointF(cam_pos_2d.x() + cone_length * np.cos(right_angle_rad),
-                              cam_pos_2d.y() + cone_length * np.sin(right_angle_rad))
+                                  cam_pos_2d.y() + cone_length * np.sin(right_angle_rad))
 
         screen_left = self.world_to_screen(left_point)
         screen_right = self.world_to_screen(right_point)
 
-        # Draw view cone (semi-transparent)
         cone_poly = QPolygonF([screen_pos, screen_left, screen_right])
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor(255, 255, 255, 25))
         painter.drawPolygon(cone_poly)
         
-        # Draw camera body
         painter.setPen(QPen(QColor(255, 255, 255), 2))
         painter.setBrush(QColor(0, 0, 0, 150))
         painter.drawEllipse(screen_pos, 8, 8)
+        
+        forward_angle_rad = np.radians(angle_deg)
+        forward_point = QPointF(cam_pos_2d.x() + 20 * np.cos(forward_angle_rad),
+                                      cam_pos_2d.y() + 20 * np.sin(forward_angle_rad))
+        screen_forward = self.world_to_screen(forward_point)
+        painter.drawLine(screen_pos, screen_forward)
 
     def draw_resize_handles(self, painter, rect):
         painter.setPen(QPen(QColor(255, 255, 255), 1))
         painter.setBrush(QBrush(QColor(255, 255, 255)))
+        
         handle_size = 8
         handles = self.get_resize_handles(rect)
         for handle in handles:
             handle_rect = QRectF(handle.x() - handle_size/2, handle.y() - handle_size/2, handle_size, handle_size)
             painter.drawRect(handle_rect)
 
-    def draw_trigger_connections(self, painter, visible_bounds):
+    def draw_trigger_connections(self, painter):
+        """Draw animated connection lines between triggers/movers and their targets."""
+        # Check if connections should be shown
         show_connections = self.main_window.config.getboolean('Display', 'show_connections', fallback=True)
-        
-        # Check play mode visibility
-        play_mode = getattr(self.main_window.view_3d, 'play_mode', False)
-        show_in_play = getattr(self.main_window.view_3d, 'show_connections_in_play_mode', False)
-        
-        if play_mode and not show_in_play:
-            return
-        
-        if not show_connections: 
-            return
-        
-        ax1, ax2 = self.get_axes()
-        if not ax1 or not ax2:
+        if not show_connections:
             return
             
+        ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
-        axis1_idx = ax_map[ax1]
-        axis2_idx = ax_map[ax2]
         
         current_connections = set()
+        
+        # Gather all connections (triggers and movers)
         connections_to_draw = []
         
         for i, brush in enumerate(self.editor.state.brushes):
             target_name = brush.get('target')
-            if not target_name: 
+            if not target_name:
                 continue
+                
+            # Check if this is a trigger or has a name (could be targeted)
             is_source = brush.get('is_trigger') or brush.get('is_mover')
-            if not is_source: 
+            if not is_source:
                 continue
+                
+            source_id = f"brush_{id(brush)}"
+            conn_key = (source_id, target_name)
+            current_connections.add(conn_key)
             
-            # Get source position
-            source_pos = brush['pos']
-            source_2d = QPointF(source_pos[axis1_idx], source_pos[axis2_idx])
-            
-            # Find target position
+            # Find target (could be brush or thing)
             target_pos = None
+            
+            # Check brushes for target
             for b in self.editor.state.brushes:
                 if b.get('name') == target_name:
                     target_pos = b['pos']
                     break
+            
+            # Check things for target
             if target_pos is None:
                 for t in self.editor.state.things:
                     if hasattr(t, 'name') and t.name == target_name:
                         target_pos = t.pos
                         break
             
-            if not target_pos:
-                continue
-                
-            target_2d = QPointF(target_pos[axis1_idx], target_pos[axis2_idx])
-            
-            # CULL connection if both source and target are outside visible bounds
-            margin = 10.0 / self.zoom_factor if self.zoom_factor > 0 else 10.0
-            source_rect = QRectF(source_2d.x() - margin, source_2d.y() - margin, margin * 2, margin * 2)
-            target_rect = QRectF(target_2d.x() - margin, target_2d.y() - margin, margin * 2, margin * 2)
-            
-            if not (visible_bounds.intersects(source_rect) or visible_bounds.intersects(target_rect)):
-                continue
-            
-            # Connection is visible - add to tracking and drawing list
-            source_id = f"brush_{id(brush)}"
-            conn_key = (source_id, target_name)
-            current_connections.add(conn_key)
-            connections_to_draw.append({
-                'key': conn_key,
-                'source_pos': source_2d,
-                'target_pos': target_2d,
-                'is_trigger': brush.get('is_trigger', False)
-            })
+            if target_pos:
+                connections_to_draw.append({
+                    'key': conn_key,
+                    'source_pos': brush['pos'],
+                    'target_pos': target_pos,
+                    'is_trigger': brush.get('is_trigger', False)
+                })
         
-        # Animation tracking (only for visible connections)
+        # Handle new connections (start growing)
         for conn_key in current_connections - self.last_connections:
             self.connection_animations[conn_key] = {'progress': 0.0, 'growing': True}
-            # Initialize traveling arrows for this connection
-            self.arrow_travel_progress[conn_key] = [0.0]  # Start with one arrow at 0
+        
+        # Handle removed connections (start ungrowing)
         for conn_key in self.last_connections - current_connections:
             if conn_key in self.connection_animations:
                 self.connection_animations[conn_key]['growing'] = False
         
         self.last_connections = current_connections
         
-        # Draw visible connections
+        # Draw connections with animation
         for conn in connections_to_draw:
             conn_key = conn['key']
+            
+            # Get or create animation state
             if conn_key not in self.connection_animations:
                 self.connection_animations[conn_key] = {'progress': 1.0, 'growing': True}
-                self.arrow_travel_progress[conn_key] = [0.0]
             
             anim = self.connection_animations[conn_key]
             progress = anim['progress']
-            if progress <= 0: 
+            
+            if progress <= 0:
                 continue
             
-            p1 = self.world_to_screen(conn['source_pos'])
-            p2 = self.world_to_screen(conn['target_pos'])
+            source_pos = conn['source_pos']
+            target_pos = conn['target_pos']
             
-            animated_p2 = QPointF(p1.x() + (p2.x() - p1.x()) * progress, p1.y() + (p2.y() - p1.y()) * progress)
-            color = QColor(0, 255, 255, 180) if conn['is_trigger'] else QColor(139, 69, 19, 180)
+            source_2d = QPointF(source_pos[ax_map[ax1]], source_pos[ax_map[ax2]])
+            target_2d = QPointF(target_pos[ax_map[ax1]], target_pos[ax_map[ax2]])
+            
+            p1 = self.world_to_screen(source_2d)
+            p2 = self.world_to_screen(target_2d)
+            
+            # Interpolate end point based on progress
+            animated_p2 = QPointF(
+                p1.x() + (p2.x() - p1.x()) * progress,
+                p1.y() + (p2.y() - p1.y()) * progress
+            )
+            
+            # Color based on type
+            if conn['is_trigger']:
+                color = QColor(0, 255, 255, 180)  # Cyan for triggers
+            else:
+                color = QColor(139, 69, 19, 180)  # Brown for movers
             
             pen = QPen(color, 2, Qt.DotLine)
             painter.setPen(pen)
             painter.drawLine(p1, animated_p2)
             
-            # Draw traveling arrows along the line
-            if progress >= 1.0 and conn_key in self.arrow_travel_progress:
-                self._draw_traveling_arrows(painter, p1, p2, color, conn_key)
-            elif progress > 0.1:
+            # Draw arrowhead at the animated end
+            if progress > 0.1:
                 self._draw_connection_arrow(painter, p1, animated_p2, color)
         
-        # Clean up finished animations
+        # Also draw ungrowing connections that are no longer in current set
         keys_to_remove = []
         for conn_key, anim in self.connection_animations.items():
-            if conn_key not in current_connections and anim['progress'] <= 0:
-                keys_to_remove.append(conn_key)
-        for key in keys_to_remove: 
+            if conn_key not in current_connections:
+                if anim['progress'] <= 0:
+                    keys_to_remove.append(conn_key)
+        
+        for key in keys_to_remove:
             del self.connection_animations[key]
-            if key in self.arrow_travel_progress:
-                del self.arrow_travel_progress[key]
-    
-    def _draw_traveling_arrows(self, painter, p1, p2, color, conn_key):
-        """Draw arrows that travel along the connection line."""
-        if conn_key not in self.arrow_travel_progress:
-            return
-        
-        dx = p2.x() - p1.x()
-        dy = p2.y() - p1.y()
-        length = math.sqrt(dx * dx + dy * dy)
-        if length < 20:
-            return
-        
-        angle = math.atan2(dy, dx)
-        arrow_size = 8
-        
-        # Draw each traveling arrow
-        for arrow_pos in self.arrow_travel_progress[conn_key]:
-            # Calculate position along line
-            ax = p1.x() + dx * arrow_pos
-            ay = p1.y() + dy * arrow_pos
-            arrow_tip = QPointF(ax, ay)
-            
-            # Draw arrow
-            arrow_p1 = QPointF(
-                ax - arrow_size * math.cos(angle - math.pi / 6),
-                ay - arrow_size * math.sin(angle - math.pi / 6)
-            )
-            arrow_p2 = QPointF(
-                ax - arrow_size * math.cos(angle + math.pi / 6),
-                ay - arrow_size * math.sin(angle + math.pi / 6)
-            )
-            
-            # Slightly brighter color for arrows
-            arrow_color = QColor(color.red(), color.green(), color.blue(), 220)
-            painter.setPen(QPen(arrow_color, 1))
-            painter.setBrush(QBrush(arrow_color))
-            painter.drawPolygon(QPolygonF([arrow_tip, arrow_p1, arrow_p2]))
     
     def _draw_connection_arrow(self, painter, p1, p2, color):
+        """Draw an arrowhead at p2 pointing from p1."""
         dx = p2.x() - p1.x()
         dy = p2.y() - p1.y()
         length = math.sqrt(dx * dx + dy * dy)
-        if length < 10: return
+        if length < 10:
+            return
+            
         angle = math.atan2(dy, dx)
         arrow_size = 8
-        arrow_p1 = QPointF(p2.x() - arrow_size * math.cos(angle - math.pi / 6), p2.y() - arrow_size * math.sin(angle - math.pi / 6))
-        arrow_p2 = QPointF(p2.x() - arrow_size * math.cos(angle + math.pi / 6), p2.y() - arrow_size * math.sin(angle + math.pi / 6))
+        
+        arrow_p1 = QPointF(
+            p2.x() - arrow_size * math.cos(angle - math.pi / 6),
+            p2.y() - arrow_size * math.sin(angle - math.pi / 6)
+        )
+        arrow_p2 = QPointF(
+            p2.x() - arrow_size * math.cos(angle + math.pi / 6),
+            p2.y() - arrow_size * math.sin(angle + math.pi / 6)
+        )
+        
         painter.setBrush(QBrush(color))
         painter.drawPolygon(QPolygonF([p2, arrow_p1, arrow_p2]))
     
     def _update_connection_animations(self):
-        animation_speed = 0.05
-        arrow_speed = 0.015  # Speed of traveling arrows
-        arrow_spacing = 0.25  # Spacing between arrows (as fraction of line length)
+        """Update animation progress for all connections."""
+        animation_speed = 0.05  # Progress per frame
         needs_update = False
         
         for conn_key, anim in self.connection_animations.items():
@@ -928,45 +545,24 @@ class View2D(QWidget):
                     anim['progress'] = max(0.0, anim['progress'] - animation_speed)
                     needs_update = True
         
-        # Update traveling arrows
-        for conn_key in list(self.arrow_travel_progress.keys()):
-            if conn_key not in self.connection_animations:
-                del self.arrow_travel_progress[conn_key]
-                continue
-            
-            anim = self.connection_animations.get(conn_key)
-            if not anim or anim['progress'] < 1.0:
-                continue
-            
-            arrows = self.arrow_travel_progress[conn_key]
-            
-            # Move all arrows forward
-            new_arrows = []
-            for pos in arrows:
-                new_pos = pos + arrow_speed
-                if new_pos < 1.0:
-                    new_arrows.append(new_pos)
-            
-            # Add new arrow at start if there's room
-            if len(new_arrows) == 0 or new_arrows[0] >= arrow_spacing:
-                new_arrows.insert(0, 0.0)
-            
-            self.arrow_travel_progress[conn_key] = new_arrows
-            needs_update = True
-        
-        if needs_update: 
+        if needs_update:
             self.update()
 
     def get_resize_handles(self, rect):
-        return [rect.topLeft(), rect.topRight(), rect.bottomLeft(), rect.bottomRight(),
-                QPointF(rect.center().x(), rect.top()), QPointF(rect.center().x(), rect.bottom()),
-                QPointF(rect.left(), rect.center().y()), QPointF(rect.right(), rect.center().y())]
+        return [
+            rect.topLeft(), rect.topRight(), rect.bottomLeft(), rect.bottomRight(),
+            QPointF(rect.center().x(), rect.top()), QPointF(rect.center().x(), rect.bottom()),
+            QPointF(rect.left(), rect.center().y()), QPointF(rect.right(), rect.center().y())
+        ]
 
     def mousePressEvent(self, event):
         world_pos = self.screen_to_world(event.pos())
         middle_click_pan_enabled = self.main_window.config.getboolean('Controls', 'MiddleClickDrag', fallback=False)
 
         if event.button() == Qt.RightButton:
+            # Init dragging state. 
+            # pan_start_pos is the anchor to check if we moved far enough.
+            # last_pan_pos is initialized but not used until drag starts.
             self.is_panning = False 
             self.pan_start_pos = event.pos()
             self.last_pan_pos = event.pos() 
@@ -979,48 +575,6 @@ class View2D(QWidget):
             return
 
         elif event.button() == Qt.LeftButton:
-            # If we're in connection mode (started from property editor), complete on click
-            if self.is_connecting:
-                # Complete the connection
-                target_object = self.connection_snap_target
-                if not target_object:
-                    target_object = self.get_object_at(event.pos())
-                
-                if target_object and target_object != self.connection_source:
-                    self.main_window.save_state()
-                    
-                    # Ensure target has a name
-                    target_name = self._ensure_object_name(target_object)
-                    
-                    # Set the trigger's target
-                    self.connection_source['target'] = target_name
-                    
-                    # Show toast
-                    self.main_window.show_toast(f"Connected to '{target_name}'")
-                    
-                    # Refresh property editor
-                    self.main_window.property_editor.set_object(self.connection_source)
-                
-                # Reset connection state
-                self.is_connecting = False
-                self.connection_source = None
-                self.connection_snap_target = None
-                self.setCursor(Qt.ArrowCursor)
-                self.update()
-                return
-            
-            # Check for CTRL+click to start connection dragging
-            if event.modifiers() & Qt.ControlModifier:
-                clicked_object = self.get_object_at(event.pos())
-                # Check if clicked object is a trigger brush
-                if isinstance(clicked_object, dict) and clicked_object.get('is_trigger', False):
-                    self.is_connecting = True
-                    self.connection_source = clicked_object
-                    self.connection_drag_pos = world_pos
-                    self.setCursor(Qt.CrossCursor)
-                    self.update()
-                    return
-            
             handle_ix = self.get_handle_at(event.pos())
             if handle_ix != -1:
                 self.is_resizing_brush = True
@@ -1039,35 +593,12 @@ class View2D(QWidget):
                 self.update()
                 return
 
-            clicked_object = self.get_object_at(event.pos(), highlight_locked=True)
-            
-            # Handle shift-click for multi-selection
-            if event.modifiers() & Qt.ShiftModifier and clicked_object:
-                # Get current selected_objects list
-                selected_objects = getattr(self.editor.state, 'selected_objects', [])
-                if not selected_objects:
-                    selected_objects = []
-                    if self.editor.state.selected_object:
-                        selected_objects = [self.editor.state.selected_object]
-                
-                # Toggle selection: add if not present, remove if present
-                if clicked_object in selected_objects:
-                    selected_objects.remove(clicked_object)
-                else:
-                    selected_objects.append(clicked_object)
-                
-                self.editor.set_selected_objects(selected_objects)
-            else:
-                # Normal click - single selection
-                self.editor.set_selected_object(clicked_object)
+            # CHANGE: Pass event.pos() (Screen Coordinates) to get_object_at
+            clicked_object = self.get_object_at(event.pos())
+            self.editor.set_selected_object(clicked_object)
 
-            if clicked_object and not (event.modifiers() & Qt.ShiftModifier):
-                # Check if object is locked (works for both brushes and things)
-                if isinstance(clicked_object, dict):
-                    is_locked = clicked_object.get('lock', False)
-                else:
-                    is_locked = clicked_object.properties.get('lock', False)
-                    
+            if clicked_object:
+                is_locked = isinstance(clicked_object, dict) and clicked_object.get('lock', False)
                 if not is_locked:
                     self.is_dragging_object = True
                     self.drag_start_pos = world_pos
@@ -1076,30 +607,16 @@ class View2D(QWidget):
                     pos_ref = clicked_object['pos'] if isinstance(clicked_object, dict) else clicked_object.pos
                     obj_pos_2d = QPointF(pos_ref[ax_map[ax1]], pos_ref[ax_map[ax2]])
                     self.drag_offset = obj_pos_2d - world_pos
-            elif not clicked_object:
+            else:
                 self.is_drawing_brush = True
                 self.draw_start_pos = self.snap_to_grid(world_pos)
                 self.draw_current_pos = self.draw_start_pos
+        
         self.update()
 
     def mouseMoveEvent(self, event):
         world_pos = self.screen_to_world(event.pos())
         middle_click_pan_enabled = self.main_window.config.getboolean('Controls', 'MiddleClickDrag', fallback=False)
-        
-        # Handle connection mode first - works with or without button pressed
-        if self.is_connecting:
-            # Update connection drag line endpoint with snap detection
-            snap_target, snap_screen_pos = self._find_snap_target(event.pos())
-            
-            if snap_target:
-                # Snap to target - convert screen pos back to world
-                self.connection_snap_target = snap_target
-                self.connection_drag_pos = self.screen_to_world(snap_screen_pos)
-            else:
-                self.connection_snap_target = None
-                self.connection_drag_pos = world_pos
-            self.update()
-            return
         
         if not event.buttons():
             handle_ix = self.get_handle_at(event.pos())
@@ -1113,14 +630,19 @@ class View2D(QWidget):
 
         elif (event.buttons() & Qt.RightButton) or \
              (event.buttons() & Qt.MiddleButton and middle_click_pan_enabled):
+            
+            # If not yet panning, check if we crossed the threshold from the START position
             if not self.is_panning:
                 if (event.pos() - self.pan_start_pos).manhattanLength() > 5:
                     self.is_panning = True
+                    # Reset last_pan_pos to current so the delta is smooth from this point
                     self.last_pan_pos = event.pos() 
 
+            # If we ARE panning (either just started or continuing)
             if self.is_panning:
                 delta = event.pos() - self.last_pan_pos
                 self.last_pan_pos = event.pos()
+                
                 if self.view_type == 'front':
                     self.pan_offset -= QPointF(delta.x() / self.zoom_factor, -delta.y() / self.zoom_factor)
                 else:
@@ -1138,17 +660,23 @@ class View2D(QWidget):
                 pos_ref = obj['pos'] if isinstance(obj, dict) else obj.pos
                 pos_ref[ax_map[ax1]] = new_obj_pos.x()
                 pos_ref[ax_map[ax2]] = new_obj_pos.y()
+                # Update 3D view in real-time during drag
                 self.main_window.view_3d.update()
         
         elif self.is_resizing_brush:
-            self.resize_brush(world_pos)
-            self.main_window.view_3d.update()
+            obj = self.editor.state.selected_object
+            if obj:
+                self.resize_brush(world_pos)
+                # Update 3D view in real-time during resize
+                self.main_window.view_3d.update()
         
         self.update()
 
     def mouseReleaseEvent(self, event):
         action_taken = self.is_dragging_object or self.is_resizing_brush
         
+        # We manually trigger context menu ONLY if we did not pan.
+        # Qt.NoContextMenu policy prevents system double-fire.
         if event.button() == Qt.RightButton and not self.is_panning:
             self.contextMenuEvent(event)
         
@@ -1157,40 +685,6 @@ class View2D(QWidget):
         if event.button() == Qt.LeftButton:
             if self.is_dragging_object: self.is_dragging_object = False
             if self.is_resizing_brush: self.is_resizing_brush = False
-            
-            # Handle connection completion
-            if self.is_connecting:
-                self.is_connecting = False
-                self.setCursor(Qt.ArrowCursor)
-                
-                # Use snapped target if available, otherwise check at cursor position
-                target_object = self.connection_snap_target
-                if not target_object:
-                    target_object = self.get_object_at(event.pos())
-                
-                if target_object and target_object != self.connection_source:
-                    self.main_window.save_state()
-                    
-                    # Ensure target has a name
-                    target_name = self._ensure_object_name(target_object)
-                    
-                    # Set the trigger's target
-                    self.connection_source['target'] = target_name
-                    
-                    # Show toast
-                    self.main_window.show_toast(f"Connected to '{target_name}'")
-                    
-                    # Refresh property editor if source is selected
-                    if self.editor.state.selected_object == self.connection_source:
-                        self.main_window.property_editor.set_object(self.connection_source)
-                    # Also refresh if target is selected (to show "targeted by")
-                    elif self.editor.state.selected_object == target_object:
-                        self.main_window.property_editor.set_object(target_object)
-                
-                self.connection_source = None
-                self.connection_snap_target = None
-                self.update()
-                return
 
             if self.is_drawing_brush:
                 self.is_drawing_brush = False
@@ -1214,35 +708,18 @@ class View2D(QWidget):
             
             if action_taken:
                 self.main_window.save_state()
+        
         self.update()
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
         
-        # Check if we clicked on a brush for brush-specific options
-        clicked_brush = self.get_brush_at(event.pos())
-        select_inside_action = None
-        
-        if clicked_brush:
-            select_inside_action = menu.addAction("Select Inside")
-            menu.addSeparator()
-        
         add_light_action = menu.addAction("Add Light")
         add_player_start_action = menu.addAction("Add Player Start")
         add_pickup_action = menu.addAction("Add Pickup")
         add_speaker_action = menu.addAction("Add Speaker")
-        menu.addSeparator()
-        add_model_action = menu.addAction("Add Model...")
 
         action = menu.exec_(self.mapToGlobal(event.pos()))
-        
-        if action is None:
-            return
-        
-        # Handle Select Inside
-        if select_inside_action and action == select_inside_action:
-            self.select_brushes_inside(clicked_brush)
-            return
         
         world_pos = self.snap_to_grid(self.screen_to_world(event.pos()))
         ax1, ax2 = self.get_axes()
@@ -1258,20 +735,6 @@ class View2D(QWidget):
         elif action == add_player_start_action: new_thing = PlayerStart(pos=pos_3d)
         elif action == add_pickup_action: new_thing = Pickup(pos=pos_3d)
         elif action == add_speaker_action: new_thing = Speaker(pos=pos_3d)
-        elif action == add_model_action:
-            filepath, _ = QFileDialog.getOpenFileName(self, "Select OBJ Model", "assets/models", "OBJ Files (*.obj)")
-            if filepath:
-                # Store relative path if possible
-                try:
-                    rel_path = os.path.relpath(filepath, "assets")
-                    # On windows relpath might start with .. if drives differ, be careful
-                    if rel_path.startswith(".."): rel_path = filepath
-                    else: rel_path = os.path.join("assets", rel_path)
-                except:
-                    rel_path = filepath
-                
-                new_thing = Model(pos=pos_3d)
-                new_thing.properties['model_path'] = rel_path
 
         if new_thing:
             self.main_window.save_state()
@@ -1279,297 +742,76 @@ class View2D(QWidget):
             self.editor.set_selected_object(new_thing)
             self.update()
 
-    def get_brush_at(self, screen_pos):
-        """Returns the brush at the given screen position, or None."""
-        world_pos = self.screen_to_world(screen_pos)
-        ax1, ax2 = self.get_axes()
-        ax_map = {'x': 0, 'y': 1, 'z': 2}
-        
-        # Check if locked items should be skipped
-        locked_not_selectable = self.main_window.config.getboolean('Display', 'locked_not_selectable_2d', fallback=False)
-        
-        for brush in reversed(self.editor.state.brushes):
-            if brush.get('hidden', False):
-                continue
-            # Skip locked brushes if setting is enabled
-            if locked_not_selectable and brush.get('lock', False):
-                continue
-            pos = brush['pos']
-            size = brush['size']
-            p1 = QPointF(pos[ax_map[ax1]] - size[ax_map[ax1]]/2, pos[ax_map[ax2]] - size[ax_map[ax2]]/2)
-            p2 = QPointF(pos[ax_map[ax1]] + size[ax_map[ax1]]/2, pos[ax_map[ax2]] + size[ax_map[ax2]]/2)
-            brush_rect = QRectF(p1, p2).normalized()
-            if brush_rect.contains(world_pos):
-                return brush
-        return None
-
-    def _ensure_object_name(self, obj):
-        """Ensure an object has a name, auto-generating one if needed. Returns the name."""
-        if isinstance(obj, dict):
-            # It's a brush
-            existing_name = obj.get('name', '')
-            if existing_name:
-                return existing_name
-            
-            # Generate a unique name
-            base_name = 'brush'
-            counter = 1
-            while True:
-                new_name = f"{base_name}_{counter}"
-                # Check if name is unique
-                name_exists = False
-                for b in self.editor.state.brushes:
-                    if b.get('name') == new_name:
-                        name_exists = True
-                        break
-                if not name_exists:
-                    for t in self.editor.state.things:
-                        if hasattr(t, 'name') and t.name == new_name:
-                            name_exists = True
-                            break
-                if not name_exists:
-                    obj['name'] = new_name
-                    return new_name
-                counter += 1
-        else:
-            # It's a Thing
-            existing_name = getattr(obj, 'name', '') or obj.properties.get('name', '')
-            if existing_name:
-                return existing_name
-            
-            # Generate a unique name based on thing type
-            thing_type = type(obj).__name__.lower()
-            base_name = thing_type
-            counter = 1
-            while True:
-                new_name = f"{base_name}_{counter}"
-                # Check if name is unique
-                name_exists = False
-                for b in self.editor.state.brushes:
-                    if b.get('name') == new_name:
-                        name_exists = True
-                        break
-                if not name_exists:
-                    for t in self.editor.state.things:
-                        if hasattr(t, 'name') and t.name == new_name:
-                            name_exists = True
-                            break
-                if not name_exists:
-                    obj.name = new_name
-                    obj.properties['name'] = new_name
-                    return new_name
-                counter += 1
-
-    def _find_snap_target(self, screen_pos):
-        """Find the nearest valid target object within snap threshold.
-        Returns (object, screen_position) or (None, None)."""
-        ax1, ax2 = self.get_axes()
-        ax_map = {'x': 0, 'y': 1, 'z': 2}
-        
-        best_target = None
-        best_distance = self.connection_snap_threshold
-        best_screen_pos = None
-        
-        # Check all brushes (except the source)
-        for brush in self.editor.state.brushes:
-            if brush is self.connection_source:
-                continue
-            if brush.get('hidden', False):
-                continue
-            
-            # Get brush center in screen coords
-            pos = brush['pos']
-            brush_center = QPointF(pos[ax_map[ax1]], pos[ax_map[ax2]])
-            brush_screen = self.world_to_screen(brush_center)
-            
-            # Calculate distance
-            dx = screen_pos.x() - brush_screen.x()
-            dy = screen_pos.y() - brush_screen.y()
-            distance = math.sqrt(dx * dx + dy * dy)
-            
-            if distance < best_distance:
-                best_distance = distance
-                best_target = brush
-                best_screen_pos = brush_screen
-        
-        # Check all things
-        for thing in self.editor.state.things:
-            if thing.properties.get('hidden', False):
-                continue
-            
-            # Get thing position in screen coords
-            thing_center = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
-            thing_screen = self.world_to_screen(thing_center)
-            
-            # Calculate distance
-            dx = screen_pos.x() - thing_screen.x()
-            dy = screen_pos.y() - thing_screen.y()
-            distance = math.sqrt(dx * dx + dy * dy)
-            
-            if distance < best_distance:
-                best_distance = distance
-                best_target = thing
-                best_screen_pos = thing_screen
-        
-        return best_target, best_screen_pos
-
-    def select_brushes_inside(self, container_brush):
-        """Select all brushes fully contained within container_brush, then delete it."""
-        self.main_window.save_state()
-        
-        # Get container bounds in 3D
-        c_pos = container_brush['pos']
-        c_size = container_brush['size']
-        c_min = [c_pos[i] - c_size[i]/2 for i in range(3)]
-        c_max = [c_pos[i] + c_size[i]/2 for i in range(3)]
-        
-        inside_brushes = []
-        
-        for brush in self.editor.state.brushes:
-            if brush is container_brush:
-                continue
-            if brush.get('hidden', False):
-                continue
-                
-            # Get brush bounds
-            b_pos = brush['pos']
-            b_size = brush['size']
-            b_min = [b_pos[i] - b_size[i]/2 for i in range(3)]
-            b_max = [b_pos[i] + b_size[i]/2 for i in range(3)]
-            
-            # Check if fully contained (all corners inside container)
-            fully_inside = all(
-                b_min[i] >= c_min[i] and b_max[i] <= c_max[i]
-                for i in range(3)
-            )
-            
-            if fully_inside:
-                inside_brushes.append(brush)
-        
-        # Remove the container brush
-        if container_brush in self.editor.state.brushes:
-            self.editor.state.brushes.remove(container_brush)
-        
-        # Select the inside brushes
-        if inside_brushes:
-            self.editor.set_selected_objects(inside_brushes)
-        else:
-            self.editor.set_selected_object(None)
-        
-        self.update()
-        self.main_window.view_3d.update()
-
     def wheelEvent(self, event):
-        modifiers = event.modifiers()
-        delta = event.angleDelta().y()
-        
-        # Check if a Light thing is selected
-        selected = self.editor.state.selected_object
-        if isinstance(selected, Light):
-            # SHIFT + wheel: adjust radius
-            if modifiers & Qt.ShiftModifier:
-                current_radius = float(selected.properties.get('radius', 512.0))
-                step = 32.0  # Radius adjustment step
-                if delta > 0:
-                    new_radius = current_radius + step
-                else:
-                    new_radius = max(32.0, current_radius - step)  # Minimum radius of 32
-                selected.properties['radius'] = new_radius
-                # Update property editor if visible
-                if hasattr(self.main_window, 'property_editor'):
-                    self.main_window.property_editor.set_object(selected)
-                self.update()
-                self.main_window.view_3d.update()
-                if hasattr(self.main_window, 'show_toast'):
-                    self.main_window.show_toast(f"Light radius: {new_radius:.0f}")
-                event.accept()
-                return
-            
-            # CTRL + wheel: adjust intensity
-            if modifiers & Qt.ControlModifier:
-                current_intensity = float(selected.properties.get('intensity', 1.0))
-                step = 0.1  # Intensity adjustment step
-                if delta > 0:
-                    new_intensity = min(10.0, current_intensity + step)  # Max intensity 10
-                else:
-                    new_intensity = max(0.1, current_intensity - step)  # Min intensity 0.1
-                selected.properties['intensity'] = round(new_intensity, 2)
-                # Update property editor if visible
-                if hasattr(self.main_window, 'property_editor'):
-                    self.main_window.property_editor.set_object(selected)
-                self.update()
-                self.main_window.view_3d.update()
-                if hasattr(self.main_window, 'show_toast'):
-                    self.main_window.show_toast(f"Light intensity: {new_intensity:.2f}")
-                event.accept()
-                return
-        
-        # Default zoom behavior
-        if delta > 0: self.zoom_in()
+        if event.angleDelta().y() > 0: self.zoom_in()
         else: self.zoom_out()
 
-    def get_object_at(self, screen_pos, highlight_locked=False):
+    def get_object_at(self, screen_pos):
+        # We calculate world_pos internally for checking brushes
         world_pos = self.screen_to_world(screen_pos)
+        
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
+        
         candidates = []
-        locked_at_pos = []  # Track locked objects at this position
-        
-        # Check if locked items should be skipped
-        locked_not_selectable = self.main_window.config.getboolean('Display', 'locked_not_selectable_2d', fallback=False)
 
+        # 1. Collect all valid 'Thing' candidates under the cursor
         for thing in reversed(self.editor.state.things):
-            # Skip hidden things
-            if thing.properties.get('hidden', False):
-                continue
+            # Get the Thing's center in World Space
             w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
+            # Convert center to Screen Space
             s_pos = self.world_to_screen(w_pos)
-            hit_threshold = 12 
-            if abs(screen_pos.x() - s_pos.x()) <= hit_threshold and abs(screen_pos.y() - s_pos.y()) <= hit_threshold:
-                # Track locked things separately if setting is enabled
-                if locked_not_selectable and thing.properties.get('lock', False):
-                    locked_at_pos.append(thing)
-                else:
-                    candidates.append(thing)
+            
+            # Check a fixed pixel area around the center (e.g., 24x24 pixels)
+            # This ensures they are clickable even when zoomed out.
+            hit_threshold = 12 # Half-size of the hit box in pixels
+            if abs(screen_pos.x() - s_pos.x()) <= hit_threshold and \
+               abs(screen_pos.y() - s_pos.y()) <= hit_threshold:
+                candidates.append(thing)
         
+        # 2. Collect all valid 'Brush' candidates under the cursor
+        # Brushes are geometry, so we check them in World Space as before.
         for brush in reversed(self.editor.state.brushes):
-            if brush.get('hidden', False): continue
+            if brush.get('hidden', False):
+                continue # Skip hidden brushes so they don't block selection
+
             pos = brush['pos']
             size = brush['size']
             p1 = QPointF(pos[ax_map[ax1]] - size[ax_map[ax1]]/2, pos[ax_map[ax2]] - size[ax_map[ax2]]/2)
             p2 = QPointF(pos[ax_map[ax1]] + size[ax_map[ax1]]/2, pos[ax_map[ax2]] + size[ax_map[ax2]]/2)
             brush_rect = QRectF(p1, p2).normalized()
             if brush_rect.contains(world_pos):
-                # Track locked brushes separately if setting is enabled
-                if locked_not_selectable and brush.get('lock', False):
-                    locked_at_pos.append(brush)
-                else:
-                    candidates.append(brush)
+                candidates.append(brush)
 
-        # If highlight_locked is True and we found locked objects, highlight them in hierarchy
-        if highlight_locked and locked_at_pos and locked_not_selectable:
-            # Highlight the first locked object in the hierarchy (without selecting)
-            if hasattr(self.main_window, 'highlight_in_hierarchy'):
-                self.main_window.highlight_in_hierarchy(locked_at_pos[0])
+        if not candidates:
+            return None
 
-        if not candidates: return None
+        # 3. Handle Cycling: If the currently selected object is in the list of candidates,
+        # return the NEXT one in the list. Otherwise, return the first one.
+        # Since 'Things' are added to candidates first, they naturally take priority 
+        # on the initial click.
         current_selection = self.editor.state.selected_object
+        
         if current_selection in candidates:
             idx = candidates.index(current_selection)
             next_idx = (idx + 1) % len(candidates)
             return candidates[next_idx]
+        
         return candidates[0]
 
     def get_handle_at(self, screen_pos):
         brush = self.editor.state.selected_object
         if not isinstance(brush, dict) or brush.get('lock', False): return -1
+
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
+        
         pos, size = brush['pos'], brush['size']
         w_pos = QPointF(pos[ax_map[ax1]] - size[ax_map[ax1]]/2, pos[ax_map[ax2]] - size[ax_map[ax2]]/2)
         w_size = QPointF(size[ax_map[ax1]], size[ax_map[ax2]])
         p1, p2 = self.world_to_screen(w_pos), self.world_to_screen(w_pos + w_size)
         screen_rect = QRectF(p1, p2).normalized()
+        
         handles = self.get_resize_handles(screen_rect)
         handle_size = 10
         for i, handle in enumerate(handles):
@@ -1580,6 +822,7 @@ class View2D(QWidget):
     def resize_brush(self, world_pos):
         brush = self.editor.state.selected_object
         if not brush: return
+        
         snapped_pos = self.snap_to_grid(world_pos)
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
@@ -1591,15 +834,21 @@ class View2D(QWidget):
 
         is_front_view = self.view_type == 'front'
         
-        if self.resize_handle_ix in [0, 2, 6]: min_x = snapped_pos.x()
-        if self.resize_handle_ix in [1, 3, 7]: max_x = snapped_pos.x()
+        if self.resize_handle_ix in [0, 2, 6]:
+            min_x = snapped_pos.x()
+        if self.resize_handle_ix in [1, 3, 7]:
+            max_x = snapped_pos.x()
         
         if is_front_view:
-            if self.resize_handle_ix in [0, 1, 4]: max_y = snapped_pos.y()
-            if self.resize_handle_ix in [2, 3, 5]: min_y = snapped_pos.y()
+            if self.resize_handle_ix in [0, 1, 4]: 
+                max_y = snapped_pos.y()
+            if self.resize_handle_ix in [2, 3, 5]: 
+                min_y = snapped_pos.y()
         else:
-            if self.resize_handle_ix in [0, 1, 4]: min_y = snapped_pos.y()
-            if self.resize_handle_ix in [2, 3, 5]: max_y = snapped_pos.y()
+            if self.resize_handle_ix in [0, 1, 4]: 
+                min_y = snapped_pos.y()
+            if self.resize_handle_ix in [2, 3, 5]: 
+                max_y = snapped_pos.y()
 
         if max_x < min_x: min_x, max_x = max_x, min_x
         if max_y < min_y: min_y, max_y = max_y, min_y
