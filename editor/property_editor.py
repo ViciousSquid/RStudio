@@ -33,6 +33,9 @@ class PropertyEditor(QWidget):
 
         self.brush_name_label = None
         self.brush_name_input = None
+        
+        # Targeted by label for things
+        self.targeted_by_label = None
 
         self.mover_checkbox = None
         self.mover_speed_label = None
@@ -64,6 +67,41 @@ class PropertyEditor(QWidget):
         self.brush_colour_reset_btn = None
 
         self.set_object(None)
+    
+    def _find_targeting_sources(self, target_name):
+        """Find all triggers/movers that target the given name."""
+        if not target_name:
+            return []
+        
+        sources = []
+        for brush in self.editor.state.brushes:
+            brush_target = brush.get('target', '')
+            if brush_target == target_name:
+                is_trigger = brush.get('is_trigger', False)
+                is_mover = brush.get('is_mover', False)
+                if is_trigger or is_mover:
+                    source_name = brush.get('name', 'unnamed')
+                    source_type = 'trigger' if is_trigger else 'mover'
+                    sources.append((source_name, source_type))
+        return sources
+    
+    def _check_target_exists(self, target_name):
+        """Check if a target name refers to an existing object."""
+        if not target_name:
+            return False
+        
+        # Check brushes
+        for brush in self.editor.state.brushes:
+            if brush.get('name') == target_name:
+                return True
+        
+        # Check things
+        for thing in self.editor.state.things:
+            thing_name = getattr(thing, 'name', '') or thing.properties.get('name', '')
+            if thing_name == target_name:
+                return True
+        
+        return False
 
     def clear_layout(self):
         while self.main_layout.count():
@@ -130,7 +168,45 @@ class PropertyEditor(QWidget):
         }
 """)
         self.target_label = QLabel("Target:")
-        self.target_input = QLineEdit(brush.get('target', ''))
+        target_value = brush.get('target', '')
+        self.target_input = QLineEdit(target_value)
+        
+        # Style target field based on connection validity
+        if brush.get('is_trigger') or brush.get('is_mover'):
+            if target_value and self._check_target_exists(target_value):
+                # Valid target - green
+                self.target_label.setText("Target: ✓")
+                self.target_label.setStyleSheet("QLabel { color: #00FF00; font-weight: bold; }")
+                self.target_input.setStyleSheet("""
+                    QLineEdit {
+                        border: 2px solid #00FF00;
+                        background-color: #1a3d1a;
+                        padding: 2px;
+                    }
+                """)
+            elif target_value:
+                # Has target but doesn't exist - red
+                self.target_label.setText("Target: ✗")
+                self.target_label.setStyleSheet("QLabel { color: #FF6666; font-weight: bold; }")
+                self.target_input.setStyleSheet("""
+                    QLineEdit {
+                        border: 2px solid #FF6666;
+                        background-color: #3d1a1a;
+                        padding: 2px;
+                    }
+                """)
+            else:
+                # No target set - amber
+                self.target_label.setText("Target: (none)")
+                self.target_label.setStyleSheet("QLabel { color: #FFA500; }")
+                self.target_input.setStyleSheet("""
+                    QLineEdit {
+                        border: 1px solid #FFA500;
+                        background-color: #3d3d1a;
+                        padding: 2px;
+                    }
+                """)
+        
         self.type_label = QLabel("Trigger Type:")
         self.type_combo = QComboBox()
         self.type_combo.addItems(['Once', 'Multiple'])
@@ -230,6 +306,33 @@ class PropertyEditor(QWidget):
 
         self.brush_name_label = QLabel("Name:")
         self.brush_name_input = QLineEdit(brush.get('name', ''))
+        
+        # Check if this brush has a valid connection (as source or target)
+        brush_name = brush.get('name', '')
+        has_valid_target = False
+        is_targeted_by = []
+        
+        # Check if brush is a trigger/mover with valid target
+        if brush.get('is_trigger') or brush.get('is_mover'):
+            target_name = brush.get('target', '')
+            if target_name and self._check_target_exists(target_name):
+                has_valid_target = True
+        
+        # Check if brush is targeted by something
+        if brush_name:
+            is_targeted_by = self._find_targeting_sources(brush_name)
+        
+        # Style the name input based on connection status
+        if has_valid_target or is_targeted_by:
+            self.brush_name_input.setStyleSheet("""
+                QLineEdit {
+                    border: 2px solid #00FF00;
+                    background-color: #1a3d1a;
+                    padding: 2px;
+                }
+            """)
+        else:
+            self.brush_name_input.setStyleSheet("")
 
         self.locked_checkbox.setChecked(is_locked)
         self.trigger_checkbox.setChecked(is_trigger)
@@ -242,7 +345,8 @@ class PropertyEditor(QWidget):
         layout.addRow("Is Trigger:", self.trigger_checkbox)
         layout.addRow(self.target_label, self.target_input)
         layout.addRow(self.type_label, self.type_combo)
-        layout.addRow("Hurt:", self.hurt_checkbox)
+        self.hurt_label_text = QLabel("Hurt:")
+        layout.addRow(self.hurt_label_text, self.hurt_checkbox)
         layout.addRow(self.hurt_amount_label, self.hurt_amount_input)
         
         # Fog properties rows
@@ -524,6 +628,8 @@ class PropertyEditor(QWidget):
         # Hurt trigger visibility
         if self.hurt_checkbox:
             self.hurt_checkbox.setVisible(show_trigger_fields)
+            self.hurt_label_text.setVisible(show_trigger_fields) 
+
         show_hurt_amount = show_trigger_fields and is_hurt
         if self.hurt_amount_label:
             self.hurt_amount_label.setVisible(show_hurt_amount)
@@ -613,6 +719,27 @@ class PropertyEditor(QWidget):
 
     def populate_for_thing(self, thing):
         layout = QFormLayout()
+        
+        # Check if this thing is targeted by any triggers/movers
+        thing_name = getattr(thing, 'name', '') or thing.properties.get('name', '')
+        targeting_sources = self._find_targeting_sources(thing_name) if thing_name else []
+        
+        # Show "Targeted by" info if applicable
+        if targeting_sources:
+            source_texts = [f"{name} ({stype})" for name, stype in targeting_sources]
+            self.targeted_by_label = QLabel(", ".join(source_texts))
+            self.targeted_by_label.setStyleSheet("""
+                QLabel {
+                    color: #00FF00;
+                    font-weight: bold;
+                    padding: 2px;
+                    background-color: #1a3d1a;
+                    border: 1px solid #00AA00;
+                    border-radius: 3px;
+                }
+            """)
+            self.targeted_by_label.setWordWrap(True)
+            layout.addRow("Targeted by:", self.targeted_by_label)
         
         # 1. SPECIAL CASE: Model path selector
         if isinstance(thing, Model):

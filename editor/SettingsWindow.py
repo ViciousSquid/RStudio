@@ -139,6 +139,9 @@ class SettingsWindow(QDialog):
             "Unhide All Brushes": "Shift+H",
             "Toggle play mode": "F5",
             "Use (play mode)": "E",
+            "Show connections (play)": "F1",
+            "Show sprites (play)": "F3",
+            "Connect trigger to target": "Ctrl+Drag",
         }
         
         self.shortcut_labels = {}

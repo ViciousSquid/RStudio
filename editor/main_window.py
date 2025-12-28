@@ -1146,6 +1146,11 @@ class MainWindow(QMainWindow):
             elif event.key() == Qt.Key_F3:
                 self.view_3d.show_sprites_in_play_mode = not self.view_3d.show_sprites_in_play_mode
                 self.view_3d.update()
+            elif event.key() == Qt.Key_F1:
+                # Toggle connection lines visibility in play mode
+                self.view_3d.show_connections_in_play_mode = not getattr(self.view_3d, 'show_connections_in_play_mode', False)
+                self.show_toast("Connections: " + ("ON" if self.view_3d.show_connections_in_play_mode else "OFF"))
+                self.update_all_ui()
             elif event.key() == Qt.Key_E:
                 # Use key - single shot, send to game state
                 if hasattr(self.view_3d, 'game_state') and self.view_3d.game_state:

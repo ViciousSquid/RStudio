@@ -54,9 +54,19 @@ class View2D(QWidget):
         self.connection_animations = {}
         self.last_connections = set()
         
+        # Animated arrow state - arrows traveling along connection lines
+        self.arrow_travel_progress = {}  # {conn_key: [arrow_positions]}
+        
         self.animation_timer = QTimer(self)
         self.animation_timer.timeout.connect(self._update_connection_animations)
         self.animation_timer.start(16)
+        
+        # CTRL+drag connection state
+        self.is_connecting = False
+        self.connection_source = None  # The trigger brush being connected
+        self.connection_drag_pos = QPointF()  # Current mouse position during drag
+        self.connection_snap_target = None  # Target object we're snapping to
+        self.connection_snap_threshold = 30  # Pixels to snap within
 
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.ClickFocus)
@@ -72,6 +82,9 @@ class View2D(QWidget):
         self.is_dragging_object = False
         self.is_resizing_brush = False
         self.resize_handle_ix = -1
+        self.is_connecting = False
+        self.connection_source = None
+        self.connection_snap_target = None
         self.update()
 
     def _smooth_update_tick(self):
@@ -248,6 +261,44 @@ class View2D(QWidget):
             start_screen = self.world_to_screen(self.draw_start_pos)
             current_screen = self.world_to_screen(self.draw_current_pos)
             painter.drawRect(QRectF(start_screen, current_screen).normalized())
+        
+        # Draw connection drag line
+        if self.is_connecting and self.connection_source:
+            ax1, ax2 = self.get_axes()
+            ax_map = {'x': 0, 'y': 1, 'z': 2}
+            source_pos = self.connection_source['pos']
+            source_2d = QPointF(source_pos[ax_map[ax1]], source_pos[ax_map[ax2]])
+            
+            p1 = self.world_to_screen(source_2d)
+            p2 = self.world_to_screen(self.connection_drag_pos)
+            
+            # Color based on valid target detection
+            if self.connection_snap_target:
+                # Green = valid target found
+                line_color = QColor(0, 255, 0)
+                pen_width = 3
+            else:
+                # Red = no valid target
+                line_color = QColor(255, 80, 80)
+                pen_width = 2
+            
+            # Draw the connection line
+            pen = QPen(line_color, pen_width)
+            painter.setPen(pen)
+            painter.drawLine(p1, p2)
+            
+            # Draw arrow at end
+            self._draw_connection_arrow(painter, p1, p2, line_color)
+            
+            # Draw circle at source
+            painter.setBrush(QBrush(QColor(line_color.red(), line_color.green(), line_color.blue(), 100)))
+            painter.drawEllipse(p1, 8, 8)
+            
+            # Draw snap indicator at target if snapped
+            if self.connection_snap_target:
+                painter.setPen(QPen(QColor(0, 255, 0), 2))
+                painter.setBrush(QBrush(QColor(0, 255, 0, 80)))
+                painter.drawEllipse(p2, 12, 12)
 
     def draw_grid(self, painter):
         grid_color = QColor(70, 70, 70)
@@ -660,6 +711,14 @@ class View2D(QWidget):
 
     def draw_trigger_connections(self, painter, visible_bounds):
         show_connections = self.main_window.config.getboolean('Display', 'show_connections', fallback=True)
+        
+        # Check play mode visibility
+        play_mode = getattr(self.main_window.view_3d, 'play_mode', False)
+        show_in_play = getattr(self.main_window.view_3d, 'show_connections_in_play_mode', False)
+        
+        if play_mode and not show_in_play:
+            return
+        
         if not show_connections: 
             return
         
@@ -725,6 +784,8 @@ class View2D(QWidget):
         # Animation tracking (only for visible connections)
         for conn_key in current_connections - self.last_connections:
             self.connection_animations[conn_key] = {'progress': 0.0, 'growing': True}
+            # Initialize traveling arrows for this connection
+            self.arrow_travel_progress[conn_key] = [0.0]  # Start with one arrow at 0
         for conn_key in self.last_connections - current_connections:
             if conn_key in self.connection_animations:
                 self.connection_animations[conn_key]['growing'] = False
@@ -736,6 +797,7 @@ class View2D(QWidget):
             conn_key = conn['key']
             if conn_key not in self.connection_animations:
                 self.connection_animations[conn_key] = {'progress': 1.0, 'growing': True}
+                self.arrow_travel_progress[conn_key] = [0.0]
             
             anim = self.connection_animations[conn_key]
             progress = anim['progress']
@@ -752,7 +814,10 @@ class View2D(QWidget):
             painter.setPen(pen)
             painter.drawLine(p1, animated_p2)
             
-            if progress > 0.1:
+            # Draw traveling arrows along the line
+            if progress >= 1.0 and conn_key in self.arrow_travel_progress:
+                self._draw_traveling_arrows(painter, p1, p2, color, conn_key)
+            elif progress > 0.1:
                 self._draw_connection_arrow(painter, p1, animated_p2, color)
         
         # Clean up finished animations
@@ -762,6 +827,45 @@ class View2D(QWidget):
                 keys_to_remove.append(conn_key)
         for key in keys_to_remove: 
             del self.connection_animations[key]
+            if key in self.arrow_travel_progress:
+                del self.arrow_travel_progress[key]
+    
+    def _draw_traveling_arrows(self, painter, p1, p2, color, conn_key):
+        """Draw arrows that travel along the connection line."""
+        if conn_key not in self.arrow_travel_progress:
+            return
+        
+        dx = p2.x() - p1.x()
+        dy = p2.y() - p1.y()
+        length = math.sqrt(dx * dx + dy * dy)
+        if length < 20:
+            return
+        
+        angle = math.atan2(dy, dx)
+        arrow_size = 8
+        
+        # Draw each traveling arrow
+        for arrow_pos in self.arrow_travel_progress[conn_key]:
+            # Calculate position along line
+            ax = p1.x() + dx * arrow_pos
+            ay = p1.y() + dy * arrow_pos
+            arrow_tip = QPointF(ax, ay)
+            
+            # Draw arrow
+            arrow_p1 = QPointF(
+                ax - arrow_size * math.cos(angle - math.pi / 6),
+                ay - arrow_size * math.sin(angle - math.pi / 6)
+            )
+            arrow_p2 = QPointF(
+                ax - arrow_size * math.cos(angle + math.pi / 6),
+                ay - arrow_size * math.sin(angle + math.pi / 6)
+            )
+            
+            # Slightly brighter color for arrows
+            arrow_color = QColor(color.red(), color.green(), color.blue(), 220)
+            painter.setPen(QPen(arrow_color, 1))
+            painter.setBrush(QBrush(arrow_color))
+            painter.drawPolygon(QPolygonF([arrow_tip, arrow_p1, arrow_p2]))
     
     def _draw_connection_arrow(self, painter, p1, p2, color):
         dx = p2.x() - p1.x()
@@ -777,7 +881,10 @@ class View2D(QWidget):
     
     def _update_connection_animations(self):
         animation_speed = 0.05
+        arrow_speed = 0.015  # Speed of traveling arrows
+        arrow_spacing = 0.25  # Spacing between arrows (as fraction of line length)
         needs_update = False
+        
         for conn_key, anim in self.connection_animations.items():
             if anim['growing']:
                 if anim['progress'] < 1.0:
@@ -787,7 +894,35 @@ class View2D(QWidget):
                 if anim['progress'] > 0.0:
                     anim['progress'] = max(0.0, anim['progress'] - animation_speed)
                     needs_update = True
-        if needs_update: self.update()
+        
+        # Update traveling arrows
+        for conn_key in list(self.arrow_travel_progress.keys()):
+            if conn_key not in self.connection_animations:
+                del self.arrow_travel_progress[conn_key]
+                continue
+            
+            anim = self.connection_animations.get(conn_key)
+            if not anim or anim['progress'] < 1.0:
+                continue
+            
+            arrows = self.arrow_travel_progress[conn_key]
+            
+            # Move all arrows forward
+            new_arrows = []
+            for pos in arrows:
+                new_pos = pos + arrow_speed
+                if new_pos < 1.0:
+                    new_arrows.append(new_pos)
+            
+            # Add new arrow at start if there's room
+            if len(new_arrows) == 0 or new_arrows[0] >= arrow_spacing:
+                new_arrows.insert(0, 0.0)
+            
+            self.arrow_travel_progress[conn_key] = new_arrows
+            needs_update = True
+        
+        if needs_update: 
+            self.update()
 
     def get_resize_handles(self, rect):
         return [rect.topLeft(), rect.topRight(), rect.bottomLeft(), rect.bottomRight(),
@@ -811,6 +946,18 @@ class View2D(QWidget):
             return
 
         elif event.button() == Qt.LeftButton:
+            # Check for CTRL+click to start connection dragging
+            if event.modifiers() & Qt.ControlModifier:
+                clicked_object = self.get_object_at(event.pos())
+                # Check if clicked object is a trigger brush
+                if isinstance(clicked_object, dict) and clicked_object.get('is_trigger', False):
+                    self.is_connecting = True
+                    self.connection_source = clicked_object
+                    self.connection_drag_pos = world_pos
+                    self.setCursor(Qt.CrossCursor)
+                    self.update()
+                    return
+            
             handle_ix = self.get_handle_at(event.pos())
             if handle_ix != -1:
                 self.is_resizing_brush = True
@@ -919,6 +1066,18 @@ class View2D(QWidget):
             self.resize_brush(world_pos)
             self.main_window.view_3d.update()
         
+        elif self.is_connecting:
+            # Update connection drag line endpoint with snap detection
+            snap_target, snap_screen_pos = self._find_snap_target(event.pos())
+            
+            if snap_target:
+                # Snap to target - convert screen pos back to world
+                self.connection_snap_target = snap_target
+                self.connection_drag_pos = self.screen_to_world(snap_screen_pos)
+            else:
+                self.connection_snap_target = None
+                self.connection_drag_pos = world_pos
+        
         self.update()
 
     def mouseReleaseEvent(self, event):
@@ -932,6 +1091,40 @@ class View2D(QWidget):
         if event.button() == Qt.LeftButton:
             if self.is_dragging_object: self.is_dragging_object = False
             if self.is_resizing_brush: self.is_resizing_brush = False
+            
+            # Handle connection completion
+            if self.is_connecting:
+                self.is_connecting = False
+                self.setCursor(Qt.ArrowCursor)
+                
+                # Use snapped target if available, otherwise check at cursor position
+                target_object = self.connection_snap_target
+                if not target_object:
+                    target_object = self.get_object_at(event.pos())
+                
+                if target_object and target_object != self.connection_source:
+                    self.main_window.save_state()
+                    
+                    # Ensure target has a name
+                    target_name = self._ensure_object_name(target_object)
+                    
+                    # Set the trigger's target
+                    self.connection_source['target'] = target_name
+                    
+                    # Show toast
+                    self.main_window.show_toast(f"Connected to '{target_name}'")
+                    
+                    # Refresh property editor if source is selected
+                    if self.editor.state.selected_object == self.connection_source:
+                        self.main_window.property_editor.set_object(self.connection_source)
+                    # Also refresh if target is selected (to show "targeted by")
+                    elif self.editor.state.selected_object == target_object:
+                        self.main_window.property_editor.set_object(target_object)
+                
+                self.connection_source = None
+                self.connection_snap_target = None
+                self.update()
+                return
 
             if self.is_drawing_brush:
                 self.is_drawing_brush = False
@@ -1043,6 +1236,116 @@ class View2D(QWidget):
             if brush_rect.contains(world_pos):
                 return brush
         return None
+
+    def _ensure_object_name(self, obj):
+        """Ensure an object has a name, auto-generating one if needed. Returns the name."""
+        if isinstance(obj, dict):
+            # It's a brush
+            existing_name = obj.get('name', '')
+            if existing_name:
+                return existing_name
+            
+            # Generate a unique name
+            base_name = 'brush'
+            counter = 1
+            while True:
+                new_name = f"{base_name}_{counter}"
+                # Check if name is unique
+                name_exists = False
+                for b in self.editor.state.brushes:
+                    if b.get('name') == new_name:
+                        name_exists = True
+                        break
+                if not name_exists:
+                    for t in self.editor.state.things:
+                        if hasattr(t, 'name') and t.name == new_name:
+                            name_exists = True
+                            break
+                if not name_exists:
+                    obj['name'] = new_name
+                    return new_name
+                counter += 1
+        else:
+            # It's a Thing
+            existing_name = getattr(obj, 'name', '') or obj.properties.get('name', '')
+            if existing_name:
+                return existing_name
+            
+            # Generate a unique name based on thing type
+            thing_type = type(obj).__name__.lower()
+            base_name = thing_type
+            counter = 1
+            while True:
+                new_name = f"{base_name}_{counter}"
+                # Check if name is unique
+                name_exists = False
+                for b in self.editor.state.brushes:
+                    if b.get('name') == new_name:
+                        name_exists = True
+                        break
+                if not name_exists:
+                    for t in self.editor.state.things:
+                        if hasattr(t, 'name') and t.name == new_name:
+                            name_exists = True
+                            break
+                if not name_exists:
+                    obj.name = new_name
+                    obj.properties['name'] = new_name
+                    return new_name
+                counter += 1
+
+    def _find_snap_target(self, screen_pos):
+        """Find the nearest valid target object within snap threshold.
+        Returns (object, screen_position) or (None, None)."""
+        ax1, ax2 = self.get_axes()
+        ax_map = {'x': 0, 'y': 1, 'z': 2}
+        
+        best_target = None
+        best_distance = self.connection_snap_threshold
+        best_screen_pos = None
+        
+        # Check all brushes (except the source)
+        for brush in self.editor.state.brushes:
+            if brush is self.connection_source:
+                continue
+            if brush.get('hidden', False):
+                continue
+            
+            # Get brush center in screen coords
+            pos = brush['pos']
+            brush_center = QPointF(pos[ax_map[ax1]], pos[ax_map[ax2]])
+            brush_screen = self.world_to_screen(brush_center)
+            
+            # Calculate distance
+            dx = screen_pos.x() - brush_screen.x()
+            dy = screen_pos.y() - brush_screen.y()
+            distance = math.sqrt(dx * dx + dy * dy)
+            
+            if distance < best_distance:
+                best_distance = distance
+                best_target = brush
+                best_screen_pos = brush_screen
+        
+        # Check all things
+        for thing in self.editor.state.things:
+            if thing.properties.get('hidden', False):
+                continue
+            
+            # Get thing position in screen coords
+            thing_center = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
+            thing_screen = self.world_to_screen(thing_center)
+            
+            # Calculate distance
+            dx = screen_pos.x() - thing_screen.x()
+            dy = screen_pos.y() - thing_screen.y()
+            distance = math.sqrt(dx * dx + dy * dy)
+            
+            if distance < best_distance:
+                best_distance = distance
+                best_target = thing
+                best_screen_pos = thing_screen
+        
+        return best_target, best_screen_pos
 
     def select_brushes_inside(self, container_brush):
         """Select all brushes fully contained within container_brush, then delete it."""
