@@ -87,6 +87,39 @@ class View2D(QWidget):
         self.connection_snap_target = None
         self.update()
 
+    def start_connection_mode(self, source_brush):
+        """Start connection mode programmatically (e.g., from property editor)."""
+        if not source_brush:
+            return
+        
+        self.is_connecting = True
+        self.connection_source = source_brush
+        self.connection_snap_target = None
+        
+        # Set initial drag position to brush center
+        ax1, ax2 = self.get_axes()
+        ax_map = {'x': 0, 'y': 1, 'z': 2}
+        source_pos = source_brush['pos']
+        self.connection_drag_pos = QPointF(source_pos[ax_map[ax1]], source_pos[ax_map[ax2]])
+        
+        self.setCursor(Qt.CrossCursor)
+        self.setFocus()  # Take focus so we can receive key events
+        self.update()
+
+    def keyPressEvent(self, event):
+        """Handle key presses - ESC cancels connection mode."""
+        if event.key() == Qt.Key_Escape and self.is_connecting:
+            self.is_connecting = False
+            self.connection_source = None
+            self.connection_snap_target = None
+            self.setCursor(Qt.ArrowCursor)
+            self.update()
+            event.accept()
+            return
+        
+        # Pass other keys to parent
+        super().keyPressEvent(event)
+
     def _smooth_update_tick(self):
         """Check for camera changes and repaint only when needed."""
         if not self.isVisible():
@@ -946,6 +979,36 @@ class View2D(QWidget):
             return
 
         elif event.button() == Qt.LeftButton:
+            # If we're in connection mode (started from property editor), complete on click
+            if self.is_connecting:
+                # Complete the connection
+                target_object = self.connection_snap_target
+                if not target_object:
+                    target_object = self.get_object_at(event.pos())
+                
+                if target_object and target_object != self.connection_source:
+                    self.main_window.save_state()
+                    
+                    # Ensure target has a name
+                    target_name = self._ensure_object_name(target_object)
+                    
+                    # Set the trigger's target
+                    self.connection_source['target'] = target_name
+                    
+                    # Show toast
+                    self.main_window.show_toast(f"Connected to '{target_name}'")
+                    
+                    # Refresh property editor
+                    self.main_window.property_editor.set_object(self.connection_source)
+                
+                # Reset connection state
+                self.is_connecting = False
+                self.connection_source = None
+                self.connection_snap_target = None
+                self.setCursor(Qt.ArrowCursor)
+                self.update()
+                return
+            
             # Check for CTRL+click to start connection dragging
             if event.modifiers() & Qt.ControlModifier:
                 clicked_object = self.get_object_at(event.pos())
@@ -1023,6 +1086,21 @@ class View2D(QWidget):
         world_pos = self.screen_to_world(event.pos())
         middle_click_pan_enabled = self.main_window.config.getboolean('Controls', 'MiddleClickDrag', fallback=False)
         
+        # Handle connection mode first - works with or without button pressed
+        if self.is_connecting:
+            # Update connection drag line endpoint with snap detection
+            snap_target, snap_screen_pos = self._find_snap_target(event.pos())
+            
+            if snap_target:
+                # Snap to target - convert screen pos back to world
+                self.connection_snap_target = snap_target
+                self.connection_drag_pos = self.screen_to_world(snap_screen_pos)
+            else:
+                self.connection_snap_target = None
+                self.connection_drag_pos = world_pos
+            self.update()
+            return
+        
         if not event.buttons():
             handle_ix = self.get_handle_at(event.pos())
             if handle_ix != -1:
@@ -1065,18 +1143,6 @@ class View2D(QWidget):
         elif self.is_resizing_brush:
             self.resize_brush(world_pos)
             self.main_window.view_3d.update()
-        
-        elif self.is_connecting:
-            # Update connection drag line endpoint with snap detection
-            snap_target, snap_screen_pos = self._find_snap_target(event.pos())
-            
-            if snap_target:
-                # Snap to target - convert screen pos back to world
-                self.connection_snap_target = snap_target
-                self.connection_drag_pos = self.screen_to_world(snap_screen_pos)
-            else:
-                self.connection_snap_target = None
-                self.connection_drag_pos = world_pos
         
         self.update()
 
@@ -1394,7 +1460,52 @@ class View2D(QWidget):
         self.main_window.view_3d.update()
 
     def wheelEvent(self, event):
-        if event.angleDelta().y() > 0: self.zoom_in()
+        modifiers = event.modifiers()
+        delta = event.angleDelta().y()
+        
+        # Check if a Light thing is selected
+        selected = self.editor.state.selected_object
+        if isinstance(selected, Light):
+            # SHIFT + wheel: adjust radius
+            if modifiers & Qt.ShiftModifier:
+                current_radius = float(selected.properties.get('radius', 512.0))
+                step = 32.0  # Radius adjustment step
+                if delta > 0:
+                    new_radius = current_radius + step
+                else:
+                    new_radius = max(32.0, current_radius - step)  # Minimum radius of 32
+                selected.properties['radius'] = new_radius
+                # Update property editor if visible
+                if hasattr(self.main_window, 'property_editor'):
+                    self.main_window.property_editor.set_object(selected)
+                self.update()
+                self.main_window.view_3d.update()
+                if hasattr(self.main_window, 'show_toast'):
+                    self.main_window.show_toast(f"Light radius: {new_radius:.0f}")
+                event.accept()
+                return
+            
+            # CTRL + wheel: adjust intensity
+            if modifiers & Qt.ControlModifier:
+                current_intensity = float(selected.properties.get('intensity', 1.0))
+                step = 0.1  # Intensity adjustment step
+                if delta > 0:
+                    new_intensity = min(10.0, current_intensity + step)  # Max intensity 10
+                else:
+                    new_intensity = max(0.1, current_intensity - step)  # Min intensity 0.1
+                selected.properties['intensity'] = round(new_intensity, 2)
+                # Update property editor if visible
+                if hasattr(self.main_window, 'property_editor'):
+                    self.main_window.property_editor.set_object(selected)
+                self.update()
+                self.main_window.view_3d.update()
+                if hasattr(self.main_window, 'show_toast'):
+                    self.main_window.show_toast(f"Light intensity: {new_intensity:.2f}")
+                event.accept()
+                return
+        
+        # Default zoom behavior
+        if delta > 0: self.zoom_in()
         else: self.zoom_out()
 
     def get_object_at(self, screen_pos, highlight_locked=False):

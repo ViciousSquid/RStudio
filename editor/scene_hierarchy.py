@@ -40,7 +40,7 @@ class SceneHierarchy(QWidget):
         self.sort_button.clicked.connect(self.cycle_sort_mode)
         self.sort_button.setStyleSheet("""
             QPushButton {
-                background-color: #425F5D;
+                background-color: #000000;
                 color: white;
                 border: none;
                 padding: 4px 8px;

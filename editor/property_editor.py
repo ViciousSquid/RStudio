@@ -2,9 +2,19 @@ import os
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFormLayout, QCheckBox, QComboBox, QPushButton,
                              QHBoxLayout, QColorDialog, QFileDialog, QGridLayout, QToolButton)
-from PyQt5.QtCore import Qt, QSize, QTimer
+from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon
 from editor.things import Thing, Light, Pickup, Monster, Model, Speaker
+
+
+class ClickableLineEdit(QLineEdit):
+    """A QLineEdit that emits a signal when clicked while empty."""
+    clicked_while_empty = pyqtSignal()
+    
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and not self.text().strip():
+            self.clicked_while_empty.emit()
+        super().mousePressEvent(event)
 
 class PropertyEditor(QWidget):
     def __init__(self, editor):
@@ -14,6 +24,7 @@ class PropertyEditor(QWidget):
         
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(5, 5, 5, 5)
+        self.main_layout.setSpacing(2)  # Compact spacing
         self.setLayout(self.main_layout)
         
         self.locked_checkbox = None
@@ -48,6 +59,24 @@ class PropertyEditor(QWidget):
         self.mover_start_on_checkbox = None
         self.preview_btn = None
         
+        # Door properties (subset of mover)
+        self.door_checkbox = None
+        self.door_checkbox_label = None
+        self.door_direction_label = None
+        self.door_direction_combo = None
+        self.door_distance_label = None
+        self.door_distance_input = None
+        self.door_lip_label = None
+        self.door_lip_input = None
+        self.door_speed_label = None
+        self.door_speed_input = None
+        self.door_auto_open_checkbox = None
+        self.door_locked_checkbox = None
+        self.door_needs_key_checkbox = None
+        self.door_key_name_label = None
+        self.door_key_name_input = None
+        self.door_preview_btn = None
+        
         # Hurt trigger widgets
         self.hurt_checkbox = None
         self.hurt_amount_label = None
@@ -65,6 +94,7 @@ class PropertyEditor(QWidget):
         self.brush_colour_label = None
         self.brush_colour_button = None
         self.brush_colour_reset_btn = None
+        self.brush_colour_widget = None  # Container widget
 
         self.set_object(None)
     
@@ -102,6 +132,22 @@ class PropertyEditor(QWidget):
                 return True
         
         return False
+    
+    def _start_connection_from_field(self, brush):
+        """Start connection mode from clicking on empty target field."""
+        if not brush.get('is_trigger') and not brush.get('is_mover'):
+            return
+        
+        # Get the current 2D view and start connection mode
+        if hasattr(self.editor, 'right_tabs'):
+            current_view = self.editor.right_tabs.currentWidget()
+            # Import View2D here to avoid circular imports
+            from editor.view_2d import View2D
+            if isinstance(current_view, View2D):
+                current_view.start_connection_mode(brush)
+                # Show toast to indicate connection mode
+                if hasattr(self.editor, 'show_toast'):
+                    self.editor.show_toast("Drag to target, ESC to cancel")
 
     def clear_layout(self):
         while self.main_layout.count():
@@ -129,13 +175,80 @@ class PropertyEditor(QWidget):
             self.populate_for_thing(obj)
 
     def populate_for_brush(self, brush):
+        # Create compact main layout
         layout = QFormLayout()
+        layout.setSpacing(4)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        
         is_locked = brush.get('lock', False)
         is_trigger = brush.get('is_trigger', False)
+        is_mover = brush.get('is_mover', False)
         
         # Sync is_fog to shader type for legacy support
         if brush.get('is_fog', False) and brush.get('shader') != 'Fog':
             brush['shader'] = 'Fog'
+
+        # --- PROMINENT NAME FIELD AT TOP ---
+        self.brush_name_label = QLabel("Name:")
+        self.brush_name_label.setStyleSheet("""
+            QLabel {
+                background-color: #6C3BAA;
+                color: white;
+                font-weight: bold;
+                padding: 6px 8px;
+                border-radius: 3px;
+            }
+        """)
+        self.brush_name_input = QLineEdit(brush.get('name', ''))
+        self.brush_name_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #6C3BAA;
+                color: white;
+                font-weight: bold;
+                padding: 6px;
+                border: 2px solid #8B5AC2;
+                border-radius: 3px;
+            }
+            QLineEdit:focus {
+                border: 2px solid #A875D6;
+                background-color: #7B4AB9;
+            }
+        """)
+        self.brush_name_input.setPlaceholderText("Enter name...")
+        
+        # Check connection status for additional styling
+        brush_name = brush.get('name', '')
+        has_valid_target = False
+        is_targeted_by = []
+        
+        if brush.get('is_trigger') or brush.get('is_mover'):
+            target_name = brush.get('target', '')
+            if target_name and self._check_target_exists(target_name):
+                has_valid_target = True
+        
+        if brush_name:
+            is_targeted_by = self._find_targeting_sources(brush_name)
+        
+        # Add green border if connected
+        if has_valid_target or is_targeted_by:
+            self.brush_name_input.setStyleSheet("""
+                QLineEdit {
+                    background-color: #6C3BAA;
+                    color: white;
+                    font-weight: bold;
+                    padding: 6px;
+                    border: 2px solid #00FF00;
+                    border-radius: 3px;
+                }
+                QLineEdit:focus {
+                    border: 2px solid #00FF00;
+                    background-color: #7B4AB9;
+                }
+            """)
+
+        # Add name row FIRST (always at top)
+        layout.addRow(self.brush_name_label, self.brush_name_input)
 
         self.locked_checkbox = QCheckBox()
         self.locked_checkbox.setStyleSheet("""
@@ -169,7 +282,9 @@ class PropertyEditor(QWidget):
 """)
         self.target_label = QLabel("Target:")
         target_value = brush.get('target', '')
-        self.target_input = QLineEdit(target_value)
+        self.target_input = ClickableLineEdit(target_value)
+        self.target_input.setPlaceholderText("Click to connect...")
+        self.target_input.clicked_while_empty.connect(lambda: self._start_connection_from_field(brush))
         
         # Style target field based on connection validity
         if brush.get('is_trigger') or brush.get('is_mover'):
@@ -303,36 +418,75 @@ class PropertyEditor(QWidget):
                 height: 25px;
             }
         """)
-
-        self.brush_name_label = QLabel("Name:")
-        self.brush_name_input = QLineEdit(brush.get('name', ''))
         
-        # Check if this brush has a valid connection (as source or target)
-        brush_name = brush.get('name', '')
-        has_valid_target = False
-        is_targeted_by = []
+        # --- Door-specific widgets ---
+        self.door_checkbox_label = QLabel("Is Door:")
+        self.door_checkbox = QCheckBox()
+        self.door_checkbox.setStyleSheet("""
+            QCheckBox::indicator:checked {
+                background-color: #F08000;
+                border: 1px solid #333;
+            }
+            QCheckBox::indicator:unchecked {
+                background-color: #425f5d;
+                border: 1px solid #333;
+            }
+            QCheckBox::indicator {
+                width: 25px;
+                height: 25px;
+            }
+        """)
+        self.door_checkbox.setChecked(brush.get('is_door', False))
         
-        # Check if brush is a trigger/mover with valid target
-        if brush.get('is_trigger') or brush.get('is_mover'):
-            target_name = brush.get('target', '')
-            if target_name and self._check_target_exists(target_name):
-                has_valid_target = True
+        self.door_direction_label = QLabel("Direction:")
+        self.door_direction_combo = QComboBox()
+        self.door_direction_combo.addItems(['Up', 'Down'])
+        door_dir = brush.get('door_direction', 'Up')
+        self.door_direction_combo.setCurrentText(door_dir)
         
-        # Check if brush is targeted by something
-        if brush_name:
-            is_targeted_by = self._find_targeting_sources(brush_name)
+        self.door_distance_label = QLabel("Distance:")
+        self.door_distance_input = QLineEdit(str(brush.get('door_distance', 128.0)))
         
-        # Style the name input based on connection status
-        if has_valid_target or is_targeted_by:
-            self.brush_name_input.setStyleSheet("""
-                QLineEdit {
-                    border: 2px solid #00FF00;
-                    background-color: #1a3d1a;
-                    padding: 2px;
-                }
-            """)
-        else:
-            self.brush_name_input.setStyleSheet("")
+        self.door_lip_label = QLabel("Lip:")
+        self.door_lip_input = QLineEdit(str(brush.get('door_lip', 8.0)))
+        self.door_lip_input.setToolTip("Amount remaining visible when door is fully open")
+        
+        self.door_speed_label = QLabel("Speed:")
+        self.door_speed_input = QLineEdit(str(brush.get('door_speed', 64.0)))
+        
+        # Door flags
+        self.door_auto_open_checkbox = QCheckBox("Opens when player approaches")
+        self.door_auto_open_checkbox.setStyleSheet("""
+            QCheckBox::indicator:checked { background-color: #F08000; border: 1px solid #333; }
+            QCheckBox::indicator:unchecked { background-color: #425f5d; border: 1px solid #333; }
+            QCheckBox::indicator { width: 20px; height: 20px; }
+        """)
+        self.door_auto_open_checkbox.setChecked(brush.get('door_auto_open', True))
+        
+        self.door_locked_checkbox = QCheckBox("Locked (can be triggered)")
+        self.door_locked_checkbox.setStyleSheet("""
+            QCheckBox::indicator:checked { background-color: #F08000; border: 1px solid #333; }
+            QCheckBox::indicator:unchecked { background-color: #425f5d; border: 1px solid #333; }
+            QCheckBox::indicator { width: 20px; height: 20px; }
+        """)
+        self.door_locked_checkbox.setChecked(brush.get('door_locked', False))
+        
+        self.door_needs_key_checkbox = QCheckBox("Needs key")
+        self.door_needs_key_checkbox.setStyleSheet("""
+            QCheckBox::indicator:checked { background-color: #F08000; border: 1px solid #333; }
+            QCheckBox::indicator:unchecked { background-color: #425f5d; border: 1px solid #333; }
+            QCheckBox::indicator { width: 20px; height: 20px; }
+        """)
+        self.door_needs_key_checkbox.setChecked(brush.get('door_needs_key', False))
+        
+        self.door_key_name_label = QLabel("Key Name:")
+        self.door_key_name_input = QLineEdit(brush.get('door_key_name', ''))
+        self.door_key_name_input.setPlaceholderText("e.g. red_key")
+        
+        self.door_preview_btn = QPushButton("Preview Door")
+        self.door_preview_btn.setCheckable(True)
+        self.door_preview_btn.setStyleSheet("QPushButton { background-color: #425F5D; color: white; border-radius: 4px; padding: 6px; font-weight: bold; } QPushButton:checked { background-color: #0056b3; }")
+        self.door_preview_btn.toggled.connect(self.toggle_door_preview)
 
         self.locked_checkbox.setChecked(is_locked)
         self.trigger_checkbox.setChecked(is_trigger)
@@ -354,12 +508,23 @@ class PropertyEditor(QWidget):
         layout.addRow(self.fog_color_label, self.fog_color_button)
 
         layout.addRow("Is Mover:", self.mover_checkbox)
-        layout.addRow(self.brush_name_label, self.brush_name_input)
         layout.addRow(self.mover_speed_label, self.mover_speed_input)
         layout.addRow(self.mover_distance_label, self.mover_distance_input)
         layout.addRow(self.mover_direction_label, self.mover_dir_widget)
         layout.addRow(self.mover_start_on_label, self.mover_start_on_checkbox)
         layout.addRow("", self.preview_btn)
+        
+        # Door widgets (shown when Is Mover is checked)
+        layout.addRow(self.door_checkbox_label, self.door_checkbox)
+        layout.addRow(self.door_direction_label, self.door_direction_combo)
+        layout.addRow(self.door_distance_label, self.door_distance_input)
+        layout.addRow(self.door_lip_label, self.door_lip_input)
+        layout.addRow(self.door_speed_label, self.door_speed_input)
+        layout.addRow("", self.door_auto_open_checkbox)
+        layout.addRow("", self.door_locked_checkbox)
+        layout.addRow("", self.door_needs_key_checkbox)
+        layout.addRow(self.door_key_name_label, self.door_key_name_input)
+        layout.addRow("", self.door_preview_btn)
 
         self.locked_checkbox.toggled.connect(self.on_lock_changed)
         self.brush_name_input.editingFinished.connect(lambda: self.update_object_prop('name', self.brush_name_input.text()))
@@ -379,6 +544,24 @@ class PropertyEditor(QWidget):
         
         self.mover_start_on_checkbox.toggled.connect(
             lambda checked: self.update_object_prop('start_on', checked))
+        
+        # Door signal connections
+        self.door_checkbox.toggled.connect(self.on_door_changed)
+        self.door_direction_combo.currentTextChanged.connect(
+            lambda t: self.update_object_prop('door_direction', t))
+        self.door_distance_input.editingFinished.connect(
+            lambda: self.update_object_prop('door_distance', float(self.door_distance_input.text()) if self.door_distance_input.text() else 128.0))
+        self.door_lip_input.editingFinished.connect(
+            lambda: self.update_object_prop('door_lip', float(self.door_lip_input.text()) if self.door_lip_input.text() else 8.0))
+        self.door_speed_input.editingFinished.connect(
+            lambda: self.update_object_prop('door_speed', float(self.door_speed_input.text()) if self.door_speed_input.text() else 64.0))
+        self.door_auto_open_checkbox.toggled.connect(
+            lambda checked: self.update_object_prop('door_auto_open', checked))
+        self.door_locked_checkbox.toggled.connect(
+            lambda checked: self.update_object_prop('door_locked', checked))
+        self.door_needs_key_checkbox.toggled.connect(self.on_door_needs_key_changed)
+        self.door_key_name_input.editingFinished.connect(
+            lambda: self.update_object_prop('door_key_name', self.door_key_name_input.text()))
 
         self.main_layout.addLayout(layout)
         
@@ -388,11 +571,16 @@ class PropertyEditor(QWidget):
         # Add Brush Colour picker
         self._add_brush_colour_picker(brush)
         
+        # Add stretch to push everything to the top
+        self.main_layout.addStretch()
+        
         self.update_brush_ui_state()
 
     def _add_shader_dropdown(self, brush):
         """Add shader dropdown for procedural material selection."""
         shader_layout = QFormLayout()
+        shader_layout.setSpacing(4)
+        shader_layout.setContentsMargins(0, 0, 0, 0)
         
         self.shader_label = QLabel("Shader:")
         self.shader_combo = QComboBox()
@@ -450,6 +638,8 @@ class PropertyEditor(QWidget):
     def _add_glow_direction_widget(self, brush):
         """Add light direction selector for glow shader brushes."""
         glow_layout = QFormLayout()
+        glow_layout.setSpacing(4)
+        glow_layout.setContentsMargins(0, 0, 0, 0)
         
         self.glow_direction_label = QLabel("Light Direction:")
         
@@ -491,10 +681,12 @@ class PropertyEditor(QWidget):
     def _add_brush_colour_picker(self, brush):
         """Add colour picker for brush tint."""
         colour_layout = QFormLayout()
+        colour_layout.setSpacing(4)
+        colour_layout.setContentsMargins(0, 0, 0, 0)
         
         # Container widget for colour button and reset button
-        colour_widget = QWidget()
-        colour_hbox = QHBoxLayout(colour_widget)
+        self.brush_colour_widget = QWidget()
+        colour_hbox = QHBoxLayout(self.brush_colour_widget)
         colour_hbox.setContentsMargins(0, 0, 0, 0)
         colour_hbox.setSpacing(5)
         
@@ -517,7 +709,7 @@ class PropertyEditor(QWidget):
         colour_hbox.addWidget(self.brush_colour_reset_btn)
         colour_hbox.addStretch()
         
-        colour_layout.addRow(self.brush_colour_label, colour_widget)
+        colour_layout.addRow(self.brush_colour_label, self.brush_colour_widget)
         self.main_layout.addLayout(colour_layout)
     
     def _update_brush_colour_button(self, colour_rgb):
@@ -591,12 +783,82 @@ class PropertyEditor(QWidget):
             if 'speed' not in self.current_object: self.current_object['speed'] = 64.0
             if 'distance' not in self.current_object: self.current_object['distance'] = 128.0
             if 'direction' not in self.current_object: self.current_object['direction'] = [0, 1, 0]
+        else:
+            # Clear door flag when mover is disabled
+            self.current_object['is_door'] = False
         self.set_object(self.current_object)
         self.editor.update_all_ui()
+
+    def on_door_changed(self, is_door):
+        """Handle door checkbox toggle."""
+        if self.current_object is None:
+            return
+        self.current_object['is_door'] = is_door
+        if is_door:
+            # Set default door values
+            if 'door_direction' not in self.current_object:
+                self.current_object['door_direction'] = 'Up'
+            if 'door_distance' not in self.current_object:
+                self.current_object['door_distance'] = 128.0
+            if 'door_lip' not in self.current_object:
+                self.current_object['door_lip'] = 8.0
+            if 'door_speed' not in self.current_object:
+                self.current_object['door_speed'] = 64.0
+            if 'door_auto_open' not in self.current_object:
+                self.current_object['door_auto_open'] = True
+            if 'door_locked' not in self.current_object:
+                self.current_object['door_locked'] = False
+            if 'door_needs_key' not in self.current_object:
+                self.current_object['door_needs_key'] = False
+            
+            # Sync door values to mover values for compatibility
+            direction = self.current_object['door_direction']
+            self.current_object['direction'] = [0, 1, 0] if direction == 'Up' else [0, -1, 0]
+            self.current_object['distance'] = self.current_object['door_distance']
+            self.current_object['speed'] = self.current_object['door_speed']
+        
+        self.update_brush_ui_state()
+        self.editor.update_all_ui()
+
+    def on_door_needs_key_changed(self, needs_key):
+        """Handle door needs key checkbox toggle."""
+        if self.current_object is None:
+            return
+        self.current_object['door_needs_key'] = needs_key
+        if needs_key:
+            if 'door_key_name' not in self.current_object:
+                self.current_object['door_key_name'] = ''
+        self.update_brush_ui_state()
+        self.editor.update_all_ui()
+
+    def toggle_door_preview(self, checked):
+        """Preview door movement on a loop."""
+        if self.editor and self.current_object:
+            if checked:
+                self.door_preview_btn.setText("Stop Preview")
+                # Sync door values to mover values for preview
+                direction = self.current_object.get('door_direction', 'Up')
+                self.current_object['direction'] = [0, 1, 0] if direction == 'Up' else [0, -1, 0]
+                self.current_object['distance'] = self.current_object.get('door_distance', 128.0)
+                self.current_object['speed'] = self.current_object.get('door_speed', 64.0)
+                self.editor.start_mover_preview(self.current_object)
+            else:
+                self.door_preview_btn.setText("Preview Door")
+                self.editor.stop_mover_preview()
 
     def update_fog_color_button(self, color_rgb):
         qcolor = QColor.fromRgbF(*color_rgb)
         self.fog_color_button.setStyleSheet(f"background-color: {qcolor.name()}")
+
+    def _set_widget_visible(self, widget, visible):
+        """Set widget visibility and collapse space when hidden."""
+        if widget is None:
+            return
+        widget.setVisible(visible)
+        if visible:
+            widget.setMaximumHeight(16777215)  # Default max
+        else:
+            widget.setMaximumHeight(0)
 
     def update_brush_ui_state(self):
         if self.current_object is None:
@@ -616,78 +878,81 @@ class PropertyEditor(QWidget):
             self.trigger_checkbox.setEnabled(not is_locked and current_shader == 'Default')
         
         show_trigger_fields = is_trigger and not is_locked
-        if self.target_label:
-            self.target_label.setVisible(show_trigger_fields)
-        if self.target_input:
-            self.target_input.setVisible(show_trigger_fields)
-        if self.type_label:
-            self.type_label.setVisible(show_trigger_fields)
-        if self.type_combo:
-            self.type_combo.setVisible(show_trigger_fields)
+        self._set_widget_visible(self.target_label, show_trigger_fields)
+        self._set_widget_visible(self.target_input, show_trigger_fields)
+        self._set_widget_visible(self.type_label, show_trigger_fields)
+        self._set_widget_visible(self.type_combo, show_trigger_fields)
         
         # Hurt trigger visibility
-        if self.hurt_checkbox:
-            self.hurt_checkbox.setVisible(show_trigger_fields)
-            self.hurt_label_text.setVisible(show_trigger_fields) 
+        self._set_widget_visible(self.hurt_checkbox, show_trigger_fields)
+        self._set_widget_visible(self.hurt_label_text, show_trigger_fields) 
 
         show_hurt_amount = show_trigger_fields and is_hurt
-        if self.hurt_amount_label:
-            self.hurt_amount_label.setVisible(show_hurt_amount)
-        if self.hurt_amount_input:
-            self.hurt_amount_input.setVisible(show_hurt_amount)
+        self._set_widget_visible(self.hurt_amount_label, show_hurt_amount)
+        self._set_widget_visible(self.hurt_amount_input, show_hurt_amount)
         
         # Show Fog fields only if Shader is 'Fog'
         show_fog_fields = is_fog and not is_locked
-        if self.fog_density_label:
-            self.fog_density_label.setVisible(show_fog_fields)
-        if self.fog_density_input:
-            self.fog_density_input.setVisible(show_fog_fields)
-        if self.fog_color_label:
-            self.fog_color_label.setVisible(show_fog_fields)
-        if self.fog_color_button:
-            self.fog_color_button.setVisible(show_fog_fields)
+        self._set_widget_visible(self.fog_density_label, show_fog_fields)
+        self._set_widget_visible(self.fog_density_input, show_fog_fields)
+        self._set_widget_visible(self.fog_color_label, show_fog_fields)
+        self._set_widget_visible(self.fog_color_button, show_fog_fields)
         
         # Show Glow direction fields only if Shader is 'Glow'
         show_glow_fields = is_glow and not is_locked
-        if self.glow_direction_label:
-            self.glow_direction_label.setVisible(show_glow_fields)
-        if self.glow_direction_widget:
-            self.glow_direction_widget.setVisible(show_glow_fields)
+        self._set_widget_visible(self.glow_direction_label, show_glow_fields)
+        self._set_widget_visible(self.glow_direction_widget, show_glow_fields)
             
         # Show Colour Picker for any brush EXCEPT triggers
-        # (Fog volumes can have color via the fog specific color picker, but maybe user wants tint too? 
-        # The prompt said "NOT if the brush is already a trigger". 
-        # Assuming we allow tint on normal brushes + procedural shaders + fog (if useful), but block on trigger.)
         show_color_picker = not is_trigger and not is_locked
-        if self.brush_colour_label:
-            self.brush_colour_label.setVisible(show_color_picker)
-        if self.brush_colour_button:
-            self.brush_colour_button.setVisible(show_color_picker)
-        if self.brush_colour_reset_btn:
-            self.brush_colour_reset_btn.setVisible(show_color_picker)
+        self._set_widget_visible(self.brush_colour_label, show_color_picker)
+        self._set_widget_visible(self.brush_colour_widget, show_color_picker)
 
         is_mover = self.current_object.get('is_mover', False)
+        is_door = self.current_object.get('is_door', False)
         show_mover_fields = is_mover and not is_locked
-        if self.brush_name_label:
-            self.brush_name_label.setVisible(show_mover_fields)
-        if self.brush_name_input:
-            self.brush_name_input.setVisible(show_mover_fields)
-        if self.mover_speed_label:
-            self.mover_speed_label.setVisible(show_mover_fields)
-        if self.mover_speed_input:
-            self.mover_speed_input.setVisible(show_mover_fields)
-        if self.mover_distance_label:
-            self.mover_distance_label.setVisible(show_mover_fields)
-        if self.mover_direction_label:
-            self.mover_direction_label.setVisible(show_mover_fields)
-        if self.mover_dir_widget:
-            self.mover_dir_widget.setVisible(show_mover_fields)
-        if self.mover_start_on_label:
-            self.mover_start_on_label.setVisible(show_mover_fields)
-        if self.mover_start_on_checkbox:
-            self.mover_start_on_checkbox.setVisible(show_mover_fields)
-        if self.preview_btn:
-            self.preview_btn.setVisible(show_mover_fields)
+        show_door_checkbox = show_mover_fields  # Show "Is Door" when mover is enabled
+        show_generic_mover = show_mover_fields and not is_door  # Hide generic mover when door mode
+        show_door_fields = show_mover_fields and is_door
+        
+        # Name field is ALWAYS visible at top (prominent purple styling)
+        self._set_widget_visible(self.brush_name_label, True)
+        self._set_widget_visible(self.brush_name_input, True)
+        
+        # Generic mover fields (hidden when is_door)
+        self._set_widget_visible(self.mover_speed_label, show_generic_mover)
+        self._set_widget_visible(self.mover_speed_input, show_generic_mover)
+        self._set_widget_visible(self.mover_distance_label, show_generic_mover)
+        self._set_widget_visible(self.mover_distance_input, show_generic_mover)
+        self._set_widget_visible(self.mover_direction_label, show_generic_mover)
+        self._set_widget_visible(self.mover_dir_widget, show_generic_mover)
+        self._set_widget_visible(self.mover_start_on_label, show_generic_mover)
+        self._set_widget_visible(self.mover_start_on_checkbox, show_generic_mover)
+        self._set_widget_visible(self.preview_btn, show_generic_mover)
+        
+        # Door checkbox (shown when mover is enabled)
+        self._set_widget_visible(self.door_checkbox_label, show_door_checkbox)
+        self._set_widget_visible(self.door_checkbox, show_door_checkbox)
+        
+        # Door-specific fields
+        self._set_widget_visible(self.door_direction_label, show_door_fields)
+        self._set_widget_visible(self.door_direction_combo, show_door_fields)
+        self._set_widget_visible(self.door_distance_label, show_door_fields)
+        self._set_widget_visible(self.door_distance_input, show_door_fields)
+        self._set_widget_visible(self.door_lip_label, show_door_fields)
+        self._set_widget_visible(self.door_lip_input, show_door_fields)
+        self._set_widget_visible(self.door_speed_label, show_door_fields)
+        self._set_widget_visible(self.door_speed_input, show_door_fields)
+        self._set_widget_visible(self.door_auto_open_checkbox, show_door_fields)
+        self._set_widget_visible(self.door_locked_checkbox, show_door_fields)
+        self._set_widget_visible(self.door_needs_key_checkbox, show_door_fields)
+        self._set_widget_visible(self.door_preview_btn, show_door_fields)
+        
+        # Key name only shows when "needs key" is checked
+        needs_key = self.current_object.get('door_needs_key', False)
+        show_key_name = show_door_fields and needs_key
+        self._set_widget_visible(self.door_key_name_label, show_key_name)
+        self._set_widget_visible(self.door_key_name_input, show_key_name)
         
         # Shader dropdown - disable when trigger is active
         if self.shader_combo:

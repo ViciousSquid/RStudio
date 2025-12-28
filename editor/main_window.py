@@ -43,9 +43,18 @@ class Toast(QLabel):
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self.fade_out)
+        
+        # Track current toast type for conditional dismissal
+        self.current_toast_id = None
 
-    def show_message(self, text, parent_widget, is_error=False, duration=None):
-        bg_color = "#8B0000" if is_error else "#2E6F40"
+    def show_message(self, text, parent_widget, is_error=False, duration=None, is_tooltip=False, toast_id=None):
+        # Choose background color based on type
+        if is_tooltip:
+            bg_color = "#425f5d"  # Teal tooltip color
+        elif is_error:
+            bg_color = "#8B0000"  # Dark red for errors
+        else:
+            bg_color = "#2E6F40"  # Green for success
         
         self.setStyleSheet(f"""
             QLabel {{
@@ -75,16 +84,23 @@ class Toast(QLabel):
         self.anim.setEndValue(1)
         self.anim.start()
         
-        # NEW: Handle duration. If duration is 0, do not start the timer.
+        # Store toast ID for conditional dismissal
+        self.current_toast_id = toast_id
+        
+        # Handle duration. If duration is 0, do not start the timer (persistent).
         if duration == 0:
             self.timer.stop()
         else:
             final_duration = duration if duration is not None else (4000 if is_error else 2500)
             self.timer.start(final_duration)
 
-    # Add a dedicated hide method to clear persistent toasts
-    def hide_toast(self):
+    def hide_toast(self, toast_id=None):
+        """Hide toast, optionally only if it matches a specific ID."""
         if self.isVisible():
+            # If toast_id specified, only hide if it matches
+            if toast_id is not None and self.current_toast_id != toast_id:
+                return
+            self.current_toast_id = None
             self.fade_out()
 
     def fade_out(self):
@@ -125,6 +141,34 @@ class MainWindow(QMainWindow):
         self.update_global_font()
         self.load_layout()
         self.toast = Toast(self)
+        
+        # --- Tooltip system ---
+        self.camera_movement_learned = self.config.getboolean('Tooltips', 'camera_movement_learned', fallback=False)
+        self.startup_tooltip_shown = False
+        self.tooltip_tips = [
+            "Shift+T to apply texture to selected brush",
+            "Space to clone selected brush",
+            "H to hide brush, Shift+H to unhide all",
+            "Ctrl+Tab to cycle 2D views",
+            "Double-click texture in Asset Browser to apply",
+            "Ctrl+Drag from trigger to connect to target",
+            "Shift+Wheel on Light to adjust radius",
+            "Ctrl+Wheel on Light to adjust intensity",
+        ]
+        self.last_tooltip_time = 0
+        self.tooltip_interval = 120  # Seconds between occasional tooltips
+        
+        # Timer for occasional tooltips
+        self.tooltip_timer = QTimer(self)
+        self.tooltip_timer.timeout.connect(self._check_occasional_tooltip)
+        self.tooltip_timer.start(30000)  # Check every 30 seconds
+        
+        # Track right-click state for camera movement detection
+        self.right_mouse_held = False
+        self.view_3d.installEventFilter(self)
+        
+        # Show startup tooltip after window is shown
+        QTimer.singleShot(1500, self._show_startup_tooltip)
 
     def cycle_2d_view(self):
         """Cycles through the 2D view tabs (Top, Side, Front) unless in play mode."""
@@ -138,12 +182,87 @@ class MainWindow(QMainWindow):
                 next_index = (self.right_tabs.currentIndex() + 1) % count
                 self.right_tabs.setCurrentIndex(next_index)
 
+    def eventFilter(self, obj, event):
+        """Track right-click state on view_3d for camera movement detection."""
+        from PyQt5.QtCore import QEvent
+        
+        if obj == self.view_3d:
+            if event.type() == QEvent.MouseButtonPress:
+                if event.button() == Qt.RightButton:
+                    self.right_mouse_held = True
+            elif event.type() == QEvent.MouseButtonRelease:
+                if event.button() == Qt.RightButton:
+                    self.right_mouse_held = False
+        
+        return super().eventFilter(obj, event)
+
     def show_toast(self, message, is_error=False, duration=None):
         """Displays a toast notification with optional custom duration."""
         # Check if toasts are disabled in settings
         if self.config.getboolean('Display', 'disable_toasts', fallback=False):
             return
+        # Never show regular toasts in play mode
+        if hasattr(self, 'view_3d') and self.view_3d.play_mode:
+            return
         self.toast.show_message(message, self, is_error, duration)
+
+    def show_tooltip(self, message, duration=4000, toast_id=None):
+        """Displays a tooltip-style toast (teal background)."""
+        # Check if toasts are disabled in settings
+        if self.config.getboolean('Display', 'disable_toasts', fallback=False):
+            return
+        # In play mode, only allow the play_mode_esc toast
+        if hasattr(self, 'view_3d') and self.view_3d.play_mode:
+            if toast_id != "play_mode_esc":
+                return
+        self.toast.show_message(message, self, is_tooltip=True, duration=duration, toast_id=toast_id)
+
+    def _show_startup_tooltip(self):
+        """Show the camera movement tooltip on startup if not yet learned."""
+        if self.camera_movement_learned:
+            return
+        if self.startup_tooltip_shown:
+            return
+        self.startup_tooltip_shown = True
+        # Duration 0 = persistent until dismissed
+        self.show_tooltip("Hold right mouse to move camera with WASD", duration=0, toast_id="camera_tip")
+
+    def _check_occasional_tooltip(self):
+        """Periodically show helpful tooltips."""
+        # Don't show tooltips in play mode
+        if hasattr(self, 'view_3d') and self.view_3d.play_mode:
+            return
+        
+        # Don't interrupt the startup tooltip
+        if not self.camera_movement_learned and self.startup_tooltip_shown:
+            return
+        
+        current_time = time.time()
+        if current_time - self.last_tooltip_time < self.tooltip_interval:
+            return
+        
+        # Pick a random tip
+        if self.tooltip_tips:
+            tip = random.choice(self.tooltip_tips)
+            self.show_tooltip(tip, duration=5000)
+            self.last_tooltip_time = current_time
+
+    def on_camera_moved_with_wasd(self):
+        """Called when user holds right-click and moves camera with WASD.
+        Dismisses the startup tooltip and marks the lesson as learned."""
+        if self.camera_movement_learned:
+            return
+        
+        self.camera_movement_learned = True
+        
+        # Save to config so it doesn't show again
+        if not self.config.has_section('Tooltips'):
+            self.config.add_section('Tooltips')
+        self.config.set('Tooltips', 'camera_movement_learned', 'True')
+        self.save_config()
+        
+        # Dismiss the startup tooltip
+        self.toast.hide_toast(toast_id="camera_tip")
 
     def clone_selected_object(self):
         """Clone the selected object with offset, identical to pressing Space."""
@@ -586,6 +705,10 @@ class MainWindow(QMainWindow):
         
         # Update play button color
         self.update_play_button_color()
+        
+        # Hide any existing tooltips first, then show play mode toast
+        self.toast.hide_toast()
+        self.show_tooltip("PRESS ESC TO EXIT PLAY MODE", duration=0, toast_id="play_mode_esc")
 
 
     def show_generate_tilemap_dialog(self):
@@ -1125,6 +1248,14 @@ class MainWindow(QMainWindow):
             if event.key() == Qt.Key_Escape:
                 self.view_3d.toggle_play_mode(None, None)
                 
+                # Hide the play mode toast
+                self.toast.hide_toast(toast_id="play_mode_esc")
+                
+                # Re-show startup tooltip if not yet learned
+                if not self.camera_movement_learned:
+                    QTimer.singleShot(500, lambda: self.show_tooltip(
+                        "Hold right mouse to move camera with WASD", duration=0, toast_id="camera_tip"))
+                
                 if hasattr(self, 'mode_label'):
                     self.mode_label.setText("EDITOR MODE")
                     self.mode_label.setStyleSheet("""
@@ -1147,9 +1278,8 @@ class MainWindow(QMainWindow):
                 self.view_3d.show_sprites_in_play_mode = not self.view_3d.show_sprites_in_play_mode
                 self.view_3d.update()
             elif event.key() == Qt.Key_F1:
-                # Toggle connection lines visibility in play mode
+                # Toggle connection lines visibility in play mode (no toast in play mode)
                 self.view_3d.show_connections_in_play_mode = not getattr(self.view_3d, 'show_connections_in_play_mode', False)
-                self.show_toast("Connections: " + ("ON" if self.view_3d.show_connections_in_play_mode else "OFF"))
                 self.update_all_ui()
             elif event.key() == Qt.Key_E:
                 # Use key - single shot, send to game state
@@ -1189,6 +1319,11 @@ class MainWindow(QMainWindow):
         if event.key() == Qt.Key_Escape and self.state.selected_object:
             self.set_selected_object(None)
             return
+
+        # Check for camera movement lesson: WASD while right-click held (editor mode only)
+        if not self.camera_movement_learned and self.right_mouse_held:
+            if event.key() in (Qt.Key_W, Qt.Key_A, Qt.Key_S, Qt.Key_D):
+                self.on_camera_moved_with_wasd()
 
         self.keys_pressed.add(event.key())
         super().keyPressEvent(event)
@@ -1334,6 +1469,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Layout reset to default.", 2000)
 
     def closeEvent(self, event):
+        # Stop tooltip timer
+        if hasattr(self, 'tooltip_timer'):
+            self.tooltip_timer.stop()
+        
         # Stop smooth updates first
         if hasattr(self, 'view_3d'):
             self.view_3d._stop_smooth_2d_updates()
