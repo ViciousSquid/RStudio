@@ -9,11 +9,20 @@ import glm
 @dataclass
 class RenderState:
     """Immutable snapshot of game state for rendering."""
+    # Player state (play mode)
     player_pos: glm.vec3 = field(default_factory=lambda: glm.vec3(0, 0, 0))
     player_angle: float = 0.0
     player_pitch: float = 0.0
     player_health: int = 100
     player_max_health: int = 100
+    
+    # Editor camera state
+    editor_camera_pos: glm.vec3 = field(default_factory=lambda: glm.vec3(0, 150, 400))
+    editor_camera_yaw: float = -90.0
+    editor_camera_pitch: float = 0.0
+    editor_camera_fov: float = 90.0
+    
+    # Shared state
     visible_brushes: List[Dict] = field(default_factory=list)
     visible_things: List[Any] = field(default_factory=list)
     active_lights: List[Any] = field(default_factory=list)
@@ -21,6 +30,9 @@ class RenderState:
     timestamp: float = 0.0
     total_brushes: int = 0
     culled_brushes: int = 0
+    
+    # Mode flag for renderer to know which camera to use
+    is_play_mode: bool = False
 
 
 class ThreadedGameState:
@@ -97,3 +109,22 @@ class ThreadedGameState:
             pressed = self._use_key_pressed
             self._use_key_pressed = False
             return pressed
+    
+    # Editor camera state (for initialization and syncing)
+    def set_editor_camera(self, pos: glm.vec3, yaw: float, pitch: float, fov: float):
+        """Set the editor camera state (called from main thread for initialization)."""
+        with self._lock:
+            self._write_state.editor_camera_pos = glm.vec3(pos)
+            self._write_state.editor_camera_yaw = yaw
+            self._write_state.editor_camera_pitch = pitch
+            self._write_state.editor_camera_fov = fov
+    
+    def get_editor_camera(self) -> tuple:
+        """Get the current editor camera state from read buffer."""
+        with self._lock:
+            return (
+                glm.vec3(self._read_state.editor_camera_pos),
+                self._read_state.editor_camera_yaw,
+                self._read_state.editor_camera_pitch,
+                self._read_state.editor_camera_fov
+            )

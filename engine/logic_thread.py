@@ -7,6 +7,7 @@ import math
 
 from .threaded_game_state import ThreadedGameState, RenderState
 from .player import Player
+from .camera import Camera
 
 # Import Thing subclasses for type checking
 try:
@@ -16,27 +17,44 @@ except ImportError:
     Pickup = None
     Light = None
 
+# Qt key constants (matching PyQt5.QtCore.Qt)
+Key_W = 0x57
+Key_S = 0x53
+Key_A = 0x41
+Key_D = 0x44
+Key_Space = 0x20
+Key_C = 0x43
+
 class LogicThread(threading.Thread):
     """
     Separate thread for game logic processing.
     Runs at a fixed timestep (default 60 Hz) independent of rendering.
+    Handles both play mode (player physics) and editor mode (camera movement).
     """
     
     TICK_RATE = 60
     TICK_DURATION = 1.0 / TICK_RATE
+    EDITOR_CAMERA_SPEED = 300.0  # Units per second
     
     def __init__(self, game_state: ThreadedGameState, 
-                 brushes: List[Dict], things: List[Any], 
+                 editor_state, 
                  visibility_system: Optional[Any] = None):
         super().__init__(daemon=True)
         self.game_state = game_state
-        self.brushes = brushes
-        self.things = things
+        self.editor_state = editor_state
         self.visibility_system = visibility_system
         
         self.running = False
         self.player: Optional[Player] = None
         self.play_mode = False
+        
+        # Frustum culling settings
+        self.culling_enabled = True
+        self.frustum_aspect = 16.0 / 9.0  # Default aspect ratio
+        
+        # Editor camera (used when not in play mode)
+        self.editor_camera = Camera()
+        self.editor_camera.pos = glm.vec3(0, 150, 400)
         
         # Player stats
         self.player_health = 100
@@ -45,6 +63,10 @@ class LogicThread(threading.Thread):
         # Trigger state
         self.player_in_triggers: set = set()
         self.fired_once_triggers: set = set()
+        
+        # Hurt trigger timers: trigger_id -> time_until_next_damage
+        self.hurt_trigger_timers: Dict[int, float] = {}
+        self.HURT_INTERVAL = 0.5  # Damage every 0.5 seconds
         
         # Pickup state
         self.collected_pickups: set = set()
@@ -60,6 +82,16 @@ class LogicThread(threading.Thread):
         self.actual_tps = 0.0
         self._tick_count = 0
         self._last_tps_time = time.perf_counter()
+
+    @property
+    def brushes(self):
+        """Dynamically get current brushes from editor state."""
+        return self.editor_state.brushes
+    
+    @property
+    def things(self):
+        """Dynamically get current things from editor state."""
+        return self.editor_state.things
 
     def set_player(self, player: Optional[Player]):
         """Set or clear the active player."""
@@ -79,12 +111,30 @@ class LogicThread(threading.Thread):
                     thing.properties['collected'] = False
             # Reset speaker state
             self.active_speakers.clear()
+            # Reset hurt trigger timers
+            self.hurt_trigger_timers.clear()
         else:
             self.player_in_triggers.clear()
             self.fired_once_triggers.clear()
             self.collected_pickups.clear()
             self.active_speakers.clear()
+            self.hurt_trigger_timers.clear()
             self._reset_movers()
+    
+    def set_editor_camera(self, pos: glm.vec3, yaw: float, pitch: float, fov: float):
+        """Set the editor camera state (thread-safe initialization)."""
+        self.editor_camera.pos = glm.vec3(pos)
+        self.editor_camera.yaw = yaw
+        self.editor_camera.pitch = pitch
+        self.editor_camera.fov = fov
+    
+    def get_editor_camera(self) -> Camera:
+        """Get the editor camera for external access."""
+        return self.editor_camera
+
+    def set_frustum_aspect(self, aspect: float):
+        """Set the aspect ratio for frustum culling (called when viewport resizes)."""
+        self.frustum_aspect = aspect
 
     def _init_movers(self):
         """Initialize mover states."""
@@ -141,29 +191,49 @@ class LogicThread(threading.Thread):
             self._last_tps_time = t
         
     def _tick(self, delta: float):
-        """Single logic tick."""
-        if not self.play_mode or not self.player:
-            return
-            
-        # 1. Update Movers (and carry player)
-        self._update_movers(delta)
-
-        # 2. Get Input
+        """Single logic tick - handles both play mode and editor mode."""
+        # Get Input (used in both modes)
         keys = self.game_state.get_keys()
         mouse_delta = self.game_state.consume_mouse_delta()
-        use_key_pressed = self.game_state.consume_use_key()
         
-        # 3. Update Player Physics
-        if mouse_delta != (0.0, 0.0):
-            self.player.update_angle(mouse_delta[0], mouse_delta[1])
+        if self.play_mode and self.player:
+            # === PLAY MODE ===
+            use_key_pressed = self.game_state.consume_use_key()
             
-        self.player.update(keys, self.brushes, delta)
-        
-        # 4. Handle Triggers
-        self._handle_triggers()
-        
-        # 5. Handle Pickups
-        self._handle_pickups(use_key_pressed)
+            # 1. Update Movers (and carry player)
+            self._update_movers(delta)
+
+            # 2. Update Player Physics
+            if mouse_delta != (0.0, 0.0):
+                self.player.update_angle(mouse_delta[0], mouse_delta[1])
+                
+            self.player.update(keys, self.brushes, delta)
+            
+            # 3. Handle Triggers (including hurt triggers)
+            self._handle_triggers(delta)
+            
+            # 4. Handle Pickups
+            self._handle_pickups(use_key_pressed)
+        else:
+            # === EDITOR MODE ===
+            # Handle editor camera rotation from mouse
+            if mouse_delta != (0.0, 0.0):
+                self.editor_camera.rotate(mouse_delta[0], mouse_delta[1])
+            
+            # Handle editor camera movement from keyboard
+            speed = self.EDITOR_CAMERA_SPEED * delta
+            if Key_W in keys:
+                self.editor_camera.move_forward(speed)
+            if Key_S in keys:
+                self.editor_camera.move_forward(-speed)
+            if Key_A in keys:
+                self.editor_camera.strafe(-speed)
+            if Key_D in keys:
+                self.editor_camera.strafe(speed)
+            if Key_Space in keys:
+                self.editor_camera.move_up(speed)
+            if Key_C in keys:
+                self.editor_camera.move_up(-speed)
 
     def _update_movers(self, delta):
         """Calculate new mover positions and move player if standing on one."""
@@ -228,7 +298,7 @@ class LogicThread(threading.Thread):
         if t < 0.5: return 4 * t * t * t
         else: return 1 - pow(-2 * t + 2, 3) / 2
 
-    def _handle_triggers(self):
+    def _handle_triggers(self, delta: float):
         if not self.player:
             return
             
@@ -252,6 +322,10 @@ class LogicThread(threading.Thread):
                 
                 trigger_type = brush.get('trigger_type', 'multiple').lower()
                 
+                # Handle hurt triggers - continuous damage while inside
+                if brush.get('hurt', False):
+                    self._handle_hurt_trigger(i, brush, delta)
+                
                 if trigger_type == 'once':
                     # Only fire once, ever
                     if i not in self.player_in_triggers and i not in self.fired_once_triggers:
@@ -261,8 +335,37 @@ class LogicThread(threading.Thread):
                     # 'multiple' - fire on entry only (not continuously)
                     if i not in self.player_in_triggers:
                         self._activate_trigger(brush, i)
+        
+        # Clean up hurt timers for triggers we've left
+        triggers_left = self.player_in_triggers - currently_colliding
+        for trigger_id in triggers_left:
+            if trigger_id in self.hurt_trigger_timers:
+                del self.hurt_trigger_timers[trigger_id]
                     
         self.player_in_triggers = currently_colliding
+    
+    def _handle_hurt_trigger(self, trigger_id: int, brush: Dict, delta: float):
+        """Handle damage from hurt triggers."""
+        hurt_amount = brush.get('hurt_amount', 10)
+        
+        # Initialize timer if first time entering
+        if trigger_id not in self.hurt_trigger_timers:
+            # Deal damage immediately on first contact
+            self._apply_damage(hurt_amount)
+            self.hurt_trigger_timers[trigger_id] = self.HURT_INTERVAL
+        else:
+            # Count down timer
+            self.hurt_trigger_timers[trigger_id] -= delta
+            
+            # Deal damage when timer expires
+            if self.hurt_trigger_timers[trigger_id] <= 0:
+                self._apply_damage(hurt_amount)
+                self.hurt_trigger_timers[trigger_id] = self.HURT_INTERVAL
+    
+    def _apply_damage(self, amount: int):
+        """Apply damage to the player."""
+        self.player_health = max(0, self.player_health - amount)
+        # Could add death handling here if health reaches 0
         
     def _activate_trigger(self, brush: Dict, trigger_id: int):
         target_name = brush.get('target')
@@ -338,40 +441,169 @@ class LogicThread(threading.Thread):
         # Mark as collected
         pickup.properties['collected'] = True
         self.collected_pickups.add(pickup_id)
+
+    # =====================================================
+    # FRUSTUM CULLING METHODS
+    # =====================================================
+    
+    def _extract_frustum_planes(self, proj_view: glm.mat4):
+        """
+        Extract the 6 frustum planes from a projection*view matrix.
+        Returns list of (a, b, c, d) tuples representing plane equations ax + by + cz + d = 0
+        Planes point inward (positive = inside frustum).
+        """
+        m = proj_view
+        planes = []
+        
+        # Left:   row3 + row0
+        planes.append(self._normalize_plane(
+            m[0][3] + m[0][0],
+            m[1][3] + m[1][0],
+            m[2][3] + m[2][0],
+            m[3][3] + m[3][0]
+        ))
+        # Right:  row3 - row0
+        planes.append(self._normalize_plane(
+            m[0][3] - m[0][0],
+            m[1][3] - m[1][0],
+            m[2][3] - m[2][0],
+            m[3][3] - m[3][0]
+        ))
+        # Bottom: row3 + row1
+        planes.append(self._normalize_plane(
+            m[0][3] + m[0][1],
+            m[1][3] + m[1][1],
+            m[2][3] + m[2][1],
+            m[3][3] + m[3][1]
+        ))
+        # Top:    row3 - row1
+        planes.append(self._normalize_plane(
+            m[0][3] - m[0][1],
+            m[1][3] - m[1][1],
+            m[2][3] - m[2][1],
+            m[3][3] - m[3][1]
+        ))
+        # Near:   row3 + row2
+        planes.append(self._normalize_plane(
+            m[0][3] + m[0][2],
+            m[1][3] + m[1][2],
+            m[2][3] + m[2][2],
+            m[3][3] + m[3][2]
+        ))
+        # Far:    row3 - row2
+        planes.append(self._normalize_plane(
+            m[0][3] - m[0][2],
+            m[1][3] - m[1][2],
+            m[2][3] - m[2][2],
+            m[3][3] - m[3][2]
+        ))
+        
+        return planes
+
+    def _normalize_plane(self, a, b, c, d):
+        """Normalize a plane equation."""
+        length = math.sqrt(a*a + b*b + c*c)
+        if length < 1e-8:
+            return (0, 0, 0, 0)
+        return (a/length, b/length, c/length, d/length)
+
+    def _aabb_in_frustum(self, planes, center, half_size):
+        """
+        Test if an AABB is inside or intersects the frustum.
+        Uses the "p-vertex" optimization for fast rejection.
+        Returns True if potentially visible, False if definitely outside.
+        """
+        for plane in planes:
+            a, b, c, d = plane
             
+            # Find the "positive vertex" (p-vertex) - the corner furthest in the plane's normal direction
+            px = center[0] + half_size[0] if a >= 0 else center[0] - half_size[0]
+            py = center[1] + half_size[1] if b >= 0 else center[1] - half_size[1]
+            pz = center[2] + half_size[2] if c >= 0 else center[2] - half_size[2]
+            
+            # If p-vertex is outside this plane, the entire AABB is outside
+            if a*px + b*py + c*pz + d < 0:
+                return False
+        
+        return True
+
     def _prepare_render_state(self):
+        """Prepare render state with frustum culling."""
         write_state = self.game_state.get_write_state()
         
-        if self.player:
+        # Set mode flag
+        write_state.is_play_mode = self.play_mode
+        
+        # Get camera info based on mode
+        if self.play_mode and self.player:
+            # Play mode - use player camera
             write_state.player_pos = glm.vec3(self.player.pos)
             write_state.player_angle = self.player.angle
             write_state.player_pitch = self.player.pitch
-            write_state.camera_view_matrix = self.player.get_view_matrix()
+            camera_pos = self.player.pos
+            view_matrix = self.player.get_view_matrix()
+            fov = 90.0  # Player FOV
+        else:
+            # Editor mode - use editor camera
+            write_state.editor_camera_pos = glm.vec3(self.editor_camera.pos)
+            write_state.editor_camera_yaw = self.editor_camera.yaw
+            write_state.editor_camera_pitch = self.editor_camera.pitch
+            write_state.editor_camera_fov = self.editor_camera.fov
+            camera_pos = self.editor_camera.pos
+            view_matrix = self.editor_camera.get_view_matrix()
+            fov = self.editor_camera.fov
+        
+        write_state.camera_view_matrix = view_matrix
         
         # Player stats
         write_state.player_health = self.player_health
         write_state.player_max_health = self.player_max_health
 
-        # Build safe display list of brushes with statistics tracking
+        # --- FRUSTUM CULLING ---
+        # Build projection matrix
+        projection = glm.perspective(glm.radians(fov), self.frustum_aspect, 1.0, 10000.0)
+        proj_view = projection * view_matrix
+        frustum_planes = self._extract_frustum_planes(proj_view)
+        
+        # Build visible brush list with culling
         safe_brushes = []
+        total_count = 0
+        culled_count = 0
+        
         for b in self.brushes:
+            total_count += 1
+            
+            # Always skip hidden brushes
             if b.get('hidden', False):
+                culled_count += 1
                 continue
             
+            # Frustum cull check (only if culling is enabled)
+            if self.culling_enabled:
+                pos = b.get('pos', [0, 0, 0])
+                size = b.get('size', [64, 64, 64])
+                center = (pos[0], pos[1], pos[2])
+                half_size = (size[0] / 2.0, size[1] / 2.0, size[2] / 2.0)
+                
+                if not self._aabb_in_frustum(frustum_planes, center, half_size):
+                    culled_count += 1
+                    continue
+            
+            # Visible - add to render list
             if b.get('is_mover', False):
                 safe_brushes.append(b.copy())
             else:
                 safe_brushes.append(b)
 
         write_state.visible_brushes = safe_brushes
-        write_state.total_brushes = len(self.brushes)
-        write_state.culled_brushes = write_state.total_brushes - len(safe_brushes)
+        write_state.total_brushes = total_count
+        write_state.culled_brushes = culled_count
         
-        # Filter out collected pickups from visible things
+        # Filter out collected pickups from visible things (only in play mode)
         visible_things = []
         for i, thing in enumerate(self.things):
-            if Pickup and isinstance(thing, Pickup) and i in self.collected_pickups:
-                continue  # Don't render collected pickups
+            if self.play_mode and Pickup and isinstance(thing, Pickup) and i in self.collected_pickups:
+                continue
             visible_things.append(thing)
         
         write_state.visible_things = visible_things

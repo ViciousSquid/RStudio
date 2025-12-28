@@ -3,8 +3,9 @@ import os
 import numpy as np
 import ctypes
 from collections import deque
+from typing import Optional
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication
-from PyQt5.QtCore import Qt, QTimer, QPoint, QUrl, QRect
+from PyQt5.QtCore import Qt, QTimer, QPoint, QPointF, QUrl, QRect
 from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QFontDatabase, QPen, QBrush
 from PyQt5.QtMultimedia import QSoundEffect
 import OpenGL.GL as gl
@@ -38,10 +39,11 @@ class QtGameView(QOpenGLWidget):
         self.culling_enabled = False
         self.selected_object = None
         self.show_sprites_in_play_mode = False
+        self.show_glow_arrows_in_play_mode = False
         self.visibility_system = None
         self.show_visibility_debug = False
 
-        self.sysmon_expanded = False
+        self.sysmon_expanded = True
         self.sysmon_stats = {
             'visible_brushes': 0,
             'visible_tris': 0,
@@ -51,10 +53,11 @@ class QtGameView(QOpenGLWidget):
             'culled_surfaces': 0
         }
 
-        # Threading
+        # Threading - always enabled
         self.game_state = ThreadedGameState()
         self.logic_thread: Optional[LogicThread] = None
         self.use_threading = True
+        self._logic_thread_started = False
 
         # Input state
         self.mouselook_active, self.last_mouse_pos = False, QPoint()
@@ -121,6 +124,69 @@ class QtGameView(QOpenGLWidget):
         self.setFocusPolicy(Qt.ClickFocus)
         self.setMouseTracking(True)
 
+        # Add a debounce timer to avoid excessive smooth update starts
+        self._smooth_update_debounce_timer = QTimer(self)
+        self._smooth_update_debounce_timer.setInterval(100)  # 100ms debounce
+        self._smooth_update_debounce_timer.setSingleShot(True)
+        self._smooth_update_debounce_timer.timeout.connect(self._stop_smooth_2d_updates)
+
+    def ensure_logic_thread_started(self):
+        """Start the logic thread if not already running. Called lazily when data is available."""
+        if self._logic_thread_started and self.logic_thread and self.logic_thread.is_alive():
+            return
+        
+        # Stop existing thread if any
+        if self.logic_thread:
+            self.logic_thread.stop()
+            self.logic_thread.join(timeout=1.0)
+        
+        # Start new thread with editor state reference
+        self.logic_thread = LogicThread(
+            self.game_state,
+            self.editor.state,
+            self.visibility_system
+        )
+        # Sync editor camera state to thread
+        self.logic_thread.set_editor_camera(
+            self.camera.pos,
+            self.camera.yaw,
+            self.camera.pitch,
+            self.camera.fov
+        )
+        self.logic_thread.set_play_mode(False)
+        self.logic_thread.start()
+        self._logic_thread_started = True
+
+        # Enable frustum culling and set initial aspect ratio
+        self.logic_thread.culling_enabled = True
+        if self.width() > 0 and self.height() > 0:
+            self.logic_thread.set_frustum_aspect(self.width() / self.height())
+
+    def _trigger_smooth_2d_updates(self):
+        """Start smooth updates on all 2D views."""
+        # Reset debounce timer
+        self._smooth_update_debounce_timer.stop()
+        self._smooth_update_debounce_timer.start()
+        
+        # Start smooth updates if not already active
+        for view in [self.editor.view_top, self.editor.view_side, self.editor.view_front]:
+            if hasattr(view, 'start_smooth_updates'):
+                view.start_smooth_updates()
+
+    def _stop_smooth_2d_updates(self):
+        """Stop smooth updates on all 2D views."""
+        for view in [self.editor.view_top, self.editor.view_side, self.editor.view_front]:
+            if hasattr(view, 'stop_smooth_updates'):
+                view.stop_smooth_updates()
+    
+    def sync_camera_from_render_state(self, render_state):
+        """Sync local camera from render state (for editor mode)."""
+        if not render_state.is_play_mode:
+            self.camera.pos = glm.vec3(render_state.editor_camera_pos)
+            self.camera.yaw = render_state.editor_camera_yaw
+            self.camera.pitch = render_state.editor_camera_pitch
+            self.camera.fov = render_state.editor_camera_fov
+
     def initializeGL(self):
         """Initializes OpenGL and the Renderer."""
         gl.glClearColor(0.1, 0.1, 0.15, 1.0)
@@ -128,9 +194,18 @@ class QtGameView(QOpenGLWidget):
         self.load_all_sprite_textures()
 
     def keyPressEvent(self, event):
-        # F3 Toggle for Debug Window Manager
+        # F3 Toggle for Debug Window Manager - cycles: Extended → Default → Closed
         if event.key() == Qt.Key_F3:
-            self.debug_mode_active = not self.debug_mode_active
+            if not self.debug_mode_active:
+                # Opening sysmon - always start in extended mode
+                self.debug_mode_active = True
+                self.sysmon_expanded = True
+            elif self.sysmon_expanded:
+                # Extended → Default (compact)
+                self.sysmon_expanded = False
+            else:
+                # Default → Closed
+                self.debug_mode_active = False
             
             if self.play_mode:
                 if self.debug_mode_active:
@@ -144,6 +219,18 @@ class QtGameView(QOpenGLWidget):
                     self.last_mouse_pos = self.mapFromGlobal(center_pos)
                     QApplication.setOverrideCursor(Qt.BlankCursor)
             
+            self.update()
+            return
+
+        # F4 Toggle for sprite visibility in play mode
+        if event.key() == Qt.Key_F4 and self.play_mode:
+            self.show_sprites_in_play_mode = not self.show_sprites_in_play_mode
+            self.update()
+            return
+
+        # F2 Toggle for glow arrow visibility in play mode (was F5)
+        if event.key() == Qt.Key_F2 and self.play_mode:
+            self.show_glow_arrows_in_play_mode = not self.show_glow_arrows_in_play_mode
             self.update()
             return
 
@@ -180,33 +267,42 @@ class QtGameView(QOpenGLWidget):
         # --- SETUP CAMERA & SCENE DATA ---
         camera_pos = glm.vec3(0,0,0)
         render_state: Optional[RenderState] = None
+        brushes_to_render = []
+        things_to_render = []
+        use_threaded_data = False
 
-        if self.play_mode and self.use_threading:
-            # THREADED RENDER PATH
-            # Use the thread-safe snapshot for EVERYTHING (Camera + Brushes)
+        # Try to get threaded data if available
+        if self.use_threading and self._logic_thread_started and self.logic_thread and self.logic_thread.is_alive():
             render_state = self.game_state.get_render_state()
-            self.view_matrix = render_state.camera_view_matrix
-            camera_pos = render_state.player_pos
-            
-            # Use snapshot brushes to ensure position matches camera timestamp
-            brushes_to_render = render_state.visible_brushes
-            things_to_render = render_state.visible_things
+            # Only use thread data if it has been populated (timestamp > 0 means thread has run)
+            if render_state.timestamp > 0:
+                use_threaded_data = True
+                self.view_matrix = render_state.camera_view_matrix
+                
+                if render_state.is_play_mode:
+                    camera_pos = render_state.player_pos
+                else:
+                    camera_pos = render_state.editor_camera_pos
+                
+                brushes_to_render = render_state.visible_brushes
+                things_to_render = render_state.visible_things
 
-        elif self.play_mode and self.player:
-            # NON-THREADED PLAY MODE (Legacy/Fallback)
-            self.view_matrix = self.player.get_view_matrix()
-            camera_pos = self.player.pos
-            brushes_to_render = self.editor.state.brushes
-            things_to_render = self.editor.state.things
-        else:
-            # EDITOR MODE
-            self.view_matrix = self.camera.get_view_matrix()
-            camera_pos = self.camera.pos
+        if not use_threaded_data:
+            # FALLBACK: Direct data access (non-threaded or thread not ready)
+            if self.play_mode and self.player:
+                self.view_matrix = self.player.get_view_matrix()
+                camera_pos = self.player.pos
+            else:
+                self.view_matrix = self.camera.get_view_matrix()
+                camera_pos = self.camera.pos
+            
             brushes_to_render = self.editor.state.brushes
             things_to_render = self.editor.state.things
         
         aspect_ratio = self.width() / self.height() if self.height() > 0 else 1
         self.projection_matrix = perspective_projection(self.camera.fov, aspect_ratio, 0.1, 10000.0)
+        if self.logic_thread and self.logic_thread.is_alive():
+            self.logic_thread.set_frustum_aspect(aspect_ratio)
 
         # Culling (Optional override for large scenes)
         if self.play_mode and self.visibility_system and not self.use_threading:
@@ -215,6 +311,15 @@ class QtGameView(QOpenGLWidget):
                 camera_pos, view_proj, max_portal_depth=4)
             brushes_to_render = [self.editor.state.brushes[i] for i in visible_indices if i < len(self.editor.state.brushes)]
 
+        # Get selection transparency from config (0-100 slider value, convert to 0.0-1.0)
+        selection_trans_percent = self.editor.config.getint('Display', 'selection_transparency', fallback=50)
+        selection_transparency = selection_trans_percent / 100.0
+        
+        # Get selected_objects list for multi-selection support
+        selected_objects = getattr(self.editor.state, 'selected_objects', [])
+        if not selected_objects and self.selected_object:
+            selected_objects = [self.selected_object]
+        
         render_config = {
             "culling_enabled": self.culling_enabled,
             "brush_display_mode": self.brush_display_mode,
@@ -223,8 +328,12 @@ class QtGameView(QOpenGLWidget):
             "show_caulk": self.editor.config.getboolean('Display', 'show_caulk', fallback=True),
             "play_mode": self.play_mode,
             "selected_object": self.selected_object,
+            "selected_objects": selected_objects,  # Multi-selection support
             "time": time.time() - self.start_time,
             "show_sprites_in_play_mode": self.show_sprites_in_play_mode,
+            "show_glow_arrows_in_play_mode": self.show_glow_arrows_in_play_mode,
+            "selection_transparency": selection_transparency,
+            "glow_arrow_scale": self.editor.config.getint('Display', 'glow_arrow_scale', fallback=100),
         }
 
         self.renderer.render_scene(
@@ -234,7 +343,7 @@ class QtGameView(QOpenGLWidget):
         )
 
         # Capture rendering statistics for SysMon
-        if self.play_mode and self.use_threading and render_state:
+        if use_threaded_data and render_state:
             visible_count = len(render_state.visible_brushes)
             self.sysmon_stats['visible_brushes'] = visible_count
             self.sysmon_stats['visible_tris'] = visible_count * 12
@@ -371,9 +480,10 @@ class QtGameView(QOpenGLWidget):
         painter.drawLine(rect.x(), rect.y() + 25, rect.right(), rect.y() + 25)
         
         # 3. Title Text
+        mode_text = "Extended" if self.sysmon_expanded else "Default"
         painter.setFont(self.console_font)
         painter.setPen(QColor(255, 255, 255)) # White text
-        painter.drawText(header_rect.adjusted(10, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, "SysMon [F3]")
+        painter.drawText(header_rect.adjusted(10, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, f"SysMon [{mode_text}]")
         
         # 4. Control Buttons
         # Expand/Collapse Arrow
@@ -552,7 +662,7 @@ class QtGameView(QOpenGLWidget):
         self.renderer.set_sprite_textures(self.sprite_textures)
 
     def update_loop(self):
-        """Modified update loop - rendering only when threading is enabled."""
+        """Main update loop - handles both editor and play mode with threading."""
         current_time = time.time()
         delta = current_time - self.last_time
         self.last_time = current_time
@@ -567,22 +677,38 @@ class QtGameView(QOpenGLWidget):
         # Record frame time in ms
         self.frame_times.append(delta * 1000.0)
 
-        if self.play_mode and self.use_threading:
-            # Send current keys to logic thread
+        # Try to ensure logic thread is started (lazy initialization)
+        if self.use_threading and hasattr(self.editor, 'state') and not self._logic_thread_started:
+            try:
+                self.ensure_logic_thread_started()
+            except Exception as e:
+                print(f"Failed to start logic thread: {e}")
+                self.use_threading = False  # Disable threading on failure
+
+        # Handle input and state updates
+        if self.use_threading and self._logic_thread_started and self.logic_thread and self.logic_thread.is_alive():
+            # THREADED PATH - unified for both editor and play mode
             self.game_state.set_keys(self.editor.keys_pressed)
+            
             # Swap buffers if logic thread has new data
             if self.game_state.try_swap():
-                self.update() # Request redraw with new state
+                render_state = self.game_state.get_render_state()
+                if not render_state.is_play_mode:
+                    # Sync local camera from render state for editor mode
+                    # Only update local camera, don't trigger 2D view updates
+                    self.sync_camera_from_render_state(render_state)
         elif self.play_mode and self.player:
-            # Non-threaded fallback
+            # Non-threaded play mode fallback
             self.player.update(self.editor.keys_pressed, self.editor.state.brushes, delta)
             self.handle_triggers()
             self.update_movers(delta)
             self.update_speaker_sounds()
-            self.update()
-        elif self.hasFocus():
+        elif not self.use_threading and self.hasFocus():
+            # Non-threaded editor mode fallback only
             self.handle_keyboard_input(delta)
-            self.update()
+        
+        # Always request a redraw of the 3D view only
+        self.update()
 
     def set_tile_map(self, tile_map):
         self.tile_map = tile_map
@@ -599,6 +725,10 @@ class QtGameView(QOpenGLWidget):
                 if hasattr(self.editor, 'toast'):
                     self.editor.toast.hide_toast()
                 self.editor.show_toast("Changed to EDITOR mode")
+        
+        # Update play button color via main window
+        if hasattr(self.editor, 'update_play_button_color'):
+            self.editor.update_play_button_color()
 
         if self.play_mode:
             # Center and hide cursor immediately to prevent "jump"
@@ -620,26 +750,33 @@ class QtGameView(QOpenGLWidget):
             self.player.pos.y = player_start_pos[1]
             
             if self.use_threading:
-                # Start logic thread
-                self.logic_thread = LogicThread(
-                    self.game_state,
-                    self.editor.state.brushes,
-                    self.editor.state.things,
-                    self.visibility_system  # Add this later
-                )
+                # Ensure logic thread is running
+                self.ensure_logic_thread_started()
+                # Set player and switch to play mode
                 self.logic_thread.set_player(self.player)
                 self.logic_thread.set_play_mode(True)
-                self.logic_thread.start()
         else:
             QApplication.restoreOverrideCursor() # Show cursor
+
+            # Reset sprite visibility for next play session
+            self.show_sprites_in_play_mode = False
+            self.show_glow_arrows_in_play_mode = False
 
             # Reset movers to original positions
             self.reset_mover_states()
 
-            if self.logic_thread:
-                self.logic_thread.stop()
-                self.logic_thread.join(timeout=1.0)
-                self.logic_thread = None
+            if self.use_threading and self.logic_thread:
+                # Switch back to editor mode (don't stop the thread)
+                self.logic_thread.set_play_mode(False)
+                self.logic_thread.set_player(None)
+                # Sync the current camera state back to the thread
+                self.logic_thread.set_editor_camera(
+                    self.camera.pos,
+                    self.camera.yaw,
+                    self.camera.pitch,
+                    self.camera.fov
+                )
+            
             self.player = None
             self.update() # Force update to clear visuals
 
@@ -887,15 +1024,36 @@ class QtGameView(QOpenGLWidget):
         return point_on_axis, distance
 
     def handle_keyboard_input(self, delta):
+        """Modified to trigger smooth updates only when camera actually moves."""
         speed, keys = 300 * delta, self.editor.keys_pressed
-        if any(key in keys for key in [Qt.Key_W, Qt.Key_S, Qt.Key_A, Qt.Key_D, Qt.Key_Space, Qt.Key_C]):
-            if Qt.Key_W in keys: self.camera.move_forward(speed)
-            if Qt.Key_S in keys: self.camera.move_forward(-speed)
-            if Qt.Key_A in keys: self.camera.strafe(-speed)
-            if Qt.Key_D in keys: self.camera.strafe(speed)
-            if Qt.Key_Space in keys: self.camera.move_up(speed)
-            if Qt.Key_C in keys: self.camera.move_up(-speed)
-            self.editor.update_views()
+        camera_moved = False
+        
+        # Track if any movement key is pressed
+        if Qt.Key_W in keys or Qt.Key_S in keys or Qt.Key_A in keys or Qt.Key_D in keys:
+            if Qt.Key_W in keys: 
+                self.camera.move_forward(speed)
+                camera_moved = True
+            if Qt.Key_S in keys: 
+                self.camera.move_forward(-speed)
+                camera_moved = True
+            if Qt.Key_A in keys: 
+                self.camera.strafe(-speed)
+                camera_moved = True
+            if Qt.Key_D in keys: 
+                self.camera.strafe(speed)
+                camera_moved = True
+        
+        if Qt.Key_Space in keys or Qt.Key_C in keys:
+            if Qt.Key_Space in keys: 
+                self.camera.move_up(speed)
+                camera_moved = True
+            if Qt.Key_C in keys: 
+                self.camera.move_up(-speed)
+                camera_moved = True
+                
+        # Trigger smooth updates if camera moved
+        if camera_moved:
+            self._trigger_smooth_2d_updates()
 
     def get_face_at(self, mouse_pos):
         if not isinstance(self.editor.state.selected_object, dict):
@@ -951,6 +1109,85 @@ class QtGameView(QOpenGLWidget):
             
         return face
 
+    def get_object_at_mouse(self, mouse_pos):
+        """Performs ray-AABB intersection to find the closest brush or thing at the mouse position."""
+        ray_origin, ray_dir = self.get_ray_from_mouse(mouse_pos.x(), mouse_pos.y())
+        
+        closest_hit = None
+        closest_distance = float('inf')
+        
+        # Check all brushes
+        for brush in self.editor.state.brushes:
+            if brush.get('hidden', False):
+                continue
+                
+            pos = glm.vec3(brush['pos'])
+            size = glm.vec3(brush['size'])
+            min_b = pos - size / 2.0
+            max_b = pos + size / 2.0
+            
+            # Ray-AABB intersection
+            tmin = 0.0
+            tmax = float('inf')
+            hit = True
+            
+            for i in range(3):
+                if abs(ray_dir[i]) < 1e-6:
+                    if ray_origin[i] < min_b[i] or ray_origin[i] > max_b[i]:
+                        hit = False
+                        break
+                else:
+                    t1 = (min_b[i] - ray_origin[i]) / ray_dir[i]
+                    t2 = (max_b[i] - ray_origin[i]) / ray_dir[i]
+                    if t1 > t2:
+                        t1, t2 = t2, t1
+                    tmin = max(tmin, t1)
+                    tmax = min(tmax, t2)
+            
+            if hit and tmin <= tmax and tmin < closest_distance and tmin > 0:
+                closest_distance = tmin
+                closest_hit = brush
+        
+        # Check all things (sprites)
+        for thing in self.editor.state.things:
+            thing_pos = glm.vec3(thing.pos)
+            # Use a bounding sphere for things
+            radius = 16.0 if isinstance(thing, Light) else 32.0
+            
+            # Ray-sphere intersection
+            oc = ray_origin - thing_pos
+            a = glm.dot(ray_dir, ray_dir)
+            b = 2.0 * glm.dot(oc, ray_dir)
+            c = glm.dot(oc, oc) - radius * radius
+            discriminant = b * b - 4 * a * c
+            
+            if discriminant >= 0:
+                t = (-b - np.sqrt(discriminant)) / (2.0 * a)
+                if t > 0 and t < closest_distance:
+                    closest_distance = t
+                    closest_hit = thing
+        
+        return closest_hit
+
+    def center_2d_views_on_object(self, obj):
+        """Centers all 2D views on the given object."""
+        if obj is None:
+            return
+            
+        # Get position based on object type
+        if isinstance(obj, dict):
+            pos = obj['pos']
+        else:
+            pos = obj.pos
+            
+        # Center each 2D view on the object
+        for view in [self.editor.view_top, self.editor.view_side, self.editor.view_front]:
+            ax1, ax2 = view.get_axes()
+            ax_map = {'x': 0, 'y': 1, 'z': 2}
+            # Set pan offset to center on object
+            view.pan_offset = QPointF(pos[ax_map[ax1]], pos[ax_map[ax2]])
+            view.update()
+
     def mousePressEvent(self, event):
         # 1. Debug Window Manager Interaction
         if self.debug_mode_active and event.button() == Qt.LeftButton:
@@ -989,6 +1226,28 @@ class QtGameView(QOpenGLWidget):
                 return
 
         # 2. Existing Interactions
+        # SHIFT-click to pick and select objects, syncing to 2D views and hierarchy
+        # Supports multi-selection: shift-click toggles object in/out of selection
+        if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ShiftModifier and not self.play_mode:
+            clicked_obj = self.get_object_at_mouse(event.pos())
+            if clicked_obj:
+                # Get current selected_objects list
+                selected_objects = getattr(self.editor.state, 'selected_objects', [])
+                if not selected_objects:
+                    selected_objects = []
+                    if self.editor.state.selected_object:
+                        selected_objects = [self.editor.state.selected_object]
+                
+                # Toggle selection: add if not present, remove if present
+                if clicked_obj in selected_objects:
+                    selected_objects.remove(clicked_obj)
+                else:
+                    selected_objects.append(clicked_obj)
+                
+                self.editor.set_selected_objects(selected_objects)
+                self.update()
+                return
+                
         if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ControlModifier and not self.play_mode:
             face_name = self.get_face_at(event.pos())
             if face_name:
@@ -1059,32 +1318,36 @@ class QtGameView(QOpenGLWidget):
                 return
 
             if self.use_threading:
-                # Threaded Mode: Send inputs to GameState.
-                # Do NOT update self.player directly to avoid race conditions 
-                # between the logic thread and render interpolation.
                 self.game_state.set_mouse_delta(float(dx), float(dy))
             elif self.player:
-                # Legacy Fallback
                 self.player.update_angle(dx, dy)
-
+            
+            # Camera is moving - trigger smooth updates
+            self._trigger_smooth_2d_updates()
+            
             # Recenter cursor
             center_pos = self.mapToGlobal(self.rect().center())
             QCursor.setPos(center_pos)
             self.last_mouse_pos = self.mapFromGlobal(center_pos)
             return
 
-        if not self.mouselook_active:
-            super().mouseMoveEvent(event)
-            return
-
-        # Editor Camera Look (Legacy behavior for editor)
-        if not self.play_mode:
+        # Editor Camera Look
+        if not self.play_mode and self.mouselook_active:
             dx, dy = event.x() - self.last_mouse_pos.x(), event.y() - self.last_mouse_pos.y()
-            self.camera.rotate(dx, dy)
+            
+            if self.use_threading and self._logic_thread_started:
+                self.game_state.set_mouse_delta(float(dx), float(dy))
+            else:
+                self.camera.rotate(dx, dy)
+            
+            # Camera is rotating - trigger smooth updates
+            self._trigger_smooth_2d_updates()
+            
+            # Recenter cursor
             center_pos = self.mapToGlobal(self.rect().center())
             QCursor.setPos(center_pos)
             self.last_mouse_pos = self.mapFromGlobal(center_pos)
-            self.editor.update_views()
+            return
 
     def mouseReleaseEvent(self, event):
         if self.debug_drag_active:
@@ -1102,6 +1365,15 @@ class QtGameView(QOpenGLWidget):
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event):
-        if self.play_mode: return
+        """Modified to trigger smooth updates for FOV changes."""
+        if self.play_mode: 
+            return
+            
+        old_fov = self.camera.fov
         self.camera.fov = np.clip(self.camera.fov - event.angleDelta().y() * 0.05, 30, 120)
+        
+        # Trigger updates if FOV actually changed
+        if self.camera.fov != old_fov:
+            self._trigger_smooth_2d_updates()
+        
         self.editor.update_views()

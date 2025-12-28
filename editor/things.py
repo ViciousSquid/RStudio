@@ -29,6 +29,12 @@ class Thing:
             else:
                 Thing._counters[class_name] += 1
             self.properties['name'] = f"{class_name}_{Thing._counters[class_name]}"
+        
+        # --- Support for lock, hidden, and color (for tagging) ---
+        # These are optional and not set by default to keep save files clean
+        # self.properties.setdefault('lock', False)
+        # self.properties.setdefault('hidden', False)
+        # self.properties.setdefault('color', None)
 
     @property
     def name(self):
@@ -181,7 +187,7 @@ class Trigger(Thing):
 
 class Model(Thing):
     """Represents a 3D model placed in the world."""
-    pixmap_path = "assets/model_icon.png"
+    pixmap_path = "assets/model.png"
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'model')

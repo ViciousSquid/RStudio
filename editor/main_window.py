@@ -1,4 +1,3 @@
-# editor/main_window.py
 import sys
 import json
 import os
@@ -8,14 +7,15 @@ import numpy as np
 import configparser
 import math
 import copy
+import time
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QMessageBox, QFileDialog, QWidget, QLabel, QVBoxLayout,
-    QGraphicsOpacityEffect
+    QGraphicsOpacityEffect, QInputDialog, QColorDialog
 )
 from PyQt5.QtWidgets import QShortcut
 from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, QRect
-from PyQt5.QtGui import QKeySequence, QPixmap, QCursor
+from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor
 
 from editor.things import Light, PlayerStart, Thing, Pickup, Monster, Model
 from editor.rand_map_gen_dial import RandomMapGeneratorDialog
@@ -104,6 +104,14 @@ class MainWindow(QMainWindow):
         self.config_path = 'settings.ini'
         self.load_config()
         self.state = EditorState()
+        
+        # Initialize selected_objects list for multi-selection support
+        # This ensures compatibility even if EditorState doesn't have it
+        if not hasattr(self.state, 'selected_objects'):
+            self.state.selected_objects = []
+        if not hasattr(self.state, 'selected_object'):
+            self.state.selected_object = None
+        
         self.keys_pressed = set()
         self.file_path = None
         self.preview_timer = QTimer()
@@ -132,7 +140,78 @@ class MainWindow(QMainWindow):
 
     def show_toast(self, message, is_error=False, duration=None):
         """Displays a toast notification with optional custom duration."""
+        # Check if toasts are disabled in settings
+        if self.config.getboolean('Display', 'disable_toasts', fallback=False):
+            return
         self.toast.show_message(message, self, is_error, duration)
+
+    def clone_selected_object(self):
+        """Clone the selected object with offset, identical to pressing Space."""
+        if not self.state.selected_object:
+            return
+            
+        self.save_state()
+        
+        # Clone the object
+        if isinstance(self.state.selected_object, dict):
+            new_obj = copy.deepcopy(self.state.selected_object)
+            self.state.brushes.append(new_obj)
+        else:
+            new_obj = copy.copy(self.state.selected_object)
+            self.state.things.append(new_obj)
+            
+        # Offset based on current 2D view (uses grid size like Space key)
+        current_view = self.right_tabs.currentWidget()
+        if isinstance(current_view, View2D):
+            axis_map = {'top': ('x', 'z'), 'side': ('y', 'z'), 'front': ('x', 'y')}
+            pos_map = {'x': 0, 'y': 1, 'z': 2}
+            ax1_name, ax2_name = axis_map.get(current_view.view_type, ('x', 'z'))
+            offset = self.grid_size_spinbox.value()
+            pos_ref = new_obj['pos'] if isinstance(new_obj, dict) else new_obj.pos
+            pos_ref[pos_map[ax1_name]] += offset
+            pos_ref[pos_map[ax2_name]] += offset
+            
+        self.set_selected_object(new_obj)
+        
+        # Show toast notification
+        self.show_toast("Brush cloned")
+        
+        # Add flash effect for brushes (hot pink highlight)
+        if isinstance(new_obj, dict):
+            new_obj['_flash_until'] = time.time() + 0.5  # Flash for 0.5s
+            
+            # Set timer to remove flash and update view
+            QTimer.singleShot(500, lambda: self._clear_flash(new_obj))
+            
+            # Immediate repaint to show flash
+            self.update_all_ui()
+
+    def _clear_flash(self, obj):
+        """Clear the flash flag from an object and refresh views."""
+        if isinstance(obj, dict) and '_flash_until' in obj:
+            del obj['_flash_until']
+            self.update_all_ui()
+
+
+    def tint_selected_brush(self):
+        """Open colour picker dialog to tint the selected brush - unified with property editor."""
+        if not isinstance(self.state.selected_object, dict):
+            self.show_toast("Select a brush first", is_error=True)
+            return
+        
+        self.save_state()
+        brush = self.state.selected_object
+        
+        # Get current colour (0.0-1.0 range) and convert to 0-255
+        current = brush.get('colour', [0.8, 0.8, 0.8])
+        current_qcolor = QColor(int(current[0] * 255), int(current[1] * 255), int(current[2] * 255))
+        
+        color = QColorDialog.getColor(current_qcolor, self, "Choose Brush Colour")
+        if color.isValid():
+            # Store as 0.0-1.0 range
+            brush['colour'] = [color.redF(), color.greenF(), color.blueF()]
+            self.update_all_ui()
+
 
     def add_model_to_scene(self, filepath, rotation, scale):
         self.save_state()
@@ -141,7 +220,26 @@ class MainWindow(QMainWindow):
         self.set_selected_object(new_model)
 
     def set_selected_object(self, obj):
-        self.state.set_selected_object(obj)
+        """Set a single selected object (backwards compatibility)."""
+        if obj is None:
+            self.state.selected_objects = []
+            self.state.selected_object = None
+        else:
+            self.state.selected_objects = [obj]
+            self.state.selected_object = obj
+        
+        if self.config.getboolean('Display', 'sync_selection', fallback=True):
+            self.view_3d.selected_object = self.state.selected_object
+        else:
+            self.view_3d.selected_object = None
+        self.update_all_ui()
+
+    def set_selected_objects(self, objects):
+        """Set multiple selected objects."""
+        self.state.selected_objects = objects if objects else []
+        # For backwards compatibility, selected_object is the first one (or None)
+        self.state.selected_object = objects[0] if objects else None
+        
         if self.config.getboolean('Display', 'sync_selection', fallback=True):
             self.view_3d.selected_object = self.state.selected_object
         else:
@@ -164,6 +262,56 @@ class MainWindow(QMainWindow):
     
     def select_object(self, obj):
         self.set_selected_object(obj)
+
+    def highlight_in_hierarchy(self, obj):
+        """Highlight an object in the scene hierarchy without selecting it.
+        Used for locked objects when locked_not_selectable_2d is enabled."""
+        if hasattr(self.scene_hierarchy, 'highlight_item'):
+            self.scene_hierarchy.highlight_item(obj)
+        elif hasattr(self.scene_hierarchy, 'scroll_to_item'):
+            self.scene_hierarchy.scroll_to_item(obj)
+
+    def update_play_button_color(self):
+        """Update the Play button color based on current mode."""
+        if hasattr(self, 'play_button'):
+            if self.view_3d.play_mode:
+                # Red for play mode
+                self.play_button.setStyleSheet("""
+                    QPushButton {
+                        background-color: #C62828;  /* Red for play mode */
+                        color: white;
+                        border: 1px solid #B71C1C;
+                        border-radius: 3px;
+                        padding: 5px 15px;
+                        font-weight: bold;
+                    }
+                    QPushButton:hover {
+                        background-color: #D32F2F;
+                    }
+                    QPushButton:pressed {
+                        background-color: #B71C1C;
+                    }
+                """)
+                self.play_button.setText("Stop")
+            else:
+                # Green for editor mode
+                self.play_button.setStyleSheet("""
+                    QPushButton {
+                        background-color: #2E7D32;  /* Green for editor mode */
+                        color: white;
+                        border: 1px solid #1B5E20;
+                        border-radius: 3px;
+                        padding: 5px 15px;
+                        font-weight: bold;
+                    }
+                    QPushButton:hover {
+                        background-color: #388E3C;
+                    }
+                    QPushButton:pressed {
+                        background-color: #1B5E20;
+                    }
+                """)
+                self.play_button.setText("Play")
 
     @staticmethod
     def _snap_to_power_of_two(n):
@@ -259,21 +407,38 @@ class MainWindow(QMainWindow):
         old_dpi_setting = self.config.getboolean('Display', 'high_dpi_scaling', fallback=False)
         old_font_size = self.config.getint('Display', 'font_size', fallback=10)
         old_show_caulk = self.config.getboolean('Display', 'show_caulk', fallback=True)
+        old_big_toolbar_buttons = self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
 
         dialog = SettingsWindow(self.config, self)
         if dialog.exec_():
             self.save_config()
             self.update_shortcuts()
+            
+            # Track which settings require restart
+            restart_required = []
+            
             new_font_size = self.config.getint('Display', 'font_size', fallback=10)
             if old_font_size != new_font_size:
                 self.update_global_font()
+                
             new_show_caulk = self.config.getboolean('Display', 'show_caulk', fallback=True)
             if old_show_caulk != new_show_caulk:
                 self.update_views()
+                
             new_dpi_setting = self.config.getboolean('Display', 'high_dpi_scaling', fallback=False)
             if old_dpi_setting != new_dpi_setting:
-                    QMessageBox.information(self, "Restart Required",
-                                              "High DPI scaling setting has been changed.\nPlease restart the application for the change to take effect.")
+                restart_required.append("High DPI scaling")
+                
+            new_big_toolbar_buttons = self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
+            if old_big_toolbar_buttons != new_big_toolbar_buttons:
+                restart_required.append("Toolbar button size")
+            
+            # Show restart message if any settings require it
+            if restart_required:
+                QMessageBox.information(self, "Restart Required",
+                    f"The following settings have been changed:\n\n" +
+                    "\n".join(f"• {setting}" for setting in restart_required) +
+                    "\n\nPlease restart the application for the changes to take effect.")
 
     def apply_caulk_to_brush(self):
         if not isinstance(self.state.selected_object, dict):
@@ -397,26 +562,30 @@ class MainWindow(QMainWindow):
                 break
         
         if not player_start:
-            QMessageBox.warning(self, "No Player Start", "Please add a Player Start object to the scene before entering play mode.")
+            QMessageBox.warning(self, "No Player Start", "Add a Player Start object to the scene before entering play mode.")
             return
 
-        self.mode_label.setText("PLAY MODE")
-        self.mode_label.setStyleSheet("""
-            QLabel {
-                background-color: #2E7D32;
-                color: white;
-                padding: 5px 10px;
-                border-radius: 4px;
-                font-weight: bold;
-                font-size: 14px;
-                border: 1px solid #1B5E20;
-            }
-        """)
+        if hasattr(self, 'mode_label'):
+            self.mode_label.setText("PLAY MODE")
+            self.mode_label.setStyleSheet("""
+                QLabel {
+                    background-color: #2E7D32;
+                    color: white;
+                    padding: 5px 10px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 14px;
+                    border: 1px solid #1B5E20;
+                }
+            """)
 
         physics_enabled = self.config.getboolean('Settings', 'physics', fallback=True)
         self.view_3d.set_tile_map(None)
         self.view_3d.toggle_play_mode(player_start.pos, player_start.get_angle(), physics_enabled)
         self.view_3d.setFocus()
+        
+        # Update play button color
+        self.update_play_button_color()
 
 
     def show_generate_tilemap_dialog(self):
@@ -450,14 +619,22 @@ class MainWindow(QMainWindow):
 
     def update_shortcuts(self):
         apply_texture_shortcut = self.config.get('Controls', 'apply_texture', fallback='Shift+T')
-        self.apply_texture_action.setShortcut(QKeySequence(apply_texture_shortcut))
+        if hasattr(self, 'apply_texture_action'):
+            self.apply_texture_action.setShortcut(QKeySequence(apply_texture_shortcut))
         reset_layout_shortcut = self.config.get('Controls', 'reset_layout', fallback='Ctrl+Shift+R')
-        self.reset_layout_action.setShortcut(QKeySequence(reset_layout_shortcut))
+        if hasattr(self, 'reset_layout_action'):
+            self.reset_layout_action.setShortcut(QKeySequence(reset_layout_shortcut))
         save_layout_shortcut = self.config.get('Controls', 'save_layout', fallback='Ctrl+Shift+S')
-        self.save_layout_action.setShortcut(QKeySequence(save_layout_shortcut))
+        if hasattr(self, 'save_layout_action'):
+            self.save_layout_action.setShortcut(QKeySequence(save_layout_shortcut))
 
-    def toggle_culling(self, state):
-        self.view_3d.set_culling(state == Qt.Checked)
+    def toggle_backface_culling(self, state):
+        """Toggle OpenGL backface culling."""
+        self.view_3d.set_backface_culling(state == Qt.Checked)
+
+    def toggle_frustum_culling(self, state):
+        """Toggle CPU frustum culling."""
+        self.view_3d.set_frustum_culling(state == Qt.Checked)
     
     def toggle_system_monitor(self):
         """Toggles the debug system monitor overlay in the 3D view."""
@@ -736,6 +913,186 @@ class MainWindow(QMainWindow):
         
         self.update_all_ui()
 
+    def hollow_selected_brush(self):
+        """Hollow out the selected brush by creating an inner subtraction brush."""
+        if not isinstance(self.state.selected_object, dict):
+            QMessageBox.warning(self, "Invalid Selection", "Please select a brush to hollow.")
+            return
+
+        outer_brush = self.state.selected_object
+        
+        # Check if brush is locked
+        if outer_brush.get('lock', False):
+            QMessageBox.warning(self, "Brush Locked", "Cannot hollow a locked brush.")
+            return
+
+        # Prompt for wall thickness (default 16)
+        max_thickness = int(min(outer_brush['size']) // 2 - 1)
+        thickness, ok = QInputDialog.getInt(
+            self,
+            "Hollow Brush",
+            "Wall thickness (grid units):",
+            value=16,
+            min=8,  # Changed from 1 to 8
+            max=max(8, max_thickness)  # Ensure at least 8
+        )
+        
+        if not ok:
+            return
+        
+        # Check if the brush is large enough to hollow
+        min_size = min(outer_brush['size'])
+        if min_size <= thickness * 2:
+            QMessageBox.warning(
+                self, 
+                "Brush Too Small", 
+                f"The brush is too small to hollow with thickness {thickness}.\n"
+                f"Minimum dimension ({min_size}) must be greater than {thickness * 2}."
+            )
+            return
+
+        self.save_state()
+        
+        # Get outer brush properties
+        outer_pos = outer_brush['pos']
+        outer_size = outer_brush['size']
+        
+        # Calculate inner brush size (reduced by thickness on each side = thickness * 2 total)
+        inner_size = [
+            outer_size[0] - thickness * 2,
+            outer_size[1] - thickness * 2,
+            outer_size[2] - thickness * 2
+        ]
+        
+        # Inner brush has the same center position
+        inner_pos = list(outer_pos)
+        
+        # Create inner brush with subtract operation
+        inner_brush = {
+            'pos': inner_pos,
+            'size': inner_size,
+            'operation': 'subtract',
+            'textures': outer_brush.get('textures', {}).copy(),
+            'name': f"{outer_brush.get('name', 'Brush')}_hollow_sub"  # Mark as temporary
+        }
+        
+        # Add the inner brush to the scene
+        self.state.brushes.append(inner_brush)
+        
+        # Now perform the subtraction using the inner brush
+        # Store current selection
+        original_selection = self.state.selected_object
+        
+        # Temporarily select the inner brush and perform subtraction
+        self.state.selected_object = inner_brush
+        self.perform_subtraction()
+        
+        # Remove the inner brush after subtraction (it's no longer needed)
+        if inner_brush in self.state.brushes:
+            self.state.brushes.remove(inner_brush)
+        
+        # Clear selection since the original brush is now replaced by fragments
+        self.set_selected_object(None)
+        
+        self.show_toast(f"Hollowed with {thickness} unit walls")
+
+    def create_room_from_brush(self):
+        """Create a room by hollowing the brush and placing lights inside."""
+        if not isinstance(self.state.selected_object, dict):
+            QMessageBox.warning(self, "Invalid Selection", "Please select a brush to convert to a room.")
+            return
+
+        outer_brush = self.state.selected_object
+        
+        # Check if brush is locked
+        if outer_brush.get('lock', False):
+            QMessageBox.warning(self, "Brush Locked", "Cannot modify a locked brush.")
+            return
+
+        # Prompt for wall thickness
+        max_thickness = int(min(outer_brush['size']) // 2 - 1)
+        thickness, ok = QInputDialog.getInt(
+            self,
+            "Create Room",
+            "Wall thickness (grid units):",
+            value=16,
+            min=8,
+            max=max(8, max_thickness)
+        )
+        
+        if not ok:
+            return
+        
+        # Check if the brush is large enough
+        min_size = min(outer_brush['size'])
+        if min_size <= thickness * 2:
+            QMessageBox.warning(
+                self, 
+                "Brush Too Small", 
+                f"The brush is too small to hollow with thickness {thickness}.\n"
+                f"Minimum dimension ({min_size}) must be greater than {thickness * 2}."
+            )
+            return
+
+        self.save_state()
+        
+        # Get outer brush properties
+        outer_pos = outer_brush['pos']
+        outer_size = outer_brush['size']
+        
+        # Store inner dimensions for light placement
+        inner_width = outer_size[0] - thickness * 2
+        inner_depth = outer_size[2] - thickness * 2
+        inner_height = outer_size[1] - thickness * 2
+        
+        # Perform hollow operation
+        inner_brush = {
+            'pos': list(outer_pos),
+            'size': [inner_width, inner_height, inner_depth],
+            'operation': 'subtract',
+            'textures': outer_brush.get('textures', {}).copy(),
+            'name': f"{outer_brush.get('name', 'Brush')}_hollow_sub"
+        }
+        
+        self.state.brushes.append(inner_brush)
+        self.state.selected_object = inner_brush
+        self.perform_subtraction()
+        
+        # Remove the inner brush 
+        if inner_brush in self.state.brushes:
+            self.state.brushes.remove(inner_brush)
+        
+        # Calculate number of lights needed (one per 1024x1024 area)
+        # Using ceiling to ensure adequate lighting
+        import math
+        num_lights_x = max(1, math.ceil(inner_width / 1024))
+        num_lights_z = max(1, math.ceil(inner_depth / 1024))
+        
+        # Calculate spacing between lights
+        spacing_x = inner_width / num_lights_x if num_lights_x > 0 else 0
+        spacing_z = inner_depth / num_lights_z if num_lights_z > 0 else 0
+        
+        # Place lights at the ceiling of the room (top of inner space)
+        light_y = outer_pos[1] + thickness  # Top of inner space
+        
+        # Add lights
+        for i in range(num_lights_x):
+            for j in range(num_lights_z):
+                # Calculate light position - centered in its grid cell
+                x = outer_pos[0] - inner_width/2 + spacing_x/2 + i * spacing_x
+                z = outer_pos[2] - inner_depth/2 + spacing_z/2 + j * spacing_z
+                
+                light_pos = [x, light_y, z]
+                new_light = Light(pos=light_pos)
+                self.state.things.append(new_light)
+        
+        # Update UI
+        self.set_selected_object(None)
+        
+        # Show confirmation
+        light_count = num_lights_x * num_lights_z
+        self.show_toast(f"Created room with {thickness} unit walls and {light_count} light(s)")
+
     def rotate_selected_brush(self):
         if not isinstance(self.state.selected_object, dict):
             QMessageBox.warning(self, "Invalid Selection", "Please select a brush to rotate.")
@@ -768,20 +1125,24 @@ class MainWindow(QMainWindow):
             if event.key() == Qt.Key_Escape:
                 self.view_3d.toggle_play_mode(None, None)
                 
-                self.mode_label.setText("EDITOR MODE")
-                self.mode_label.setStyleSheet("""
-                    QLabel {
-                        background-color: #333333;
-                        color: #888888;
-                        padding: 5px 10px;
-                        border-radius: 4px;
-                        font-weight: bold;
-                        font-size: 14px;
-                        border: 1px solid #444;
-                    }
-                """)
+                if hasattr(self, 'mode_label'):
+                    self.mode_label.setText("EDITOR MODE")
+                    self.mode_label.setStyleSheet("""
+                        QLabel {
+                            background-color: #333333;
+                            color: #888888;
+                            padding: 5px 10px;
+                            border-radius: 4px;
+                            font-weight: bold;
+                            font-size: 14px;
+                            border: 1px solid #444;
+                        }
+                    """)
                 
                 self.setFocus() 
+                # Update play button color when exiting play mode
+                self.update_play_button_color()
+                
             elif event.key() == Qt.Key_F3:
                 self.view_3d.show_sprites_in_play_mode = not self.view_3d.show_sprites_in_play_mode
                 self.view_3d.update()
@@ -798,11 +1159,15 @@ class MainWindow(QMainWindow):
         if self.state.selected_object:
             if event.key() == Qt.Key_Delete:
                 self.save_state()
-                if isinstance(self.state.selected_object, dict):
-                    self.state.brushes.remove(self.state.selected_object)
-                else:
-                    self.state.things.remove(self.state.selected_object)
-                self.set_selected_object(None)
+                # Handle multi-selection delete
+                for obj in list(self.state.selected_objects):
+                    if isinstance(obj, dict):
+                        if obj in self.state.brushes:
+                            self.state.brushes.remove(obj)
+                    else:
+                        if obj in self.state.things:
+                            self.state.things.remove(obj)
+                self.set_selected_objects([])
                 return
 
             if event.key() == Qt.Key_H:
@@ -813,25 +1178,7 @@ class MainWindow(QMainWindow):
                 return
 
             if event.key() == Qt.Key_Space:
-                self.save_state()
-                if isinstance(self.state.selected_object, dict):
-                    new_obj = copy.deepcopy(self.state.selected_object)
-                    self.state.brushes.append(new_obj)
-                else:
-                    new_obj = copy.copy(self.state.selected_object)
-                    self.state.things.append(new_obj)
-
-                current_view = self.right_tabs.currentWidget()
-                if isinstance(current_view, View2D):
-                    axis_map = {'top': ('x', 'z'), 'side': ('y', 'z'), 'front': ('x', 'y')}
-                    pos_map = {'x': 0, 'y': 1, 'z': 2}
-                    ax1_name, ax2_name = axis_map.get(current_view.view_type, ('x', 'z'))
-                    offset = self.grid_size_spinbox.value()
-                    pos_ref = new_obj['pos'] if isinstance(new_obj, dict) else new_obj.pos
-                    pos_ref[pos_map[ax1_name]] += offset
-                    pos_ref[pos_map[ax2_name]] += offset
-
-                self.set_selected_object(new_obj)
+                self.clone_selected_object()
                 return
 
         if event.key() == Qt.Key_Escape and self.state.selected_object:
@@ -982,5 +1329,16 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Layout reset to default.", 2000)
 
     def closeEvent(self, event):
+        # Stop smooth updates first
+        if hasattr(self, 'view_3d'):
+            self.view_3d._stop_smooth_2d_updates()
+        
+        # Save layout
         self.save_layout()
+        
+        # Stop logic thread
+        if hasattr(self, 'view_3d') and self.view_3d.logic_thread:
+            self.view_3d.logic_thread.stop()
+            self.view_3d.logic_thread.join(timeout=1.0)
+        
         super().closeEvent(event)
