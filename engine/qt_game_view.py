@@ -40,6 +40,7 @@ class QtGameView(QOpenGLWidget):
         self.selected_object = None
         self.show_sprites_in_play_mode = False
         self.show_glow_arrows_in_play_mode = False
+        self.show_connections_in_play_mode = False
         self.visibility_system = None
         self.show_visibility_debug = False
 
