@@ -33,3 +33,21 @@ SHADOW_VOLUME_FRAGMENT_SHADER = load_shader_from_file(os.path.join(shader_dir, '
 
 VERTEX_SHADER_FOG = load_shader_from_file(os.path.join(shader_dir, 'vertex_shader_fog.glsl'))
 FRAGMENT_SHADER_FOG = load_shader_from_file(os.path.join(shader_dir, 'fragment_shader_fog.glsl'))
+
+# --- Procedural Material Shaders ---
+VERTEX_SHADER_PROCEDURAL = load_shader_from_file(os.path.join(shader_dir, 'procedural_vert.glsl'))
+FRAGMENT_SHADER_PROCEDURAL = load_shader_from_file(os.path.join(shader_dir, 'procedural_frag.glsl'))
+
+# Material type mapping for procedural shader
+PROCEDURAL_MATERIAL_TYPES = {
+    'Default': 0,
+    'Metal': 1,
+    'Glass': 2,
+    'Concrete': 3,
+    'Brick': 4,
+    'Wood': 5,
+    'Marble': 6,
+    'Rust': 7,
+    'Glow': 8,
+    'Water': 9,
+}
