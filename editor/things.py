@@ -29,6 +29,12 @@ class Thing:
             else:
                 Thing._counters[class_name] += 1
             self.properties['name'] = f"{class_name}_{Thing._counters[class_name]}"
+        
+        # --- Support for lock, hidden, and color (for tagging) ---
+        # These are optional and not set by default to keep save files clean
+        # self.properties.setdefault('lock', False)
+        # self.properties.setdefault('hidden', False)
+        # self.properties.setdefault('color', None)
 
     @property
     def name(self):
@@ -163,6 +169,15 @@ class Monster(Thing):
 
 class Pickup(Thing):
     pixmap_path = "assets/pickup.png"
+    
+    # Key sprite mappings: key_name -> sprite filename
+    KEY_SPRITES = {
+        'blue_key': 'assets/bluekey.png',
+        'red_key': 'assets/redkey.png',
+        'yellow_key': 'assets/yellowkey.png',
+        'green_key': 'assets/greenkey.png',
+    }
+    
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'pickup')
@@ -170,6 +185,29 @@ class Pickup(Thing):
         self.properties.setdefault('value', 25)
         self.properties.setdefault('activation', 'walk_over')  # 'walk_over' or 'use'
         self.properties.setdefault('collected', False)  # Runtime state
+        
+        # Key-specific properties (only relevant when item_type == 'key')
+        self.properties.setdefault('key_name', 'blue_key')  # Default key name
+    
+    def is_key(self):
+        """Check if this pickup is a key."""
+        return self.properties.get('item_type') == 'key'
+    
+    def get_key_name(self):
+        """Get the key name for matching with doors."""
+        return self.properties.get('key_name', 'blue_key')
+    
+    def get_sprite_path(self):
+        """Get the appropriate sprite path based on item type and key name."""
+        if self.is_key():
+            key_name = self.get_key_name()
+            return self.KEY_SPRITES.get(key_name, 'assets/pickup.png')
+        return 'assets/pickup.png'
+    
+    @classmethod
+    def get_key_sprite_path(cls, key_name):
+        """Class method to get sprite path for a specific key name."""
+        return cls.KEY_SPRITES.get(key_name, 'assets/pickup.png')
 
 class Trigger(Thing):
     pixmap_path = None
@@ -181,7 +219,7 @@ class Trigger(Thing):
 
 class Model(Thing):
     """Represents a 3D model placed in the world."""
-    pixmap_path = "assets/model_icon.png"
+    pixmap_path = "assets/model.png"
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'model')
