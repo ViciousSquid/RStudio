@@ -40,6 +40,9 @@ class View2D(QWidget):
         self.world_size = 1024
         self.snap_to_grid_enabled = True
 
+        # Throttle tracker for 3D updates during drag
+        self.last_3d_update_time = 0.0
+
         # Add timer-based smooth updating
         self.smooth_update_timer = QTimer(self)
         self.smooth_update_timer.setInterval(33)  # ~30 FPS
@@ -238,7 +241,7 @@ class View2D(QWidget):
 
     def get_axes(self):
         if self.view_type == 'top': return 'x', 'z'
-        elif self.view_type == 'side': return 'y', 'z'
+        elif self.view_type == 'side': return 'z', 'y'
         elif self.view_type == 'front': return 'x', 'y'
         return None, None
         
@@ -246,7 +249,7 @@ class View2D(QWidget):
         center_x, center_y = self.width() / 2, self.height() / 2
         screen_x = center_x + (p.x() - self.pan_offset.x()) * self.zoom_factor
         
-        if self.view_type == 'front':
+        if self.view_type in ['front', 'side']:
             screen_y = center_y - (p.y() - self.pan_offset.y()) * self.zoom_factor
         else:
             screen_y = center_y + (p.y() - self.pan_offset.y()) * self.zoom_factor
@@ -257,7 +260,7 @@ class View2D(QWidget):
         center_x, center_y = self.width() / 2, self.height() / 2
         world_x = (p.x() - center_x) / self.zoom_factor + self.pan_offset.x()
         
-        if self.view_type == 'front':
+        if self.view_type in ['front', 'side']:
             world_y = (center_y - p.y()) / self.zoom_factor + self.pan_offset.y()
         else:
             world_y = (p.y() - center_y) / self.zoom_factor + self.pan_offset.y()
@@ -644,12 +647,25 @@ class View2D(QWidget):
             if not pixmap: continue
 
             pixmap_size = pixmap.size()
+            
+            # Calculate the standard bounding rect for selection/tags (screen aligned)
             draw_rect = QRectF(s_pos.x() - pixmap_size.width() / 2, 
                             s_pos.y() - pixmap_size.height() / 2,
                             pixmap_size.width(), 
                             pixmap_size.height())
             
-            painter.drawPixmap(draw_rect.toRect(), pixmap)
+            # Draw the sprite with a vertical flip so it appears upright
+            painter.save()
+            painter.translate(s_pos)
+            painter.scale(1, -1) # Flip vertically
+            
+            # Draw centered at (0,0) relative to the translated origin
+            target_rect = QRectF(-pixmap_size.width() / 2, 
+                                 -pixmap_size.height() / 2, 
+                                 pixmap_size.width(), 
+                                 pixmap_size.height())
+            painter.drawPixmap(target_rect.toRect(), pixmap)
+            painter.restore()
 
             if isinstance(thing, Model):
                 rotation = thing.properties.get('rotation', [0, 0, 0])
@@ -1136,13 +1152,36 @@ class View2D(QWidget):
                 ax_map = {'x': 0, 'y': 1, 'z': 2}
                 new_obj_pos = self.snap_to_grid(world_pos + self.drag_offset)
                 pos_ref = obj['pos'] if isinstance(obj, dict) else obj.pos
-                pos_ref[ax_map[ax1]] = new_obj_pos.x()
-                pos_ref[ax_map[ax2]] = new_obj_pos.y()
-                self.main_window.view_3d.update()
+                
+                # Always store as list to maintain JSON serializability
+                if isinstance(pos_ref, list):
+                    pos_ref[ax_map[ax1]] = new_obj_pos.x()
+                    pos_ref[ax_map[ax2]] = new_obj_pos.y()
+                else:
+                    # If it's a glm vector, convert to list
+                    if hasattr(pos_ref, 'x'):  # It's a glm vector
+                        new_pos_list = [pos_ref[0], pos_ref[1], pos_ref[2]]
+                        new_pos_list[ax_map[ax1]] = new_obj_pos.x()
+                        new_pos_list[ax_map[ax2]] = new_obj_pos.y()
+                        obj.pos = new_pos_list  # Store as list, not glm vector
+                    else:
+                        # Already a list/tuple from somewhere else
+                        pos_ref[ax_map[ax1]] = new_obj_pos.x()
+                        pos_ref[ax_map[ax2]] = new_obj_pos.y()
+                
+                # THROTTLE FIX: Only update 3D view if enough time has passed (approx 60 FPS)
+                current_time = time.time()
+                if current_time - self.last_3d_update_time > 0.016:
+                    self.main_window.view_3d.update()
+                    self.last_3d_update_time = current_time
         
         elif self.is_resizing_brush:
             self.resize_brush(world_pos)
-            self.main_window.view_3d.update()
+            # Apply same throttle to brush resizing for consistency
+            current_time = time.time()
+            if current_time - self.last_3d_update_time > 0.016:
+                self.main_window.view_3d.update()
+                self.last_3d_update_time = current_time
         
         self.update()
 

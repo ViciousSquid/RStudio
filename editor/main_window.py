@@ -810,6 +810,9 @@ class MainWindow(QMainWindow):
         self.view_3d.brush_display_mode = text
         self.view_3d.update()
 
+    def set_cull_distance(self, distance):
+        self.view_3d.set_cull_distance(distance)
+
     def zoom_in_2d(self):
         current_view = self.right_tabs.currentWidget()
         if isinstance(current_view, View2D):

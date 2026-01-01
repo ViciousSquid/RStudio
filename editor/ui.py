@@ -347,4 +347,15 @@ class Ui_MainWindow(object):
         bottom_layout.addWidget(QLabel("Display:"))
         bottom_layout.addWidget(MainWindow.display_mode_combobox)
         
+        # Cull Distance
+        bottom_layout.addSpacing(20)
+        bottom_layout.addWidget(QLabel("Cull Dist:"))
+        MainWindow.cull_dist_spinbox = QSpinBox()
+        MainWindow.cull_dist_spinbox.setRange(500, 20000)
+        MainWindow.cull_dist_spinbox.setValue(4096)
+        MainWindow.cull_dist_spinbox.setSingleStep(250)
+        MainWindow.cull_dist_spinbox.setToolTip("Objects beyond this distance will not be rendered")
+        MainWindow.cull_dist_spinbox.valueChanged.connect(MainWindow.set_cull_distance)
+        bottom_layout.addWidget(MainWindow.cull_dist_spinbox)
+        
         status_bar.addPermanentWidget(bottom_widget, 1)
