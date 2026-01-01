@@ -297,7 +297,6 @@ class Renderer:
             return self.load_texture('default.png', 'textures')
         try:
             img = Image.open(texture_path).convert("RGBA")
-            img = img.transpose(Image.FLIP_TOP_BOTTOM)
             tex_id = gl.glGenTextures(1)
             self.texture_manager[tex_cache_name] = tex_id
             gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
@@ -376,7 +375,7 @@ class Renderer:
         else:
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
 
-        self.draw_grid(projection, view, self.grid_indices_count, config.get('play_mode', False))
+        self.draw_grid(projection, view, self.grid_indices_count)
         opaque_brushes, transparent_brushes, sprites, fog_volumes = self._sort_objects(brushes, things, config)
         lights = [t for t in things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
 
@@ -504,11 +503,6 @@ class Renderer:
                 if abs(brush_top - floor_y) < 0.1 or brush_top <= floor_y:
                     continue
                 
-                # Skip large wall-like brushes (XZ footprint > 500 in either dimension)
-                # These are architectural walls, not shadow-casting objects
-                if sx > 500 or sz > 500:
-                    continue
-                
                 # ONLY check light radius - shadows visible even when caster off-screen
                 dist_sq = (bx-lx)**2 + (by-ly)**2 + (bz-lz)**2
                 if dist_sq > light_radius_sq * 1.5:
@@ -535,11 +529,8 @@ class Renderer:
             for brush in shadow_casters:
                 bx, by, bz = brush['pos']
                 sx, sy, sz = brush['size']
-                # Footprint must cover the full shadow width (which uses diagonal * 2.5)
-                brush_diag = ((sx*sx + sz*sz) ** 0.5) * 0.5
-                footprint_size = brush_diag * 2.5 + 2.0  # Match shadow_width plus margin
                 footprint_mat = glm.translate(self._identity_mat4, glm.vec3(bx, shadow_y, bz))
-                footprint_mat = glm.scale(footprint_mat, glm.vec3(footprint_size, 0.01, footprint_size))
+                footprint_mat = glm.scale(footprint_mat, glm.vec3(sx + 1.0, 0.01, sz + 1.0))
                 gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(footprint_mat))
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
             
@@ -583,33 +574,20 @@ class Renderer:
                 if total_len < 0.1:
                     continue
                 
-                # Cap shadow length to prevent extremely long shadows
-                max_shadow_len = light_radius * 0.75  # Increased to reach walls
-                if total_len > max_shadow_len:
-                    total_len = max_shadow_len
-                
-                # Use brush diagonal for coverage at all angles
-                brush_diagonal = ((sx*sx + sz*sz) ** 0.5) * 0.5
-                
-                # Shadow extends from brush toward far point
-                # Center it so near edge overlaps brush (stencil clips that part)
-                shadow_len = total_len + brush_diagonal * 3  # Extra length to reach walls
-                shadow_cx = bx + dir_x * (shadow_len * 0.5 - brush_diagonal)
-                shadow_cz = bz + dir_z * (shadow_len * 0.5 - brush_diagonal)
+                # Single shadow: center at midpoint of shadow extent
+                shadow_cx = bx + dir_x * (total_len * 0.5)
+                shadow_cz = bz + dir_z * (total_len * 0.5)
                 angle = glm.atan(dir_x, dir_z)
                 
-                # Width covers brush diagonal plus margin
-                shadow_width = brush_diagonal * 2.5
-                
-                # Alpha - shadows should be dark, not light grey
+                # Alpha based on distance from light
                 dist_sq = (bx-lx)**2 + (by-ly)**2 + (bz-lz)**2
                 dist = dist_sq ** 0.5
-                shadow_alpha = 0.6 * (1.0 - (dist / light_radius) * 0.3)
-                shadow_alpha = max(0.4, min(0.7, shadow_alpha))
+                shadow_alpha = 0.25 * (1.0 - (dist / light_radius) * 0.5)
+                shadow_alpha = max(0.08, min(0.3, shadow_alpha))
                 
                 self._floor_shadow_batch.add(
                     (shadow_cx, shadow_y, shadow_cz),
-                    (shadow_width, 0.01, shadow_len),
+                    (sx, 0.01, total_len + sz),  # Full length in one quad
                     angle,
                     shadow_alpha
                 )
@@ -759,9 +737,8 @@ class Renderer:
                 if dist_sq > light_radius_sq:
                     continue
                 dist = dist_sq ** 0.5
-                # Match floor shadow alpha for consistency
-                alpha = 0.6 * (1.0 - (dist / light_radius) * 0.3)
-                alpha = max(0.4, min(0.7, alpha))
+                alpha = 0.3 * (1.0 - (dist / light_radius) * 0.7)
+                alpha = max(0.05, min(0.35, alpha))
                 
                 wall_mat = glm.translate(self._identity_mat4, shadow_pos)
                 wall_mat = glm.scale(wall_mat, scale_vec)
@@ -835,8 +812,8 @@ class Renderer:
             sprites = [t for t in things if isinstance(t, Thing)]
         return opaque, transparent, sprites, fog
 
-    def draw_grid(self, projection, view, grid_indices_count, play_mode=False):
-        if not self.vaos['grid'] or play_mode:
+    def draw_grid(self, projection, view, grid_indices_count):
+        if not self.vaos['grid']:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
@@ -877,17 +854,7 @@ class Renderer:
             elif brush.get('operation') == 'subtract':
                 color, alpha = [1.0, 0.0, 0.0], 1.0
             else:
-                # Use brush colour if set, otherwise default gray
-                brush_colour = brush.get('colour')
-                if brush_colour and isinstance(brush_colour, (list, tuple)) and len(brush_colour) >= 3:
-                    # Detect if color is 0-255 or 0-1 range to support both legacy and new formats
-                    if any(c > 1.0 for c in brush_colour):
-                        color = [brush_colour[0] / 255.0, brush_colour[1] / 255.0, brush_colour[2] / 255.0]
-                    else:
-                        color = [float(brush_colour[0]), float(brush_colour[1]), float(brush_colour[2])]
-                else:
-                    color = [0.8, 0.8, 0.8]
-                alpha = 1.0
+                color, alpha = [0.8, 0.8, 0.8], 1.0
             gl.glUniform3fv(color_loc, 1, color)
             gl.glUniform1f(alpha_loc, alpha)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
