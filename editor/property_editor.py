@@ -378,8 +378,13 @@ class PropertyEditor(QWidget):
     def on_shader_changed(self, shader_type):
         if self.current_object is None: return
         self.current_object['shader'] = shader_type
+        
         is_fog = (shader_type == 'Fog')
         self.current_object['is_fog'] = is_fog
+        
+        is_water = (shader_type == 'Water')
+        self.current_object['is_water'] = is_water
+
         if shader_type != 'Default':
             self.current_object['is_trigger'] = False
             if self.trigger_checkbox:
@@ -389,6 +394,10 @@ class PropertyEditor(QWidget):
             if is_fog:
                 if 'fog_density' not in self.current_object: self.current_object['fog_density'] = 2.0
                 if 'fog_color' not in self.current_object: self.current_object['fog_color'] = [0.5, 0.6, 0.7]
+            
+            if is_water and 'textures' not in self.current_object:
+                pass 
+
             if shader_type == 'Glow':
                 if 'light_direction' not in self.current_object: self.current_object['light_direction'] = 'top'
         self.update_brush_ui_state()
