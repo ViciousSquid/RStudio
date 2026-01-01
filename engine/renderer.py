@@ -208,13 +208,13 @@ class Renderer:
             self.shader_loader = ShaderLoader()
             self.shaders = {}
             self.uniforms = {}
-            
             for name, files in [('simple', ('simple.vert', 'simple.frag')),
                                 ('lit', ('lit.vert', 'lit.frag')),
                                 ('textured', ('textured.vert', 'textured.frag')),
                                 ('sprite', ('sprite.vert', 'sprite.frag')),
                                 ('shadow_volume', ('shadow_volume.vert', 'shadow_volume.frag')),
-                                ('fog', ('fog.vert', 'fog.frag'))]:
+                                ('fog', ('fog.vert', 'fog.frag')),
+                                ('water', ('water.vert', 'water.frag'))]:
                 shader = self.shader_loader.compile_shader_program(*files)
                 self.shaders[name] = shader
                 self.uniforms[name] = UniformCache(shader)
@@ -226,8 +226,13 @@ class Renderer:
             self.uniforms['sprite'].preload(['projection', 'view', 'sprite_texture', 'sprite_pos_world', 'sprite_size'])
             self.uniforms['shadow_volume'].preload(['projection', 'view', 'model', 'light_pos'])
             self._preload_lit_uniforms('fog')
-            self.uniforms['fog'].preload(['viewPos', 'time', 'noiseTexture', 'density', 'fogColor', 'noiseScale'])
+            self.uniforms['fog'].preload(['viewPos', 'time', 'noiseTexture', 'density', 'fogColor', 'noiseScale', 'object_color', 'alpha'])
+            
+            self._preload_lit_uniforms('water')
+            self.uniforms['water'].preload(['time', 'viewPos'])
+
             print(f"Shaders loaded from: {self.shader_loader.shader_dir}")
+
         except Exception as e:
             print(f"FATAL: Shader Error: {e}")
             return
@@ -377,7 +382,10 @@ class Renderer:
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
 
         self.draw_grid(projection, view, self.grid_indices_count, config.get('play_mode', False))
-        opaque_brushes, transparent_brushes, sprites, fog_volumes = self._sort_objects(brushes, things, config)
+        
+        # Unpack water_brushes from the updated sort function
+        opaque_brushes, transparent_brushes, sprites, fog_volumes, water_brushes = self._sort_objects(brushes, things, config)
+        
         lights = [t for t in things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
 
         # Opaque pass
@@ -399,16 +407,28 @@ class Renderer:
         # Transparent pass
         if transparent_brushes:
             transparent_brushes.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
+        
+        # Sort water back-to-front
+        if water_brushes:
+            water_brushes.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
+            
         if sprites:
             sprites.sort(key=lambda s: -self._distance_sq(s.pos, camera_pos))
+            
         gl.glEnable(gl.GL_BLEND)
         gl.glDepthMask(gl.GL_FALSE)
+        
         self.draw_sprites(projection, view, sprites, self.sprite_textures)
+        
         if current_mode == RENDER_MODE_UNLIT:
             self.draw_textured_brushes(projection, view, camera_pos, transparent_brushes, lights, config)
         else:
             self.draw_lit_brushes(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True)
+            
         if current_mode == RENDER_MODE_LIT:
+            # Draw Water
+            self.draw_water_brushes(projection, view, camera_pos, water_brushes, lights, config)
+            # Draw Fog
             self.draw_fog_volumes(projection, view, camera_pos, fog_volumes, lights, config)
 
         # Overlays
@@ -786,6 +806,7 @@ class Renderer:
         visible_brushes = self._cull_brushes(projection, view, camera_pos, brushes)
         if not visible_brushes:
             return
+        gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         shader = self.shaders['fog']
         uniforms = self.uniforms['fog']
@@ -800,15 +821,29 @@ class Renderer:
         gl.glUniform1i(uniforms['noiseTexture'], 1)
         gl.glBindVertexArray(self.vaos['cube'])
         gl.glEnable(gl.GL_CULL_FACE)
-        model_loc, density_loc = uniforms['model'], uniforms['density']
-        fog_color_loc, noise_scale_loc = uniforms['fogColor'], uniforms['noiseScale']
+        
+        model_loc = uniforms['model']
+        density_loc = uniforms['density']
+        fog_color_loc = uniforms['fogColor']
+        noise_scale_loc = uniforms['noiseScale']
+        object_color_loc = uniforms['object_color']
+        alpha_loc = uniforms['alpha']
+        
         for brush in visible_brushes:
             pos, size = brush['pos'], brush['size']
             model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-            gl.glUniform1f(density_loc, brush.get('fog_density', 0.01))
-            gl.glUniform3fv(fog_color_loc, 1, brush.get('fog_color', [0.5, 0.6, 0.7]))
-            gl.glUniform1f(noise_scale_loc, brush.get('fog_noise_scale', 0.01))
+            
+            f_density = brush.get('fog_density', 0.01)
+            f_color = brush.get('fog_color', [0.5, 0.6, 0.7])
+            f_noise = brush.get('fog_noise_scale', 0.01)
+            
+            gl.glUniform1f(density_loc, f_density)
+            gl.glUniform3fv(fog_color_loc, 1, f_color)
+            gl.glUniform1f(noise_scale_loc, f_noise)
+            gl.glUniform3fv(object_color_loc, 1, f_color)
+            gl.glUniform1f(alpha_loc, 0.4)
+            
             gl.glCullFace(gl.GL_FRONT)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
             gl.glCullFace(gl.GL_BACK)
@@ -818,22 +853,72 @@ class Renderer:
         gl.glActiveTexture(gl.GL_TEXTURE0)
 
     def _sort_objects(self, brushes, things, config):
-        opaque, transparent, sprites, fog = [], [], [], []
+        opaque, transparent, sprites, fog, water = [], [], [], [], []
         is_play = config.get('play_mode', False)
         show_sprites = config.get('show_sprites_in_play_mode', False)
+        
         for brush in brushes:
             if brush.get('hidden'):
                 continue
-            if brush.get('is_fog'):
+            
+            # Check for boolean flag OR the string property
+            is_water_brush = brush.get('is_water', False) or brush.get('shader') == 'Water'
+            
+            # If explicit flag is missing, check the textures (fallback)
+            if not is_water_brush:
+                for tex_name in brush.get('textures', {}).values():
+                    if tex_name and 'water' in str(tex_name).lower():
+                        is_water_brush = True
+                        break
+            
+            if is_water_brush:
+                water.append(brush)
+            elif brush.get('is_fog'):
                 fog.append(brush)
             elif brush.get('is_trigger'):
                 if not is_play:
                     transparent.append(brush)
             else:
                 opaque.append(brush)
+                
         if not is_play or show_sprites:
             sprites = [t for t in things if isinstance(t, Thing)]
-        return opaque, transparent, sprites, fog
+            
+        return opaque, transparent, sprites, fog, water
+
+    def draw_water_brushes(self, projection, view, camera_pos, brushes, lights, config):
+        if not brushes:
+            return
+            
+        # Water is technically transparent, so we don't depth-write, 
+        # but we need depth-test to hide behind walls.
+        visible = self._cull_brushes(projection, view, camera_pos, brushes)
+        if not visible:
+            return
+
+        shader = self.shaders['water']
+        uniforms = self.uniforms['water']
+        
+        gl.glUseProgram(shader)
+        self._set_light_uniforms_cached('water', lights)
+        
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
+        gl.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
+        gl.glUniform1f(uniforms['time'], config.get('time', 0.0))
+        
+        gl.glBindVertexArray(self.vaos['cube'])
+        model_loc = uniforms['model']
+        
+        for brush in visible:
+            pos, size = brush['pos'], brush['size']
+            # Scale slightly down to prevent z-fighting if flush with walls
+            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+            self.render_stats.draw_calls += 1
+            
+        gl.glBindVertexArray(0)
 
     def draw_grid(self, projection, view, grid_indices_count, play_mode=False):
         if not self.vaos['grid'] or play_mode:
