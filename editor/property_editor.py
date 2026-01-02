@@ -1,7 +1,8 @@
 import os
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFormLayout, QCheckBox, QComboBox, QPushButton,
-                             QHBoxLayout, QColorDialog, QFileDialog, QGridLayout, QToolButton)
+                             QHBoxLayout, QColorDialog, QFileDialog, QGridLayout, 
+                             QToolButton, QSlider)
 from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon
 from editor.things import Thing, Light, Pickup, Monster, Model, Speaker
@@ -37,6 +38,17 @@ class PropertyEditor(QWidget):
         self.fog_emit_light_checkbox = None
         self.fog_color_label = None
         self.fog_color_button = None
+
+        # --- Water Widgets ---
+        self.water_opacity_label = None
+        self.water_opacity_slider = None
+        self.water_reflectivity_label = None
+        self.water_reflectivity_slider = None
+        self.water_plane_label = None
+        self.water_plane_checkbox = None
+        self.water_color_label = None
+        self.water_color_button = None
+        # ---------------------
 
         self.brush_name_label = None
         self.brush_name_input = None
@@ -213,12 +225,46 @@ class PropertyEditor(QWidget):
         self.hurt_amount_input.setRange(1, 1000)
         self.hurt_amount_input.setValue(brush.get('hurt_amount', 10))
         
+        # Fog Widgets
         self.fog_density_label = QLabel("Fog Density:")
         self.fog_density_input = QLineEdit(str(brush.get('fog_density', 2.0)))
         self.fog_color_label = QLabel("Fog Color:")
         self.fog_color_button = QPushButton()
         self.fog_color_button.setFixedSize(100, 25)
         self.update_fog_color_button(brush.get('fog_color', [0.5, 0.6, 0.7]))
+
+        # Water Widgets (Updated)
+        self.water_opacity_label = QLabel("Opacity:")
+        self.water_opacity_slider = QSlider(Qt.Horizontal)
+        self.water_opacity_slider.setRange(0, 100)
+        current_opacity = int(brush.get('water_opacity', 0.5) * 100)
+        self.water_opacity_slider.setValue(current_opacity)
+        self.water_opacity_slider.valueChanged.connect(
+            lambda v: self.update_object_prop('water_opacity', v / 100.0)
+        )
+
+        self.water_reflectivity_label = QLabel("Reflectivity:")
+        self.water_reflectivity_slider = QSlider(Qt.Horizontal)
+        self.water_reflectivity_slider.setRange(0, 100)
+        current_reflectivity = int(brush.get('water_reflectivity', 0.5) * 100)
+        self.water_reflectivity_slider.setValue(current_reflectivity)
+        self.water_reflectivity_slider.valueChanged.connect(
+            lambda v: self.update_object_prop('water_reflectivity', v / 100.0)
+        )
+
+        self.water_plane_label = QLabel("Plane Only:")
+        self.water_plane_checkbox = QCheckBox("Draw top only")
+        self.water_plane_checkbox.setStyleSheet("QCheckBox::indicator:checked { background-color: #F08000; border: 1px solid #333; } QCheckBox::indicator:unchecked { background-color: #425f5d; border: 1px solid #333; } QCheckBox::indicator { width: 20px; height: 20px; }")
+        self.water_plane_checkbox.setChecked(brush.get('water_plane', False))
+        self.water_plane_checkbox.toggled.connect(
+             lambda checked: self.update_object_prop('water_plane', checked)
+        )
+
+        self.water_color_label = QLabel("Water Tint:")
+        self.water_color_button = QPushButton()
+        self.water_color_button.setFixedSize(100, 25)
+        self._update_water_color_button(brush.get('water_tint', [0.0, 0.4, 0.6]))
+        self.water_color_button.clicked.connect(self.on_water_color_changed)
 
         self.mover_checkbox = QCheckBox("Moves back and forth")
         self.mover_checkbox.setStyleSheet("QCheckBox::indicator:checked { background-color: #F08000; border: 1px solid #333; } QCheckBox::indicator:unchecked { background-color: #425f5d; border: 1px solid #333; } QCheckBox::indicator { width: 20px; height: 20px; }")
@@ -311,6 +357,11 @@ class PropertyEditor(QWidget):
         layout.addRow(self.fog_density_label, self.fog_density_input)
         layout.addRow(self.fog_color_label, self.fog_color_button)
 
+        layout.addRow(self.water_opacity_label, self.water_opacity_slider)
+        layout.addRow(self.water_reflectivity_label, self.water_reflectivity_slider)
+        layout.addRow(self.water_plane_label, self.water_plane_checkbox)
+        layout.addRow(self.water_color_label, self.water_color_button)
+
         layout.addRow("Is Mover:", self.mover_checkbox)
         layout.addRow(self.mover_speed_label, self.mover_speed_input)
         layout.addRow(self.mover_distance_label, self.mover_distance_input)
@@ -366,7 +417,7 @@ class PropertyEditor(QWidget):
         shader_layout.setContentsMargins(0, 0, 0, 0)
         self.shader_label = QLabel("Shader:")
         self.shader_combo = QComboBox()
-        shader_types = ['Default', 'Metal', 'Glass', 'Concrete', 'Wood', 'Marble', 'Glow', 'Water', 'Fog']
+        shader_types = ['Default', 'Glass', 'Glow', 'Water', 'Fog']
         self.shader_combo.addItems(shader_types)
         current_shader = brush.get('shader', 'Default')
         self.shader_combo.setCurrentText(current_shader)
@@ -378,13 +429,9 @@ class PropertyEditor(QWidget):
     def on_shader_changed(self, shader_type):
         if self.current_object is None: return
         self.current_object['shader'] = shader_type
-        
         is_fog = (shader_type == 'Fog')
-        self.current_object['is_fog'] = is_fog
-        
         is_water = (shader_type == 'Water')
-        self.current_object['is_water'] = is_water
-
+        self.current_object['is_fog'] = is_fog
         if shader_type != 'Default':
             self.current_object['is_trigger'] = False
             if self.trigger_checkbox:
@@ -394,10 +441,15 @@ class PropertyEditor(QWidget):
             if is_fog:
                 if 'fog_density' not in self.current_object: self.current_object['fog_density'] = 2.0
                 if 'fog_color' not in self.current_object: self.current_object['fog_color'] = [0.5, 0.6, 0.7]
-            
-            if is_water and 'textures' not in self.current_object:
-                pass 
-
+            if is_water:
+                # Remove old props if they exist to avoid confusion
+                if 'water_murkiness' in self.current_object: del self.current_object['water_murkiness']
+                if 'water_depth' in self.current_object: del self.current_object['water_depth']
+                # Initialize new props
+                if 'water_opacity' not in self.current_object: self.current_object['water_opacity'] = 0.5
+                if 'water_reflectivity' not in self.current_object: self.current_object['water_reflectivity'] = 0.5
+                if 'water_plane' not in self.current_object: self.current_object['water_plane'] = False
+                if 'water_tint' not in self.current_object: self.current_object['water_tint'] = [0.0, 0.4, 0.6]
             if shader_type == 'Glow':
                 if 'light_direction' not in self.current_object: self.current_object['light_direction'] = 'top'
         self.update_brush_ui_state()
@@ -511,6 +563,21 @@ class PropertyEditor(QWidget):
             r, g, b = int(color[0] * 255), int(color[1] * 255), int(color[2] * 255)
             self.fog_color_button.setStyleSheet(f"background-color: rgb({r}, {g}, {b});")
 
+    def on_water_color_changed(self):
+        if self.current_object is None: return
+        current = self.current_object.get('water_tint', [0.0, 0.4, 0.6])
+        current_qcolor = QColor(int(current[0] * 255), int(current[1] * 255), int(current[2] * 255))
+        color = QColorDialog.getColor(current_qcolor, self, "Choose Water Tint")
+        if color.isValid():
+            self.current_object['water_tint'] = [color.redF(), color.greenF(), color.blueF()]
+            self._update_water_color_button(self.current_object['water_tint'])
+            self.editor.update_all_ui()
+
+    def _update_water_color_button(self, color):
+        if self.water_color_button:
+            r, g, b = int(color[0] * 255), int(color[1] * 255), int(color[2] * 255)
+            self.water_color_button.setStyleSheet(f"background-color: rgb({r}, {g}, {b});")
+
     def toggle_door_preview(self, checked):
         if self.editor:
             if checked:
@@ -582,6 +649,7 @@ class PropertyEditor(QWidget):
         is_door = self.current_object.get('is_door', False)
         is_hurt = self.current_object.get('hurt', False)
         is_fog = self.current_object.get('is_fog', False) or self.current_object.get('shader') == 'Fog'
+        is_water = self.current_object.get('shader') == 'Water'
         is_glow = self.current_object.get('shader') == 'Glow'
         needs_key = self.current_object.get('door_needs_key', False)
         
@@ -596,6 +664,13 @@ class PropertyEditor(QWidget):
         # Fog widgets
         for w in [self.fog_density_label, self.fog_density_input, self.fog_color_label, self.fog_color_button]:
             if w: w.setVisible(is_fog)
+            
+        # Water widgets
+        for w in [self.water_opacity_label, self.water_opacity_slider, 
+                  self.water_reflectivity_label, self.water_reflectivity_slider,
+                  self.water_plane_label, self.water_plane_checkbox,
+                  self.water_color_label, self.water_color_button]:
+            if w: w.setVisible(is_water)
         
         # Mover widgets
         for w in [self.mover_speed_label, self.mover_speed_input, self.mover_distance_label, 
