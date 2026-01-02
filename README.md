@@ -13,10 +13,9 @@
 
 * Lights can cast stencil shadows (buggy)
 * Physics in Play Mode
-* Volumetric Fog
+* Realisitc water and fog volumes
   
 ### Roadmap:
-* Quake/Quake2/Quake3/Half-life map support
 * OBJ model support (currently partially implemented)
 * Visual scripting
 * Terrain generation
