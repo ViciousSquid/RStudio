@@ -1767,14 +1767,14 @@
         },
         {
             "pos": [
-                32.0,
+                -192.0,
                 -96.0,
-                448.0
+                384.0
             ],
             "size": [
-                1056.0,
+                384.0,
                 32.0,
-                904.0
+                512.0
             ],
             "textures": {
                 "north": "default.png",
@@ -1786,7 +1786,9 @@
             },
             "shader": "Water",
             "is_fog": false,
-            "is_trigger": false
+            "is_trigger": false,
+            "water_reflectivity": 0.8,
+            "water_plane": true
         },
         {
             "pos": [
@@ -1826,7 +1828,7 @@
                 "name": "Light_2",
                 "color": "[255, 255, 200]",
                 "intensity": "1.0",
-                "radius": "512.0",
+                "radius": "768.0",
                 "colour": "[255, 255, 255]",
                 "state": "on",
                 "show_radius": "False",
@@ -1929,7 +1931,7 @@
                 "type": "light",
                 "name": "Light_1",
                 "colour": "[255, 255, 255]",
-                "intensity": "0.15",
+                "intensity": "0.45",
                 "radius": "512.0",
                 "state": "on",
                 "show_radius": "False",
