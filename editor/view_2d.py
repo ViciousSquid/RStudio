@@ -39,6 +39,7 @@ class View2D(QWidget):
         self.grid_size = 16
         self.world_size = 1024
         self.snap_to_grid_enabled = True
+        self.grid_visible = True  # Grid visibility (controlled by toggle button)
 
         # Throttle tracker for 3D updates during drag
         self.last_3d_update_time = 0.0
@@ -337,6 +338,12 @@ class View2D(QWidget):
                 painter.drawEllipse(p2, 12, 12)
 
     def draw_grid(self, painter):
+        # Don't draw grid if hidden or in play mode
+        if not self.grid_visible:
+            return
+        if hasattr(self.editor, 'view_3d') and self.editor.view_3d.play_mode:
+            return
+            
         grid_color = QColor(70, 70, 70)
         thick_grid_color = QColor(90, 90, 90)
         world_origin_color = QColor(0, 255, 0)

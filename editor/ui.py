@@ -257,7 +257,7 @@ class Ui_MainWindow(object):
         tint_btn.setFixedSize(50, 50)
         tint_btn.setToolTip("Tint selected brush colour")
         tint_btn.clicked.connect(MainWindow.tint_selected_brush)
-        
+
         top_toolbar.addWidget(room_btn)
         top_toolbar.addWidget(hollow_btn)
         top_toolbar.addWidget(clone_btn) 
@@ -265,9 +265,53 @@ class Ui_MainWindow(object):
         top_toolbar.addWidget(subtract_btn)
         top_toolbar.addWidget(tint_btn)
         
+        # Add separator before grid toggle
+        separator2 = QFrame()
+        separator2.setFrameShape(QFrame.VLine)
+        separator2.setFrameShadow(QFrame.Sunken)
+        separator2.setFixedWidth(2)
+        separator2.setStyleSheet("background-color: transparent;")
+        top_toolbar.addWidget(separator2)
+        
+        # === GRID TOGGLE ===
+        grid_btn = QPushButton()
+        grid_btn.setIcon(QIcon("assets/b_grid.png"))
+        grid_btn.setIconSize(QSize(icon_size_val, icon_size_val))
+        grid_btn.setFixedSize(icon_size_val, icon_size_val)
+        grid_btn.setToolTip("Toggle 3D View Grid (G)")
+        grid_btn.setCheckable(True)
+        grid_btn.setChecked(True)  # Grid visible by default
+        grid_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #555;
+                border: 1px solid #666;
+            }
+            QPushButton:checked {
+                background-color: #F08000;
+                border: 1px solid #FF9020;
+            }
+            QPushButton:hover {
+                background-color: #6a6a6a;
+            }
+            QPushButton:checked:hover {
+                background-color: #FF9020;
+            }
+        """)
+        grid_btn.toggled.connect(MainWindow.toggle_grid)
+        top_toolbar.addWidget(grid_btn)
+        MainWindow.grid_btn = grid_btn  # Store reference
+        
+        # Add separator before play
+        separator3 = QFrame()
+        separator3.setFrameShape(QFrame.VLine)
+        separator3.setFrameShadow(QFrame.Sunken)
+        separator3.setFixedWidth(6)
+        separator3.setStyleSheet("background-color: #555;")
+        top_toolbar.addWidget(separator3)
+        
         play_button = QPushButton(QIcon("assets/b_test.png"),"Play")
         play_button.setIconSize(QSize(icon_size_val, icon_size_val))
-        play_button.setFixedSize(icon_size_val + 80, icon_size_val)  # Wider for text
+        play_button.setFixedSize(icon_size_val + 180, icon_size_val)
         play_button.setToolTip("Drop in and play (F5)")
         play_button.setShortcut("f5")
         play_button.clicked.connect(MainWindow.enter_play_mode)

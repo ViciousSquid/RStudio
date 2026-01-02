@@ -130,6 +130,7 @@ class MainWindow(QMainWindow):
         
         self.keys_pressed = set()
         self.file_path = None
+        self.grid_visible = True  # Grid visibility state (never visible in play mode)
         self.preview_timer = QTimer()
         self.preview_timer.timeout.connect(self.update_mover_preview)
         self.preview_data = {} 
@@ -1327,6 +1328,17 @@ class MainWindow(QMainWindow):
             self.set_selected_object(None)
             return
 
+        # G key toggles grid visibility (editor mode only)
+        if event.key() == Qt.Key_G:
+            new_state = not self.grid_visible
+            self.toggle_grid(new_state)
+            # Update the toolbar button state
+            if hasattr(self, 'grid_btn'):
+                self.grid_btn.blockSignals(True)
+                self.grid_btn.setChecked(new_state)
+                self.grid_btn.blockSignals(False)
+            return
+
         # Check for camera movement lesson: WASD while right-click held (editor mode only)
         if not self.camera_movement_learned and self.right_mouse_held:
             if event.key() in (Qt.Key_W, Qt.Key_A, Qt.Key_S, Qt.Key_D):
@@ -1364,6 +1376,14 @@ class MainWindow(QMainWindow):
         enabled = state == Qt.Checked
         for view in [self.view_top, self.view_side, self.view_front]:
             view.snap_to_grid_enabled = enabled
+
+    def toggle_grid(self, visible):
+        """Toggle grid visibility in 3D view only."""
+        self.grid_visible = visible
+        # Update the 3D view grid
+        if hasattr(self.view_3d, 'grid_visible'):
+            self.view_3d.grid_visible = visible
+            self.view_3d.update()
 
     def save_level_as(self):
         filePath, _ = QFileDialog.getSaveFileName(self, "Save Level As", "maps", "JSON Files (*.json)")
@@ -1489,3 +1509,4 @@ class MainWindow(QMainWindow):
             self.view_3d.logic_thread.join(timeout=1.0)
         
         super().closeEvent(event)
+
