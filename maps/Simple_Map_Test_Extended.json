@@ -430,7 +430,7 @@
         },
         {
             "pos": [
-                304.0,
+                312.0,
                 0,
                 -240.0
             ],
@@ -448,7 +448,7 @@
                 "down": "default.png"
             },
             "is_trigger": false,
-            "lock": true
+            "lock": false
         },
         {
             "pos": [
@@ -1699,54 +1699,6 @@
         },
         {
             "pos": [
-                432.0,
-                -24.0,
-                392.0
-            ],
-            "size": [
-                64.0,
-                16.0,
-                16.0
-            ],
-            "textures": {
-                "north": "default.png",
-                "south": "default.png",
-                "east": "default.png",
-                "west": "default.png",
-                "top": "default.png",
-                "down": "default.png"
-            },
-            "shader": "Glow",
-            "is_fog": false,
-            "is_trigger": false,
-            "light_direction": "west"
-        },
-        {
-            "pos": [
-                432.0,
-                -24.0,
-                88.0
-            ],
-            "size": [
-                64.0,
-                16.0,
-                16.0
-            ],
-            "textures": {
-                "north": "default.png",
-                "south": "default.png",
-                "east": "default.png",
-                "west": "default.png",
-                "top": "default.png",
-                "down": "default.png"
-            },
-            "shader": "Glow",
-            "is_fog": false,
-            "is_trigger": false,
-            "light_direction": "west"
-        },
-        {
-            "pos": [
                 32.0,
                 -152.0,
                 444.0
@@ -1787,19 +1739,22 @@
             "shader": "Water",
             "is_fog": false,
             "is_trigger": false,
-            "water_reflectivity": 0.8,
-            "water_plane": true
+            "water_reflectivity": 0.5,
+            "water_plane": true,
+            "water_opacity": 0.71,
+            "water_wave_enabled": true,
+            "water_wave_height": 0.07
         },
         {
             "pos": [
-                -384.0,
-                -24.0,
-                392.0
+                -208.0,
+                -128.0,
+                384.0
             ],
             "size": [
-                32.0,
-                16.0,
-                16.0
+                80.0,
+                128.0,
+                80.0
             ],
             "textures": {
                 "north": "default.png",
@@ -1808,11 +1763,7 @@
                 "west": "default.png",
                 "top": "default.png",
                 "down": "default.png"
-            },
-            "shader": "Glow",
-            "is_fog": false,
-            "is_trigger": false,
-            "light_direction": "east"
+            }
         }
     ],
     "things": [
@@ -1950,6 +1901,24 @@
                 "name": "Light_1",
                 "colour": "[255, 255, 255]",
                 "intensity": "0.2",
+                "radius": "512.0",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
+        },
+        {
+            "type": "light",
+            "pos": [
+                -144.0,
+                40,
+                496.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_3",
+                "colour": "[255, 255, 255]",
+                "intensity": "1.0",
                 "radius": "512.0",
                 "state": "on",
                 "show_radius": "False",
