@@ -677,6 +677,10 @@ class LogicThread(threading.Thread):
                     thing.properties['collected'] = False
                     self.collected_pickups.discard(pickup_id)
     
+    def has_key(self, key_name: str) -> bool:
+        """Check if the player has a specific key."""
+        return key_name in self.collected_keys
+
     def use_key(self, key_name: str) -> bool:
         """
         Use (consume) a key from the player's inventory.
