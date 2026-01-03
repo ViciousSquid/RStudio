@@ -91,6 +91,9 @@ class LogicThread(threading.Thread):
         self.collected_pickups: set = set()
         self.collected_keys: set = set()
         
+        # Respawn timers: {pickup_id: time_remaining}
+        self.respawn_timers: Dict[int, float] = {}
+        
         # Speaker state
         self.active_speakers: set = set()
         
@@ -99,6 +102,9 @@ class LogicThread(threading.Thread):
         
         # Door Animation State
         self.door_states: Dict[int, Dict[str, Any]] = {}
+        
+        # Interaction State
+        self.current_hud_message = ""
         
         # Performance Monitoring
         self.actual_tps = 0.0
@@ -131,21 +137,25 @@ class LogicThread(threading.Thread):
             # Reset pickup state
             self.collected_pickups.clear()
             self.collected_keys.clear()
+            self.respawn_timers.clear()
             for thing in self.things:
                 if Pickup and isinstance(thing, Pickup):
                     thing.properties['collected'] = False
             # Reset speaker state
             self.active_speakers.clear()
             self.hurt_trigger_timers.clear()
+            self.current_hud_message = ""
         else:
             self.player_in_triggers.clear()
             self.fired_once_triggers.clear()
             self.collected_pickups.clear()
             self.collected_keys.clear()
+            self.respawn_timers.clear()
             self.active_speakers.clear()
             self.hurt_trigger_timers.clear()
             self._reset_movers()
             self._reset_doors()
+            self.current_hud_message = ""
     
     def set_editor_camera(self, pos: glm.vec3, yaw: float, pitch: float, fov: float):
         """Set the editor camera state (thread-safe initialization)."""
@@ -331,14 +341,160 @@ class LogicThread(threading.Thread):
         # Handle triggers
         self._handle_triggers(use_key)
         
-        # Handle pickups
+        # Handle interactions (Doors & Pickups prompts)
+        self._handle_interactions(use_key)
+        
+        # Handle pickups (actual collection)
         self._handle_pickups(use_key)
+        
+        # Handle respawning
+        self._update_respawns(delta)
         
         # Update movers
         self._update_movers(delta)
         
         # Update doors
         self._update_doors(delta)
+
+    def _handle_interactions(self, use_key_pressed: bool):
+        """
+        Check for interactive objects (Doors, Pickups) in front of the player 
+        and handle 'E' interaction or display HUD messages.
+        """
+        self.current_hud_message = ""
+        
+        # --- 1. DOOR INTERACTION (Raycast & Touch) ---
+        found_door_idx = -1
+        found_door_brush = None
+        
+        reach_distance = 80.0
+        step_size = 16.0
+        
+        px, py, pz = self.player.pos
+        angle = self.player.angle
+        vx = math.cos(angle)
+        vz = math.sin(angle)
+        
+        # Raycast step
+        for dist in np.arange(step_size, reach_distance + step_size, step_size):
+            check_x = px + vx * dist
+            check_z = pz + vz * dist
+            check_y = py 
+            
+            for i, brush in enumerate(self.brushes):
+                if not brush.get('is_door'): continue
+                
+                pos = brush['pos']
+                size = brush['size']
+                
+                if (pos[0] - size[0]/2 <= check_x <= pos[0] + size[0]/2 and
+                    pos[2] - size[2]/2 <= check_z <= pos[2] + size[2]/2 and
+                    pos[1] - size[1]/2 <= check_y <= pos[1] + size[1]/2):
+                    
+                    found_door_idx = i
+                    found_door_brush = brush
+                    break 
+            
+            if found_door_brush:
+                break 
+
+        # Touch check (fallback)
+        if not found_door_brush:
+            touch_radius = 24.0 
+            for i, brush in enumerate(self.brushes):
+                if not brush.get('is_door'): continue
+                pos = brush['pos']
+                size = brush['size']
+                
+                door_min_x = pos[0] - size[0]/2
+                door_max_x = pos[0] + size[0]/2
+                door_min_z = pos[2] - size[2]/2
+                door_max_z = pos[2] + size[2]/2
+                door_min_y = pos[1] - size[1]/2
+                door_max_y = pos[1] + size[1]/2
+
+                player_min_x = px - touch_radius
+                player_max_x = px + touch_radius
+                player_min_z = pz - touch_radius
+                player_max_z = pz + touch_radius
+                
+                overlap_x = (player_min_x < door_max_x) and (player_max_x > door_min_x)
+                overlap_z = (player_min_z < door_max_z) and (player_max_z > door_min_z)
+                overlap_y = (py > door_min_y) and (py < door_max_y)
+
+                if overlap_x and overlap_z and overlap_y:
+                    found_door_idx = i
+                    found_door_brush = brush
+                    break
+
+        if found_door_brush:
+            # Door Logic
+            door_state = self.door_states.get(found_door_idx, {}).get('state', 'closed')
+            if door_state != 'closed': return
+            if found_door_brush.get('door_auto_open', False): return
+            
+            is_locked = found_door_brush.get('door_locked', False)
+            needs_key = found_door_brush.get('door_needs_key', False)
+            key_name = found_door_brush.get('door_key_name', '')
+            
+            if is_locked:
+                self.current_hud_message = "This door is locked remotely"
+            elif needs_key:
+                has_key = self.has_key(key_name)
+                pretty_key_name = key_name.replace('_', ' ').title() if key_name else "Key"
+                if has_key:
+                    self.current_hud_message = f"Press E to unlock ({pretty_key_name})"
+                    if use_key_pressed: self._trigger_door_open(found_door_idx)
+                else:
+                    self.current_hud_message = f"You need the {pretty_key_name}"
+            else:
+                self.current_hud_message = "Press E to open"
+                if use_key_pressed: self._trigger_door_open(found_door_idx)
+            
+            # Return early if door is blocking interaction
+            return
+
+        # --- 2. PICKUP INTERACTION (Look-At) ---
+        if Pickup:
+            best_pickup = None
+            closest_dist = float('inf')
+            
+            p_pos = glm.vec3(px, py, pz)
+            # Player view direction (horizontal)
+            p_dir = glm.vec3(vx, 0, vz) 
+            
+            for i, thing in enumerate(self.things):
+                if not isinstance(thing, Pickup): continue
+                if thing.properties.get('collected', False): continue
+                if thing.properties.get('activation') != 'use': continue
+                
+                t_pos = glm.vec3(thing.pos)
+                dist = glm.distance(p_pos, t_pos)
+                
+                # Check distance (must be close)
+                if dist < 64.0:
+                    # Check angle (must be looking at it)
+                    to_thing = glm.normalize(t_pos - p_pos)
+                    # Dot product > 0.8 is roughly within 35 degrees of center
+                    if glm.dot(p_dir, to_thing) > 0.8:
+                        if dist < closest_dist:
+                            closest_dist = dist
+                            best_pickup = thing
+            
+            if best_pickup:
+                item_name = best_pickup.properties.get('item_type', 'Item').replace('_', ' ').title()
+                if item_name == "Key":
+                    key_name = best_pickup.properties.get('key_name', 'Key').replace('_', ' ').title()
+                    self.current_hud_message = f"[E] Pick up {key_name}"
+                else:
+                    self.current_hud_message = f"[E] Pick up {item_name}"
+
+    def _trigger_door_open(self, door_idx: int):
+        """Helper to force a door to start opening."""
+        if door_idx in self.door_states:
+            state = self.door_states[door_idx]
+            if state['state'] == 'closed':
+                state['state'] = 'opening'
 
     def _handle_triggers(self, use_key_pressed: bool):
         """Check and activate triggers."""
@@ -413,6 +569,16 @@ class LogicThread(threading.Thread):
                 if brush.get('is_mover'):
                     brush['start_on'] = not brush.get('start_on', False)
                 elif brush.get('is_door'):
+                    # Check if door requires a key
+                    required_key = brush.get('required_key', '')
+                    if required_key:
+                        # Door needs a key - check if player has it
+                        if not self.has_key(required_key):
+                            # Player doesn't have the key - door stays closed
+                            return
+                        # Player has the key - consume it and open door
+                        self.use_key(required_key)
+                    
                     idx = self.brushes.index(brush)
                     if idx in self.door_states:
                         state = self.door_states[idx]
@@ -472,9 +638,54 @@ class LogicThread(threading.Thread):
             key_name = pickup.properties.get('key_name', '')
             if key_name:
                 self.collected_keys.add(key_name)
+        elif item_type == 'ammo':
+            # Future: track ammo
+            pass
+        elif item_type == 'armour':
+            # Future: track armor
+            pass
         
         pickup.properties['collected'] = True
         self.collected_pickups.add(pickup_id)
+        
+        # Check if pickup should respawn
+        if pickup.properties.get('respawns', False):
+            respawn_time = pickup.properties.get('respawn_time', 20.0)
+            self.respawn_timers[pickup_id] = respawn_time
+    
+    def _update_respawns(self, delta: float):
+        """Update respawn timers and respawn pickups when ready."""
+        if not Pickup:
+            return
+        
+        # List to track pickups that should respawn this tick
+        to_respawn = []
+        
+        for pickup_id, time_remaining in list(self.respawn_timers.items()):
+            self.respawn_timers[pickup_id] = time_remaining - delta
+            if self.respawn_timers[pickup_id] <= 0:
+                to_respawn.append(pickup_id)
+        
+        # Respawn pickups
+        for pickup_id in to_respawn:
+            del self.respawn_timers[pickup_id]
+            
+            # Find the pickup by index
+            if pickup_id < len(self.things):
+                thing = self.things[pickup_id]
+                if isinstance(thing, Pickup):
+                    thing.properties['collected'] = False
+                    self.collected_pickups.discard(pickup_id)
+    
+    def use_key(self, key_name: str) -> bool:
+        """
+        Use (consume) a key from the player's inventory.
+        Returns True if the key was used, False if player doesn't have it.
+        """
+        if key_name in self.collected_keys:
+            self.collected_keys.remove(key_name)
+            return True
+        return False
 
     def _update_movers(self, delta: float):
         """Update all active movers."""
@@ -573,47 +784,6 @@ class LogicThread(threading.Thread):
 
     # =====================================================
     # FRUSTUM CULLING
-    # =====================================================
-    
-    def _extract_frustum_planes(self, proj_view: glm.mat4):
-        """Extract 6 frustum planes from projection-view matrix."""
-        m = proj_view
-        planes = []
-        
-        # Left, Right, Bottom, Top, Near, Far
-        planes.append(self._normalize_plane(m[0][3] + m[0][0], m[1][3] + m[1][0], m[2][3] + m[2][0], m[3][3] + m[3][0]))
-        planes.append(self._normalize_plane(m[0][3] - m[0][0], m[1][3] - m[1][0], m[2][3] - m[2][0], m[3][3] - m[3][0]))
-        planes.append(self._normalize_plane(m[0][3] + m[0][1], m[1][3] + m[1][1], m[2][3] + m[2][1], m[3][3] + m[3][1]))
-        planes.append(self._normalize_plane(m[0][3] - m[0][1], m[1][3] - m[1][1], m[2][3] - m[2][1], m[3][3] - m[3][1]))
-        planes.append(self._normalize_plane(m[0][3] + m[0][2], m[1][3] + m[1][2], m[2][3] + m[2][2], m[3][3] + m[3][2]))
-        planes.append(self._normalize_plane(m[0][3] - m[0][2], m[1][3] - m[1][2], m[2][3] - m[2][2], m[3][3] - m[3][2]))
-        
-        return planes
-
-    def _normalize_plane(self, a, b, c, d):
-        length = math.sqrt(a*a + b*b + c*c)
-        if length < 1e-8:
-            return (0, 0, 0, 0)
-        return (a/length, b/length, c/length, d/length)
-
-    def _aabb_in_frustum(self, planes, center, half_size) -> bool:
-        """Test if AABB is visible in frustum."""
-        for plane in planes:
-            a, b, c, d = plane
-            px = center[0] + half_size[0] if a >= 0 else center[0] - half_size[0]
-            py = center[1] + half_size[1] if b >= 0 else center[1] - half_size[1]
-            pz = center[2] + half_size[2] if c >= 0 else center[2] - half_size[2]
-            
-            if a*px + b*py + c*pz + d < 0:
-                return False
-        return True
-    
-    def has_key(self, key_name: str) -> bool:
-        """Check if player has a key."""
-        return key_name in self.collected_keys
-
-    # =====================================================
-    # FRUSTUM CULLING METHODS
     # =====================================================
     
     def _extract_frustum_planes(self, proj_view: glm.mat4):
@@ -732,14 +902,16 @@ class LogicThread(threading.Thread):
         # Key inventory (for HUD display)
         write_state.collected_keys = set(self.collected_keys)
 
+        # Pass the HUD message to the render state
+        write_state.hud_message = self.current_hud_message
+
         # --- Ensure JSON-serializable light data ---
         # Convert any glm vectors to lists in things before storing in render state
         visible_things = []
         for i, thing in enumerate(self.things):
             if self.play_mode and Pickup and isinstance(thing, Pickup) and i in self.collected_pickups:
-                # Keep keys visible even when collected (for visual feedback)
-                if not thing.is_key():
-                    continue
+                # Do not render collected keys
+                continue
             
             # Convert glm vectors to lists if they exist (for JSON compatibility)
             if Light and isinstance(thing, Light):

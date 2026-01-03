@@ -221,20 +221,45 @@ layout (location = 2) in vec2 aTexCoords;
 
 out vec3 FragPos;
 out vec2 TexCoords;
+out vec3 Normal; // Pass normal to frag for recalculation if needed
 
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
 uniform float time;
 
+// New uniforms for displacement
+uniform int useWaveDisplacement;
+uniform float waveStrength; // Controls the height/amplitude
+
 void main()
 {
-    // Vertex displacement removed (Flat surface)
     vec3 pos = aPos;
     
+    // Sum of Sines Displacement
+    if (useWaveDisplacement == 1) {
+        float speed = time * 1.5;
+        
+        // Wave 1 (Large, slow)
+        float y = sin(pos.x * 0.5 + speed) * cos(pos.z * 0.5 + speed) * waveStrength;
+        
+        // Wave 2 (Smaller, diagonal)
+        y += sin(pos.x * 1.1 + pos.z * 0.4 + speed * 1.2) * (waveStrength * 0.5);
+        
+        // Wave 3 (Detail irregularity)
+        y += cos(pos.x * 2.1 - speed) * (waveStrength * 0.2);
+        
+        pos.y += y;
+    }
+    
     FragPos = vec3(model * vec4(pos, 1.0));
-    // Scale UVs so texture repeats
+    
+    // Scale UVs (4.0) gives good density for the normal map provided
     TexCoords = aTexCoords * 4.0; 
+    
+    // Recalculate normal based on model rotation
+    Normal = mat3(transpose(inverse(model))) * aNormal;
+    
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }""",
 
@@ -243,6 +268,7 @@ out vec4 FragColor;
 
 in vec3 FragPos;
 in vec2 TexCoords;
+in vec3 Normal;
 
 struct Light {
     vec3 position;
@@ -264,66 +290,76 @@ uniform vec3 waterTint;
 
 void main()
 {
-    // 1. Animated Normal Mapping
-    vec2 speed = vec2(0.05, 0.03);
+    // 1. Animated Normal Mapping (Counter-scrolling layers)
+    vec2 speed = vec2(0.04, 0.02);
     
-    // Layer 1
+    // Layer 1: Moves diagonally
     vec2 coord1 = TexCoords + time * speed;
     vec3 n1 = texture(normalMap, coord1).rgb;
     
-    // Layer 2
-    vec2 coord2 = (TexCoords * 1.61) + (time * vec2(-speed.x, speed.y) * 0.7);
+    // Layer 2: Moves opposite direction, slightly larger scale
+    vec2 coord2 = (TexCoords * 0.7) - (time * vec2(speed.y, speed.x));
     vec3 n2 = texture(normalMap, coord2).rgb;
     
+    // Blend normals for chaotic surface detail
     vec3 norm = normalize((n1 + n2) - 1.0);
 
-    // 2. Base Color
-    vec3 baseColor = waterTint;
-
-    // 3. Lighting
+    // 2. Base Color & Environment
     vec3 viewDir = normalize(viewPos - FragPos);
     
-    vec3 diffuseAccum = vec3(0.0);
-    vec3 specularAccum = vec3(0.0);
+    // Fresnel Effect: Stronger at grazing angles (Schlick's approximation)
+    // R0 is the reflection coefficient at 0 degrees.
+    float R0 = 0.02; 
+    float fresnel = R0 + (1.0 - R0) * pow(1.0 - max(dot(viewDir, vec3(0.0, 1.0, 0.0)), 0.0), 5.0);
+    fresnel = clamp(fresnel * waterReflectivity * 2.5, 0.0, 1.0);
 
-    // Calculate dynamic shininess:
-    // At 0.0 (Lowest): 100.0 (Sharp, normal wet look)
-    // At 1.0 (Highest): 2.0 (Massive, broad highlight)
-    float shininess = mix(100.0, 2.0, waterReflectivity);
+    // 3. Lighting (Blinn-Phong for sharper, wetter highlights)
+    vec3 lightAccumulation = vec3(0.0);
+    vec3 specularAccum = vec3(0.0);
+    
+    // Dynamic Shininess: Wet surfaces have high shininess (tight highlights)
+    float shininess = 128.0; 
 
     for(int i = 0; i < active_lights; i++) {
-        vec3 lightDir = normalize(lights[i].position - FragPos);
-        float diff = max(dot(norm, lightDir), 0.0);
-        
-        vec3 halfwayDir = normalize(lightDir + viewDir);
-        
-        float spec = pow(max(dot(norm, halfwayDir), 0.0), shininess);
-        
-        vec3 lightColor = lights[i].color * lights[i].intensity;
-        
-        diffuseAccum += (diff * lightColor);
-        specularAccum += (spec * lightColor);
+        float distance = length(lights[i].position - FragPos);
+        if(distance < lights[i].radius) {
+            vec3 lightDir = normalize(lights[i].position - FragPos);
+            
+            // Attenuation
+            float att = 1.0 - smoothstep(0.0, lights[i].radius, distance);
+            vec3 lightColor = lights[i].color * lights[i].intensity * att;
+
+            // Diffuse
+            float diff = max(dot(norm, lightDir), 0.0);
+            lightAccumulation += diff * lightColor;
+            
+            // Specular (Blinn-Phong)
+            vec3 halfwayDir = normalize(lightDir + viewDir);
+            float spec = pow(max(dot(norm, halfwayDir), 0.0), shininess);
+            specularAccum += spec * lightColor;
+        }
     }
     
-    vec3 litSurface = baseColor * diffuseAccum;
-
-    // 4. Fresnel & Environment
-    vec3 envColor = vec3(0.7, 0.85, 1.0); 
+    // Ambient component (Water isn't pitch black in shadow)
+    vec3 ambient = vec3(0.15) * waterTint;
     
-    float fresnel = pow(1.0 - max(dot(viewDir, vec3(0.0, 1.0, 0.0)), 0.0), 3.0);
+    // 4. Composition
+    // Mix the water tint with the light calculation
+    vec3 diffuseColor = waterTint * (ambient + lightAccumulation);
     
-    // Mix diffuse base with environment color
-    vec3 finalColor = mix(litSurface, envColor, fresnel * waterReflectivity);
-
-    // 5. Add Specular Highlights
-    // Intensity Boost:
-    // At 0.0 (Lowest): 0.5 (Normal intensity)
-    // At 1.0 (Highest): 8.0 (Blindingly bright/Exaggerated)
-    float specularIntensity = mix(0.5, 8.0, waterReflectivity);
+    // Fake Sky Reflection Color
+    vec3 skyColor = vec3(0.65, 0.80, 0.95);
     
-    finalColor += specularAccum * specularIntensity;
+    // Mix diffuse water with sky reflection based on Fresnel
+    vec3 finalColor = mix(diffuseColor, skyColor, fresnel);
+    
+    // Add Specular Highlights on top (Sun glitter)
+    // Multiplied by reflectivity to allow dull water
+    finalColor += specularAccum * (waterReflectivity * 2.0);
 
-    float alpha = clamp(waterOpacity + (fresnel * 0.5), 0.0, 1.0);
+    // 5. Alpha Calculation
+    // Water is more opaque at grazing angles (fresnel) and based on base opacity
+    float alpha = clamp(waterOpacity + (fresnel * 0.6), 0.0, 1.0);
 
     FragColor = vec4(finalColor, alpha);
 }""",
@@ -359,6 +395,9 @@ uniform vec3 viewPos;
 uniform vec3 waterColor; // Acts as the base glass tint
 uniform float distortionStrength;
 uniform float causticStrength;
+uniform float glassOpacity;      // Base opacity (0=transparent, 1=opaque)
+uniform float refractionIndex;   // Index of refraction (1.0-2.5)
+uniform float roughness;          // Surface roughness (0=clear, 1=frosted)
 
 // --- NOISE & PATTERN FUNCTIONS ---
 float random(in vec2 _st) {
@@ -400,48 +439,90 @@ void main() {
     vec3 baseNormal = normalize(Normal);
     vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
 
+    // --- USE WORLD-SPACE COORDINATES FOR VISIBLE SURFACE TEXTURE ---
+    // Using FragPos makes the texture stay fixed on the surface (visible!)
+    vec2 surfaceUV = FragPos.xz * 0.5 + FragPos.xy * 0.3; // Combine XZ and XY planes
+    
     // --- REFRACTION ---
-    // Distort UVs based on view angle and normal
-    vec3 refractDir = refract(-viewDir, baseNormal, 0.9);
-    vec2 refractUV = TexCoords + refractDir.xy * distortionStrength * 0.02;
+    float iorRatio = 1.0 / max(refractionIndex, 1.0);
+    vec3 refractDir = refract(-viewDir, baseNormal, iorRatio);
+    // Use world-space position for distortion calculation
+    vec2 refractUV = surfaceUV + refractDir.xy * distortionStrength * 0.2;
 
-    // --- STATIC SURFACE BUMP MAPPING ---
-    float surfaceHeight = pattern(refractUV * 2.0);
-    float epsilon = 0.01;
-    float hA = pattern((refractUV + vec2(epsilon, 0)) * 2.0);
-    float hB = pattern((refractUV + vec2(0, epsilon)) * 2.0);
+    // --- SURFACE BUMP MAPPING ---
+    float bumpScale = 1.5 + roughness * 8.0;
+    float surfaceHeight = pattern(refractUV * bumpScale);
+    float epsilon = 0.015;
+    float hA = pattern((refractUV + vec2(epsilon, 0)) * bumpScale);
+    float hB = pattern((refractUV + vec2(0, epsilon)) * bumpScale);
 
+    float distortMultiplier = (distortionStrength * 4.0) + roughness * 2.0;
     vec3 perturbedNormal = normalize(vec3(
-        (surfaceHeight - hA) * distortionStrength,
-        1.0 / max(distortionStrength * 10.0, 0.1),
-        (surfaceHeight - hB) * distortionStrength
+        (surfaceHeight - hA) * distortMultiplier,
+        1.0 / max(distortMultiplier * 3.0, 0.1),
+        (surfaceHeight - hB) * distortMultiplier
     ));
     
-    // Mix the geometric normal with the noise normal
-    vec3 finalNormal = normalize(baseNormal + perturbedNormal * 0.1);
+    // Strong normal mixing for visible surface detail
+    float normalMix = 0.5 + roughness * 0.4 + distortionStrength * 0.3;
+    vec3 finalNormal = normalize(baseNormal + perturbedNormal * normalMix);
 
-    // --- SHARP FRESNEL ---
-    // Powers higher than 3.0 result in very sharp edges (glass look)
-    float fresnel = pow(1.0 - max(dot(viewDir, finalNormal), 0.0), 5.0);
+    // --- VISIBLE SURFACE TEXTURE PATTERN ---
+    // Add subtle surface variation that's always visible
+    float surfacePattern = pattern(surfaceUV * 2.0);
+    float detailPattern = pattern(surfaceUV * 8.0) * 0.3;
+    float combinedPattern = surfacePattern * 0.7 + detailPattern;
+    
+    // --- FRESNEL EFFECT (Much stronger) ---
+    float fresnelPower = mix(1.5, 10.0, causticStrength); // Wider range
+    float fresnel = pow(1.0 - max(dot(viewDir, finalNormal), 0.0), fresnelPower);
+    
+    // Add pattern-based fresnel variation for surface detail
+    float fresnelWithPattern = fresnel * (0.8 + combinedPattern * 0.4);
 
-    // --- SPECULAR ---
+    // --- SPECULAR HIGHLIGHTS (Much more prominent) ---
     vec3 reflectDir = reflect(-lightDir, finalNormal);
-    // 512.0 shininess for very tight, wet/glassy highlights
-    float spec = pow(max(dot(viewDir, reflectDir), 0.0), 512.0);
-    vec3 specular = vec3(1.0) * spec * causticStrength;
+    float shininess = mix(256.0, 16.0, roughness);
+    float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+    
+    // Add multiple specular lobes for more glass-like appearance
+    vec3 reflectDir2 = reflect(-viewDir, finalNormal);
+    float envSpec = pow(max(dot(reflectDir2, vec3(0, 1, 0)), 0.0), 32.0);
+    
+    vec3 specular = vec3(1.0) * (spec * causticStrength * 4.0 + envSpec * 0.5);
 
-    // --- COMPOSITION ---
+    // --- COMPOSITION WITH VISIBLE SURFACE DETAILS ---
     vec3 backgroundColor = waterColor;
-    vec3 reflectionColor = vec3(0.9, 0.95, 1.0); // Sky-ish reflection
     
-    // Mix base tint with reflection based on Fresnel angle
-    vec3 finalRGB = mix(backgroundColor, reflectionColor, fresnel);
-    finalRGB += specular * 2.0;
+    // Add surface color variation based on pattern
+    vec3 surfaceColor = backgroundColor * (0.85 + combinedPattern * 0.3);
+    
+    // Bright reflection color for sky/environment
+    vec3 reflectionColor = vec3(0.95, 0.98, 1.0) + vec3(combinedPattern * 0.1);
+    
+    // Mix with strong fresnel influence and pattern
+    vec3 baseMix = mix(surfaceColor, reflectionColor, fresnelWithPattern * min(causticStrength * 2.5, 1.0));
+    
+    // Add subtle color shifts at different view angles
+    vec3 angleColor = vec3(0.9, 0.95, 1.0) * fresnel * 0.2;
+    
+    vec3 finalRGB = baseMix + angleColor;
+    
+    // Add prominent specular highlights
+    finalRGB += specular * (2.5 - roughness * 1.2);
+    
+    // Add slight surface scattering for depth
+    float scattering = combinedPattern * 0.15 * (1.0 - glassOpacity);
+    finalRGB += vec3(scattering) * waterColor;
 
-    // Calculate Alpha: clear in center, opaque at edges
-    float alpha = 0.05 + fresnel * 0.85;
+    // --- ALPHA CALCULATION ---
+    // Make opacity more visible at all ranges
+    float fresnelContribution = fresnelWithPattern * (0.2 + roughness * 0.1) * (1.0 - glassOpacity);
+    float roughnessOpacity = roughness * 0.25;
+    float patternOpacity = combinedPattern * 0.08; // Surface pattern adds slight opacity
+    float alpha = clamp(glassOpacity + fresnelContribution + roughnessOpacity + patternOpacity, 0.05, 1.0);
     
-    FragColor = vec4(finalRGB, clamp(alpha, 0.0, 1.0));
+    FragColor = vec4(finalRGB, alpha);
 }""",
     
     'shadow_volume.vert': """#version 330 core

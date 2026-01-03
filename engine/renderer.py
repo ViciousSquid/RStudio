@@ -165,7 +165,8 @@ class Renderer:
                                 ('sprite', ('sprite.vert', 'sprite.frag')),
                                 ('shadow_volume', ('shadow_volume.vert', 'shadow_volume.frag')),
                                 ('fog', ('fog.vert', 'fog.frag')),
-                                ('water', ('water.vert', 'water.frag'))]:
+                                ('water', ('water.vert', 'water.frag')),
+                                ('glass', ('glass.vert', 'glass.frag'))]:
                 shader = self.shader_loader.compile_shader_program(*files)
                 self.shaders[name] = shader
                 self.uniforms[name] = UniformCache(shader)
@@ -180,9 +181,13 @@ class Renderer:
             self.uniforms['fog'].preload(['viewPos', 'time', 'noiseTexture', 'density', 'fogColor', 'noiseScale', 'object_color', 'alpha'])
             
             self._preload_lit_uniforms('water')
-            # Updated preloads for Water to include new uniforms for Opacity and Reflectivity
-            self.uniforms['water'].preload(['time', 'viewPos', 'normalMap', 'waterOpacity', 'waterReflectivity', 'waterTint'])
+            self.uniforms['water'].preload(['time', 'viewPos', 'normalMap', 'waterOpacity', 'waterReflectivity', 'waterTint', 'useWaveDisplacement', 'waveStrength'])
             self.water_normal_id = self.load_texture('water_normal.png', 'textures')
+            
+            self.uniforms['glass'].preload(['projection', 'view', 'model', 'viewPos', 'waterColor', 
+                                           'distortionStrength', 'causticStrength', 'glassOpacity', 
+                                           'refractionIndex', 'roughness'])
+            
             print(f"Shaders loaded from: {self.shader_loader.shader_dir}")
         except Exception as e:
             print(f"FATAL: Shader Error: {e}")
@@ -194,6 +199,7 @@ class Renderer:
         self.update_grid_buffers(initial_world_size, initial_grid_size)
         self.noise_texture_id = self._load_3d_texture('assets/noise_3d.bin')
         self.sprite_textures = {}
+        self.instance_textures = {}  # Per-instance texture overrides (thing id -> tex_id)
         self.load_texture('default.png', 'textures')
         self.load_texture('caulk', 'textures')
         self._proj_ptr = None
@@ -225,6 +231,10 @@ class Renderer:
         self.vaos['grid'] = vao
     
     def set_sprite_textures(self, textures): self.sprite_textures = textures
+    
+    def set_instance_textures(self, textures): 
+        """Set per-instance texture overrides (dict mapping thing id -> texture_id)."""
+        self.instance_textures = textures
 
     def load_texture(self, texture_name, subfolder):
         tex_cache_name = os.path.join(subfolder, texture_name)
@@ -316,9 +326,9 @@ class Renderer:
         elif current_mode == RENDER_MODE_VERTEX: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_POINT); gl.glPointSize(4.0)
         else: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
 
-        self.draw_grid(projection, view, self.grid_indices_count, config.get('play_mode', False))
+        self.draw_grid(projection, view, self.grid_indices_count, config.get('play_mode', False), config.get('grid_visible', True))
         
-        opaque_brushes, transparent_brushes, sprites, fog_volumes, water_brushes = self._sort_objects(brushes, things, config)
+        opaque_brushes, transparent_brushes, sprites, fog_volumes, water_brushes, glass_brushes = self._sort_objects(brushes, things, config)
         lights = [t for t in things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
 
         gl.glDepthMask(gl.GL_TRUE)
@@ -334,17 +344,19 @@ class Renderer:
 
         if transparent_brushes: transparent_brushes.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
         if water_brushes: water_brushes.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
+        if glass_brushes: glass_brushes.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
         if sprites: sprites.sort(key=lambda s: -self._distance_sq(s.pos, camera_pos))
             
         gl.glEnable(gl.GL_BLEND)
         gl.glDepthMask(gl.GL_FALSE)
         
-        self.draw_sprites(projection, view, sprites, self.sprite_textures)
+        self.draw_sprites(projection, view, sprites, self.sprite_textures, self.instance_textures)
         if current_mode == RENDER_MODE_UNLIT: self.draw_textured_brushes(projection, view, camera_pos, transparent_brushes, lights, config)
         else: self.draw_lit_brushes(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True)
             
         if current_mode == RENDER_MODE_LIT:
             self.draw_water_brushes(projection, view, camera_pos, water_brushes, lights, config)
+            self.draw_glass_brushes(projection, view, camera_pos, glass_brushes, lights, config)
             self.draw_fog_volumes(projection, view, camera_pos, fog_volumes, lights, config)
 
         gl.glDepthMask(gl.GL_TRUE)
@@ -557,17 +569,36 @@ class Renderer:
         gl.glDisable(gl.GL_CULL_FACE); gl.glBindVertexArray(0); gl.glActiveTexture(gl.GL_TEXTURE0)
 
     def _sort_objects(self, brushes, things, config):
-        opaque, transparent, sprites, fog, water = [], [], [], [], []
+        opaque, transparent, sprites, fog, water, glass = [], [], [], [], [], []
         is_play, show_sprites = config.get('play_mode', False), config.get('show_sprites_in_play_mode', False)
         for brush in brushes:
             if brush.get('hidden'): continue
             if brush.get('is_water', False) or brush.get('shader') == 'Water' or any('water' in (t or '').lower() for t in brush.get('textures', {}).values()): water.append(brush)
             elif brush.get('is_fog') or brush.get('shader') == 'Fog': fog.append(brush)
+            elif brush.get('shader') == 'Glass': glass.append(brush)
             elif brush.get('is_trigger'): 
                 if not is_play: transparent.append(brush)
             else: opaque.append(brush)
-        if not is_play or show_sprites: sprites = [t for t in things if isinstance(t, Thing)]
-        return opaque, transparent, sprites, fog, water
+        
+        # In play mode: always show Pickups (so player can collect them)
+        # Other sprites (Light, PlayerStart, etc.) only show if show_sprites is enabled
+        if not is_play:
+            # Editor mode: show all sprites
+            sprites = [t for t in things if isinstance(t, Thing)]
+        else:
+            # Play mode: always show Pickups, optionally show other sprites
+            for t in things:
+                if isinstance(t, Thing):
+                    # Import Pickup here to check type
+                    from editor.things import Pickup
+                    if isinstance(t, Pickup):
+                        # Always show pickups in play mode (unless collected - handled by logic thread)
+                        sprites.append(t)
+                    elif show_sprites:
+                        # Other sprites only if debug enabled
+                        sprites.append(t)
+        
+        return opaque, transparent, sprites, fog, water, glass
 
     def draw_water_brushes(self, projection, view, camera_pos, brushes, lights, config):
         if not brushes: return
@@ -586,6 +617,9 @@ class Renderer:
         reflectivity_loc = uniforms['waterReflectivity']
         tint_loc, model_loc = uniforms['waterTint'], uniforms['model']
         
+        wave_enable_loc = uniforms['useWaveDisplacement']
+        wave_str_loc = uniforms['waveStrength']
+        
         gl.glBindVertexArray(self.vaos['cube'])
         gl.glEnable(gl.GL_BLEND); gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         
@@ -597,21 +631,76 @@ class Renderer:
             gl.glUniform1f(reflectivity_loc, brush.get('water_reflectivity', 0.5))
             gl.glUniform3fv(tint_loc, 1, brush.get('water_tint', [0.0, 0.4, 0.6]))
             
+            # Default to False (0) and 0.5 strength
+            gl.glUniform1i(wave_enable_loc, int(brush.get('water_wave_enabled', False)))
+            gl.glUniform1f(wave_str_loc, brush.get('water_wave_height', 0.5))
+            
             if brush.get('water_plane', False):
-                # Draw ONLY the top face (indices 30-36)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
             else:
-                # Draw everything EXCEPT the bottom face (indices 24-30)
-                # Draw sides (0-24)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
-                # Draw top (30-36)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
                 
             self.render_stats.draw_calls += 1
         gl.glBindVertexArray(0)
 
-    def draw_grid(self, projection, view, grid_indices_count, play_mode=False):
-        if not self.vaos['grid'] or play_mode or 'simple' not in self.shaders: return
+    def draw_glass_brushes(self, projection, view, camera_pos, brushes, lights, config):
+        """Render brushes with the glass shader effect."""
+        if not brushes or 'glass' not in self.shaders: return
+        visible = self._cull_brushes(projection, view, camera_pos, brushes)
+        if not visible: return
+        
+        shader, uniforms = self.shaders['glass'], self.uniforms['glass']
+        gl.glUseProgram(shader)
+        
+        # Set common uniforms
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
+        gl.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
+        
+        # Get uniform locations
+        model_loc = uniforms['model']
+        water_color_loc = uniforms['waterColor']
+        distortion_loc = uniforms['distortionStrength']
+        caustic_loc = uniforms['causticStrength']
+        opacity_loc = uniforms['glassOpacity']
+        refraction_loc = uniforms['refractionIndex']
+        roughness_loc = uniforms['roughness']
+        
+        gl.glBindVertexArray(self.vaos['cube'])
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl.glEnable(gl.GL_CULL_FACE)
+        gl.glCullFace(gl.GL_BACK)
+        
+        for brush in visible:
+            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+            
+            # Read all glass properties from brush
+            glass_color = brush.get('glass_color', [0.7, 0.85, 0.95])
+            opacity = brush.get('glass_opacity', 0.3)
+            distortion = brush.get('glass_distortion', 0.5)
+            refraction = brush.get('glass_refraction', 1.5)
+            roughness = brush.get('glass_roughness', 0.0)
+            fresnel = brush.get('glass_fresnel', 0.5)
+            
+            # Set all uniforms
+            gl.glUniform3fv(water_color_loc, 1, glass_color)
+            gl.glUniform1f(distortion_loc, distortion)
+            gl.glUniform1f(caustic_loc, fresnel)
+            gl.glUniform1f(opacity_loc, opacity)
+            gl.glUniform1f(refraction_loc, refraction)
+            gl.glUniform1f(roughness_loc, roughness)
+            
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+            self.render_stats.draw_calls += 1
+        
+        gl.glDisable(gl.GL_CULL_FACE)
+        gl.glBindVertexArray(0)
+
+    def draw_grid(self, projection, view, grid_indices_count, play_mode=False, grid_visible=True):
+        if not self.vaos['grid'] or play_mode or not grid_visible or 'simple' not in self.shaders: return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
@@ -689,10 +778,53 @@ class Renderer:
         model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
         gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
         gl.glUniform3f(uniforms['color'], 1.0, 1.0, 0.0)
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE); gl.glBindVertexArray(self.vaos['cube']); gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL); gl.glBindVertexArray(0)
+        
+        # Draw only the 12 edges of the cube (no diagonals)
+        # Create edge VAO if not exists
+        if not hasattr(self, '_edge_vao') or self._edge_vao is None:
+            # 8 corners of unit cube, 12 edges as line pairs
+            edge_vertices = np.array([
+                # Bottom face edges
+                -0.5, -0.5, -0.5,  0.5, -0.5, -0.5,  # edge 1
+                 0.5, -0.5, -0.5,  0.5, -0.5,  0.5,  # edge 2
+                 0.5, -0.5,  0.5, -0.5, -0.5,  0.5,  # edge 3
+                -0.5, -0.5,  0.5, -0.5, -0.5, -0.5,  # edge 4
+                # Top face edges
+                -0.5,  0.5, -0.5,  0.5,  0.5, -0.5,  # edge 5
+                 0.5,  0.5, -0.5,  0.5,  0.5,  0.5,  # edge 6
+                 0.5,  0.5,  0.5, -0.5,  0.5,  0.5,  # edge 7
+                -0.5,  0.5,  0.5, -0.5,  0.5, -0.5,  # edge 8
+                # Vertical edges
+                -0.5, -0.5, -0.5, -0.5,  0.5, -0.5,  # edge 9
+                 0.5, -0.5, -0.5,  0.5,  0.5, -0.5,  # edge 10
+                 0.5, -0.5,  0.5,  0.5,  0.5,  0.5,  # edge 11
+                -0.5, -0.5,  0.5, -0.5,  0.5,  0.5,  # edge 12
+            ], dtype=np.float32)
+            self._edge_vao = gl.glGenVertexArrays(1)
+            gl.glBindVertexArray(self._edge_vao)
+            vbo = gl.glGenBuffers(1)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, edge_vertices.nbytes, edge_vertices, gl.GL_STATIC_DRAW)
+            gl.glEnableVertexAttribArray(0)
+            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+            gl.glBindVertexArray(0)
+        
+        gl.glLineWidth(1.0)
+        gl.glBindVertexArray(self._edge_vao)
+        gl.glDrawArrays(gl.GL_LINES, 0, 24)  # 12 edges * 2 vertices
+        gl.glBindVertexArray(0)
 
-    def draw_sprites(self, projection, view, things_to_draw, sprite_textures):
+    def draw_sprites(self, projection, view, things_to_draw, sprite_textures, instance_textures=None):
+        """
+        Draw thing sprites.
+        
+        Args:
+            projection: Projection matrix
+            view: View matrix  
+            things_to_draw: List of Thing objects to render
+            sprite_textures: Dict mapping class name -> texture ID (default textures)
+            instance_textures: Optional dict mapping thing object id -> texture ID (for per-instance sprites)
+        """
         if not things_to_draw or 'sprite' not in self.shaders: return
         shader, uniforms = self.shaders['sprite'], self.uniforms['sprite']
         gl.glUseProgram(shader)
@@ -703,7 +835,15 @@ class Renderer:
         gl.glBindVertexArray(self.vaos['sprite'])
         current_tex = None
         for thing in things_to_draw:
-            tex_id = sprite_textures.get(thing.__class__.__name__)
+            # Check for per-instance texture first
+            tex_id = None
+            if instance_textures:
+                tex_id = instance_textures.get(id(thing))
+            
+            # Fall back to class-based texture
+            if tex_id is None:
+                tex_id = sprite_textures.get(thing.__class__.__name__)
+            
             if tex_id:
                 if tex_id != current_tex: gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id); current_tex = tex_id
                 gl.glUniform3fv(pos_loc, 1, thing.pos)

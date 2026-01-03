@@ -44,6 +44,7 @@ class QtGameView(QOpenGLWidget):
         self.show_sprites_in_play_mode = False
         self.visibility_system = None
         self.show_visibility_debug = False
+        self.grid_visible = True  # Grid visibility toggle
 
         self.sysmon_expanded = False
         self.sysmon_stats = {
@@ -116,6 +117,7 @@ class QtGameView(QOpenGLWidget):
             "selected_object": None,
             "time": 0.0,
             "show_sprites_in_play_mode": False,
+            "grid_visible": True,
         }
 
         self.is_dragging_gizmo = False
@@ -190,6 +192,10 @@ class QtGameView(QOpenGLWidget):
     def preload_level_textures(self):
         if self.renderer:
             self.renderer.preload_level_textures(self.editor.state.brushes)
+
+    def update_grid(self):
+        """Signals that the grid mesh needs to be rebuilt."""
+        self.grid_dirty = True
 
     def resizeGL(self, width, height):
         super().resizeGL(width, height)
@@ -266,12 +272,16 @@ class QtGameView(QOpenGLWidget):
         self._render_config["selected_object"] = self.selected_object
         self._render_config["time"] = time.perf_counter() - self.start_time
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
+        self._render_config["grid_visible"] = getattr(self, 'grid_visible', True) and not self.play_mode
         
         # Pass unculled brushes for shadow rendering (shadows visible even when caster is off-screen)
         if render_state and hasattr(render_state, 'all_brushes'):
             self._render_config["all_brushes"] = render_state.all_brushes
         else:
             self._render_config["all_brushes"] = self.editor.state.brushes
+
+        # Update per-instance textures for things like key pickups
+        self.update_instance_textures(things_to_render)
 
         self.renderer.render_scene(
             self.projection_matrix, self.view_matrix, camera_pos,
@@ -314,6 +324,22 @@ class QtGameView(QOpenGLWidget):
                     QApplication.setOverrideCursor(Qt.BlankCursor)
             self.update()
             return
+
+        # Grid resizing (Non-play mode only)
+        if not self.play_mode:
+            if event.key() == Qt.Key_BracketLeft:
+                if hasattr(self.editor, 'set_grid_size'):
+                    new_size = max(1, self.grid_size // 2)
+                    self.editor.set_grid_size(new_size)
+                    self.editor.show_toast(f"Grid Size: {new_size}")
+                return
+            elif event.key() == Qt.Key_BracketRight:
+                if hasattr(self.editor, 'set_grid_size'):
+                    new_size = min(2048, self.grid_size * 2)
+                    self.editor.set_grid_size(new_size)
+                    self.editor.show_toast(f"Grid Size: {new_size}")
+                return
+
         if self.play_mode:
             if getattr(self, 'show_render_menu', False):
                 if event.key() == Qt.Key_1: self.current_render_mode = RENDER_MODE_LIT
@@ -346,6 +372,8 @@ class QtGameView(QOpenGLWidget):
 
     def _draw_hud(self, painter, render_state):
         if not render_state: return
+        
+        # --- Health Bar ---
         health = render_state.player_health
         max_health = render_state.player_max_health
         health_ratio = health / max_health if max_health > 0 else 0
@@ -354,162 +382,229 @@ class QtGameView(QOpenGLWidget):
         bar_height = 20
         bar_x = hud_margin
         bar_y = self.height() - hud_margin - bar_height
+        
+        # Draw Health Background
         painter.setPen(QPen(QColor(60, 60, 60), 2))
         painter.setBrush(QBrush(QColor(40, 40, 40, 200)))
         painter.drawRect(bar_x, bar_y, bar_width, bar_height)
+        
+        # Color Logic
         if health_ratio > 0.6: fill_color = QColor(50, 200, 50)
         elif health_ratio > 0.3: fill_color = QColor(255, 200, 50)
         else: fill_color = QColor(200, 50, 50)
+        
+        # Draw Health Fill
         fill_width = int(bar_width * health_ratio)
         if fill_width > 0:
             painter.setPen(Qt.NoPen)
             painter.setBrush(QBrush(fill_color))
             painter.drawRect(bar_x, bar_y, fill_width, bar_height)
+            
+        # Draw Text
         font = QFont()
         font.setPointSize(11)
         font.setBold(True)
         painter.setFont(font)
         painter.setPen(QColor(255, 255, 255))
         painter.drawText(bar_x, bar_y - 5, f"HEALTH: {health}/{max_health}")
-        painter.drawText(bar_x + bar_width + 20, bar_y + bar_height - 5, "[E] Use")
+        # REMOVED: painter.drawText(bar_x + bar_width + 20, bar_y + bar_height - 5, "[E] Use")
+
+        # --- Context Sensitive Interaction Message ---
+        if hasattr(render_state, 'hud_message') and render_state.hud_message:
+            msg = render_state.hud_message
+            
+            # Font settings for message
+            msg_font = QFont()
+            msg_font.setPointSize(14)
+            msg_font.setBold(True)
+            painter.setFont(msg_font)
+            
+            # Calculate text size to center it
+            fm = painter.fontMetrics()
+            text_width = fm.horizontalAdvance(msg) 
+            
+            cx = self.width() // 2
+            cy = self.height() // 2 + 50 # Render slightly below center crosshair
+            
+            # Draw Shadow
+            painter.setPen(QColor(0, 0, 0))
+            painter.drawText(cx - text_width//2 + 2, cy + 2, msg)
+            
+            # Draw Text
+            painter.setPen(QColor(200, 200, 200))
+            painter.drawText(cx - text_width//2, cy, msg)
+        
+        # --- Collected Keys (Clean Look) ---
+        collected_keys = getattr(render_state, 'collected_keys', set())
+        if collected_keys:
+            key_x = self.width() - hud_margin - 100
+            key_y = self.height() - hud_margin - 100
+            key_size = 75
+            key_spacing = 40
+            
+            # REMOVED: Background Rectangle logic
+            
+            # Draw each key icon directly
+            for i, key_name in enumerate(sorted(collected_keys)):
+                icon_x = key_x - i * key_spacing
+                
+                try:
+                    pixmap = Pickup.get_key_pixmap(key_name)
+                    if pixmap and not pixmap.isNull():
+                        scaled_pixmap = pixmap.scaled(key_size, key_size)
+                        painter.drawPixmap(icon_x, key_y, scaled_pixmap)
+                    else:
+                        self._draw_key_fallback(painter, key_name, icon_x, key_y, key_size)
+                except:
+                    self._draw_key_fallback(painter, key_name, icon_x, key_y, key_size)
+    
+    def _draw_key_fallback(self, painter, key_name, x, y, size):
+        """Draw a colored key icon as fallback when pixmap not available."""
+        key_colors = {
+            'blue_key': QColor(50, 100, 200),
+            'red_key': QColor(200, 50, 50),
+            'yellow_key': QColor(200, 200, 50),
+            'green_key': QColor(50, 200, 50),
+        }
+        color = key_colors.get(key_name, QColor(150, 150, 150))
+        
+        painter.setPen(QPen(color.darker(120), 2))
+        painter.setBrush(QBrush(color))
+        painter.drawRoundedRect(x, y, size, size, 4, 4)
+        
+        # Draw key symbol
+        painter.setPen(QPen(QColor(255, 255, 255), 2))
+        # Key body
+        painter.drawLine(x + 8, y + size//2, x + size - 8, y + size//2)
+        # Key head
+        painter.drawEllipse(x + 4, y + size//2 - 6, 12, 12)
+        # Key teeth
+        painter.drawLine(x + size - 10, y + size//2, x + size - 10, y + size//2 + 6)
+        painter.drawLine(x + size - 14, y + size//2, x + size - 14, y + size//2 + 4)
 
     def _draw_window_manager(self, painter):
         bg_color = QColor(20, 20, 25, 240)
         border_color = QColor(80, 80, 90)
         header_color = QColor(66, 95, 93)
         text_color = QColor(220, 220, 220)
+        graph_bg_color = QColor(10, 10, 15, 200)
         
-        # Increased height to accommodate graph
-        target_height = 280 if self.sysmon_expanded else 160
+        # Target height approx 210px when expanded
+        target_height = 210 if self.sysmon_expanded else 30
+        
         rect = QRect(self.debug_window_rect.x(), self.debug_window_rect.y(), self.debug_window_rect.width(), target_height)
         
+        # Draw Window Background
         painter.setPen(QPen(border_color, 1))
         painter.setBrush(QBrush(bg_color))
         painter.drawRect(rect)
         
+        # Draw Header
         header_rect = QRect(rect.x(), rect.y(), rect.width(), 25)
         painter.fillRect(header_rect, header_color)
         painter.setPen(QPen(border_color, 1))
         painter.drawLine(rect.x(), rect.y() + 25, rect.right(), rect.y() + 25)
         
+        # Header Text
         painter.setFont(self.console_font)
         painter.setPen(QColor(255, 255, 255))
         painter.drawText(header_rect.adjusted(10, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, "SysMon [F3]")
         
+        # Header Controls
         painter.drawText(QRect(rect.right() - 50, rect.y(), 25, 25), Qt.AlignCenter, "▼" if self.sysmon_expanded else "▶")
         painter.drawText(QRect(rect.right() - 25, rect.y(), 25, 25), Qt.AlignCenter, "[X]")
         
-        content_y = rect.y() + 45
+        if not self.sysmon_expanded:
+            return
+
         left_margin = rect.x() + 10
         line_height = 18
-        
-        tps = getattr(self.logic_thread, 'actual_tps', 0.0) if self.logic_thread else 0.0
-        painter.setPen(text_color)
-        painter.drawText(left_margin, content_y, f"TPS: {tps:.1f}")
-        
-        # Frame time graph
-        graph_y = content_y + line_height * 2
+        graph_x = rect.x() + 5
+        graph_y = rect.y() + 30
+        graph_width = rect.width() - 10
         graph_height = 50
-        graph_width = rect.width() - 20
-        graph_x = left_margin
         
-        # Draw graph background
         painter.setPen(QPen(border_color, 1))
-        painter.setBrush(QBrush(QColor(10, 10, 15, 200)))
+        painter.setBrush(QBrush(graph_bg_color))
         painter.drawRect(graph_x, graph_y, graph_width, graph_height)
         
-        # Draw frame time graph
+        max_frame_time = max(self.frame_times) if self.frame_times else 16.67
+        max_frame_time = max(max_frame_time, 16.67)
+        
         if len(self.frame_times) > 1:
-            # Calculate scale - target 16.67ms (60fps) as baseline
-            max_frame_time = max(self.frame_times) if self.frame_times else 16.67
-            max_frame_time = max(max_frame_time, 16.67)  # At least show 60fps baseline
-            
-            # Draw 16.67ms (60fps) reference line
-            ref_y = graph_y + graph_height - (16.67 / max_frame_time) * graph_height
-            painter.setPen(QPen(QColor(60, 60, 80), 1, Qt.DashLine))
-            painter.drawLine(graph_x, int(ref_y), graph_x + graph_width, int(ref_y))
-            
-            # Draw 33.33ms (30fps) reference line if visible
-            if max_frame_time > 33.33:
-                ref_y_30 = graph_y + graph_height - (33.33 / max_frame_time) * graph_height
-                painter.setPen(QPen(QColor(80, 60, 60), 1, Qt.DashLine))
-                painter.drawLine(graph_x, int(ref_y_30), graph_x + graph_width, int(ref_y_30))
-            
-            # Draw the graph line
-            num_samples = len(self.frame_times)
-            step = graph_width / max(num_samples - 1, 1)
-            
             points = []
+            step = graph_width / max(len(self.frame_times) - 1, 1)
+            
             for i, ft in enumerate(self.frame_times):
                 x = graph_x + i * step
+                # Invert Y so higher time = higher spike
                 y = graph_y + graph_height - (ft / max_frame_time) * graph_height
                 y = max(graph_y, min(graph_y + graph_height, y))
-                points.append((int(x), int(y)))
+                points.append(QPoint(int(x), int(y)))
             
-            # Draw filled area under curve
+            # Fill area
             if points:
                 poly_points = [QPoint(graph_x, graph_y + graph_height)]
-                poly_points.extend([QPoint(p[0], p[1]) for p in points])
-                poly_points.append(QPoint(graph_x + graph_width, graph_y + graph_height))
+                poly_points.extend(points)
+                poly_points.append(QPoint(int(graph_x + (len(self.frame_times)-1)*step), graph_y + graph_height))
+                
                 painter.setPen(Qt.NoPen)
                 painter.setBrush(QBrush(QColor(100, 200, 100, 40)))
                 painter.drawPolygon(QPolygon(poly_points))
-            
-            # Draw line
-            painter.setPen(QPen(QColor(100, 255, 100), 1))
-            for i in range(len(points) - 1):
-                painter.drawLine(points[i][0], points[i][1], points[i+1][0], points[i+1][1])
-            
-            # Current frame time text
-            current_ft = self.frame_times[-1] if self.frame_times else 0
-            avg_ft = sum(self.frame_times) / len(self.frame_times) if self.frame_times else 0
-            painter.setPen(text_color)
-            painter.drawText(graph_x, graph_y + graph_height + 12, f"Frame: {current_ft:.1f}ms  Avg: {avg_ft:.1f}ms")
-        
-        if self.sysmon_expanded:
-            visible = self.sysmon_stats.get('visible_brushes', 0)
-            total_brushes = self.sysmon_stats.get('total_brushes', 0)
-            culled_brushes = self.sysmon_stats.get('culled_brushes', 0)
-            total_things = len(self.editor.state.things)
-            
-            draws = self.renderer.render_stats.draw_calls if self.renderer else 0
-            stats_y = graph_y + graph_height + 30
-            
-            painter.setPen(text_color)
-            painter.drawText(left_margin, stats_y, f"Things:   {total_things}")
-            painter.drawText(left_margin, stats_y + line_height, f"Draws:    {draws}")
-
-            # Brushes line (Penultimate)
-            brush_text = f"Brushes:  {total_brushes} "
-            painter.drawText(left_margin, stats_y + line_height * 2, brush_text)
-            
-            # Draw Vis count in green
-            fm = painter.fontMetrics()
-            try:
-                offset = fm.horizontalAdvance(brush_text)
-            except AttributeError:
-                offset = fm.width(brush_text)
                 
-            painter.setPen(QColor(50, 200, 50))
-            painter.drawText(left_margin + offset, stats_y + line_height * 2, f"(Visible: {visible})")
+                # Draw Line
+                painter.setPen(QPen(QColor(100, 255, 100), 1))
+                painter.drawPolyline(QPolygon(points))
 
-            # Culling Percentage
-            cull_pct = 0.0
-            if total_brushes > 0:
-                cull_pct = (culled_brushes / total_brushes) * 100.0
+        frame_stats_y = graph_y + graph_height + 26
+        
+        current_ft = self.frame_times[-1] if self.frame_times else 0
+        avg_ft = sum(self.frame_times) / len(self.frame_times) if self.frame_times else 0
+        
+        font = painter.font()
+        font.setPointSize(10)
+        painter.setFont(font)
+        painter.setPen(QColor(255, 255, 255))
+        painter.drawText(left_margin, int(frame_stats_y), f"Frame: {current_ft:.1f}ms  Avg: {avg_ft:.1f}ms")
+        stats_start_y = frame_stats_y + 24
+        
+        visible = self.sysmon_stats.get('visible_brushes', 0)
+        total_brushes = self.sysmon_stats.get('total_brushes', 0)
+        culled_brushes = self.sysmon_stats.get('culled_brushes', 0)
+        total_things = len(self.editor.state.things)
+        draws = self.renderer.render_stats.draw_calls if self.renderer else 0
 
-            font = painter.font()
-            big_font = QFont(font)
-            big_font.setPointSize(font.pointSize() + 1)
-            big_font.setBold(True)
-            painter.setFont(big_font)
-            
-            # Draw underneath
-            painter.setPen(QColor(200, 200, 200))
-            painter.drawText(left_margin, int(stats_y + line_height * 3.5), f"Culled: {cull_pct:.1f}%")
-            
-            # Restore font
-            painter.setFont(font)
+        painter.setPen(text_color)
+        painter.drawText(left_margin, int(stats_start_y), f"Things:   {total_things}")
+        painter.drawText(left_margin, int(stats_start_y + line_height), f"Draws:    {draws}")
+        brush_text = f"Brushes:  {total_brushes} "
+        painter.drawText(left_margin, int(stats_start_y + line_height * 2), brush_text)
+        
+        # Visible count in green
+        fm = painter.fontMetrics()
+        offset = fm.horizontalAdvance(brush_text)
+        painter.setPen(QColor(50, 200, 50))
+        painter.drawText(left_margin + offset, int(stats_start_y + line_height * 2), f"(Visible: {visible})")
+
+        cull_pct = 0.0
+        if total_brushes > 0:
+            cull_pct = (culled_brushes / total_brushes) * 100.0
+
+        footer_font = QFont(font)
+        footer_font.setPointSize(11) # Reduced size
+        footer_font.setBold(True)
+        painter.setFont(footer_font)
+        
+        painter.setPen(QColor(180, 180, 180)) 
+        painter.drawText(left_margin, rect.bottom() - 10, f"Culled: {cull_pct:.1f}%")
+        tps = getattr(self.logic_thread, 'actual_tps', 0.0) if self.logic_thread else 0.0
+        
+        tps_text = f"TPS: {tps:.1f}"
+        tps_width = painter.fontMetrics().horizontalAdvance(tps_text)
+        painter.setPen(QColor(220, 220, 220))
+        painter.drawText(rect.right() - tps_width - 10, rect.bottom() - 10, tps_text)
+    
+        painter.setFont(self.console_font)
 
     def _draw_render_menu(self, painter):
         width, height = 200, 120
@@ -545,10 +640,53 @@ class QtGameView(QOpenGLWidget):
     def load_all_sprite_textures(self):
         things = {'PlayerStart': 'player.png', 'Light': 'light.png', 'Monster': 'monster.png', 'Pickup': 'pickup.png', 'Speaker': 'speaker.png'}
         for cls, fname in things.items():
-            tid = self.load_texture(fname, '')
+            tid = self.load_texture(fname, 'sprites')
             if tid: self.sprite_textures[cls] = tid
+        
+        # Load key-specific textures
+        key_textures = {
+            'blue_key': 'bluekey.png',
+            'red_key': 'redkey.png', 
+            'yellow_key': 'yellowkey.png',
+            'green_key': 'greenkey.png',
+        }
+        for key_name, fname in key_textures.items():
+            tid = self.load_texture(fname, 'sprites')
+            if tid: 
+                self.sprite_textures[f'key_{key_name}'] = tid
+        
         if self.renderer:
             self.renderer.set_sprite_textures(self.sprite_textures)
+    
+    def update_instance_textures(self, things):
+        """Build per-instance texture mapping for things like Pickups with custom sprites."""
+        if not self.renderer:
+            return
+        
+        instance_textures = {}
+        
+        for thing in things:
+            if isinstance(thing, Pickup):
+                # Check if it's a key
+                if thing.is_key():
+                    key_name = thing.get_key_name()
+                    tex_key = f'key_{key_name}'
+                    if tex_key in self.sprite_textures:
+                        instance_textures[id(thing)] = self.sprite_textures[tex_key]
+                # Check for custom sprite
+                elif thing.properties.get('custom_sprite'):
+                    sprite_path = thing.properties.get('custom_sprite')
+                    
+                    # STRICT: Enforce loading from assets/sprites folder only
+                    # We extract just the filename and force the 'sprites' subfolder
+                    filename = os.path.basename(sprite_path.replace('\\', '/'))
+                        
+                    # Load custom sprite texture if not already loaded
+                    tex_id = self.load_texture(filename, 'sprites')
+                    if tex_id:
+                        instance_textures[id(thing)] = tex_id
+        
+        self.renderer.set_instance_textures(instance_textures)
 
     def toggle_play_mode(self, player_start_pos, player_start_angle, physics_enabled=True):
         self.play_mode = not self.play_mode
