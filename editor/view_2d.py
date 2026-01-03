@@ -642,9 +642,8 @@ class View2D(QWidget):
             w_pos = QPointF(thing.pos[axis1_idx], thing.pos[axis2_idx])
             s_pos = self.world_to_screen(w_pos)
 
-            # Modified: Check for Light OR Speaker for radius drawing
+            # 1. Draw Radius (for Light or Speaker)
             if (isinstance(thing, Light) or isinstance(thing, Speaker)) and thing.properties.get('show_radius', False):
-                # Use 'colour' if available (Light), otherwise default to Yellow for Speaker
                 default_col = [255, 255, 0] if isinstance(thing, Speaker) else [255, 255, 255]
                 r, g, b = thing.properties.get('colour', default_col)
                 
@@ -654,26 +653,22 @@ class View2D(QWidget):
                 radius = thing.get_radius() * self.zoom_factor
                 painter.drawEllipse(s_pos, radius, radius)
 
-            # Use instance-specific pixmap (handles dynamic sprites for Pickups)
+            # 2. Draw the Sprite (Pixmap)
             if hasattr(thing, 'get_instance_pixmap'):
                 pixmap = thing.get_instance_pixmap()
             else:
                 pixmap = thing.get_pixmap()
+            
             if not pixmap: continue
 
             pixmap_size = pixmap.size()
-            
-            # Calculate the standard bounding rect for selection/tags (screen aligned)
             draw_rect = QRectF(s_pos.x() - pixmap_size.width() / 2, 
                             s_pos.y() - pixmap_size.height() / 2,
                             pixmap_size.width(), 
                             pixmap_size.height())
             
-            # Draw the sprite with a vertical flip so it appears upright
             painter.save()
             painter.translate(s_pos)
-            
-            # Draw centered at (0,0) relative to the translated origin
             target_rect = QRectF(-pixmap_size.width() / 2, 
                                  -pixmap_size.height() / 2, 
                                  pixmap_size.width(), 
@@ -681,26 +676,54 @@ class View2D(QWidget):
             painter.drawPixmap(target_rect.toRect(), pixmap)
             painter.restore()
 
-            if isinstance(thing, Model):
-                rotation = thing.properties.get('rotation', [0, 0, 0])
-                yaw_deg = rotation[1]
-                
-                angle_rad = 0.0
-                if self.view_type == 'top':
-                    angle_rad = math.radians(yaw_deg)
-                
-                if self.view_type == 'top':
-                    arrow_len = 25
-                    end_x = s_pos.x() + math.sin(angle_rad) * arrow_len
-                    end_y = s_pos.y() + math.cos(angle_rad) * arrow_len
-                    
-                    painter.setPen(QPen(QColor(0, 255, 255), 2))
-                    painter.drawLine(s_pos, QPointF(end_x, end_y))
+            # 3. NEW: Draw Directional Orientation Arrow
+            # We check for 'angle' (common in PlayerStart/Pickups) or 'rotation' (Models)
+            angle_deg = None
+            if 'angle' in thing.properties:
+                angle_deg = float(thing.properties.get('angle', 0.0))
+            elif 'rotation' in thing.properties:
+                # Use Y-axis rotation for Top view orientation
+                rot = thing.properties.get('rotation', [0, 0, 0])
+                angle_deg = rot[1] if self.view_type == 'top' else None
 
-            # Draw color tag for things (similar to brushes)
+            if angle_deg is not None:
+                painter.save()
+                # Determine arrow color: Cyan for Player, Orange for NPCs/Items
+                arrow_color = QColor(0, 255, 255) if thing.__class__.__name__ == 'PlayerStart' else QColor(255, 128, 0)
+                
+                # Math consistent with draw_mover_arrow
+                angle_rad = math.radians(angle_deg)
+                arrow_len = 35 * self.zoom_factor
+                if arrow_len < 15: arrow_len = 15 # Ensure visibility at high zoom
+                
+                # In Top View (XZ), angle 0 is +X (Right). 
+                # Note: Screen Y is inverted relative to world Z in Top View
+                dx = math.cos(angle_rad) * arrow_len
+                dy = math.sin(angle_rad) * arrow_len
+                if self.view_type == 'top':
+                    dy = -dy # Screen Y inversion
+                
+                s_end = s_pos + QPointF(dx, dy)
+                
+                painter.setPen(QPen(arrow_color, 2))
+                painter.drawLine(s_pos, s_end)
+                
+                # Draw Arrow Head
+                head_angle = math.atan2(s_end.y() - s_pos.y(), s_end.x() - s_pos.x())
+                head_size = 8
+                p1 = s_end - QPointF(math.cos(head_angle - math.pi / 6) * head_size, 
+                                     math.sin(head_angle - math.pi / 6) * head_size)
+                p2 = s_end - QPointF(math.cos(head_angle + math.pi / 6) * head_size, 
+                                     math.sin(head_angle + math.pi / 6) * head_size)
+                
+                painter.setBrush(QBrush(arrow_color))
+                painter.drawPolygon(QPolygonF([s_end, p1, p2]))
+                painter.restore()
+
+            # 4. Draw color tag for things
             self.draw_thing_color_tag(painter, thing, draw_rect)
 
-            # Check if thing is in selected_objects list (for multi-select support)
+            # 5. Draw selection highlight
             is_selected = thing in getattr(self.editor.state, 'selected_objects', []) or thing == self.editor.state.selected_object
             if is_selected:
                 painter.setPen(QPen(QColor(255, 255, 0), 2, Qt.DotLine))

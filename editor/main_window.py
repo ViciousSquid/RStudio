@@ -504,15 +504,26 @@ class MainWindow(QMainWindow):
     def stop_mover_preview(self):
         if self.preview_timer.isActive():
             self.preview_timer.stop()
-            # Restore original position
             if self.preview_data and self.preview_data.get('obj'):
                 self.preview_data['obj']['pos'] = self.preview_data['original_pos']
             self.preview_data = {}
             self.update_views()
-            # If property editor is open, uncheck the button (handled via UI update)
-            if self.property_editor.preview_btn:
-                self.property_editor.preview_btn.setChecked(False)
-                self.property_editor.preview_btn.setText("Preview Movement")
+            
+            # Check for Mover button
+            m_btn = self.property_editor._widgets.get('mover_preview_btn')
+            if m_btn:
+                m_btn.blockSignals(True)
+                m_btn.setChecked(False)
+                m_btn.setText("▶ Preview Movement")
+                m_btn.blockSignals(False)
+                
+            # Check for Door button
+            d_btn = self.property_editor._widgets.get('door_preview_btn')
+            if d_btn:
+                d_btn.blockSignals(True)
+                d_btn.setChecked(False)
+                d_btn.setText("▶ Preview Door")
+                d_btn.blockSignals(False)
 
     def update_mover_preview(self):
         if not self.preview_data:

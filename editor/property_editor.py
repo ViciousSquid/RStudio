@@ -1217,9 +1217,11 @@ class PropertyEditor(QWidget):
 
     def toggle_door_preview(self, checked):
         if self.editor:
+            # Correctly retrieve the button from the internal dictionary
             btn = self._widgets.get('door_preview_btn')
             if checked:
                 if btn: btn.setText("■ Stop Preview")
+                # Doors use the same mover logic for the preview
                 if hasattr(self.editor, 'start_mover_preview'):
                     self.editor.start_mover_preview(self.current_object)
             else:
