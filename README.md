@@ -12,8 +12,9 @@
 * Fully modular and open source (MIT License)
 
 * Lights can cast stencil shadows (buggy)
+* Moving brushes, doors, pickups
 * Physics in Play Mode
-* Realisitc water and fog volumes
+* Water and fog volumes
   
 ### Roadmap:
 * OBJ model support (currently partially implemented)
