@@ -47,6 +47,14 @@ class Toast(QLabel):
         # Track current toast type for conditional dismissal
         self.current_toast_id = None
 
+    def update_position(self):
+        """Recalculate position relative to parent (used on resize)."""
+        if self.isVisible() and self.parentWidget():
+            parent_rect = self.parentWidget().rect()
+            x = parent_rect.width() // 2 - self.width() // 2
+            y = parent_rect.height() - self.height() - 60
+            self.move(x, y)
+
     def show_message(self, text, parent_widget, is_error=False, duration=None, is_tooltip=False, toast_id=None):
         # Choose background color based on type
         if is_tooltip:
@@ -70,11 +78,9 @@ class Toast(QLabel):
         self.setText(text)
         self.adjustSize()
         
-        parent_rect = parent_widget.rect()
-        x = parent_rect.width() // 2 - self.width() // 2
-        y = parent_rect.height() - self.height() - 60 
+        # Initial positioning
+        self.update_position()
         
-        self.move(x, y)
         self.show()
         self.raise_()
         
@@ -197,6 +203,10 @@ class MainWindow(QMainWindow):
             by = 35 
             self.play_button.move(bx, by)
             self.play_button.raise_()
+            
+        # Reposition toast if visible so it stays centered at the bottom
+        if hasattr(self, 'toast'):
+            self.toast.update_position()
 
     def reposition_overlays(self):
         """Positions the Play button at the top middle (where the toast used to be)."""
@@ -1536,4 +1546,3 @@ class MainWindow(QMainWindow):
             self.view_3d.logic_thread.join(timeout=1.0)
         
         super().closeEvent(event)
-
