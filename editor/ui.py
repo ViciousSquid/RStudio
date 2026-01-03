@@ -36,7 +36,6 @@ class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         MainWindow.setObjectName("MainWindow")
         
-        # --- Create UI Components FIRST ---
         MainWindow.view_3d = QtGameView(MainWindow)
         MainWindow.view_3d.show_triggers_as_solid = True 
         
@@ -46,7 +45,6 @@ class Ui_MainWindow(object):
         MainWindow.property_editor = PropertyEditor(MainWindow)
         MainWindow.scene_hierarchy = SceneHierarchy(MainWindow)
 
-        # --- Create and Arrange Docks ---
         MainWindow.setDockOptions(QMainWindow.AnimatedDocks | QMainWindow.AllowNestedDocks | QMainWindow.AllowTabbedDocks)
         MainWindow.setTabPosition(Qt.AllDockWidgetAreas, QTabWidget.North)
 
@@ -132,7 +130,6 @@ class Ui_MainWindow(object):
         file_menu = menubar.addMenu('File')
         edit_menu = menubar.addMenu('Edit')
         view_menu = menubar.addMenu('View')
-        #tools_menu = menubar.addMenu('Tools')
         help_menu = menubar.addMenu('Help')
 
         file_menu.addAction(QAction('New Map', MainWindow, shortcut='Ctrl+N', triggered=MainWindow.new_map))
@@ -144,7 +141,6 @@ class Ui_MainWindow(object):
         file_menu.addSeparator()
         file_menu.addAction(QAction('Exit', MainWindow, shortcut='Ctrl+Q', triggered=MainWindow.close))
 
-        # Create Undo/Redo actions once and store them on MainWindow
         MainWindow.undo_action = QAction(QIcon("assets/b_undo.png"), 'Undo', MainWindow)
         MainWindow.undo_action.setShortcut('Ctrl+Z')
         MainWindow.undo_action.setObjectName('undo_action')
@@ -192,13 +188,10 @@ class Ui_MainWindow(object):
         toggle_triggers_action.triggered.connect(MainWindow.toggle_trigger_display)
         view_menu.addAction(toggle_triggers_action)
 
-        # New System Monitor Toggle
         system_monitor_action = QAction('System Monitor', MainWindow, checkable=True)
         system_monitor_action.setShortcut('F3')
         system_monitor_action.triggered.connect(MainWindow.toggle_system_monitor)
         view_menu.addAction(system_monitor_action)
-
-        #tools_menu.addAction(QAction('Generate Collision Tilemap...', MainWindow, triggered=MainWindow.show_generate_tilemap_dialog))
 
         modern_action = QAction('Modern (Shaders)', MainWindow, checkable=True, checked=True)
         immediate_action = QAction('Immediate (Legacy)', MainWindow, checkable=True)
@@ -301,30 +294,25 @@ class Ui_MainWindow(object):
         top_toolbar.addWidget(grid_btn)
         MainWindow.grid_btn = grid_btn  # Store reference
         
-        # Add separator before play
-        separator3 = QFrame()
-        separator3.setFrameShape(QFrame.VLine)
-        separator3.setFrameShadow(QFrame.Sunken)
-        separator3.setFixedWidth(6)
-        separator3.setStyleSheet("background-color: #555;")
-        top_toolbar.addWidget(separator3)
-        
-        play_button = QPushButton(QIcon("assets/b_test.png"),"Play")
-        play_button.setIconSize(QSize(icon_size_val, icon_size_val))
-        play_button.setFixedSize(icon_size_val + 180, icon_size_val)
-        play_button.setToolTip("Drop in and play (F5)")
-        play_button.setShortcut("f5")
-        play_button.clicked.connect(MainWindow.enter_play_mode)
+        # === FLOATING PLAY BUTTON ===
+        MainWindow.play_button = QPushButton(QIcon("assets/b_test.png"), "Play", MainWindow)
+        MainWindow.play_button.setIconSize(QSize(icon_size_val, icon_size_val))
+        MainWindow.play_button.setFixedSize(icon_size_val + 180, icon_size_val)
+        MainWindow.play_button.setToolTip("Drop in and play (F5)")
+        MainWindow.play_button.setShortcut("f5")
+        MainWindow.play_button.clicked.connect(MainWindow.enter_play_mode)
         
         # Style the play button with green background and larger font
-        current_font = play_button.font()
+        current_font = MainWindow.play_button.font()
         current_font.setPointSize(current_font.pointSize() + 1)
-        play_button.setFont(current_font)
-        play_button.setStyleSheet("""
+        MainWindow.play_button.setFont(current_font)
+        MainWindow.play_button.setStyleSheet("""
             QPushButton {
                 background-color: #22b14c;
                 color: white;
                 font-weight: bold;
+                border: 1px solid #1a8f3d;
+                border-radius: 4px;
             }
             QPushButton:hover {
                 background-color: #28d157;
@@ -333,10 +321,8 @@ class Ui_MainWindow(object):
                 background-color: #1a8f3d;
             }
         """)
-        
-        top_toolbar.addWidget(play_button)
 
-        # Display dropdown
+        # Display dropdown logic placeholder
         display_mode_widget = QWidget()
         display_mode_layout = QHBoxLayout(display_mode_widget)
         display_mode_layout.setContentsMargins(5,0,5,0)

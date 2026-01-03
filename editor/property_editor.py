@@ -21,6 +21,7 @@ class PropertyEditor(QWidget):
         super().__init__()
         self.editor = editor
         self.current_object = None
+        self._populating = False  # Flag to prevent recursion during population
         
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(5, 5, 5, 5)
@@ -86,10 +87,12 @@ class PropertyEditor(QWidget):
         if self.tab_widget is not None and self.current_object is obj:
             saved_tab_index = self.tab_widget.currentIndex()
         
+        self._populating = True  # Set flag to prevent recursion
         self.current_object = obj
         self.clear_layout()
         if obj is None:
             self.main_layout.addWidget(QLabel("Nothing selected."))
+            self._populating = False
             return
         if isinstance(obj, dict): 
             self.populate_for_brush(obj)
@@ -100,6 +103,8 @@ class PropertyEditor(QWidget):
         if saved_tab_index is not None and self.tab_widget is not None:
             if saved_tab_index < self.tab_widget.count():
                 self.tab_widget.setCurrentIndex(saved_tab_index)
+        
+        self._populating = False  # Reset flag after population complete
 
     def _create_styled_header(self, text, color="#6C3BAA"):
         """Create a styled header label."""
@@ -944,6 +949,30 @@ class PropertyEditor(QWidget):
         reflect_layout.addWidget(reflect_label)
         layout.addRow("Reflectivity:", reflect_layout)
         self._widgets['water_reflect_slider'] = reflect_slider
+
+        # Wave Displacement Checkbox
+        wave_cb = QCheckBox("Enable Vertex Waves")
+        wave_cb.setStyleSheet(self._checkbox_style())
+        wave_cb.setChecked(brush.get('water_wave_enabled', False))
+        wave_cb.toggled.connect(lambda checked: self.update_object_prop('water_wave_enabled', checked))
+        layout.addRow("", wave_cb)
+        self._widgets['water_wave_cb'] = wave_cb
+
+        # Wave Height Slider
+        wave_h_layout = QHBoxLayout()
+        wave_h_slider = QSlider(Qt.Horizontal)
+        wave_h_slider.setRange(0, 200) # 0.0 to 2.0
+        wave_h_slider.setValue(int(brush.get('water_wave_height', 0.5) * 100))
+        wave_h_label = QLabel(f"{brush.get('water_wave_height', 0.5):.2f}")
+        wave_h_slider.setToolTip("Amplitude of the waves. Keep low for realism.")
+        wave_h_slider.valueChanged.connect(lambda v: (
+            self.update_object_prop('water_wave_height', v / 100.0),
+            wave_h_label.setText(f"{v / 100.0:.2f}")
+        ))
+        wave_h_layout.addWidget(wave_h_slider)
+        wave_h_layout.addWidget(wave_h_label)
+        layout.addRow("Wave Height:", wave_h_layout)
+        self._widgets['water_wave_h_slider'] = wave_h_slider
         
         # Plane only checkbox
         plane_cb = QCheckBox("Draw top surface only")
@@ -1071,6 +1100,9 @@ class PropertyEditor(QWidget):
             if 'glass_color' not in self.current_object: self.current_object['glass_color'] = [0.9, 0.95, 1.0]
             if 'glass_opacity' not in self.current_object: self.current_object['glass_opacity'] = 0.3
             if 'glass_distortion' not in self.current_object: self.current_object['glass_distortion'] = 0.5
+            if 'glass_refraction' not in self.current_object: self.current_object['glass_refraction'] = 1.5
+            if 'glass_roughness' not in self.current_object: self.current_object['glass_roughness'] = 0.0
+            if 'glass_fresnel' not in self.current_object: self.current_object['glass_fresnel'] = 0.5
         elif shader_type == 'Glow':
             if 'glow_color' not in self.current_object: self.current_object['glow_color'] = [1.0, 0.9, 0.7]
             if 'glow_intensity' not in self.current_object: self.current_object['glow_intensity'] = 1.5
@@ -1080,6 +1112,8 @@ class PropertyEditor(QWidget):
             if 'water_opacity' not in self.current_object: self.current_object['water_opacity'] = 0.5
             if 'water_reflectivity' not in self.current_object: self.current_object['water_reflectivity'] = 0.5
             if 'water_tint' not in self.current_object: self.current_object['water_tint'] = [0.0, 0.4, 0.6]
+            if 'water_wave_enabled' not in self.current_object: self.current_object['water_wave_enabled'] = False
+            if 'water_wave_height' not in self.current_object: self.current_object['water_wave_height'] = 0.5
         elif shader_type == 'Fog':
             self.current_object['is_fog'] = True
             if 'fog_density' not in self.current_object: self.current_object['fog_density'] = 2.0
@@ -1226,11 +1260,17 @@ class PropertyEditor(QWidget):
         is_pickup = isinstance(thing, Pickup)
         current_item_type = thing.properties.get('item_type', 'health') if is_pickup else None
         
+        # Track widgets to hide/show for pickup type changes
+        self._pickup_value_widgets = []
+        self._pickup_key_widgets = []
+        self._pickup_sprite_widgets = []
+        
         for key, value in sorted(thing.properties.items()):
             if key == 'name': continue
-            if isinstance(thing, Light) and key == 'colour': continue
+            if isinstance(thing, Light) and key in ['colour', 'type']: continue
             if isinstance(thing, Model) and key in ['model_path', 'scale', 'rotation', 'type']: continue
-            if is_pickup and key == 'key_name': continue
+            # Skip these - we handle them specially for Pickup
+            if is_pickup and key in ['key_name', 'custom_sprite', 'respawns', 'respawn_time']: continue
 
             label_text = key.replace('_', ' ').title() + ":"
             
@@ -1244,23 +1284,32 @@ class PropertyEditor(QWidget):
                 self.add_sound_file_widget(layout, thing, key, value)
             elif isinstance(thing, Pickup) and key == 'item_type':
                 widget = QComboBox()
-                item_types = ['health', 'ammo', 'armour', 'powerup', 'key', 'message', 'weapon']
+                item_types = ['health', 'key']
                 widget.addItems(item_types)
                 widget.setCurrentText(value)
                 widget.currentTextChanged.connect(self.on_pickup_item_type_changed)
                 layout.addRow(label_text, widget)
                 
+                # Key Name dropdown (only visible for key type)
                 self.pickup_key_name_label = QLabel("Key Name:")
-                self.pickup_key_name_input = QLineEdit(thing.properties.get('key_name', ''))
-                self.pickup_key_name_input.setPlaceholderText("e.g. blue_key (must match door)")
-                self.pickup_key_name_input.editingFinished.connect(
-                    lambda: self.update_object_prop('key_name', self.pickup_key_name_input.text())
-                )
-                layout.addRow(self.pickup_key_name_label, self.pickup_key_name_input)
+                self.pickup_key_name_combo = QComboBox()
+                key_names = ['blue_key', 'red_key', 'yellow_key', 'green_key']
+                self.pickup_key_name_combo.addItems(key_names)
+                # Allow custom key names too
+                self.pickup_key_name_combo.setEditable(True)
+                current_key = thing.properties.get('key_name', 'blue_key')
+                if current_key in key_names:
+                    self.pickup_key_name_combo.setCurrentText(current_key)
+                else:
+                    self.pickup_key_name_combo.setCurrentText(current_key)
+                self.pickup_key_name_combo.currentTextChanged.connect(self.on_pickup_key_name_changed)
+                layout.addRow(self.pickup_key_name_label, self.pickup_key_name_combo)
+                
+                self._pickup_key_widgets.append((self.pickup_key_name_label, self.pickup_key_name_combo))
                 
                 is_key_type = (value == 'key')
                 self.pickup_key_name_label.setVisible(is_key_type)
-                self.pickup_key_name_input.setVisible(is_key_type)
+                self.pickup_key_name_combo.setVisible(is_key_type)
                 
             elif isinstance(thing, Pickup) and key == 'activation':
                 widget = QComboBox()
@@ -1269,6 +1318,26 @@ class PropertyEditor(QWidget):
                 widget.setCurrentText(value)
                 widget.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
                 layout.addRow(label_text, widget)
+                # Store reference to restrict activation for health pickups
+                self._pickup_activation_widget = widget
+                # If health pickup, force walk_over and disable
+                if current_item_type == 'health':
+                    widget.setCurrentText('walk_over')
+                    widget.setEnabled(False)
+                    self.update_object_prop('activation', 'walk_over')
+            elif isinstance(thing, Pickup) and key == 'value':
+                # Store reference to hide when item_type is 'key'
+                label = QLabel(label_text)
+                widget = QSpinBox()
+                widget.setRange(-99999, 99999)
+                widget.setValue(value)
+                widget.valueChanged.connect(lambda v, k=key: self.update_object_prop(k, v))
+                layout.addRow(label, widget)
+                self._pickup_value_widgets.append((label, widget))
+                # Hide if currently a key
+                if current_item_type == 'key':
+                    label.setVisible(False)
+                    widget.setVisible(False)
             elif isinstance(value, bool):
                 widget = QCheckBox()
                 widget.setStyleSheet(self._checkbox_style())
@@ -1290,17 +1359,186 @@ class PropertyEditor(QWidget):
                 widget.editingFinished.connect(lambda le=widget, k=key: self.update_object_prop(k, le.text()))
                 layout.addRow(label_text, widget)
         
+        # Add Pickup-specific controls
+        if is_pickup:
+            # Sprite selection button (only for non-key types)
+            self.pickup_sprite_label = QLabel("Sprite:")
+            sprite_widget = QWidget()
+            sprite_layout = QHBoxLayout(sprite_widget)
+            sprite_layout.setContentsMargins(0, 0, 0, 0)
+            
+            custom_sprite = thing.properties.get('custom_sprite', '')
+            self.pickup_sprite_path = QLineEdit(custom_sprite)
+            self.pickup_sprite_path.setReadOnly(True)
+            self.pickup_sprite_path.setPlaceholderText("Default sprite")
+            
+            sprite_btn = QPushButton("Sprite...")
+            sprite_btn.setFixedWidth(120)
+            sprite_btn.clicked.connect(self.on_pickup_sprite_select)
+            
+            clear_btn = QPushButton("clear")
+            clear_btn.setFixedWidth(120)
+            clear_btn.setToolTip("Clear custom sprite")
+            clear_btn.clicked.connect(self.on_pickup_sprite_clear)
+            
+            sprite_layout.addWidget(self.pickup_sprite_path)
+            sprite_layout.addWidget(sprite_btn)
+            sprite_layout.addWidget(clear_btn)
+            
+            layout.addRow(self.pickup_sprite_label, sprite_widget)
+            self._pickup_sprite_widgets.append((self.pickup_sprite_label, sprite_widget))
+            
+            # Hide sprite controls for keys (keys have fixed sprites)
+            if current_item_type == 'key':
+                self.pickup_sprite_label.setVisible(False)
+                sprite_widget.setVisible(False)
+        
+        # Add respawn controls ONLY for Pickups (PlayerStart, Speaker, etc. do not respawn)
+        if isinstance(thing, Pickup):
+            layout.addRow(self._create_section_header("Respawn"))
+            
+            respawns = thing.properties.get('respawns', False)
+            respawn_time = thing.properties.get('respawn_time', 20.0)
+            
+            respawn_widget = QWidget()
+            respawn_layout = QHBoxLayout(respawn_widget)
+            respawn_layout.setContentsMargins(0, 0, 0, 0)
+            
+            self.respawn_checkbox = QCheckBox("Respawns")
+            self.respawn_checkbox.setStyleSheet(self._checkbox_style())
+            self.respawn_checkbox.setChecked(respawns)
+            self.respawn_checkbox.stateChanged.connect(self.on_respawn_toggled)
+            
+            self.respawn_time_label = QLabel("after")
+            self.respawn_time_spin = QDoubleSpinBox()
+            self.respawn_time_spin.setRange(0.1, 9999.0)
+            self.respawn_time_spin.setValue(respawn_time)
+            self.respawn_time_spin.setSuffix(" sec")
+            self.respawn_time_spin.valueChanged.connect(lambda v: self.update_object_prop('respawn_time', v))
+            
+            # Show/hide respawn time based on checkbox
+            self.respawn_time_label.setVisible(respawns)
+            self.respawn_time_spin.setVisible(respawns)
+            
+            respawn_layout.addWidget(self.respawn_checkbox)
+            respawn_layout.addWidget(self.respawn_time_label)
+            respawn_layout.addWidget(self.respawn_time_spin)
+            respawn_layout.addStretch()
+            
+            layout.addRow("", respawn_widget)
+        
         self.main_layout.addLayout(layout)
+
+    def on_respawn_toggled(self, state):
+        """Handle respawn checkbox toggle."""
+        respawns = state == Qt.Checked
+        self.update_object_prop('respawns', respawns)
+        if hasattr(self, 'respawn_time_label'):
+            self.respawn_time_label.setVisible(respawns)
+        if hasattr(self, 'respawn_time_spin'):
+            self.respawn_time_spin.setVisible(respawns)
+
+    def on_pickup_key_name_changed(self, key_name):
+        """Handle key name dropdown change - updates sprite immediately."""
+        if self.current_object is None: return
+        self.update_object_prop('key_name', key_name)
+        # Clear sprite cache to force reload
+        if hasattr(Pickup, 'clear_sprite_cache'):
+            Pickup.clear_sprite_cache()
+        # Refresh views to show new sprite
+        self.editor.update_all_ui()
+
+    def on_pickup_sprite_select(self):
+        """Open file dialog to select custom sprite for pickup."""
+        if self.current_object is None or not isinstance(self.current_object, Pickup):
+            return
+        
+        start_path = os.path.join('assets', 'sprites')
+        if not os.path.exists(start_path):
+            start_path = 'assets'
+        
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Select Sprite Image", start_path,
+            "Image Files (*.png *.jpg *.jpeg *.bmp)"
+        )
+        
+        if filepath:
+            try:
+                rel_path = os.path.relpath(filepath, '.').replace('\\', '/')
+            except ValueError:
+                rel_path = filepath
+            
+            self.update_object_prop('custom_sprite', rel_path)
+            if hasattr(self, 'pickup_sprite_path'):
+                self.pickup_sprite_path.setText(rel_path)
+            
+            # Clear sprite cache to force reload
+            if hasattr(Pickup, 'clear_sprite_cache'):
+                Pickup.clear_sprite_cache()
+            
+            self.editor.update_all_ui()
+
+    def on_pickup_sprite_clear(self):
+        """Clear custom sprite, revert to default."""
+        if self.current_object is None or not isinstance(self.current_object, Pickup):
+            return
+        
+        self.update_object_prop('custom_sprite', '')
+        if hasattr(self, 'pickup_sprite_path'):
+            self.pickup_sprite_path.setText('')
+        
+        # Clear sprite cache to force reload
+        if hasattr(Pickup, 'clear_sprite_cache'):
+            Pickup.clear_sprite_cache()
+        
+        self.editor.update_all_ui()
 
     def on_pickup_item_type_changed(self, item_type):
         if self.current_object is None: return
         self.update_object_prop('item_type', item_type)
         
         is_key = (item_type == 'key')
-        if hasattr(self, 'pickup_key_name_label') and self.pickup_key_name_label:
-            self.pickup_key_name_label.setVisible(is_key)
-        if hasattr(self, 'pickup_key_name_input') and self.pickup_key_name_input:
-            self.pickup_key_name_input.setVisible(is_key)
+        is_health = (item_type == 'health')
+        
+        # Show/hide key name widgets
+        if hasattr(self, '_pickup_key_widgets'):
+            for label, widget in self._pickup_key_widgets:
+                label.setVisible(is_key)
+                widget.setVisible(is_key)
+        
+        # Show/hide value widgets (hide for keys)
+        if hasattr(self, '_pickup_value_widgets'):
+            for label, widget in self._pickup_value_widgets:
+                label.setVisible(not is_key)
+                widget.setVisible(not is_key)
+        
+        # Show/hide sprite widgets (hide for keys - they use predefined sprites)
+        if hasattr(self, '_pickup_sprite_widgets'):
+            for label, widget in self._pickup_sprite_widgets:
+                label.setVisible(not is_key)
+                widget.setVisible(not is_key)
+        
+        # Health pickup restrictions
+        if is_health:
+            # Set default sprite for health pickups
+            self.update_object_prop('custom_sprite', 'assets/sprites/health.png')
+            if hasattr(self, 'pickup_sprite_path'):
+                self.pickup_sprite_path.setText('assets/sprites/health.png')
+            # Force walk_over activation
+            self.update_object_prop('activation', 'walk_over')
+            if hasattr(self, '_pickup_activation_widget'):
+                self._pickup_activation_widget.setCurrentText('walk_over')
+                self._pickup_activation_widget.setEnabled(False)
+        else:
+            # Re-enable activation dropdown for non-health pickups
+            if hasattr(self, '_pickup_activation_widget'):
+                self._pickup_activation_widget.setEnabled(True)
+        
+        # Clear sprite cache and refresh views
+        if hasattr(Pickup, 'clear_sprite_cache'):
+            Pickup.clear_sprite_cache()
+        
+        self.editor.update_all_ui()
 
     def add_model_path_widget(self, layout, thing):
         widget = QWidget()
@@ -1396,4 +1634,8 @@ class PropertyEditor(QWidget):
                     try: value = float(value)
                     except (ValueError, TypeError): value = 0.0
             self.current_object.properties[key] = value
-        self.editor.update_all_ui()
+        
+        # Only update UI if we're not in the middle of populating
+        # This prevents infinite recursion when populate calls update_object_prop
+        if not self._populating:
+            self.editor.update_all_ui()

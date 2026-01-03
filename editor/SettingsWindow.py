@@ -87,6 +87,10 @@ class SettingsWindow(QDialog):
         self.sync_selection_checkbox = QCheckBox("Highlight selected brushes")
         view_3d_layout.addWidget(self.sync_selection_checkbox)
         
+        self.click_select_3d_checkbox = QCheckBox("Click to select in 3D view")
+        self.click_select_3d_checkbox.setToolTip("Allow selecting brushes/things by clicking in the 3D view (without Shift)")
+        view_3d_layout.addWidget(self.click_select_3d_checkbox)
+        
         # Selection transparency slider
         selection_trans_layout = QHBoxLayout()
         selection_trans_layout.addWidget(QLabel("Selection Transparency:"))
@@ -170,6 +174,10 @@ class SettingsWindow(QDialog):
         restart_group = QGroupBox("Requires Restart")
         restart_layout = QVBoxLayout()
         
+        self.vsync_checkbox = QCheckBox("Enable VSync (Sync to Monitor)")
+        self.vsync_checkbox.setToolTip("Syncs framerate to monitor refresh rate to prevent tearing.\nDisable for benchmarking.")
+        restart_layout.addWidget(self.vsync_checkbox)
+        
         self.dpi_scaling_checkbox = QCheckBox("Enable High DPI Scaling")
         restart_layout.addWidget(self.dpi_scaling_checkbox)
         
@@ -241,6 +249,8 @@ class SettingsWindow(QDialog):
             "save_layout": "Ctrl+Shift+S",
             "Hide Brush": "H",
             "Unhide All Brushes": "Shift+H",
+            "Decrease Grid Size": "[",
+            "Increase Grid Size": "]",
             "Toggle play mode": "F5",
             "Use (play mode)": "E",
             "Show connections (play)": "F1",
@@ -248,7 +258,8 @@ class SettingsWindow(QDialog):
             "Connect trigger to target": "Ctrl+Drag",
             "Light Radius (when selected)": "Shift+Wheel",
             "Light Intensity (when selected)": "Ctrl+Wheel",
-            "Move Camera (3D view)": "Right Mouse+WASD",
+            "Free Camera (3D view)": "Right Mouse+WASD",
+            "Move Camera (3D view)": "SPACE and C",
         }
         
         self.shortcut_labels = {}
@@ -306,6 +317,7 @@ class SettingsWindow(QDialog):
         # Editor settings
         self.show_caulk_checkbox.setChecked(self.config.getboolean('Display', 'show_caulk', fallback=True))
         self.sync_selection_checkbox.setChecked(self.config.getboolean('Display', 'sync_selection', fallback=True))
+        self.click_select_3d_checkbox.setChecked(self.config.getboolean('Display', 'click_select_3d', fallback=False))
         selection_trans = self.config.getint('Display', 'selection_transparency', fallback=50)
         self.selection_transparency_slider.setValue(selection_trans)
         self.selection_transparency_label.setText(f"{selection_trans}%")
@@ -320,6 +332,7 @@ class SettingsWindow(QDialog):
         self.always_show_sysmon_checkbox.setChecked(self.config.getboolean('Display', 'always_show_sysmon', fallback=False))
         self.disable_toasts_checkbox.setChecked(self.config.getboolean('Display', 'disable_toasts', fallback=False))
         self.font_size_spinbox.setValue(self.config.getint('Display', 'font_size', fallback=10))
+        self.vsync_checkbox.setChecked(self.config.getboolean('Display', 'vsync', fallback=False))
         self.dpi_scaling_checkbox.setChecked(self.config.getboolean('Display', 'high_dpi_scaling', fallback=False))
         self.big_toolbar_buttons_checkbox.setChecked(self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False))
 
@@ -401,6 +414,7 @@ class SettingsWindow(QDialog):
         # Editor settings
         self.config.set('Display', 'show_caulk', str(self.show_caulk_checkbox.isChecked()))
         self.config.set('Display', 'sync_selection', str(self.sync_selection_checkbox.isChecked()))
+        self.config.set('Display', 'click_select_3d', str(self.click_select_3d_checkbox.isChecked()))
         self.config.set('Display', 'selection_transparency', str(self.selection_transparency_slider.value()))
         self.config.set('Display', 'show_connections', str(self.show_connections_checkbox.isChecked()))
         self.config.set('Display', 'locked_not_selectable_2d', str(self.locked_not_selectable_checkbox.isChecked()))
@@ -411,6 +425,7 @@ class SettingsWindow(QDialog):
         self.config.set('Display', 'always_show_sysmon', str(self.always_show_sysmon_checkbox.isChecked()))
         self.config.set('Display', 'disable_toasts', str(self.disable_toasts_checkbox.isChecked()))
         self.config.set('Display', 'font_size', str(self.font_size_spinbox.value()))
+        self.config.set('Display', 'vsync', str(self.vsync_checkbox.isChecked()))
         self.config.set('Display', 'high_dpi_scaling', str(self.dpi_scaling_checkbox.isChecked()))
         self.config.set('Display', 'big_toolbar_buttons', str(self.big_toolbar_buttons_checkbox.isChecked()))
         

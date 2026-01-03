@@ -72,7 +72,7 @@ class Toast(QLabel):
         
         parent_rect = parent_widget.rect()
         x = parent_rect.width() // 2 - self.width() // 2
-        y = 30 
+        y = parent_rect.height() - self.height() - 60 
         
         self.move(x, y)
         self.show()
@@ -136,6 +136,7 @@ class MainWindow(QMainWindow):
         self.preview_data = {} 
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
+        QTimer.singleShot(0, self.reposition_overlays)
         self.ctrl_tab_shortcut = QShortcut(QKeySequence("Ctrl+Tab"), self)
         self.ctrl_tab_shortcut.activated.connect(self.cycle_2d_view)
         self.setFocus()
@@ -156,7 +157,6 @@ class MainWindow(QMainWindow):
             "Space to clone selected brush",
             "H to hide brush, Shift+H to unhide all",
             "Ctrl+Tab to cycle 2D views",
-            "Double-click texture in Asset Browser to apply",
             "Ctrl+Drag from trigger to connect to target",
             "Shift+Wheel on Light to adjust radius",
             "Ctrl+Wheel on Light to adjust intensity",
@@ -187,6 +187,25 @@ class MainWindow(QMainWindow):
             if count > 0:
                 next_index = (self.right_tabs.currentIndex() + 1) % count
                 self.right_tabs.setCurrentIndex(next_index)
+
+    def resizeEvent(self, event):
+        """Reposition floating UI elements on window resize."""
+        super().resizeEvent(event)
+        if hasattr(self, 'play_button'):
+            # Center horizontally, 35px from the top
+            bx = self.width() // 2 - self.play_button.width() // 2
+            by = 35 
+            self.play_button.move(bx, by)
+            self.play_button.raise_()
+
+    def reposition_overlays(self):
+        """Positions the Play button at the top middle (where the toast used to be)."""
+        if hasattr(self, 'play_button'):
+            # Centered horizontally, 35 pixels from the top
+            px = self.width() // 2 - self.play_button.width() // 2
+            py = 35 
+            self.play_button.move(px, py)
+            self.play_button.raise_()
 
     def eventFilter(self, obj, event):
         """Track right-click state on view_3d for camera movement detection."""
@@ -445,7 +464,14 @@ class MainWindow(QMainWindow):
         return int(2**power)
 
     def start_mover_preview(self, brush):
-        if not brush or not isinstance(brush, dict) or not brush.get('is_mover', False):
+        if not brush or not isinstance(brush, dict):
+            return
+        
+        # Support both movers and doors
+        is_mover = brush.get('is_mover', False)
+        is_door = brush.get('is_door', False)
+        
+        if not is_mover and not is_door:
             return
 
         self.preview_data = {
@@ -454,7 +480,8 @@ class MainWindow(QMainWindow):
             'direction': np.array(brush.get('direction', [0, 1, 0]), dtype=float),
             'distance': brush.get('distance', 128.0),
             'speed': brush.get('speed', 64.0),
-            'time': 0.0
+            'time': 0.0,
+            'is_door': is_door
         }
         
         # Normalize direction

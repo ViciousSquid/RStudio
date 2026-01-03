@@ -80,6 +80,13 @@ class Thing:
 
         cls._pixmap_cache[class_name] = pixmap
         return pixmap
+    
+    def get_instance_pixmap(self):
+        """
+        Gets the QPixmap for this specific instance. 
+        Override in subclasses for dynamic sprite selection.
+        """
+        return self.__class__.get_pixmap()
 
     def to_dict(self):
         serializable_props = {k: str(v) for k, v in self.properties.items()}
@@ -111,7 +118,7 @@ class Thing:
 # --- Thing Subclasses ---
 
 class PlayerStart(Thing):
-    pixmap_path = "assets/player.png"
+    pixmap_path = "assets/sprites/player.png"
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'playerstart')
@@ -121,7 +128,7 @@ class PlayerStart(Thing):
         return float(self.properties.get('angle', 0.0))
 
 class Light(Thing):
-    pixmap_path = "assets/light.png"
+    pixmap_path = "assets/sprites/light.png"
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'light')
@@ -143,7 +150,7 @@ class Light(Thing):
         return float(self.properties.get('radius', 512.0))
 
 class Speaker(Thing):
-    pixmap_path = "assets/speaker.png"
+    pixmap_path = "assets/sprites/speaker.png"
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'speaker')
@@ -161,22 +168,25 @@ class Speaker(Thing):
         return float(self.properties.get('radius', 512.0))
 
 class Monster(Thing):
-    pixmap_path = "assets/monster.png"
+    pixmap_path = "assets/sprites/monster.png"
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'monster')
         self.properties.setdefault('id', 0)
 
 class Pickup(Thing):
-    pixmap_path = "assets/pickup.png"
+    pixmap_path = "assets/sprites/pickup.png"
     
     # Key sprite mappings: key_name -> sprite filename
     KEY_SPRITES = {
-        'blue_key': 'assets/bluekey.png',
-        'red_key': 'assets/redkey.png',
-        'yellow_key': 'assets/yellowkey.png',
-        'green_key': 'assets/greenkey.png',
+        'blue_key': 'assets/sprites/bluekey.png',
+        'red_key': 'assets/sprites/redkey.png',
+        'yellow_key': 'assets/sprites/yellowkey.png',
+        'green_key': 'assets/sprites/greenkey.png',
     }
+    
+    # Cache for dynamically loaded sprites (keyed by path)
+    _dynamic_sprite_cache = {}
     
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -186,8 +196,15 @@ class Pickup(Thing):
         self.properties.setdefault('activation', 'walk_over')  # 'walk_over' or 'use'
         self.properties.setdefault('collected', False)  # Runtime state
         
+        # Only Pickups have respawn functionality
+        self.properties.setdefault('respawns', False)
+        self.properties.setdefault('respawn_time', 20.0)
+        
         # Key-specific properties (only relevant when item_type == 'key')
         self.properties.setdefault('key_name', 'blue_key')  # Default key name
+        
+        # Custom sprite override (user-selected sprite)
+        self.properties.setdefault('custom_sprite', '')  # Path to custom sprite
     
     def is_key(self):
         """Check if this pickup is a key."""
@@ -198,16 +215,103 @@ class Pickup(Thing):
         return self.properties.get('key_name', 'blue_key')
     
     def get_sprite_path(self):
-        """Get the appropriate sprite path based on item type and key name."""
+        """Get the appropriate sprite path based on item type, key name, or custom sprite."""
+        # Custom sprite takes highest priority (unless it's a key with no custom sprite)
+        custom = self.properties.get('custom_sprite', '')
+        if custom and not self.is_key():
+            return custom
+        
+        # For keys, use key-specific sprites
         if self.is_key():
             key_name = self.get_key_name()
-            return self.KEY_SPRITES.get(key_name, 'assets/pickup.png')
-        return 'assets/pickup.png'
+            return self.KEY_SPRITES.get(key_name, 'assets/sprites/pickup.png')
+        
+        # Custom sprite for non-keys
+        if custom:
+            return custom
+        
+        # Default
+        return 'assets/sprites/pickup.png'
+    
+    def get_instance_pixmap(self):
+        """
+        Gets the QPixmap for this specific Pickup instance.
+        Handles keys and custom sprites dynamically.
+        """
+        sprite_path = self.get_sprite_path()
+        
+        # Check dynamic cache first
+        if sprite_path in Pickup._dynamic_sprite_cache:
+            return Pickup._dynamic_sprite_cache[sprite_path]
+        
+        # Try to load the sprite
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+        except NameError:
+            project_root = os.path.abspath(os.path.join(os.getcwd()))
+        
+        # Handle both relative and absolute paths
+        if os.path.isabs(sprite_path):
+            absolute_path = sprite_path
+        else:
+            absolute_path = os.path.join(project_root, sprite_path)
+        
+        pixmap = None
+        if os.path.exists(absolute_path):
+            loaded_pixmap = QPixmap(absolute_path)
+            if not loaded_pixmap.isNull():
+                # Scale to 75x75 if it's a custom sprite
+                custom = self.properties.get('custom_sprite', '')
+                if custom and loaded_pixmap.width() != 75:
+                    pixmap = loaded_pixmap.scaled(75, 75)
+                else:
+                    pixmap = loaded_pixmap
+            else:
+                print(f"Error: QPixmap failed to load sprite from {absolute_path}")
+        else:
+            print(f"Warning: Sprite file not found at: {absolute_path}")
+            # Fall back to default class pixmap
+            pixmap = Pickup.get_pixmap()
+        
+        # Cache and return
+        Pickup._dynamic_sprite_cache[sprite_path] = pixmap
+        return pixmap
     
     @classmethod
     def get_key_sprite_path(cls, key_name):
         """Class method to get sprite path for a specific key name."""
-        return cls.KEY_SPRITES.get(key_name, 'assets/pickup.png')
+        return cls.KEY_SPRITES.get(key_name, 'assets/sprites/pickup.png')
+    
+    @classmethod
+    def get_key_pixmap(cls, key_name):
+        """Get a pixmap for a specific key by name (for HUD display)."""
+        sprite_path = cls.get_key_sprite_path(key_name)
+        
+        if sprite_path in cls._dynamic_sprite_cache:
+            return cls._dynamic_sprite_cache[sprite_path]
+        
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+        except NameError:
+            project_root = os.path.abspath(os.path.join(os.getcwd()))
+        
+        absolute_path = os.path.join(project_root, sprite_path)
+        
+        pixmap = None
+        if os.path.exists(absolute_path):
+            loaded_pixmap = QPixmap(absolute_path)
+            if not loaded_pixmap.isNull():
+                pixmap = loaded_pixmap
+        
+        cls._dynamic_sprite_cache[sprite_path] = pixmap
+        return pixmap
+    
+    @classmethod
+    def clear_sprite_cache(cls):
+        """Clear the dynamic sprite cache (useful when sprites are changed)."""
+        cls._dynamic_sprite_cache.clear()
 
 class Trigger(Thing):
     pixmap_path = None
@@ -219,7 +323,7 @@ class Trigger(Thing):
 
 class Model(Thing):
     """Represents a 3D model placed in the world."""
-    pixmap_path = "assets/model.png"
+    pixmap_path = "assets/sprites/model.png"
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'model')

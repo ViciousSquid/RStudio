@@ -642,15 +642,23 @@ class View2D(QWidget):
             w_pos = QPointF(thing.pos[axis1_idx], thing.pos[axis2_idx])
             s_pos = self.world_to_screen(w_pos)
 
-            if isinstance(thing, Light) and thing.properties.get('show_radius', False):
-                r, g, b = thing.properties.get('colour', [255, 255, 255])
-                light_color = QColor(r, g, b, 60)
-                painter.setBrush(QBrush(light_color))
-                painter.setPen(QPen(light_color.darker(120), 1))
+            # Modified: Check for Light OR Speaker for radius drawing
+            if (isinstance(thing, Light) or isinstance(thing, Speaker)) and thing.properties.get('show_radius', False):
+                # Use 'colour' if available (Light), otherwise default to Yellow for Speaker
+                default_col = [255, 255, 0] if isinstance(thing, Speaker) else [255, 255, 255]
+                r, g, b = thing.properties.get('colour', default_col)
+                
+                viz_color = QColor(r, g, b, 60)
+                painter.setBrush(QBrush(viz_color))
+                painter.setPen(QPen(viz_color.darker(120), 1))
                 radius = thing.get_radius() * self.zoom_factor
                 painter.drawEllipse(s_pos, radius, radius)
 
-            pixmap = thing.get_pixmap()
+            # Use instance-specific pixmap (handles dynamic sprites for Pickups)
+            if hasattr(thing, 'get_instance_pixmap'):
+                pixmap = thing.get_instance_pixmap()
+            else:
+                pixmap = thing.get_pixmap()
             if not pixmap: continue
 
             pixmap_size = pixmap.size()
@@ -664,7 +672,6 @@ class View2D(QWidget):
             # Draw the sprite with a vertical flip so it appears upright
             painter.save()
             painter.translate(s_pos)
-            painter.scale(1, -1) # Flip vertically
             
             # Draw centered at (0,0) relative to the translated origin
             target_rect = QRectF(-pixmap_size.width() / 2, 
@@ -1144,7 +1151,7 @@ class View2D(QWidget):
             if self.is_panning:
                 delta = event.pos() - self.last_pan_pos
                 self.last_pan_pos = event.pos()
-                if self.view_type == 'front':
+                if self.view_type in ['front', 'side']:
                     self.pan_offset -= QPointF(delta.x() / self.zoom_factor, -delta.y() / self.zoom_factor)
                 else:
                     self.pan_offset -= QPointF(delta.x() / self.zoom_factor, delta.y() / self.zoom_factor)
