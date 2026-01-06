@@ -62,6 +62,7 @@ class LogicThread(threading.Thread):
         self.running = False
         self.player: Optional[Player] = None
         self.play_mode = False
+        self.terrain = None  # Reference to terrain for collision
         
         # Frustum culling settings
         self.culling_enabled = True
@@ -156,6 +157,10 @@ class LogicThread(threading.Thread):
             self._reset_movers()
             self._reset_doors()
             self.current_hud_message = ""
+    
+    def set_terrain(self, terrain):
+        """Set terrain reference for collision detection."""
+        self.terrain = terrain
     
     def set_editor_camera(self, pos: glm.vec3, yaw: float, pitch: float, fov: float):
         """Set the editor camera state (thread-safe initialization)."""
@@ -336,7 +341,7 @@ class LogicThread(threading.Thread):
             self.player.update_angle(dx, dy)
         
         # Update player physics and movement
-        self.player.update(keys, self.brushes, delta)
+        self.player.update(keys, self.brushes, delta, terrain=self.terrain)
         
         # Handle triggers
         self._handle_triggers(use_key)

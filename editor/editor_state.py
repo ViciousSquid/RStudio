@@ -9,7 +9,7 @@ class EditorState:
         self.brushes = []
         self.things = []
         self.selected_object = None
-        
+        self.terrain_data = None
         self.undo_stack = []
         self.redo_stack = []
         
@@ -31,18 +31,25 @@ class EditorState:
 
     def get_level_data(self):
         """Serializes the current scene state into a dictionary with a fingerprint."""
-        return {
+        data = {
             'fingerprint': 'RStudio', # The magic number
             'brushes': self.brushes, 
             'things': [t.to_dict() for t in self.things]
         }
+        
+        # Check if terrain data exists and add it to the save file
+        if hasattr(self, 'terrain_data') and self.terrain_data:
+            data['terrain_data'] = self.terrain_data
+            
+        return data
 
     def load_from_data(self, level_data):
         """Populates the scene from a dictionary after validating the fingerprint."""
         if level_data.get('fingerprint') != 'RStudio':
-            raise ValueError("Not a valid save file: Missing 'RStudio' fingerprint.") # Refuse to load
+            raise ValueError("Not a valid save file: Missing 'RStudio' fingerprint.")
             
         self.brushes = level_data.get('brushes', [])
+        self.terrain_data = level_data.get('terrain_data', None) # <--- Add this line
         
         things_data = level_data.get('things', [])
         new_things = []

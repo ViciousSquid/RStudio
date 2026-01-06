@@ -16,6 +16,7 @@ class Player:
         # Physics state
         self.on_ground = False
         self.ground_object = None  # Reference to the brush we are standing on
+        self.on_terrain = False  # True if standing on terrain
         self.physics_enabled = physics_enabled
         self.step_height = 18.0  # Max height the player can step up automatically
 
@@ -46,7 +47,7 @@ class Player:
                 return True
         return False
 
-    def update(self, keys, brushes, delta):
+    def update(self, keys, brushes, delta, terrain=None):
         # --- 1. Input Processing ---
         forward_input = (1 if Qt.Key_W in keys or Qt.Key_Up in keys else 0) - \
                         (1 if Qt.Key_S in keys or Qt.Key_Down in keys else 0)
@@ -112,14 +113,67 @@ class Player:
         if Qt.Key_Space in keys and self.on_ground:
             self.velocity.y = JUMP_STRENGTH
             self.on_ground = False
+            self.on_terrain = False
             self.ground_object = None
 
         self.pos.y += self.velocity.y * delta
         
         self.on_ground = False 
+        self.on_terrain = False
         self.ground_object = None
         
         self._resolve_collision(brushes, axis='y')
+        
+        # D. Terrain Collision (after brush collision)
+        self._resolve_terrain_collision(terrain)
+
+    def _resolve_terrain_collision(self, terrain):
+        """
+        Check and resolve collision with terrain.
+        Terrain acts as a floor the player can walk on.
+        """
+        if terrain is None:
+            return
+        
+        # Check if terrain has collision enabled
+        if not terrain.is_solid():
+            return
+        
+        # Get terrain height at player's XZ position
+        terrain_height = terrain.get_height_at_safe(self.pos.x, self.pos.z)
+        
+        if terrain_height is None:
+            # Player is outside terrain bounds
+            return
+        
+        # Player's feet position
+        feet_y = self.pos.y - self.height / 2
+        
+        # Check if player is at or below terrain surface
+        if feet_y <= terrain_height:
+            # Snap player to stand on terrain
+            self.pos.y = terrain_height + self.height / 2
+            
+            # Only stop downward velocity if we were falling
+            if self.velocity.y < 0:
+                self.velocity.y = 0
+            
+            self.on_ground = True
+            self.on_terrain = True
+            self.ground_object = None  # Terrain isn't a brush
+        
+        # Also check if player will hit terrain next frame (predictive)
+        elif self.velocity.y < 0:
+            # Calculate where feet will be next frame
+            predicted_feet_y = feet_y + self.velocity.y * (1.0 / 60.0)  # Assume 60fps
+            
+            if predicted_feet_y <= terrain_height:
+                # Will hit terrain - snap to surface
+                self.pos.y = terrain_height + self.height / 2
+                self.velocity.y = 0
+                self.on_ground = True
+                self.on_terrain = True
+                self.ground_object = None
 
     def _resolve_collision(self, brushes, axis):
         """

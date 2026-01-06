@@ -286,6 +286,7 @@ class View2D(QWidget):
             return
         
         self.draw_grid(painter)
+        self.draw_terrain(painter, visible_bounds)
         self.draw_brushes(painter, visible_bounds)
         self.draw_things(painter, visible_bounds)
         self.draw_camera(painter)
@@ -621,6 +622,122 @@ class View2D(QWidget):
             tag_y = int(screen_rect.bottomRight().y() - tag_size - 2) 
             painter.drawPixmap(tag_x, tag_y, pixmap)
 
+    def _compute_model_screen_coords(self, model_thing, ax_map, ax1, ax2):
+        """Helper to compute screen coordinates for a model's wireframe.
+        Returns (pts_x, pts_y) numpy arrays, or None if failed."""
+        model_path = model_thing.properties.get('model_path')
+        if not model_path: return None
+
+        # Access loaded model from renderer via main window reference
+        if not hasattr(self.main_window, 'view_3d') or not self.main_window.view_3d.renderer:
+            return None
+            
+        renderer = self.main_window.view_3d.renderer
+        
+        # Check if loaded (don't force load during hit test to prevent lag)
+        # But ensure loaded for draw. 
+        # Since this helper is used by both, we might need to handle load triggering externally or check context.
+        # For now, if not loaded, return None. 
+        if model_path not in renderer.loaded_models:
+            return None
+            
+        obj = renderer.loaded_models.get(model_path)
+        if not obj or not hasattr(obj, 'cpu_vertices') or not obj.cpu_vertices:
+            return None
+
+        # Optimization: Too many vertices check
+        if len(obj.cpu_vertices) > 2000:
+            return None # Treat as box fallback elsewhere
+
+        # Transform parameters
+        pos = model_thing.pos
+        scale = model_thing.properties.get('scale', 1.0)
+        if isinstance(scale, (int, float)): scale = [scale, scale, scale]
+        rot = model_thing.properties.get('rotation', [0, 0, 0])
+        
+        # Build Rotation Matrix
+        def rotate_x(a):
+            c, s = np.cos(a), np.sin(a)
+            return np.array([[1,0,0], [0,c,-s], [0,s,c]])
+        def rotate_y(a):
+            c, s = np.cos(a), np.sin(a)
+            return np.array([[c,0,s], [0,1,0], [-s,0,c]])
+        def rotate_z(a):
+            c, s = np.cos(a), np.sin(a)
+            return np.array([[c,-s,0], [s,c,0], [0,0,1]])
+
+        rx = rotate_x(np.radians(rot[0]))
+        ry = rotate_y(np.radians(rot[1]))
+        rz = rotate_z(np.radians(rot[2]))
+        
+        # Rotation Order: Z * X * Y
+        R = rz @ rx @ ry 
+
+        # Prepare vertices array from cached OBJ data
+        verts = np.array(obj.cpu_vertices)
+        
+        # Apply Transforms
+        verts = verts * np.array(scale)
+        verts = verts @ R.T 
+        verts = verts + np.array(pos)
+        
+        # Extract relevant axes for this 2D view
+        ix1, ix2 = ax_map[ax1], ax_map[ax2]
+        
+        # Project to screen coordinates
+        center_x, center_y = self.width() / 2, self.height() / 2
+        pan_x, pan_y = self.pan_offset.x(), self.pan_offset.y()
+        zoom = self.zoom_factor
+        
+        pts_x = center_x + (verts[:, ix1] - pan_x) * zoom
+        if self.view_type in ['front', 'side']:
+            pts_y = center_y - (verts[:, ix2] - pan_y) * zoom
+        else:
+            pts_y = center_y + (verts[:, ix2] - pan_y) * zoom
+            
+        return pts_x, pts_y
+
+    def _draw_model_wireframe(self, painter, model_thing, ax_map, ax1, ax2):
+        """Draws the projected wireframe of a 3D model in the 2D view."""
+        # Ensure model is loaded before trying to compute coords
+        model_path = model_thing.properties.get('model_path')
+        if model_path and hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.renderer:
+            renderer = self.main_window.view_3d.renderer
+            if model_path not in renderer.loaded_models:
+                renderer.load_model(model_path)
+
+        coords = self._compute_model_screen_coords(model_thing, ax_map, ax1, ax2)
+        
+        if coords is None:
+             # Fallback: Draw small placeholder box
+             painter.setPen(QPen(QColor(200, 200, 200), 1))
+             s_pos = self.world_to_screen(QPointF(model_thing.pos[ax_map[ax1]], model_thing.pos[ax_map[ax2]]))
+             painter.drawRect(QRectF(s_pos.x()-10, s_pos.y()-10, 20, 20))
+             return
+
+        pts_x, pts_y = coords
+        
+        painter.setPen(QPen(QColor(0, 255, 255, 100), 1))
+        
+        width, height = self.width(), self.height()
+        
+        # Iterate over triangles
+        for i in range(0, len(pts_x), 3):
+            # Culling optimization
+            if (pts_x[i] < 0 and pts_x[i+1] < 0 and pts_x[i+2] < 0) or \
+               (pts_x[i] > width and pts_x[i+1] > width and pts_x[i+2] > width) or \
+               (pts_y[i] < 0 and pts_y[i+1] < 0 and pts_y[i+2] < 0) or \
+               (pts_y[i] > height and pts_y[i+1] > height and pts_y[i+2] > height):
+                continue
+
+            p0 = QPointF(pts_x[i], pts_y[i])
+            p1 = QPointF(pts_x[i+1], pts_y[i+1])
+            p2 = QPointF(pts_x[i+2], pts_y[i+2])
+            
+            painter.drawLine(p0, p1)
+            painter.drawLine(p1, p2)
+            painter.drawLine(p2, p0)
+
     def draw_things(self, painter, visible_bounds):
         ax1, ax2 = self.get_axes()
         if not ax1 or not ax2:
@@ -641,94 +758,216 @@ class View2D(QWidget):
             
             w_pos = QPointF(thing.pos[axis1_idx], thing.pos[axis2_idx])
             s_pos = self.world_to_screen(w_pos)
+            
+            draw_rect = None
 
-            # 1. Draw Radius (for Light or Speaker)
-            if (isinstance(thing, Light) or isinstance(thing, Speaker)) and thing.properties.get('show_radius', False):
-                default_col = [255, 255, 0] if isinstance(thing, Speaker) else [255, 255, 255]
-                r, g, b = thing.properties.get('colour', default_col)
-                
-                viz_color = QColor(r, g, b, 60)
-                painter.setBrush(QBrush(viz_color))
-                painter.setPen(QPen(viz_color.darker(120), 1))
-                radius = thing.get_radius() * self.zoom_factor
-                painter.drawEllipse(s_pos, radius, radius)
+            # --- MODEL RENDERING ---
+            if isinstance(thing, Model):
+                self._draw_model_wireframe(painter, thing, ax_map, ax1, ax2)
+                # Selection box for models
+                draw_rect = QRectF(s_pos.x() - 16, s_pos.y() - 16, 32, 32)
 
-            # 2. Draw the Sprite (Pixmap)
-            if hasattr(thing, 'get_instance_pixmap'):
-                pixmap = thing.get_instance_pixmap()
+            # --- SPRITE RENDERING ---
             else:
-                pixmap = thing.get_pixmap()
+                # 1. Draw Radius
+                if (isinstance(thing, Light) or isinstance(thing, Speaker)) and thing.properties.get('show_radius', False):
+                    default_col = [255, 255, 0] if isinstance(thing, Speaker) else [255, 255, 255]
+                    r, g, b = thing.properties.get('colour', default_col)
+                    viz_color = QColor(r, g, b, 60)
+                    painter.setBrush(QBrush(viz_color))
+                    painter.setPen(QPen(viz_color.darker(120), 1))
+                    radius = thing.get_radius() * self.zoom_factor
+                    painter.drawEllipse(s_pos, radius, radius)
+
+                # 2. Draw Sprite
+                if hasattr(thing, 'get_instance_pixmap'):
+                    pixmap = thing.get_instance_pixmap()
+                else:
+                    pixmap = thing.get_pixmap()
+                
+                if pixmap:
+                    pixmap_size = pixmap.size()
+                    draw_rect = QRectF(s_pos.x() - pixmap_size.width() / 2, 
+                                       s_pos.y() - pixmap_size.height() / 2,
+                                       pixmap_size.width(), 
+                                       pixmap_size.height())
+                    
+                    painter.save()
+                    painter.translate(s_pos)
+                    target_rect = QRectF(-pixmap_size.width() / 2, 
+                                         -pixmap_size.height() / 2, 
+                                         pixmap_size.width(), 
+                                         pixmap_size.height())
+                    painter.drawPixmap(target_rect.toRect(), pixmap)
+                    painter.restore()
+
+                # 3. Direction Arrow
+                angle_deg = None
+                if 'angle' in thing.properties:
+                    angle_deg = float(thing.properties.get('angle', 0.0))
+                
+                if angle_deg is not None:
+                    painter.save()
+                    arrow_color = QColor(0, 255, 255) if thing.__class__.__name__ == 'PlayerStart' else QColor(255, 128, 0)
+                    angle_rad = math.radians(angle_deg)
+                    arrow_len = 35 * self.zoom_factor
+                    if arrow_len < 15: arrow_len = 15
+                    
+                    dx = math.cos(angle_rad) * arrow_len
+                    dy = math.sin(angle_rad) * arrow_len
+                    if self.view_type == 'top': dy = -dy 
+                    
+                    s_end = s_pos + QPointF(dx, dy)
+                    painter.setPen(QPen(arrow_color, 2))
+                    painter.drawLine(s_pos, s_end)
+                    
+                    head_angle = math.atan2(s_end.y() - s_pos.y(), s_end.x() - s_pos.x())
+                    head_size = 8
+                    p1 = s_end - QPointF(math.cos(head_angle - math.pi / 6) * head_size, 
+                                         math.sin(head_angle - math.pi / 6) * head_size)
+                    p2 = s_end - QPointF(math.cos(head_angle + math.pi / 6) * head_size, 
+                                         math.sin(head_angle + math.pi / 6) * head_size)
+                    
+                    painter.setBrush(QBrush(arrow_color))
+                    painter.drawPolygon(QPolygonF([s_end, p1, p2]))
+                    painter.restore()
+
+            # 4. Overlays
+            if draw_rect:
+                self.draw_thing_color_tag(painter, thing, draw_rect)
+                is_selected = thing in getattr(self.editor.state, 'selected_objects', []) or thing == self.editor.state.selected_object
+                if is_selected:
+                    painter.setPen(QPen(QColor(255, 255, 0), 2, Qt.DotLine))
+                    painter.setBrush(Qt.NoBrush)
+                    painter.drawRect(draw_rect.adjusted(-2, -2, 2, 2))
+
+    def draw_terrain(self, painter, visible_bounds):
+        """Draw terrain outline/profile in 2D view."""
+        # Check if terrain exists and is enabled
+        if not hasattr(self.editor, 'terrain') or not self.editor.terrain:
+            return
+        terrain = self.editor.terrain
+        if not terrain.enabled:
+            return
+        
+        ax1, ax2 = self.get_axes()
+        if not ax1 or not ax2:
+            return
+        
+        # Get view bounds
+        min1 = visible_bounds.left()
+        max1 = visible_bounds.right()
+        min2 = visible_bounds.top()
+        max2 = visible_bounds.bottom()
+        
+        # Set terrain drawing style
+        terrain_color = QColor(139, 90, 43, 180)  # Brown with transparency
+        terrain_fill = QColor(139, 90, 43, 40)
+        
+        if terrain.solid:
+            pen = QPen(terrain_color, 2)
+        else:
+            pen = QPen(terrain_color, 1, Qt.DashLine)
+        
+        painter.setPen(pen)
+        
+        # Get terrain bounds
+        t_bounds = terrain.get_terrain_bounds()
+        t_min_x, t_max_x = t_bounds[0]
+        t_min_z, t_max_z = t_bounds[1]
+        
+        if ax1 == 'x' and ax2 == 'z':
+            # TOP VIEW - Draw terrain boundary rectangle
+            p1 = self.world_to_screen(QPointF(t_min_x, t_min_z))
+            p2 = self.world_to_screen(QPointF(t_max_x, t_max_z))
+            rect = QRectF(p1, p2).normalized()
             
-            if not pixmap: continue
-
-            pixmap_size = pixmap.size()
-            draw_rect = QRectF(s_pos.x() - pixmap_size.width() / 2, 
-                            s_pos.y() - pixmap_size.height() / 2,
-                            pixmap_size.width(), 
-                            pixmap_size.height())
+            painter.setBrush(QBrush(terrain_fill))
+            painter.drawRect(rect)
             
-            painter.save()
-            painter.translate(s_pos)
-            target_rect = QRectF(-pixmap_size.width() / 2, 
-                                 -pixmap_size.height() / 2, 
-                                 pixmap_size.width(), 
-                                 pixmap_size.height())
-            painter.drawPixmap(target_rect.toRect(), pixmap)
-            painter.restore()
-
-            # 3. NEW: Draw Directional Orientation Arrow
-            # We check for 'angle' (common in PlayerStart/Pickups) or 'rotation' (Models)
-            angle_deg = None
-            if 'angle' in thing.properties:
-                angle_deg = float(thing.properties.get('angle', 0.0))
-            elif 'rotation' in thing.properties:
-                # Use Y-axis rotation for Top view orientation
-                rot = thing.properties.get('rotation', [0, 0, 0])
-                angle_deg = rot[1] if self.view_type == 'top' else None
-
-            if angle_deg is not None:
-                painter.save()
-                # Determine arrow color: Cyan for Player, Orange for NPCs/Items
-                arrow_color = QColor(0, 255, 255) if thing.__class__.__name__ == 'PlayerStart' else QColor(255, 128, 0)
+            # Draw a grid pattern to indicate terrain
+            painter.setPen(QPen(QColor(139, 90, 43, 60), 1))
+            chunk_size = terrain.chunk_size
+            for cx in range(terrain.min_chunk_x, terrain.max_chunk_x + 2):
+                x = cx * chunk_size + terrain.offset_x
+                p1 = self.world_to_screen(QPointF(x, t_min_z))
+                p2 = self.world_to_screen(QPointF(x, t_max_z))
+                painter.drawLine(p1, p2)
+            for cz in range(terrain.min_chunk_z, terrain.max_chunk_z + 2):
+                z = cz * chunk_size + terrain.offset_z
+                p1 = self.world_to_screen(QPointF(t_min_x, z))
+                p2 = self.world_to_screen(QPointF(t_max_x, z))
+                painter.drawLine(p1, p2)
+            
+            # Label
+            painter.setPen(QPen(terrain_color, 1))
+            label_pos = self.world_to_screen(QPointF(t_min_x + 10, t_min_z + 10))
+            painter.drawText(label_pos, "TERRAIN")
+            
+        elif ax1 == 'x' and ax2 == 'y':
+            # FRONT VIEW - Draw height profile
+            center_z = (t_min_z + t_max_z) / 2
+            
+            # Sample terrain heights
+            resolution = 64
+            points = []
+            sample_min_x = max(min1, t_min_x)
+            sample_max_x = min(max1, t_max_x)
+            
+            if sample_max_x > sample_min_x:
+                for x in np.linspace(sample_min_x, sample_max_x, resolution):
+                    h = terrain.get_height_at(x, center_z)
+                    screen_pt = self.world_to_screen(QPointF(x, h))
+                    points.append(screen_pt)
                 
-                # Math consistent with draw_mover_arrow
-                angle_rad = math.radians(angle_deg)
-                arrow_len = 35 * self.zoom_factor
-                if arrow_len < 15: arrow_len = 15 # Ensure visibility at high zoom
+                if len(points) >= 2:
+                    # Draw filled area under terrain
+                    bottom_y = self.world_to_screen(QPointF(0, terrain.offset_y)).y()
+                    polygon = QPolygonF()
+                    polygon.append(QPointF(points[0].x(), bottom_y))
+                    for pt in points:
+                        polygon.append(pt)
+                    polygon.append(QPointF(points[-1].x(), bottom_y))
+                    
+                    painter.setBrush(QBrush(terrain_fill))
+                    painter.drawPolygon(polygon)
+                    
+                    # Draw terrain line
+                    painter.setPen(pen)
+                    painter.setBrush(Qt.NoBrush)
+                    for i in range(len(points) - 1):
+                        painter.drawLine(points[i], points[i + 1])
+                        
+        elif ax1 == 'z' and ax2 == 'y':
+            # SIDE VIEW - Draw height profile
+            center_x = (t_min_x + t_max_x) / 2
+            
+            resolution = 64
+            points = []
+            sample_min_z = max(min1, t_min_z)
+            sample_max_z = min(max1, t_max_z)
+            
+            if sample_max_z > sample_min_z:
+                for z in np.linspace(sample_min_z, sample_max_z, resolution):
+                    h = terrain.get_height_at(center_x, z)
+                    screen_pt = self.world_to_screen(QPointF(z, h))
+                    points.append(screen_pt)
                 
-                # In Top View (XZ), angle 0 is +X (Right). 
-                # Note: Screen Y is inverted relative to world Z in Top View
-                dx = math.cos(angle_rad) * arrow_len
-                dy = math.sin(angle_rad) * arrow_len
-                if self.view_type == 'top':
-                    dy = -dy # Screen Y inversion
-                
-                s_end = s_pos + QPointF(dx, dy)
-                
-                painter.setPen(QPen(arrow_color, 2))
-                painter.drawLine(s_pos, s_end)
-                
-                # Draw Arrow Head
-                head_angle = math.atan2(s_end.y() - s_pos.y(), s_end.x() - s_pos.x())
-                head_size = 8
-                p1 = s_end - QPointF(math.cos(head_angle - math.pi / 6) * head_size, 
-                                     math.sin(head_angle - math.pi / 6) * head_size)
-                p2 = s_end - QPointF(math.cos(head_angle + math.pi / 6) * head_size, 
-                                     math.sin(head_angle + math.pi / 6) * head_size)
-                
-                painter.setBrush(QBrush(arrow_color))
-                painter.drawPolygon(QPolygonF([s_end, p1, p2]))
-                painter.restore()
-
-            # 4. Draw color tag for things
-            self.draw_thing_color_tag(painter, thing, draw_rect)
-
-            # 5. Draw selection highlight
-            is_selected = thing in getattr(self.editor.state, 'selected_objects', []) or thing == self.editor.state.selected_object
-            if is_selected:
-                painter.setPen(QPen(QColor(255, 255, 0), 2, Qt.DotLine))
-                painter.setBrush(Qt.NoBrush)
-                painter.drawRect(draw_rect.adjusted(-2, -2, 2, 2))
+                if len(points) >= 2:
+                    bottom_y = self.world_to_screen(QPointF(0, terrain.offset_y)).y()
+                    polygon = QPolygonF()
+                    polygon.append(QPointF(points[0].x(), bottom_y))
+                    for pt in points:
+                        polygon.append(pt)
+                    polygon.append(QPointF(points[-1].x(), bottom_y))
+                    
+                    painter.setBrush(QBrush(terrain_fill))
+                    painter.drawPolygon(polygon)
+                    
+                    painter.setPen(pen)
+                    painter.setBrush(Qt.NoBrush)
+                    for i in range(len(points) - 1):
+                        painter.drawLine(points[i], points[i + 1])
     
     def draw_camera(self, painter):
         """Optimized camera drawing with early exit for off-screen cameras."""
@@ -1595,13 +1834,34 @@ class View2D(QWidget):
         locked_not_selectable = self.main_window.config.getboolean('Display', 'locked_not_selectable_2d', fallback=False)
 
         for thing in reversed(self.editor.state.things):
-            # Skip hidden things
             if thing.properties.get('hidden', False):
                 continue
-            w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
-            s_pos = self.world_to_screen(w_pos)
-            hit_threshold = 12 
-            if abs(screen_pos.x() - s_pos.x()) <= hit_threshold and abs(screen_pos.y() - s_pos.y()) <= hit_threshold:
+            
+            is_hit = False
+            
+            # Standard Thing Hit Test
+            if isinstance(thing, Model):
+                # Advanced Model Hit Test: Check Bounding Box of projected vertices
+                coords = self._compute_model_screen_coords(thing, ax_map, ax1, ax2)
+                if coords:
+                    pts_x, pts_y = coords
+                    # Compute BBox
+                    min_x, max_x = np.min(pts_x), np.max(pts_x)
+                    min_y, max_y = np.min(pts_y), np.max(pts_y)
+                    # Check contains
+                    sx, sy = screen_pos.x(), screen_pos.y()
+                    if sx >= min_x and sx <= max_x and sy >= min_y and sy <= max_y:
+                        is_hit = True
+            
+            # Fallback (or non-model) hit test
+            if not is_hit:
+                w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
+                s_pos = self.world_to_screen(w_pos)
+                hit_threshold = 12 
+                if abs(screen_pos.x() - s_pos.x()) <= hit_threshold and abs(screen_pos.y() - s_pos.y()) <= hit_threshold:
+                    is_hit = True
+
+            if is_hit:
                 # Track locked things separately if setting is enabled
                 if locked_not_selectable and thing.properties.get('lock', False):
                     locked_at_pos.append(thing)

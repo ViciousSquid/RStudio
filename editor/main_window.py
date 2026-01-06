@@ -11,10 +11,10 @@ import time
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QMessageBox, QFileDialog, QWidget, QLabel, QVBoxLayout,
-    QGraphicsOpacityEffect, QInputDialog, QColorDialog
+    QGraphicsOpacityEffect, QInputDialog, QColorDialog, QProgressDialog
 )
 from PyQt5.QtWidgets import QShortcut
-from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, QRect
+from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, QRect, QPoint
 from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor
 
 from editor.things import Light, PlayerStart, Thing, Pickup, Monster, Model
@@ -25,11 +25,17 @@ from editor.ui import Ui_MainWindow, GenerateTilemapDialog
 from engine.constants import TILE_SIZE, WALL_TILE, FLOOR_TILE
 from editor.view_2d import View2D
 from editor.editor_state import EditorState
+from editor.terrain_editor import TerrainEditorWindow
+from engine.terrain import Terrain
+
 
 class Toast(QLabel):
     def __init__(self, parent):
         super().__init__(parent)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.SubWindow)
+        # CRITICAL: Remove Qt.SubWindow to use parent coordinates
+        self.setWindowFlags(Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setAlignment(Qt.AlignCenter)
         self.hide()
         
@@ -44,25 +50,32 @@ class Toast(QLabel):
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self.fade_out)
         
-        # Track current toast type for conditional dismissal
         self.current_toast_id = None
 
     def update_position(self):
-        """Recalculate position relative to parent (used on resize)."""
-        if self.isVisible() and self.parentWidget():
-            parent_rect = self.parentWidget().rect()
-            x = parent_rect.width() // 2 - self.width() // 2
-            y = parent_rect.height() - self.height() - 60
-            self.move(x, y)
+        if not self.isVisible() or not self.parentWidget():
+            return
+            
+        parent = self.parentWidget()
+        # Calculate horizontal center
+        x = max(0, (parent.width() - self.width()) // 2)
+        
+        # FIX: Remove the -60 offset to align with the bottom status bar area.
+        # parent.height() represents the absolute bottom of the MainWindow.
+        y = parent.height() - self.height()
+        
+        self.move(x, y)
+        self.raise_()  # Ensures it stays above the Status Bar widgets
 
-    def show_message(self, text, parent_widget, is_error=False, duration=None, is_tooltip=False, toast_id=None):
-        # Choose background color based on type
+    def show_message(self, text, parent_widget, is_error=False, duration=None, 
+                     is_tooltip=False, toast_id=None):
+        """Show toast notification with STRICT bottom-middle positioning."""
         if is_tooltip:
-            bg_color = "#425f5d"  # Teal tooltip color
+            bg_color = "#2b2b2b"
         elif is_error:
-            bg_color = "#8B0000"  # Dark red for errors
+            bg_color = "#8B0000"
         else:
-            bg_color = "#2E6F40"  # Green for success
+            bg_color = "#2E6F40"
         
         self.setStyleSheet(f"""
             QLabel {{
@@ -77,9 +90,7 @@ class Toast(QLabel):
         
         self.setText(text)
         self.adjustSize()
-        
-        # Initial positioning
-        self.update_position()
+        self.update_position()  # Force immediate positioning
         
         self.show()
         self.raise_()
@@ -90,10 +101,8 @@ class Toast(QLabel):
         self.anim.setEndValue(1)
         self.anim.start()
         
-        # Store toast ID for conditional dismissal
         self.current_toast_id = toast_id
         
-        # Handle duration. If duration is 0, do not start the timer (persistent).
         if duration == 0:
             self.timer.stop()
         else:
@@ -101,9 +110,8 @@ class Toast(QLabel):
             self.timer.start(final_duration)
 
     def hide_toast(self, toast_id=None):
-        """Hide toast, optionally only if it matches a specific ID."""
+        """Hide toast, optionally only if matching ID."""
         if self.isVisible():
-            # If toast_id specified, only hide if it matches
             if toast_id is not None and self.current_toast_id != toast_id:
                 return
             self.current_toast_id = None
@@ -120,7 +128,7 @@ class MainWindow(QMainWindow):
         self.root_dir = root_dir
         self.setWindowTitle("RStudio")
         self.setGeometry(100, 100, 1600, 900)
-        self.setMinimumSize(1200, 800)
+        self.setMinimumSize(1280, 800)
 
         self.config = configparser.ConfigParser()
         self.config_path = 'settings.ini'
@@ -128,7 +136,6 @@ class MainWindow(QMainWindow):
         self.state = EditorState()
         
         # Initialize selected_objects list for multi-selection support
-        # This ensures compatibility even if EditorState doesn't have it
         if not hasattr(self.state, 'selected_objects'):
             self.state.selected_objects = []
         if not hasattr(self.state, 'selected_object'):
@@ -136,7 +143,7 @@ class MainWindow(QMainWindow):
         
         self.keys_pressed = set()
         self.file_path = None
-        self.grid_visible = True  # Grid visibility state (never visible in play mode)
+        self.grid_visible = True
         self.preview_timer = QTimer()
         self.preview_timer.timeout.connect(self.update_mover_preview)
         self.preview_data = {} 
@@ -148,7 +155,10 @@ class MainWindow(QMainWindow):
         self.setFocus()
         self.update_global_font()
         self.load_layout()
-        self.toast = Toast(self)
+        
+        # Terrain system
+        self.terrain = None
+        self.terrain_editor_window = None
 
         # Enable sysmon at launch if configured
         if self.config.getboolean('Display', 'always_show_sysmon', fallback=False):
@@ -158,14 +168,83 @@ class MainWindow(QMainWindow):
         # Tooltip system
         self.camera_movement_learned = self.config.getboolean('Tooltips', 'camera_movement_learned', fallback=False)
         self.startup_tooltip_shown = False
+        self.camera_movement_learned = self.config.getboolean('Tooltips', 'camera_movement_learned', fallback=False)
+        self.startup_tooltip_shown = False
         self.tooltip_tips = [
-            "Shift+T to apply texture to selected brush",
-            "Space to clone selected brush",
-            "H to hide brush, Shift+H to unhide all",
-            "Ctrl+Tab to cycle 2D views",
-            "Ctrl+Drag from trigger to connect to target",
-            "Shift+Wheel on Light to adjust radius",
-            "Ctrl+Wheel on Light to adjust intensity",
+            # Camera & Navigation
+            "Right-click + WASD: Move camera",
+            "Mouse wheel: Zoom in/out",
+            "Ctrl+Tab: Cycle 2D views (Top/Side/Front)",
+            
+            # Brush Tools
+            "Space: Clone selected brush/object",
+            "H: Hide selected, Shift+H: Unhide all",
+            "Delete: Remove selected brush/object",
+            "Shift+T: Apply texture to brush",
+            "Subtract: Cut geometry from solid brushes",
+            "Rotate: Flip dimensions in active 2D view",
+            "Tint: Change brush color permanently",
+            "Create Room: Hollows + auto-adds lights",
+            "Hollow: Creates empty space with wall thickness",
+            
+            # Textures & Materials
+            "Drag from Asset Browser onto brush faces",
+            "Apply Caulk: Invisible but solid",
+            "Select face in 2D view + texture: Apply to single face",
+            
+            # Things & Entities
+            "Add Player Start before Play Mode",
+            "Shift+Wheel on Light: Adjust radius",
+            "Ctrl+Wheel on Light: Adjust intensity",
+            "Ctrl+Drag from Trigger: Connect to targets",
+            "Triggers activate movers, doors, etc.",
+            
+            # Play Mode
+            "F5: Enter/Exit Play Mode",
+            "ESC: Exit Play Mode",
+            "F3: Toggle System Monitor",
+            "F4: Toggle sprite visibility",
+            "F1: Toggle connection lines",
+            "E: Use/interact with objects",
+            
+            # 2D Views
+            "Grid size auto-snaps to power of 2",
+            "2D views show projections: Top(XZ), Side(YZ), Front(XY)",
+            
+            # Selection
+            "Ctrl+Click: Multi-select",
+            "Click empty space: Clear selection",
+            
+            # Asset Browser
+            "T: Toggle Asset Browser",
+            "Double-click: Preview asset",
+            
+            # Terrain
+            "Terrain Editor: Sculpt heightmaps",
+            "Terrain collision works in Play Mode",
+            
+            # UI & Layout
+            "Save/Load custom window layouts",
+            "Scene Hierarchy: Select by name",
+            "Property Editor: Fine-tune properties",
+            
+            # Advanced
+            "Subtract + Hollow: Create complex geometry",
+            "Locked brushes: Cannot be modified",
+            "Movers: Require direction vector",
+            "Doors: Auto-rotate around Z axis",
+            
+            # Generation
+            "Generate random maps from algorithms",
+            "Export collision tilemaps",
+            
+            # Performance
+            "Cull Distance: Hide distant objects",
+            "Display modes: Wireframe/Solid/Textured",
+            
+            # Undo/Redo
+            "Ctrl+Z: Undo, Ctrl+Y: Redo",
+            "Undo stack: 50 states max",
         ]
         self.last_tooltip_time = 0
         self.tooltip_interval = 120  # Seconds between occasional tooltips
@@ -181,6 +260,11 @@ class MainWindow(QMainWindow):
         
         # Show startup tooltip after window is shown
         QTimer.singleShot(1500, self._show_startup_tooltip)
+
+    def moveEvent(self, event):
+        """Handle window move."""
+        super().moveEvent(event)
+
 
     def cycle_2d_view(self):
         """Cycles through the 2D view tabs (Top, Side, Front) unless in play mode."""
@@ -198,15 +282,10 @@ class MainWindow(QMainWindow):
         """Reposition floating UI elements on window resize."""
         super().resizeEvent(event)
         if hasattr(self, 'play_button'):
-            # Center horizontally, 35px from the top
             bx = self.width() // 2 - self.play_button.width() // 2
             by = 35 
             self.play_button.move(bx, by)
             self.play_button.raise_()
-            
-        # Reposition toast if visible so it stays centered at the bottom
-        if hasattr(self, 'toast'):
-            self.toast.update_position()
 
     def reposition_overlays(self):
         """Positions the Play button at the top middle (where the toast used to be)."""
@@ -232,25 +311,47 @@ class MainWindow(QMainWindow):
         return super().eventFilter(obj, event)
 
     def show_toast(self, message, is_error=False, duration=None):
-        """Displays a toast notification with optional custom duration."""
-        # Check if toasts are disabled in settings
+        """Displays a notification"""
         if self.config.getboolean('Display', 'disable_toasts', fallback=False):
             return
-        # Never show regular toasts in play mode
-        if hasattr(self, 'view_3d') and self.view_3d.play_mode:
-            return
-        self.toast.show_message(message, self, is_error, duration)
+        
+        # Set the style based on the message type
+        if is_error:
+            bg = "#8B0000" # Dark Red
+            fg = "white"
+        else:
+            bg = "#2b2b2b"
+            fg = "white"
+
+        self.ui.notification_label.setStyleSheet(f"""
+            background-color: {bg};
+            color: {fg};
+            font-weight: bold;
+            padding: 2px 10px;
+            border-radius: 3px;
+        """)
+        
+        self.ui.notification_label.setText(message.upper())
+        
+        # Auto-clear timer
+        final_duration = duration if duration is not None else (4000 if is_error else 2500)
+        if final_duration > 0:
+            QTimer.singleShot(final_duration, lambda: self.ui.notification_label.setText(""))
 
     def show_tooltip(self, message, duration=4000, toast_id=None):
-        """Displays a tooltip-style toast (teal background)."""
-        # Check if toasts are disabled in settings
-        if self.config.getboolean('Display', 'disable_toasts', fallback=False):
-            return
-        # In play mode, only allow the play_mode_esc toast
-        if hasattr(self, 'view_3d') and self.view_3d.play_mode:
-            if toast_id != "play_mode_esc":
-                return
-        self.toast.show_message(message, self, is_tooltip=True, duration=duration, toast_id=toast_id)
+        """Displays teal-styled tooltips in the same area."""
+        # Re-use the toast logic with teal styling
+        self.ui.notification_label.setStyleSheet("""
+            background-color: #2b2b2b;
+            color: white;
+            font-weight: bold;
+            padding: 2px 10px;
+            border-radius: 3px;
+        """)
+        self.ui.notification_label.setText(message.upper())
+        
+        if duration > 0:
+            QTimer.singleShot(duration, lambda: self.ui.notification_label.setText(""))
 
     def _show_startup_tooltip(self):
         """Show the camera movement tooltip on startup if not yet learned."""
@@ -283,21 +384,84 @@ class MainWindow(QMainWindow):
             self.last_tooltip_time = current_time
 
     def on_camera_moved_with_wasd(self):
-        """Called when user holds right-click and moves camera with WASD.
-        Dismisses the startup tooltip and marks the lesson as learned."""
+        """Called when user holds right-click and moves camera with WASD."""
         if self.camera_movement_learned:
             return
         
         self.camera_movement_learned = True
         
-        # Save to config so it doesn't show again
+        # Save to config
         if not self.config.has_section('Tooltips'):
             self.config.add_section('Tooltips')
         self.config.set('Tooltips', 'camera_movement_learned', 'True')
         self.save_config()
         
-        # Dismiss the startup tooltip
-        self.toast.hide_toast(toast_id="camera_tip")
+        # FIX: Clear the notification label directly instead of using self.toast
+        self.ui.notification_label.setText("")
+
+    
+    def open_terrain_editor(self):
+        """Open the terrain editor floating window."""
+        from PyQt5.QtWidgets import QProgressDialog
+        from PyQt5.QtCore import Qt
+        
+        # Create terrain if it doesn't exist
+        if self.terrain is None:
+            # Show progress dialog BEFORE creating terrain
+            progress = QProgressDialog("Generating terrain...\nPlease wait.", None, 0, 0, self)
+            progress.setWindowTitle("Please Wait")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.setMinimumWidth(300)
+            progress.setMinimumHeight(100)
+            progress.setStyleSheet("""
+                QProgressDialog {
+                    font-size: 14px;
+                }
+                QLabel {
+                    font-size: 14px;
+                    padding: 15px;
+                }
+            """)
+            progress.show()
+            QApplication.processEvents()  # Force the dialog to appear immediately
+            
+            try:
+                # Now create the terrain (this is the slow part)
+                from engine.terrain import Terrain
+                self.terrain = Terrain(seed=42)
+                
+                # Load from state if available
+                if hasattr(self.state, 'terrain_data') and self.state.terrain_data:
+                    self.terrain.from_dict(self.state.terrain_data)
+                
+                # Setup shader in renderer
+                if hasattr(self.view_3d, 'renderer') and self.view_3d.renderer:
+                    self.view_3d.renderer.setup_terrain_shader(self.terrain)
+                
+                # Wire up terrain to logic thread for collision
+                if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
+                    self.view_3d.logic_thread.set_terrain(self.terrain)
+            finally:
+                # Always close the progress dialog
+                progress.close()
+        
+        # Create or show editor window
+        if self.terrain_editor_window is None:
+            from editor.terrain_editor import TerrainEditorWindow
+            self.terrain_editor_window = TerrainEditorWindow(self.terrain, self)
+            self.terrain_editor_window.terrain_changed.connect(self.on_terrain_changed)
+        
+        self.terrain_editor_window.show()
+        self.terrain_editor_window.raise_()
+        self.terrain_editor_window.activateWindow()
+    
+    def on_terrain_changed(self):
+        """Handle terrain changes."""
+        if self.terrain:
+            if hasattr(self.state, 'terrain_data'):
+                self.state.terrain_data = self.terrain.to_dict()
+        self.update_views()
 
     def clone_selected_object(self):
         """Clone the selected object with offset, identical to pressing Space."""
@@ -759,9 +923,7 @@ class MainWindow(QMainWindow):
         # Update play button color
         self.update_play_button_color()
         
-        # Hide any existing tooltips first, then show play mode toast
-        self.toast.hide_toast()
-        self.show_tooltip("PRESS ESC TO EXIT PLAY MODE", duration=0, toast_id="play_mode_esc")
+        self.ui.notification_label.setText("PRESS ESC TO EXIT PLAY MODE")
 
 
     def show_generate_tilemap_dialog(self):
@@ -1304,8 +1466,8 @@ class MainWindow(QMainWindow):
             if event.key() == Qt.Key_Escape:
                 self.view_3d.toggle_play_mode(None, None)
                 
-                # Hide the play mode toast
-                self.toast.hide_toast(toast_id="play_mode_esc")
+                # FIX: Clear notification label directly
+                self.ui.notification_label.setText("")
                 
                 # Re-show startup tooltip if not yet learned
                 if not self.camera_movement_learned:
@@ -1466,7 +1628,35 @@ class MainWindow(QMainWindow):
             # This triggers the fingerprint validation in EditorState
             self.state.load_from_data(level_data)
 
-            # Success Path: Initialize camera view based on PlayerStart
+            # Restore Terrain ---
+            if hasattr(self.state, 'terrain_data') and self.state.terrain_data:
+                # Initialize terrain system if it doesn't exist yet
+                if self.terrain is None:
+                    from engine.terrain import Terrain
+                    self.terrain = Terrain()
+                    
+                    # Link to renderer
+                    if hasattr(self.view_3d, 'renderer') and self.view_3d.renderer:
+                        self.view_3d.renderer.setup_terrain_shader(self.terrain)
+                    
+                    # Link to logic thread (for collision)
+                    if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
+                        self.view_3d.logic_thread.set_terrain(self.terrain)
+
+                # Apply the loaded data to the terrain engine
+                self.terrain.from_dict(self.state.terrain_data)
+                self.terrain.mark_all_dirty()
+                
+                # Update the terrain editor window if it is currently open
+                if self.terrain_editor_window and self.terrain_editor_window.isVisible():
+                    self.terrain_editor_window.load_from_terrain()
+            
+            elif self.terrain:
+                # If the loaded map has NO terrain, disable the existing terrain engine
+                self.terrain.enabled = False
+                self.terrain.mark_all_dirty()
+
+            # Initialize camera view based on PlayerStart
             player_start_pos = None
             for t in self.state.things:
                 if isinstance(t, PlayerStart):
@@ -1482,10 +1672,9 @@ class MainWindow(QMainWindow):
             self.set_selected_object(None)
             
             filename = os.path.basename(filePath)
-            self.show_toast(f"Loaded {filename}") # Success toast
+            self.show_toast(f"Loaded {filename}")
 
         except ValueError as ve:
-            # Replaces QMessageBox with a persistent red toast
             self.show_toast(f"Rejected: {ve}", is_error=True)
         except Exception as e:
             self.show_toast(f"Error: {e}", is_error=True)

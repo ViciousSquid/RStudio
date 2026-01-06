@@ -2,13 +2,16 @@ import glm
 import numpy as np
 import OpenGL.GL as gl
 import ctypes 
-from editor.things import Thing, Light 
+from editor.things import Thing, Light, Model
 from OpenGL.GL.shaders import compileProgram, compileShader 
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX 
 from engine.shaders import DEFAULT_SHADERS
 from PIL import Image 
 import os
 from collections import defaultdict
+from engine.terrain import TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER
+# Import the OBJ loader
+from .obj_loader import OBJ
 
 class ShaderLoader:
     def __init__(self, shader_dir='assets/shaders'):
@@ -88,9 +91,13 @@ class Frustum:
         return np.all(dots >= 0)
 
 class RenderStats:
-    __slots__ = ('total_brushes', 'culled_brushes', 'visible_brushes', 'draw_calls', 'shadow_draw_calls')
+    __slots__ = ('total_brushes', 'culled_brushes', 'visible_brushes', 'draw_calls', 'shadow_draw_calls', 'total_tris', 'visible_tris')
     def __init__(self): self.reset()
-    def reset(self): self.total_brushes = self.culled_brushes = self.visible_brushes = self.draw_calls = self.shadow_draw_calls = 0
+    def reset(self): 
+        self.total_brushes = self.culled_brushes = self.visible_brushes = 0
+        self.draw_calls = self.shadow_draw_calls = 0
+        self.total_tris = 0    # Total triangles existing in the level
+        self.visible_tris = 0  # Triangles currently sent to GPU 
 
 class LODManager:
     __slots__ = ('full_dist_sq', 'cull_dist_sq')
@@ -144,6 +151,8 @@ class Renderer:
     MAX_LIGHTS = 16
     def __init__(self, texture_loader, initial_grid_size, initial_world_size):
         self.texture_manager = {}
+        # Cache for loaded OBJ models
+        self.loaded_models = {} 
         self.load_texture_callback = texture_loader
         self._identity_mat4 = glm.mat4(1.0)
         self.frustum = Frustum()
@@ -183,6 +192,29 @@ class Renderer:
             self._preload_lit_uniforms('water')
             self.uniforms['water'].preload(['time', 'viewPos', 'normalMap', 'waterOpacity', 'waterReflectivity', 'waterTint', 'useWaveDisplacement', 'waveStrength'])
             self.water_normal_id = self.load_texture('water_normal.png', 'textures')
+            
+            # Compile terrain shader
+            try:
+                terrain_vs = compileShader(TERRAIN_VERTEX_SHADER, gl.GL_VERTEX_SHADER)
+                terrain_fs = compileShader(TERRAIN_FRAGMENT_SHADER, gl.GL_FRAGMENT_SHADER)
+                terrain_program = compileProgram(terrain_vs, terrain_fs)
+                self.shaders['terrain'] = terrain_program
+                self.uniforms['terrain'] = UniformCache(terrain_program)
+                self.uniforms['terrain'].preload([
+                    'projection', 'view', 'active_lights',
+                    'texGrass', 'texRock', 'texSand', 'texSnow',
+                    'biomeWeights', 'terrainHeightScale'
+                ])
+                for i in range(self.MAX_LIGHTS):
+                    self.uniforms['terrain'].preload([
+                        f'lights[{i}].position', f'lights[{i}].color',
+                        f'lights[{i}].intensity', f'lights[{i}].radius'
+                    ])
+                print("Terrain shader loaded")
+            except Exception as e:
+                print(f"Terrain shader error: {e}")
+                self.shaders['terrain'] = None
+
             
             self.uniforms['glass'].preload(['projection', 'view', 'model', 'viewPos', 'waterColor', 
                                            'distortionStrength', 'causticStrength', 'glassOpacity', 
@@ -235,6 +267,26 @@ class Renderer:
     def set_instance_textures(self, textures): 
         """Set per-instance texture overrides (dict mapping thing id -> texture_id)."""
         self.instance_textures = textures
+
+    # Load OBJ model into cache
+    def load_model(self, filename):
+        if filename in self.loaded_models:
+            return self.loaded_models[filename]
+        
+        full_path = os.path.join('assets', 'models', filename)
+        if not os.path.exists(full_path):
+            # Try plain path just in case
+            full_path = filename
+        
+        if os.path.exists(full_path):
+            print(f"Loading model: {full_path}")
+            model = OBJ(full_path)
+            if model.is_loaded:
+                self.loaded_models[filename] = model
+                return model
+        
+        print(f"Failed to load model: {filename}")
+        return None
 
     def load_texture(self, texture_name, subfolder):
         tex_cache_name = os.path.join(subfolder, texture_name)
@@ -314,6 +366,71 @@ class Renderer:
             self.render_stats.visible_brushes += 1
         return visible
 
+    def setup_terrain_shader(self, terrain):
+        """Setup terrain with shader program and uniform locations."""
+        if 'terrain' not in self.shaders or not self.shaders['terrain']:
+            return
+        terrain.shader_program = self.shaders['terrain']
+        terrain.uniforms = {
+            'projection': self.uniforms['terrain']['projection'],
+            'view': self.uniforms['terrain']['view'],
+            'active_lights': self.uniforms['terrain']['active_lights'],
+            'texGrass': self.uniforms['terrain']['texGrass'],
+            'texRock': self.uniforms['terrain']['texRock'],
+            'texSand': self.uniforms['terrain']['texSand'],
+            'texSnow': self.uniforms['terrain']['texSnow'],
+            'biomeWeights': self.uniforms['terrain']['biomeWeights'],
+            'terrainHeightScale': self.uniforms['terrain']['terrainHeightScale'],
+        }
+        for i in range(self.MAX_LIGHTS):
+            terrain.uniforms[f'lights[{i}].position'] = self.uniforms['terrain'][f'lights[{i}].position']
+            terrain.uniforms[f'lights[{i}].color'] = self.uniforms['terrain'][f'lights[{i}].color']
+            terrain.uniforms[f'lights[{i}].intensity'] = self.uniforms['terrain'][f'lights[{i}].intensity']
+            terrain.uniforms[f'lights[{i}].radius'] = self.uniforms['terrain'][f'lights[{i}].radius']
+
+    def _ensure_terrain_textures(self, terrain):
+        """Ensure terrain has valid texture IDs, loading defaults if necessary."""
+        # Map terrain texture attributes to file names (assumed in assets/textures/terrain/)
+        mappings = [
+            ('grass_tex', 'grass.jpg'),
+            ('rock_tex', 'rock.jpg'),
+            ('sand_tex', 'sand.jpg'),
+            ('snow_tex', 'snow.jpg')
+        ]
+        
+        # Ensure we have a valid default texture
+        self.load_texture('default.png', 'textures')
+        
+        for attr, filename in mappings:
+            current_id = getattr(terrain, attr, 0)
+            if not current_id or current_id == -1:
+                new_id = self.load_texture(filename, 'textures/terrain')
+                setattr(terrain, attr, new_id)
+
+    def render_terrain(self, projection, view, camera_pos, terrain, lights, frustum_planes=None):
+        """Render the terrain."""
+        if terrain is None or not terrain.enabled:
+            return
+            
+        # Ensure textures are loaded before rendering
+        self._ensure_terrain_textures(terrain)
+            
+        if not terrain.shader_program:
+            self.setup_terrain_shader(terrain)
+        
+        # Calculate active lights count
+        active_lights_count = len(lights) if lights else 0
+        
+        # Disable culling before drawing terrain to prevent invisibility
+        gl.glDisable(gl.GL_CULL_FACE)
+        
+        # Track terrain triangles in visible stats safely
+        if hasattr(terrain, 'get_tri_count'):
+            self.render_stats.visible_tris += terrain.get_tri_count()
+        
+        # Pass the count explicitly to update_and_render
+        terrain.update_and_render(projection, view, camera_pos, frustum_planes, lights, active_lights_count)
+
     def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config):
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDepthFunc(gl.GL_LESS)
@@ -322,19 +439,41 @@ class Renderer:
         self._view_ptr = glm.value_ptr(view)
         current_mode = config.get('render_mode', RENDER_MODE_LIT)
 
+        # Reset per-frame triangle stats
+        self.render_stats.visible_tris = 0
+
         if current_mode == RENDER_MODE_WIREFRAME: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
         elif current_mode == RENDER_MODE_VERTEX: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_POINT); gl.glPointSize(4.0)
         else: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
 
         self.draw_grid(projection, view, self.grid_indices_count, config.get('play_mode', False), config.get('grid_visible', True))
         
-        opaque_brushes, transparent_brushes, sprites, fog_volumes, water_brushes, glass_brushes = self._sort_objects(brushes, things, config)
+        opaque_brushes, transparent_brushes, sprite_things, fog_volumes, water_brushes, glass_brushes = self._sort_objects(brushes, things, config)
+        
+        models_to_render = []
+        final_sprites = []
+        for thing in sprite_things:
+            if isinstance(thing, Thing) and thing.properties.get('model_path'):
+                models_to_render.append(thing)
+            else:
+                final_sprites.append(thing)
+
         lights = [t for t in things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
+
+        terrain = config.get('terrain', None)
+        if terrain and terrain.enabled:
+            self.render_terrain(projection, view, camera_pos, terrain, lights)
 
         gl.glDepthMask(gl.GL_TRUE)
         gl.glDisable(gl.GL_BLEND)
-        if current_mode == RENDER_MODE_UNLIT: self.draw_textured_brushes(projection, view, camera_pos, opaque_brushes, lights, config)
-        else: self.draw_lit_brushes(projection, view, camera_pos, opaque_brushes, lights, config)
+        
+        if current_mode == RENDER_MODE_UNLIT: 
+            self.draw_textured_brushes(projection, view, camera_pos, opaque_brushes, lights, config)
+        else: 
+            self.draw_lit_brushes(projection, view, camera_pos, opaque_brushes, lights, config)
+
+        if models_to_render:
+            self.draw_models(projection, view, camera_pos, models_to_render, lights, config)
 
         if current_mode == RENDER_MODE_LIT:
             shadow_lights = [l for l in lights if l.properties.get('casts_shadows')]
@@ -345,12 +484,13 @@ class Renderer:
         if transparent_brushes: transparent_brushes.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
         if water_brushes: water_brushes.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
         if glass_brushes: glass_brushes.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
-        if sprites: sprites.sort(key=lambda s: -self._distance_sq(s.pos, camera_pos))
+        if final_sprites: final_sprites.sort(key=lambda s: -self._distance_sq(s.pos, camera_pos))
             
         gl.glEnable(gl.GL_BLEND)
         gl.glDepthMask(gl.GL_FALSE)
         
-        self.draw_sprites(projection, view, sprites, self.sprite_textures, self.instance_textures)
+        self.draw_sprites(projection, view, final_sprites, self.sprite_textures, self.instance_textures)
+        
         if current_mode == RENDER_MODE_UNLIT: self.draw_textured_brushes(projection, view, camera_pos, transparent_brushes, lights, config)
         else: self.draw_lit_brushes(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True)
             
@@ -370,6 +510,124 @@ class Renderer:
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDisable(gl.GL_BLEND)
         gl.glUseProgram(0)
+
+
+    def draw_models(self, projection, view, camera_pos, models, lights, config):
+        if not models: return
+        
+        lit_shader = self.shaders.get('lit')
+        textured_shader = self.shaders.get('textured')
+        current_shader = None
+        
+        gl.glDisable(gl.GL_CULL_FACE) 
+
+        for thing in models:
+            model_file = thing.properties.get('model_path')
+            if not model_file: continue
+            
+            obj = self.load_model(model_file)
+            if not obj or not obj.is_loaded: continue
+            
+            # Track triangles for this model
+            self.render_stats.visible_tris += (obj.vertex_count // 3)
+            
+            # --- TRANSFORM CALCULATION ---
+            pos = thing.pos
+            scale = thing.properties.get('scale', 1.0)
+            if isinstance(scale, (int, float)): scale = [scale, scale, scale]
+            rot = thing.properties.get('rotation', [0, 0, 0])
+            
+            mat = glm.translate(self._identity_mat4, glm.vec3(*pos))
+            mat = glm.rotate(mat, glm.radians(rot[1]), glm.vec3(0, 1, 0)) # Yaw
+            mat = glm.rotate(mat, glm.radians(rot[0]), glm.vec3(1, 0, 0)) # Pitch
+            mat = glm.rotate(mat, glm.radians(rot[2]), glm.vec3(0, 0, 1)) # Roll
+            mat = glm.scale(mat, glm.vec3(*scale))
+            
+            gl.glBindVertexArray(obj.vao)
+            manual_texture = thing.properties.get('texture')
+            
+            if obj.groups and not manual_texture:
+                for group in obj.groups:
+                    mat_name = group['material']
+                    material = obj.materials.get(mat_name, {'color': [0.8, 0.8, 0.8], 'texture': None})
+                    use_texture = material.get('texture')
+                    
+                    if use_texture and textured_shader:
+                        if current_shader != textured_shader:
+                            gl.glUseProgram(textured_shader)
+                            current_shader = textured_shader
+                            u = self.uniforms['textured']
+                            gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+                            gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, self._view_ptr)
+                            self._set_light_uniforms_cached('textured', lights)
+                            gl.glActiveTexture(gl.GL_TEXTURE0)
+                            gl.glUniform1i(u['texture_diffuse'], 0)
+                        
+                        tex_id = 0
+                        path_in_textures = os.path.join('assets', 'textures', use_texture)
+                        if os.path.exists(path_in_textures):
+                            tex_id = self.load_texture(use_texture, 'textures')
+                        else:
+                            tex_id = self.load_texture(use_texture, 'models')
+                        
+                        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                        gl.glUniformMatrix4fv(self.uniforms['textured']['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
+                        
+                    elif lit_shader:
+                        if current_shader != lit_shader:
+                            gl.glUseProgram(lit_shader)
+                            current_shader = lit_shader
+                            u = self.uniforms['lit']
+                            gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+                            gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, self._view_ptr)
+                            self._set_light_uniforms_cached('lit', lights)
+
+                        color = material.get('color', [0.8, 0.8, 0.8])
+                        gl.glUniform3fv(self.uniforms['lit']['object_color'], 1, color)
+                        gl.glUniform1f(self.uniforms['lit']['alpha'], 1.0)
+                        gl.glUniformMatrix4fv(self.uniforms['lit']['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
+
+                    gl.glDrawArrays(gl.GL_TRIANGLES, group['start'], group['count'])
+
+            else:
+                tex_name = manual_texture
+                target_shader = textured_shader if tex_name else lit_shader
+                
+                if target_shader == textured_shader:
+                    if current_shader != textured_shader:
+                        gl.glUseProgram(textured_shader)
+                        current_shader = textured_shader
+                        u = self.uniforms['textured']
+                        gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+                        gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, self._view_ptr)
+                        self._set_light_uniforms_cached('textured', lights)
+                        gl.glActiveTexture(gl.GL_TEXTURE0)
+                        gl.glUniform1i(u['texture_diffuse'], 0)
+                    
+                    tex_id = self.load_texture(tex_name, 'textures')
+                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                    gl.glUniformMatrix4fv(self.uniforms['textured']['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
+                    
+                elif lit_shader:
+                    if current_shader != lit_shader:
+                        gl.glUseProgram(lit_shader)
+                        current_shader = lit_shader
+                        u = self.uniforms['lit']
+                        gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+                        gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, self._view_ptr)
+                        self._set_light_uniforms_cached('lit', lights)
+                    
+                    col = thing.properties.get('color', [0.8, 0.8, 0.8])
+                    gl.glUniform3fv(self.uniforms['lit']['object_color'], 1, col)
+                    gl.glUniform1f(self.uniforms['lit']['alpha'], 1.0)
+                    gl.glUniformMatrix4fv(self.uniforms['lit']['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
+
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, obj.vertex_count)
+                
+            self.render_stats.draw_calls += 1
+            
+        gl.glBindVertexArray(0)
+        gl.glEnable(gl.GL_CULL_FACE)
 
     def _distance_sq(self, pos1, pos2):
         if isinstance(pos1, (list, tuple)): return (pos1[0]-pos2.x)**2 + (pos1[1]-pos2.y)**2 + (pos1[2]-pos2.z)**2
@@ -724,6 +982,9 @@ class Renderer:
         fill_mode = (gl.GL_FILL if show_triggers_solid else gl.GL_LINE) if is_transparent_pass else (gl.GL_FILL if display_mode != "Wireframe" else gl.GL_LINE)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
         for brush in visible:
+            # Update Visible Triangle Stats
+            self.render_stats.visible_tris += 12
+            
             model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
             if brush.get('is_trigger'): color, alpha = [0.0, 1.0, 1.0], 0.3
@@ -763,6 +1024,9 @@ class Renderer:
         for tex_id, items in batches.items():
             if tex_id != current_tex: gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id); current_tex = tex_id
             for brush, face_idx in items:
+                # Update triangle stats (each face is 2 triangles)
+                self.render_stats.visible_tris += 2
+                
                 model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
                 gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
                 gl.glDrawArrays(gl.GL_TRIANGLES, face_idx * 6, 6)

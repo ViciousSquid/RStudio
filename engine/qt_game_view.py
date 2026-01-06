@@ -167,6 +167,13 @@ class QtGameView(QOpenGLWidget):
             for f in os.listdir(tex_dir):
                 if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tga')):
                     self.renderer.load_texture(f, 'textures')
+
+        # Added for terrain textures
+        terrain_dir = os.path.join('assets', 'textures', 'terrain')
+        if os.path.exists(terrain_dir):
+            for f in os.listdir(terrain_dir):
+                if f.lower().endswith(('.jpg', '.png')):
+                    self.renderer.load_texture(os.path.join('terrain', f), 'textures')
         print("Assets loaded.")
 
     def _start_logic_thread(self):
@@ -273,6 +280,7 @@ class QtGameView(QOpenGLWidget):
         self._render_config["time"] = time.perf_counter() - self.start_time
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
         self._render_config["grid_visible"] = getattr(self, 'grid_visible', True) and not self.play_mode
+        self._render_config["terrain"] = getattr(self.editor, 'terrain', None)
         
         # Pass unculled brushes for shadow rendering (shadows visible even when caster is off-screen)
         if render_state and hasattr(render_state, 'all_brushes'):
@@ -483,128 +491,108 @@ class QtGameView(QOpenGLWidget):
         painter.drawLine(x + size - 14, y + size//2, x + size - 14, y + size//2 + 4)
 
     def _draw_window_manager(self, painter):
-        bg_color = QColor(20, 20, 25, 240)
-        border_color = QColor(80, 80, 90)
-        header_color = QColor(66, 95, 93)
-        text_color = QColor(220, 220, 220)
-        graph_bg_color = QColor(10, 10, 15, 200)
+        # --- 1. Define Visual Styles ---
+        bg_color = QColor(20, 20, 25, 235)      
+        border_color = QColor(80, 80, 90)       
+        header_color = QColor(66, 95, 93)       
+        text_color = QColor(220, 220, 220)      
+        graph_bg_color = QColor(10, 10, 15, 200) 
         
-        # Target height approx 210px when expanded
-        target_height = 210 if self.sysmon_expanded else 30
+        target_height = 240 if self.sysmon_expanded else 30
+        rect = QRect(self.debug_window_rect.x(), self.debug_window_rect.y(), 
+                     self.debug_window_rect.width(), target_height)
         
-        rect = QRect(self.debug_window_rect.x(), self.debug_window_rect.y(), self.debug_window_rect.width(), target_height)
-        
-        # Draw Window Background
+        # --- 2. Draw Main Window Container ---
         painter.setPen(QPen(border_color, 1))
         painter.setBrush(QBrush(bg_color))
-        painter.drawRect(rect)
+        painter.drawRect(rect) # Restored background rectangle
         
-        # Draw Header
+        # --- 3. Draw Header ---
         header_rect = QRect(rect.x(), rect.y(), rect.width(), 25)
         painter.fillRect(header_rect, header_color)
         painter.setPen(QPen(border_color, 1))
         painter.drawLine(rect.x(), rect.y() + 25, rect.right(), rect.y() + 25)
         
-        # Header Text
         painter.setFont(self.console_font)
         painter.setPen(QColor(255, 255, 255))
         painter.drawText(header_rect.adjusted(10, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, "SysMon [F3]")
-        
-        # Header Controls
         painter.drawText(QRect(rect.right() - 50, rect.y(), 25, 25), Qt.AlignCenter, "▼" if self.sysmon_expanded else "▶")
         painter.drawText(QRect(rect.right() - 25, rect.y(), 25, 25), Qt.AlignCenter, "[X]")
         
         if not self.sysmon_expanded:
             return
 
-        left_margin = rect.x() + 10
-        line_height = 18
-        graph_x = rect.x() + 5
-        graph_y = rect.y() + 30
-        graph_width = rect.width() - 10
-        graph_height = 50
+        # --- 4. Draw Performance Graph ---
+        graph_x, graph_y = rect.x() + 5, rect.y() + 30
+        graph_width, graph_height = rect.width() - 10, 50
         
         painter.setPen(QPen(border_color, 1))
         painter.setBrush(QBrush(graph_bg_color))
         painter.drawRect(graph_x, graph_y, graph_width, graph_height)
         
-        max_frame_time = max(self.frame_times) if self.frame_times else 16.67
-        max_frame_time = max(max_frame_time, 16.67)
-        
         if len(self.frame_times) > 1:
-            points = []
+            max_ft = max(max(self.frame_times), 16.67)
             step = graph_width / max(len(self.frame_times) - 1, 1)
+            points = [QPoint(int(graph_x + i * step), int(graph_y + graph_height - (ft / max_ft) * graph_height)) 
+                      for i, ft in enumerate(self.frame_times)]
             
-            for i, ft in enumerate(self.frame_times):
-                x = graph_x + i * step
-                # Invert Y so higher time = higher spike
-                y = graph_y + graph_height - (ft / max_frame_time) * graph_height
-                y = max(graph_y, min(graph_y + graph_height, y))
-                points.append(QPoint(int(x), int(y)))
-            
-            # Fill area
-            if points:
-                poly_points = [QPoint(graph_x, graph_y + graph_height)]
-                poly_points.extend(points)
-                poly_points.append(QPoint(int(graph_x + (len(self.frame_times)-1)*step), graph_y + graph_height))
-                
-                painter.setPen(Qt.NoPen)
-                painter.setBrush(QBrush(QColor(100, 200, 100, 40)))
-                painter.drawPolygon(QPolygon(poly_points))
-                
-                # Draw Line
-                painter.setPen(QPen(QColor(100, 255, 100), 1))
-                painter.drawPolyline(QPolygon(points))
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(100, 200, 100, 40)))
+            poly = QPolygon([QPoint(graph_x, graph_y + graph_height)] + points + [QPoint(points[-1].x(), graph_y + graph_height)])
+            painter.drawPolygon(poly)
+            painter.setPen(QPen(QColor(100, 255, 100), 1))
+            painter.drawPolyline(QPolygon(points))
 
-        frame_stats_y = graph_y + graph_height + 26
+        # --- 5. Triangle Statistics Calculation ---
+        # Brushes are cubes, so each has 12 triangles
+        brush_tris = len(self.editor.state.brushes) * 12 
+
+        terrain_total_tris = 0
+        terrain_visible_tris = 0
+
+        if hasattr(self.editor, 'terrain') and self.editor.terrain is not None:
+            # Use the modified method to get total triangles in memory
+            terrain_total_tris = self.editor.terrain.get_tri_count()
+            # Use the attribute updated during the last update_and_render call for visible count
+            terrain_visible_tris = self.editor.terrain.total_triangles
+
+        total_tris = brush_tris + terrain_total_tris
+        visible_tris = (self.renderer.render_stats.visible_tris if self.renderer else 0) + terrain_visible_tris
+
+        # --- 6. Draw Text Statistics ---
+        left_margin = rect.x() + 10
+        stats_start_y = graph_y + graph_height + 25
+        line_height = 18
         
         current_ft = self.frame_times[-1] if self.frame_times else 0
-        avg_ft = sum(self.frame_times) / len(self.frame_times) if self.frame_times else 0
-        
-        font = painter.font()
-        font.setPointSize(10)
-        painter.setFont(font)
         painter.setPen(QColor(255, 255, 255))
-        painter.drawText(left_margin, int(frame_stats_y), f"Frame: {current_ft:.1f}ms  Avg: {avg_ft:.1f}ms")
-        stats_start_y = frame_stats_y + 24
+        painter.drawText(left_margin, stats_start_y, f"Frame: {current_ft:.1f}ms  FPS: {self.fps:.0f}")
         
-        visible = self.sysmon_stats.get('visible_brushes', 0)
-        total_brushes = self.sysmon_stats.get('total_brushes', 0)
-        culled_brushes = self.sysmon_stats.get('culled_brushes', 0)
-        total_things = len(self.editor.state.things)
-        draws = self.renderer.render_stats.draw_calls if self.renderer else 0
-
         painter.setPen(text_color)
-        painter.drawText(left_margin, int(stats_start_y), f"Things:   {total_things}")
-        painter.drawText(left_margin, int(stats_start_y + line_height), f"Draws:    {draws}")
-        brush_text = f"Brushes:  {total_brushes} "
-        painter.drawText(left_margin, int(stats_start_y + line_height * 2), brush_text)
+        painter.drawText(left_margin, stats_start_y + line_height * 2, f"Things:   {len(self.editor.state.things)}")
+        painter.drawText(left_margin, stats_start_y + line_height * 3, f"Draws:    {self.renderer.render_stats.draw_calls if self.renderer else 0}")
         
-        # Visible count in green
+        brush_text = f"Brushes:  {self.sysmon_stats.get('total_brushes', 0)} "
+        painter.drawText(left_margin, stats_start_y + line_height * 4, brush_text)
+        
+        tri_text = f"Tris:     {total_tris} "
+        painter.drawText(left_margin, stats_start_y + line_height * 5, tri_text)
+        
         fm = painter.fontMetrics()
-        offset = fm.horizontalAdvance(brush_text)
         painter.setPen(QColor(50, 200, 50))
-        painter.drawText(left_margin + offset, int(stats_start_y + line_height * 2), f"(Visible: {visible})")
+        painter.drawText(left_margin + fm.horizontalAdvance(brush_text), 
+                         stats_start_y + line_height * 4, f"(Visible: {self.sysmon_stats.get('visible_brushes', 0)})")
+        painter.drawText(left_margin + fm.horizontalAdvance(tri_text), 
+                         stats_start_y + line_height * 5, f"(Visible: {visible_tris})")
 
-        cull_pct = 0.0
-        if total_brushes > 0:
-            cull_pct = (culled_brushes / total_brushes) * 100.0
-
-        footer_font = QFont(font)
-        footer_font.setPointSize(11) # Reduced size
-        footer_font.setBold(True)
-        painter.setFont(footer_font)
-        
-        painter.setPen(QColor(180, 180, 180)) 
+        painter.setPen(QColor(180, 180, 180))
+        culled_brushes = self.sysmon_stats.get('culled_brushes', 0)
+        total_brushes = self.sysmon_stats.get('total_brushes', 0)
+        cull_pct = (culled_brushes / total_brushes * 100) if total_brushes > 0 else 0
         painter.drawText(left_margin, rect.bottom() - 10, f"Culled: {cull_pct:.1f}%")
-        tps = getattr(self.logic_thread, 'actual_tps', 0.0) if self.logic_thread else 0.0
         
-        tps_text = f"TPS: {tps:.1f}"
-        tps_width = painter.fontMetrics().horizontalAdvance(tps_text)
-        painter.setPen(QColor(220, 220, 220))
-        painter.drawText(rect.right() - tps_width - 10, rect.bottom() - 10, tps_text)
-    
-        painter.setFont(self.console_font)
+        tps_text = f"TPS: {getattr(self.logic_thread, 'actual_tps', 0.0):.1f}"
+        painter.drawText(rect.right() - fm.horizontalAdvance(tps_text) - 10, rect.bottom() - 10, tps_text)
 
     def _draw_render_menu(self, painter):
         width, height = 200, 120

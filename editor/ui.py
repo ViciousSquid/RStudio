@@ -84,7 +84,7 @@ class Ui_MainWindow(object):
 
         MainWindow.right_tabs.setStyleSheet("""
             QTabBar::tab:selected { background: #F08000; color: white; }
-            QTabBar::tab { background: #425f5d; color: #ccc; height: 35px; min-width: 150px; padding: 0px; border: 1px solid #222; }
+            QTabBar::tab { background: #2b2b2b; color: #ccc; height: 35px; min-width: 150px; padding: 0px; border: 1px solid #222; }
             QTabBar::tab:hover { background: #5a7a82; }
             QTabBar::scroller { width: 0px; }
         """)
@@ -293,6 +293,24 @@ class Ui_MainWindow(object):
         grid_btn.toggled.connect(MainWindow.toggle_grid)
         top_toolbar.addWidget(grid_btn)
         MainWindow.grid_btn = grid_btn  # Store reference
+        # === TERRAIN BUTTON ===
+        separator_terrain = QFrame()
+        separator_terrain.setFrameShape(QFrame.VLine)
+        separator_terrain.setFrameShadow(QFrame.Sunken)
+        separator_terrain.setFixedWidth(2)
+        separator_terrain.setStyleSheet("background-color: transparent;")
+        top_toolbar.addWidget(separator_terrain)
+        
+        terrain_btn = QPushButton()
+        terrain_btn.setIcon(QIcon("assets/terrain.png"))
+        terrain_btn.setIconSize(QSize(icon_size_val, icon_size_val))
+        terrain_btn.setFixedSize(icon_size_val, icon_size_val)
+        terrain_btn.setToolTip("Terrain Editor (Low-Poly Terrain)")
+        terrain_btn.clicked.connect(MainWindow.open_terrain_editor)
+        top_toolbar.addWidget(terrain_btn)
+        MainWindow.terrain_btn = terrain_btn
+        
+
         
         # === FLOATING PLAY BUTTON ===
         MainWindow.play_button = QPushButton(QIcon("assets/b_test.png"), "Play", MainWindow)
@@ -339,10 +357,6 @@ class Ui_MainWindow(object):
         bottom_layout = QHBoxLayout(bottom_widget)
         bottom_layout.setContentsMargins(10, 2, 10, 2)
         
-        MainWindow.snap_checkbox = QCheckBox("Snap to Grid")
-        MainWindow.snap_checkbox.setChecked(True)
-        MainWindow.snap_checkbox.stateChanged.connect(MainWindow.toggle_snap_to_grid)
-        
         MainWindow.grid_size_spinbox = QSpinBox()
         MainWindow.grid_size_spinbox.setRange(4, 128)
         MainWindow.grid_size_spinbox.setValue(16)
@@ -355,14 +369,6 @@ class Ui_MainWindow(object):
         MainWindow.world_size_spinbox.setSingleStep(1)
         MainWindow.world_size_spinbox.valueChanged.connect(MainWindow.set_world_size)
         
-        # Display mode dropdown (moved from toolbar to status bar)
-        MainWindow.display_mode_combobox = QComboBox()
-        MainWindow.display_mode_combobox.addItems(["Wireframe", "Solid Lit", "Textured"])
-        MainWindow.display_mode_combobox.setCurrentText("Textured")
-        MainWindow.display_mode_combobox.currentTextChanged.connect(MainWindow.set_brush_display_mode)
-        
-        # Layout: Left side - grid controls
-        bottom_layout.addWidget(MainWindow.snap_checkbox)
         bottom_layout.addSpacing(20)
         bottom_layout.addWidget(QLabel("Grid Size:"))
         bottom_layout.addWidget(MainWindow.grid_size_spinbox)
@@ -370,14 +376,12 @@ class Ui_MainWindow(object):
         bottom_layout.addWidget(QLabel("World Size:"))
         bottom_layout.addWidget(MainWindow.world_size_spinbox)
         
-        # Stretch to push display mode to the right
-        bottom_layout.addStretch(1)
+        # 2. Mid-aligned Controls
+        MainWindow.display_mode_combobox = QComboBox()
+        MainWindow.display_mode_combobox.addItems(["Wireframe", "Solid Lit", "Textured"])
+        MainWindow.display_mode_combobox.setCurrentText("Textured")
+        MainWindow.display_mode_combobox.currentTextChanged.connect(MainWindow.set_brush_display_mode)
         
-        # Right side - display mode
-        bottom_layout.addWidget(QLabel("Display:"))
-        bottom_layout.addWidget(MainWindow.display_mode_combobox)
-        
-        # Cull Distance
         bottom_layout.addSpacing(20)
         bottom_layout.addWidget(QLabel("Cull Dist:"))
         MainWindow.cull_dist_spinbox = QSpinBox()
@@ -387,5 +391,34 @@ class Ui_MainWindow(object):
         MainWindow.cull_dist_spinbox.setToolTip("Objects beyond this distance will not be rendered")
         MainWindow.cull_dist_spinbox.valueChanged.connect(MainWindow.set_cull_distance)
         bottom_layout.addWidget(MainWindow.cull_dist_spinbox)
+
+        bottom_layout.addSpacing(20)
+        bottom_layout.addWidget(QLabel("Display:"))
+        bottom_layout.addWidget(MainWindow.display_mode_combobox)
+
+        # --- EXPANDING NOTIFICATION AREA (FAR RIGHT) ---
+        # Add a small buffer spacing before the label
+        bottom_layout.addSpacing(20)
+
+        self.notification_label = QLabel("")
+        self.notification_label.setAlignment(Qt.AlignCenter)
+        
+        # CRITICAL: This allows the label to expand and fill all available space
+        self.notification_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        
+        # Set a very large maximum width so it isn't capped
+        self.notification_label.setMaximumWidth(16777215) 
+        
+        self.notification_label.setStyleSheet("""
+            QLabel {
+                background-color: transparent; /* Becomes yellow/red via main_window logic */
+                color: black;
+                font-weight: bold;
+                border-radius: 3px;
+                padding: 2px 10px;
+                font-size: 14px;
+            }
+        """)
+        bottom_layout.addWidget(self.notification_label)
         
         status_bar.addPermanentWidget(bottom_widget, 1)
