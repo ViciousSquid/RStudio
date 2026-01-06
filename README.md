@@ -7,18 +7,9 @@
 * Custom OpenGL/PyGame engine supports immediate "drop-in and play" (like CryEngine Editor)
 * Real-time lighting with optional stencil shadows
 * Volumetric fog
+* Terrain generation
 * `json` level format :-)
 * Custom physics engine with configurable parameters
-* Fully modular and open source (MIT License)
-
-* Lights can cast stencil shadows (buggy)
+* OBJ model support
 * Moving brushes, doors, pickups
-* Physics in Play Mode
-* Water and fog volumes
-  
-### Roadmap:
-* OBJ model support (currently partially implemented)
-* Visual scripting
-* Terrain generation
-
 
