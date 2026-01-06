@@ -365,7 +365,7 @@
                 "respawn_time": "20.0",
                 "item_type": "key",
                 "value": "25",
-                "activation": "use",
+                "activation": "walk_over",
                 "collected": "True",
                 "key_name": "blue_key",
                 "custom_sprite": ""
