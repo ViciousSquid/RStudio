@@ -6,6 +6,7 @@ v1.0.12.5 (Latest version)
 
 v1.0.12.0  |  Verdant_Meadow
 
+* Improved renderer
 * Added terrain generator and UI
 * Finalised UI layout
 
@@ -15,4 +16,5 @@ v1.0.11.0  |  Delicious-Toast
 * First non-beta release
 
 * Added Toast notification area to UI
+
 
