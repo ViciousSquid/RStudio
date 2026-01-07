@@ -2,7 +2,7 @@ v1.0.12.5 (Latest version)
 
 * Increased teerrain gen limits by 16x
 * Improvements to texturing/tinting brushes
-* Geometry and terrain looks beautiful even with no textures (for lo-fi feel)
+* Geometry and terrain looks good even with no textures (lo-fi feel)
 
 v1.0.12.0  |  Verdant_Meadow
 
@@ -15,3 +15,4 @@ v1.0.11.0  |  Delicious-Toast
 * First non-beta release
 
 * Added Toast notification area to UI
+
