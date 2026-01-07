@@ -151,6 +151,8 @@ class LogicThread(threading.Thread):
             self.current_hud_message = ""
             # Reset gate inputs tracking
             self.gate_inputs = {}
+            # Reset active weapon
+            self.active_weapon = None
         else:
             self.player_in_triggers.clear()
             self.fired_once_triggers.clear()
@@ -163,6 +165,7 @@ class LogicThread(threading.Thread):
             self._reset_doors()
             self.current_hud_message = ""
             self.gate_inputs = {}
+            self.active_weapon = None
     
     def set_terrain(self, terrain):
         """Set terrain reference for collision detection."""
@@ -711,6 +714,9 @@ class LogicThread(threading.Thread):
             key_name = pickup.properties.get('key_name', '')
             if key_name:
                 self.collected_keys.add(key_name)
+        elif item_type in ['gun1', 'gun2']:
+            self.active_weapon = item_type
+            self.current_hud_message = f"Picked up {item_type.upper()}"
         elif item_type == 'ammo':
             # Future: track ammo
             pass
@@ -981,6 +987,9 @@ class LogicThread(threading.Thread):
 
         # Pass the HUD message to the render state
         write_state.hud_message = self.current_hud_message
+
+        # Pass the active weapon to the render state
+        write_state.active_weapon = self.active_weapon
 
         # --- Ensure JSON-serializable light data ---
         # Convert any glm vectors to lists in things before storing in render state

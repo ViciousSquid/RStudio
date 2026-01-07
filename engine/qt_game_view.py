@@ -6,14 +6,12 @@ from collections import deque
 from typing import Optional
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication
 from PyQt5.QtCore import Qt, QTimer, QPoint, QUrl, QRect
-from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QFontDatabase, QPen, QBrush, QPolygon, QKeySequence
+from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QFontDatabase, QPen, QBrush, QPolygon, QKeySequence, QPixmap
 from PyQt5.QtMultimedia import QSoundEffect
 import OpenGL.GL as gl
-# --- NEW IMPORT: Shaders ---
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
 from engine.camera import Camera
-# --- IMPORT: LogicGate included ---
 from editor.things import Thing, Light, PlayerStart, Monster, Pickup, Speaker, LogicGate
 from engine.player import Player
 from PIL import Image
@@ -86,7 +84,7 @@ class QtGameView(QOpenGLWidget):
         
         self.texture_manager = {}
         self.sprite_textures = {}
-        
+        self.gun_hud_pixmaps = {}
         self.renderer = None
 
         # Debug Rendering Resources (Core Profile safe)
@@ -584,11 +582,30 @@ class QtGameView(QOpenGLWidget):
             painter.setPen(QColor(200, 200, 200))
             painter.drawText(cx - text_width//2, cy, msg)
         
+        # Draw Gun HUD Overlay if a weapon is active
+        active_weapon = getattr(render_state, 'active_weapon', None)
+        if active_weapon:
+            hud_pixmap = self._load_gun_hud_pixmap(active_weapon)
+            if hud_pixmap and not hud_pixmap.isNull():
+                # Position in bottom right, scaled relative to screen height
+                scale_factor = self.height() / 600.0  # Base scale on window height
+                target_h = int(200 * scale_factor)
+                if hud_pixmap.height() > 0:
+                    target_w = int(hud_pixmap.width() * (target_h / hud_pixmap.height()))
+                else:
+                    target_w = target_h
+                
+                # Draw at bottom right
+                x = self.width() - target_w - 20
+                y = self.height() - target_h
+                
+                painter.drawPixmap(x, y, target_w, target_h, hud_pixmap)
+        
         collected_keys = getattr(render_state, 'collected_keys', set())
         if collected_keys:
             key_x = self.width() - hud_margin - 100
             key_y = self.height() - hud_margin - 100
-            key_size = 75
+            key_size = 100
             key_spacing = 40
             
             for i, key_name in enumerate(sorted(collected_keys)):
@@ -1049,3 +1066,16 @@ class QtGameView(QOpenGLWidget):
         if rel.x > rel.y and rel.x > rel.z: return 'east' if local.x > 0 else 'west'
         if rel.y > rel.x and rel.y > rel.z: return 'top' if local.y > 0 else 'bottom'
         return 'north' if local.z > 0 else 'south'
+
+    def _load_gun_hud_pixmap(self, gun_type):
+        """Lazy load HUD pixmaps for guns."""
+        if gun_type in self.gun_hud_pixmaps:
+            return self.gun_hud_pixmaps[gun_type]
+            
+        # Expects assets/sprites/gun1HUD.png or gun2HUD.png
+        path = os.path.join('assets', 'sprites', f'{gun_type}HUD.png')
+        if os.path.exists(path):
+            pixmap = QPixmap(path)
+            self.gun_hud_pixmaps[gun_type] = pixmap
+            return pixmap
+        return None
