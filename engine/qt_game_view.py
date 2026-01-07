@@ -6,12 +6,15 @@ from collections import deque
 from typing import Optional
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication
 from PyQt5.QtCore import Qt, QTimer, QPoint, QUrl, QRect
-from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QFontDatabase, QPen, QBrush, QPolygon
+from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QFontDatabase, QPen, QBrush, QPolygon, QKeySequence
 from PyQt5.QtMultimedia import QSoundEffect
 import OpenGL.GL as gl
+# --- NEW IMPORT: Shaders ---
+from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
 from engine.camera import Camera
-from editor.things import Thing, Light, PlayerStart, Monster, Pickup, Speaker
+# --- IMPORT: LogicGate included ---
+from editor.things import Thing, Light, PlayerStart, Monster, Pickup, Speaker, LogicGate
 from engine.player import Player
 from PIL import Image
 from .renderer import Renderer
@@ -39,12 +42,12 @@ class QtGameView(QOpenGLWidget):
         self.camera.pos = glm.vec3(0, 150, 400)
         self.grid_size, self.world_size = 16, 1024
         self.grid_dirty = True
-        self.culling_enabled = True # Default true for perf
+        self.culling_enabled = True 
         self.selected_object = None
         self.show_sprites_in_play_mode = False
         self.visibility_system = None
         self.show_visibility_debug = False
-        self.grid_visible = True  # Grid visibility toggle
+        self.grid_visible = True
 
         self.sysmon_expanded = False
         self.sysmon_stats = {
@@ -69,36 +72,25 @@ class QtGameView(QOpenGLWidget):
         # Debug Window Manager State
         self.debug_mode_active = False
         self.debug_window_rect = QRect(20, 20, 400, 200)
-        self.debug_drag_active = False
-        self.debug_drag_offset = QPoint()
         self.frame_times = deque(maxlen=100)
         self.console_font = QFont("Arial", 9)
         self.console_font.setStyleHint(QFont.Monospace)
         
         self.texture_manager = {}
         self.sprite_textures = {}
-        self.noise_texture_id = 0
-
+        
         self.renderer = None
+
+        # Debug Rendering Resources (Core Profile safe)
+        self.debug_shader = None
+        self.debug_vao = None
+        self.debug_vbo = None
 
         self.show_render_menu = False
         self.current_render_mode = RENDER_MODE_LIT
-        self.render_mode_names = {
-            RENDER_MODE_LIT: "Lit (Phong)",
-            RENDER_MODE_UNLIT: "Unlit (Fullbright)",
-            RENDER_MODE_WIREFRAME: "Wireframe",
-            RENDER_MODE_VERTEX: "Vertex"
-        }
         
         self.play_mode = False
         self.player = None
-        self.tile_map = None
-        self.player_in_triggers = set()
-        self.fired_once_triggers = set()
-        self.active_sounds = {}
-        self.played_once_sounds = set()
-        
-        self.mover_states = {}
         
         self.fps = 0
         self.frame_count = 0
@@ -126,7 +118,6 @@ class QtGameView(QOpenGLWidget):
         self.drag_start_on_axis = None
         self.projection_matrix = glm.mat4(1.0)
         self.view_matrix = glm.mat4(1.0)
-        
         self._cached_aspect_ratio = 1.0
         self.cull_distance = 4096
 
@@ -140,27 +131,62 @@ class QtGameView(QOpenGLWidget):
 
     def initializeGL(self):
         gl.glClearColor(0.1, 0.1, 0.15, 1.0)
-        # Disable VSync for max FPS testing (enable in production if needed)
         try:
-            # WGL_EXT_swap_control
-            # This is platform specific, skipping for safety or check OS
             pass
         except: pass
 
         self.renderer = Renderer(self.load_texture, self.grid_size, self.world_size)
         self.set_cull_distance(self.cull_distance)
         
-        # PRELOAD OPTIMIZATION
         self._preload_assets()
-        
         self.load_all_sprite_textures()
         if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'brushes'):
             self.preload_level_textures()
         
         self._start_logic_thread()
+        self._init_debug_resources()
+
+    def _init_debug_resources(self):
+        """Initialize shader and buffers for drawing debug lines in Core Profile."""
+        try:
+            # Simple Pass-through Shader
+            vs_src = """
+            #version 330 core
+            layout (location = 0) in vec3 aPos;
+            uniform mat4 view;
+            uniform mat4 projection;
+            void main() { gl_Position = projection * view * vec4(aPos, 1.0); }
+            """
+            fs_src = """
+            #version 330 core
+            out vec4 FragColor;
+            uniform vec3 color;
+            void main() { FragColor = vec4(color, 1.0); }
+            """
+            self.debug_shader = compileProgram(
+                compileShader(vs_src, gl.GL_VERTEX_SHADER), 
+                compileShader(fs_src, gl.GL_FRAGMENT_SHADER)
+            )
+            
+            self.debug_vao = gl.glGenVertexArrays(1)
+            self.debug_vbo = gl.glGenBuffers(1)
+            
+            gl.glBindVertexArray(self.debug_vao)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.debug_vbo)
+            
+            # Allocate 1MB dynamic buffer (plenty for debug lines)
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, 1024 * 1024, None, gl.GL_DYNAMIC_DRAW)
+            
+            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
+            gl.glEnableVertexAttribArray(0)
+            
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
+            gl.glBindVertexArray(0)
+            
+        except Exception as e:
+            print(f"Debug Renderer Init Failed: {e}")
 
     def _preload_assets(self):
-        """Preloads all textures in the assets/textures folder to VRAM."""
         print("Preloading assets...")
         tex_dir = os.path.join('assets', 'textures')
         if os.path.exists(tex_dir):
@@ -168,7 +194,6 @@ class QtGameView(QOpenGLWidget):
                 if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tga')):
                     self.renderer.load_texture(f, 'textures')
 
-        # Added for terrain textures
         terrain_dir = os.path.join('assets', 'textures', 'terrain')
         if os.path.exists(terrain_dir):
             for f in os.listdir(terrain_dir):
@@ -201,7 +226,6 @@ class QtGameView(QOpenGLWidget):
             self.renderer.preload_level_textures(self.editor.state.brushes)
 
     def update_grid(self):
-        """Signals that the grid mesh needs to be rebuilt."""
         self.grid_dirty = True
 
     def resizeGL(self, width, height):
@@ -241,8 +265,6 @@ class QtGameView(QOpenGLWidget):
             self.renderer.update_grid_buffers(self.world_size, self.grid_size)
             self.grid_dirty = False
 
-        start_total = time.perf_counter()
-
         camera_pos = glm.vec3(0, 0, 0)
         render_state: Optional[RenderState] = None
 
@@ -254,7 +276,6 @@ class QtGameView(QOpenGLWidget):
             else:
                 camera_pos = render_state.editor_camera_pos
             
-            # Logic thread does culling, just grab results
             brushes_to_render = render_state.visible_brushes
             things_to_render = render_state.visible_things
             
@@ -282,13 +303,11 @@ class QtGameView(QOpenGLWidget):
         self._render_config["grid_visible"] = getattr(self, 'grid_visible', True) and not self.play_mode
         self._render_config["terrain"] = getattr(self.editor, 'terrain', None)
         
-        # Pass unculled brushes for shadow rendering (shadows visible even when caster is off-screen)
         if render_state and hasattr(render_state, 'all_brushes'):
             self._render_config["all_brushes"] = render_state.all_brushes
         else:
             self._render_config["all_brushes"] = self.editor.state.brushes
 
-        # Update per-instance textures for things like key pickups
         self.update_instance_textures(things_to_render)
 
         self.renderer.render_scene(
@@ -297,13 +316,15 @@ class QtGameView(QOpenGLWidget):
             self.selected_object, self._render_config
         )
 
-        # Update stats
+        # --- MODERN LOGIC LINK VISUALIZATION ---
+        if getattr(self.editor, 'show_logic_links', False):
+            self.render_logic_connections()
+
         if render_state:
             self.sysmon_stats['visible_brushes'] = len(render_state.visible_brushes)
             self.sysmon_stats['culled_brushes'] = render_state.culled_brushes
             self.sysmon_stats['total_brushes'] = render_state.total_brushes
 
-        # 2D Overlay
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         if self.editor.config.getboolean('Display', 'show_fps', fallback=False):
@@ -316,12 +337,125 @@ class QtGameView(QOpenGLWidget):
             self._draw_hud(painter, render_state)
         if self.debug_mode_active:
             self._draw_window_manager(painter)
+            
+        if getattr(self.editor, 'show_logic_links', False):
+            painter.setPen(QColor(255, 255, 0))
+            painter.setFont(QFont("Arial", 10, QFont.Bold))
+            painter.drawText(10, self.height() - 40, "LINKS VISIBLE [F1]")
+            
         painter.end()
 
+    def render_logic_connections(self):
+        """Draws connections using modern OpenGL (Core Profile Compatible)."""
+        if not self.debug_shader or not self.debug_vao: return
+
+        # 1. Disable Depth Test so lines draw ON TOP of geometry (X-Ray)
+        gl.glDisable(gl.GL_DEPTH_TEST)
+
+        # 2. Collect Lines
+        name_to_pos = {}
+        for b in self.editor.state.brushes:
+            if b.get('name'): name_to_pos[b['name']] = b['pos']
+        for t in self.editor.state.things:
+            t_name = getattr(t, 'name', t.properties.get('name'))
+            if t_name: name_to_pos[t_name] = t.pos
+
+        logic_lines = []   # Yellow
+        trigger_lines = [] # Cyan
+
+        # Things (Logic Gates) -> Target
+        for t in self.editor.state.things:
+            tgt = t.properties.get('target')
+            if tgt and tgt in name_to_pos:
+                start = t.pos
+                end = name_to_pos[tgt]
+                
+                is_gate = t.properties.get('type') == 'logic_gate'
+                line_data = [start[0], start[1], start[2], end[0], end[1], end[2]]
+                
+                if is_gate: logic_lines.extend(line_data)
+                else: trigger_lines.extend(line_data)
+
+        # Brushes (Triggers) -> Target
+        for b in self.editor.state.brushes:
+            tgt = b.get('target')
+            if tgt and tgt in name_to_pos:
+                start = b['pos']
+                end = name_to_pos[tgt]
+                trigger_lines.extend([start[0], start[1], start[2], end[0], end[1], end[2]])
+
+        # 3. Render
+        gl.glUseProgram(self.debug_shader)
+        
+        # Uniforms
+        view_loc = gl.glGetUniformLocation(self.debug_shader, "view")
+        proj_loc = gl.glGetUniformLocation(self.debug_shader, "projection")
+        color_loc = gl.glGetUniformLocation(self.debug_shader, "color")
+        
+        gl.glUniformMatrix4fv(view_loc, 1, gl.GL_FALSE, glm.value_ptr(self.view_matrix))
+        gl.glUniformMatrix4fv(proj_loc, 1, gl.GL_FALSE, glm.value_ptr(self.projection_matrix))
+        
+        gl.glBindVertexArray(self.debug_vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.debug_vbo)
+        
+        # Draw Logic Lines (Yellow)
+        if logic_lines:
+            data = np.array(logic_lines, dtype=np.float32)
+            gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data.nbytes, data)
+            gl.glUniform3f(color_loc, 1.0, 1.0, 0.0)
+            gl.glDrawArrays(gl.GL_LINES, 0, len(logic_lines)//3)
+            
+        # Draw Trigger Lines (Cyan)
+        if trigger_lines:
+            data = np.array(trigger_lines, dtype=np.float32)
+            # Just reuse buffer from offset 0
+            gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data.nbytes, data)
+            gl.glUniform3f(color_loc, 0.0, 1.0, 1.0)
+            gl.glDrawArrays(gl.GL_LINES, 0, len(trigger_lines)//3)
+
+        gl.glBindVertexArray(0)
+        gl.glUseProgram(0)
+
+        # 4. Re-enable Depth Test for the rest of the renderer
+        gl.glEnable(gl.GL_DEPTH_TEST)
+
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_F3:
+        # Helper to check key match against config
+        def check_key(cfg_key, default):
+            # Retrieve the key string from config, defaulting if not found
+            key_str = self.editor.config.get('Shortcuts', cfg_key, fallback=default)
+            seq = QKeySequence(key_str)
+            # Compare the event's key combination against the configured sequence
+            return QKeySequence(event.key() | int(event.modifiers())) == seq
+            
+        # 1. Show Connections (Default: F1)
+        if check_key('key_show_connections', 'F1'):
+            current_state = getattr(self.editor, 'show_logic_links', False)
+            self.editor.show_logic_links = not current_state
+            self.editor.update_views()
+            if hasattr(self.editor, 'show_toast'):
+                status = "ON" if self.editor.show_logic_links else "OFF"
+                self.editor.show_toast(f"Logic Links: {status}")
+            return
+            
+        # 2. Toggle Wireframe Mode (Default: F2)
+        if check_key('key_toggle_wireframe', 'F2'):
+             if self.current_render_mode == RENDER_MODE_WIREFRAME:
+                 self.current_render_mode = RENDER_MODE_LIT
+             else:
+                 self.current_render_mode = RENDER_MODE_WIREFRAME
+             
+             mode_name = self.render_mode_names.get(self.current_render_mode, "Unknown")
+             if hasattr(self.editor, 'show_toast'):
+                 self.editor.show_toast(f"Render Mode: {mode_name}")
+             self.update()
+             return
+
+        # 3. System Monitor (Default: F3)
+        if check_key('key_sysmon', 'F3'):
             self.debug_mode_active = not self.debug_mode_active
             if self.play_mode:
+                # Handle cursor visibility when toggling debug mode in game
                 if self.debug_mode_active:
                     QApplication.restoreOverrideCursor()
                     self.setCursor(Qt.ArrowCursor)
@@ -333,30 +467,43 @@ class QtGameView(QOpenGLWidget):
             self.update()
             return
 
-        # Grid resizing (Non-play mode only)
+        # 4. Grid Resizing (Bracket Keys) - Editor Mode Only
         if not self.play_mode:
             if event.key() == Qt.Key_BracketLeft:
                 if hasattr(self.editor, 'set_grid_size'):
                     new_size = max(1, self.grid_size // 2)
                     self.editor.set_grid_size(new_size)
-                    self.editor.show_toast(f"Grid Size: {new_size}")
+                    if hasattr(self.editor, 'show_toast'):
+                        self.editor.show_toast(f"Grid Size: {new_size}")
                 return
             elif event.key() == Qt.Key_BracketRight:
                 if hasattr(self.editor, 'set_grid_size'):
                     new_size = min(2048, self.grid_size * 2)
                     self.editor.set_grid_size(new_size)
-                    self.editor.show_toast(f"Grid Size: {new_size}")
+                    if hasattr(self.editor, 'show_toast'):
+                        self.editor.show_toast(f"Grid Size: {new_size}")
                 return
 
+        # 5. Render Menu Shortcuts - Play Mode Only
         if self.play_mode:
             if getattr(self, 'show_render_menu', False):
-                if event.key() == Qt.Key_1: self.current_render_mode = RENDER_MODE_LIT
-                elif event.key() == Qt.Key_2: self.current_render_mode = RENDER_MODE_UNLIT
-                elif event.key() == Qt.Key_3: self.current_render_mode = RENDER_MODE_WIREFRAME
-                elif event.key() == Qt.Key_4: self.current_render_mode = RENDER_MODE_VERTEX
-                elif event.key() == Qt.Key_Escape: self.show_render_menu = False
-                self.update()
+                if event.key() == Qt.Key_1: 
+                    self.current_render_mode = RENDER_MODE_LIT
+                    self.update()
+                elif event.key() == Qt.Key_2: 
+                    self.current_render_mode = RENDER_MODE_UNLIT
+                    self.update()
+                elif event.key() == Qt.Key_3: 
+                    self.current_render_mode = RENDER_MODE_WIREFRAME
+                    self.update()
+                elif event.key() == Qt.Key_4: 
+                    self.current_render_mode = RENDER_MODE_VERTEX
+                    self.update()
+                elif event.key() == Qt.Key_Escape: 
+                    self.show_render_menu = False
+                    self.update()
                 return 
+                
         super().keyPressEvent(event)
 
     def _draw_sprites_text(self, painter):
@@ -381,7 +528,6 @@ class QtGameView(QOpenGLWidget):
     def _draw_hud(self, painter, render_state):
         if not render_state: return
         
-        # --- Health Bar ---
         health = render_state.player_health
         max_health = render_state.player_max_health
         health_ratio = health / max_health if max_health > 0 else 0
@@ -391,58 +537,45 @@ class QtGameView(QOpenGLWidget):
         bar_x = hud_margin
         bar_y = self.height() - hud_margin - bar_height
         
-        # Draw Health Background
         painter.setPen(QPen(QColor(60, 60, 60), 2))
         painter.setBrush(QBrush(QColor(40, 40, 40, 200)))
         painter.drawRect(bar_x, bar_y, bar_width, bar_height)
         
-        # Color Logic
         if health_ratio > 0.6: fill_color = QColor(50, 200, 50)
         elif health_ratio > 0.3: fill_color = QColor(255, 200, 50)
         else: fill_color = QColor(200, 50, 50)
         
-        # Draw Health Fill
         fill_width = int(bar_width * health_ratio)
         if fill_width > 0:
             painter.setPen(Qt.NoPen)
             painter.setBrush(QBrush(fill_color))
             painter.drawRect(bar_x, bar_y, fill_width, bar_height)
             
-        # Draw Text
         font = QFont()
         font.setPointSize(11)
         font.setBold(True)
         painter.setFont(font)
         painter.setPen(QColor(255, 255, 255))
         painter.drawText(bar_x, bar_y - 5, f"HEALTH: {health}/{max_health}")
-        # REMOVED: painter.drawText(bar_x + bar_width + 20, bar_y + bar_height - 5, "[E] Use")
 
-        # --- Context Sensitive Interaction Message ---
         if hasattr(render_state, 'hud_message') and render_state.hud_message:
             msg = render_state.hud_message
-            
-            # Font settings for message
             msg_font = QFont()
             msg_font.setPointSize(14)
             msg_font.setBold(True)
             painter.setFont(msg_font)
             
-            # Calculate text size to center it
             fm = painter.fontMetrics()
             text_width = fm.horizontalAdvance(msg) 
             
             cx = self.width() // 2
-            cy = self.height() // 2 + 50 # Render slightly below center crosshair
+            cy = self.height() // 2 + 50 
             
-            # Draw Shadow
             painter.setPen(QColor(0, 0, 0))
             painter.drawText(cx - text_width//2 + 2, cy + 2, msg)
-            
-            # Draw Text
             painter.setPen(QColor(200, 200, 200))
             painter.drawText(cx - text_width//2, cy, msg)
         
-        # --- Collected Keys (Clean Look) ---
         collected_keys = getattr(render_state, 'collected_keys', set())
         if collected_keys:
             key_x = self.width() - hud_margin - 100
@@ -450,12 +583,8 @@ class QtGameView(QOpenGLWidget):
             key_size = 75
             key_spacing = 40
             
-            # REMOVED: Background Rectangle logic
-            
-            # Draw each key icon directly
             for i, key_name in enumerate(sorted(collected_keys)):
                 icon_x = key_x - i * key_spacing
-                
                 try:
                     pixmap = Pickup.get_key_pixmap(key_name)
                     if pixmap and not pixmap.isNull():
@@ -467,7 +596,6 @@ class QtGameView(QOpenGLWidget):
                     self._draw_key_fallback(painter, key_name, icon_x, key_y, key_size)
     
     def _draw_key_fallback(self, painter, key_name, x, y, size):
-        """Draw a colored key icon as fallback when pixmap not available."""
         key_colors = {
             'blue_key': QColor(50, 100, 200),
             'red_key': QColor(200, 50, 50),
@@ -480,18 +608,13 @@ class QtGameView(QOpenGLWidget):
         painter.setBrush(QBrush(color))
         painter.drawRoundedRect(x, y, size, size, 4, 4)
         
-        # Draw key symbol
         painter.setPen(QPen(QColor(255, 255, 255), 2))
-        # Key body
         painter.drawLine(x + 8, y + size//2, x + size - 8, y + size//2)
-        # Key head
         painter.drawEllipse(x + 4, y + size//2 - 6, 12, 12)
-        # Key teeth
         painter.drawLine(x + size - 10, y + size//2, x + size - 10, y + size//2 + 6)
         painter.drawLine(x + size - 14, y + size//2, x + size - 14, y + size//2 + 4)
 
     def _draw_window_manager(self, painter):
-        # --- 1. Define Visual Styles ---
         bg_color = QColor(20, 20, 25, 235)      
         border_color = QColor(80, 80, 90)       
         header_color = QColor(66, 95, 93)       
@@ -502,12 +625,10 @@ class QtGameView(QOpenGLWidget):
         rect = QRect(self.debug_window_rect.x(), self.debug_window_rect.y(), 
                      self.debug_window_rect.width(), target_height)
         
-        # --- 2. Draw Main Window Container ---
         painter.setPen(QPen(border_color, 1))
         painter.setBrush(QBrush(bg_color))
-        painter.drawRect(rect) # Restored background rectangle
+        painter.drawRect(rect) 
         
-        # --- 3. Draw Header ---
         header_rect = QRect(rect.x(), rect.y(), rect.width(), 25)
         painter.fillRect(header_rect, header_color)
         painter.setPen(QPen(border_color, 1))
@@ -522,7 +643,6 @@ class QtGameView(QOpenGLWidget):
         if not self.sysmon_expanded:
             return
 
-        # --- 4. Draw Performance Graph ---
         graph_x, graph_y = rect.x() + 5, rect.y() + 30
         graph_width, graph_height = rect.width() - 10, 50
         
@@ -543,23 +663,17 @@ class QtGameView(QOpenGLWidget):
             painter.setPen(QPen(QColor(100, 255, 100), 1))
             painter.drawPolyline(QPolygon(points))
 
-        # --- 5. Triangle Statistics Calculation ---
-        # Brushes are cubes, so each has 12 triangles
         brush_tris = len(self.editor.state.brushes) * 12 
-
         terrain_total_tris = 0
         terrain_visible_tris = 0
 
         if hasattr(self.editor, 'terrain') and self.editor.terrain is not None:
-            # Use the modified method to get total triangles in memory
             terrain_total_tris = self.editor.terrain.get_tri_count()
-            # Use the attribute updated during the last update_and_render call for visible count
             terrain_visible_tris = self.editor.terrain.total_triangles
 
         total_tris = brush_tris + terrain_total_tris
         visible_tris = (self.renderer.render_stats.visible_tris if self.renderer else 0) + terrain_visible_tris
 
-        # --- 6. Draw Text Statistics ---
         left_margin = rect.x() + 10
         stats_start_y = graph_y + graph_height + 25
         line_height = 18
@@ -631,7 +745,6 @@ class QtGameView(QOpenGLWidget):
             tid = self.load_texture(fname, 'sprites')
             if tid: self.sprite_textures[cls] = tid
         
-        # Load key-specific textures
         key_textures = {
             'blue_key': 'bluekey.png',
             'red_key': 'redkey.png', 
@@ -647,29 +760,33 @@ class QtGameView(QOpenGLWidget):
             self.renderer.set_sprite_textures(self.sprite_textures)
     
     def update_instance_textures(self, things):
-        """Build per-instance texture mapping for things like Pickups with custom sprites."""
         if not self.renderer:
             return
         
         instance_textures = {}
         
         for thing in things:
-            if isinstance(thing, Pickup):
-                # Check if it's a key
+            if isinstance(thing, LogicGate):
+                l_type = thing.properties.get('logic_type', 'and').lower()
+                filename = f"logic_{l_type}.png"
+                tex_key = f"logic_{l_type}"
+                if tex_key not in self.sprite_textures:
+                    tid = self.load_texture(filename, 'sprites')
+                    if tid: 
+                        self.sprite_textures[tex_key] = tid
+                
+                if tex_key in self.sprite_textures:
+                    instance_textures[id(thing)] = self.sprite_textures[tex_key]
+
+            elif isinstance(thing, Pickup):
                 if thing.is_key():
                     key_name = thing.get_key_name()
                     tex_key = f'key_{key_name}'
                     if tex_key in self.sprite_textures:
                         instance_textures[id(thing)] = self.sprite_textures[tex_key]
-                # Check for custom sprite
                 elif thing.properties.get('custom_sprite'):
                     sprite_path = thing.properties.get('custom_sprite')
-                    
-                    # STRICT: Enforce loading from assets/sprites folder only
-                    # We extract just the filename and force the 'sprites' subfolder
                     filename = os.path.basename(sprite_path.replace('\\', '/'))
-                        
-                    # Load custom sprite texture if not already loaded
                     tex_id = self.load_texture(filename, 'sprites')
                     if tex_id:
                         instance_textures[id(thing)] = tex_id
@@ -685,7 +802,6 @@ class QtGameView(QOpenGLWidget):
             self.last_mouse_pos = self.mapFromGlobal(center_pos)
             QApplication.setOverrideCursor(Qt.BlankCursor)
             
-            # Setup player for logic thread
             self.player = Player(player_start_pos[0], player_start_pos[2], np.radians(player_start_angle), physics_enabled=physics_enabled)
             self.player.pos.y = player_start_pos[1]
             if self.logic_thread:
@@ -707,7 +823,6 @@ class QtGameView(QOpenGLWidget):
         self.cull_distance = distance
         if self.renderer:
             self.renderer.lod_manager.cull_dist_sq = distance * distance
-            # Scale full detail distance relative to cull distance (e.g., 25%)
             self.renderer.lod_manager.full_dist_sq = (distance * 0.25) ** 2
         self.update()
 
@@ -798,9 +913,7 @@ class QtGameView(QOpenGLWidget):
 
     def mousePressEvent(self, event):
         if self.debug_mode_active and event.button() == Qt.LeftButton:
-            # Simple debug window interaction passthrough or close logic
             if self.debug_window_rect.contains(event.pos()):
-                # Simplified for brevity: just check click areas
                 if event.x() > self.debug_window_rect.right() - 25 and event.y() < self.debug_window_rect.y() + 25:
                     self.debug_mode_active = False
                     if self.play_mode:
@@ -823,7 +936,6 @@ class QtGameView(QOpenGLWidget):
                 return
 
         if event.button() == Qt.LeftButton and self.editor.state.selected_object and not self.play_mode:
-            # Gizmo Logic (Using raycast against axis lines)
             obj_pos = self.get_selected_object_pos()
             if obj_pos:
                 ray_o, ray_d = self.get_ray_from_mouse(event.x(), event.y())
@@ -833,7 +945,7 @@ class QtGameView(QOpenGLWidget):
                 
                 for axis, vec in [('x', glm.vec3(1,0,0)), ('y', glm.vec3(0,1,0)), ('z', glm.vec3(0,0,1))]:
                     pt, dist = self.intersect_ray_with_axis(ray_o, ray_d, obj_pos, vec)
-                    if pt and dist < 1.5 and glm.distance(pt, obj_pos) < 40.0: # Thresholds
+                    if pt and dist < 1.5 and glm.distance(pt, obj_pos) < 40.0:
                         if dist < best_dist:
                             best_dist = dist
                             hit_axis = axis
@@ -910,7 +1022,6 @@ class QtGameView(QOpenGLWidget):
         pos, size = glm.vec3(brush['pos']), glm.vec3(brush['size'])
         bmin, bmax = pos - size/2, pos + size/2
         
-        # Ray-AABB intersection logic to find face normal
         tmin, tmax = 0.0, float('inf')
         for i in range(3):
             if abs(ray_d[i]) < 1e-6:
@@ -927,7 +1038,6 @@ class QtGameView(QOpenGLWidget):
         local = hit - pos
         rel = abs(local) / size
         
-        # Identify face by max component
         if rel.x > rel.y and rel.x > rel.z: return 'east' if local.x > 0 else 'west'
         if rel.y > rel.x and rel.y > rel.z: return 'top' if local.y > 0 else 'bottom'
         return 'north' if local.z > 0 else 'south'

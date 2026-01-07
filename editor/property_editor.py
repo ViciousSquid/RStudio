@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFrame, QDoubleSpinBox, QSizePolicy)
 from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QFont
-from editor.things import Thing, Light, Pickup, Monster, Model, Speaker
+from editor.things import Thing, Light, Pickup, Monster, Model, Speaker, LogicGate
 
 class ClickableLineEdit(QLineEdit):
     clicked_while_empty = pyqtSignal()
@@ -59,15 +59,17 @@ class PropertyEditor(QWidget):
             if thing_name == target_name: return True
         return False
     
-    def _start_connection_from_field(self, brush):
-        if not brush.get('is_trigger') and not brush.get('is_mover'): return
-        if hasattr(self.editor, 'right_tabs'):
-            current_view = self.editor.right_tabs.currentWidget()
-            from editor.view_2d import View2D
-            if isinstance(current_view, View2D):
-                current_view.start_connection_mode(brush)
-                if hasattr(self.editor, 'show_toast'):
-                    self.editor.show_toast("Drag to target, ESC to cancel")
+    def _start_connection_from_field(self, obj):
+        """Helper to start connection mode from the UI."""
+        # Fix: Check if obj is a dict (Brush) before using .get()
+        if isinstance(obj, dict):
+            # If it's a brush, ensure it's a trigger or mover
+            if not obj.get('is_trigger') and not obj.get('is_mover'): 
+                return
+        
+        # If it's a LogicGate (or other Thing), we assume it's valid
+        if hasattr(self.editor, 'view_2d'):
+            self.editor.view_2d.start_connection_mode(obj)
 
     def clear_layout(self):
         while self.main_layout.count():
@@ -1255,6 +1257,24 @@ class PropertyEditor(QWidget):
             self.add_model_path_widget(layout, thing)
             self.add_vector3_widget(layout, thing, 'scale')
             self.add_vector3_widget(layout, thing, 'rotation')
+
+        if isinstance(thing, LogicGate):
+            # --- Logic Type Dropdown ---
+            type_label = QLabel("Logic Type:")
+            type_combo = QComboBox()
+            type_combo.addItems(['AND', 'OR', 'XOR', 'NAND', 'NOR'])
+            type_combo.setCurrentText(thing.properties.get('logic_type', 'AND'))
+            type_combo.currentTextChanged.connect(lambda t: self.update_object_prop('logic_type', t))
+            layout.addRow(type_label, type_combo)
+
+            # --- Target Field ---
+            target_label = QLabel("Target:")
+            target_input = ClickableLineEdit(thing.properties.get('target', ''))
+            target_input.setPlaceholderText("Object to activate...")
+            # Reuse your existing connection logic
+            target_input.clicked_while_empty.connect(lambda: self._start_connection_from_field(thing))
+            target_input.editingFinished.connect(lambda: self.update_object_prop('target', target_input.text()))
+            layout.addRow(target_label, target_input)
 
         if isinstance(thing, Light):
             self.add_color_picker_widget(layout, thing, 'colour')

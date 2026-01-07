@@ -156,95 +156,40 @@ class MainWindow(QMainWindow):
         self.update_global_font()
         self.load_layout()
         
-        # Terrain system
         self.terrain = None
         self.terrain_editor_window = None
+        self.ui.action_asset_browser.triggered.connect(self.toggle_asset_browser)
 
         # Enable sysmon at launch if configured
         if self.config.getboolean('Display', 'always_show_sysmon', fallback=False):
             self.view_3d.debug_mode_active = True
             self.view_3d.sysmon_expanded = True
+
+        self.show_logic_links = False
         
-        # Tooltip system
+        # Tooltips
         self.camera_movement_learned = self.config.getboolean('Tooltips', 'camera_movement_learned', fallback=False)
         self.startup_tooltip_shown = False
         self.camera_movement_learned = self.config.getboolean('Tooltips', 'camera_movement_learned', fallback=False)
         self.startup_tooltip_shown = False
         self.tooltip_tips = [
-            # Camera & Navigation
             "Right-click + WASD: Move camera",
             "Mouse wheel: Zoom in/out",
-            "Ctrl+Tab: Cycle 2D views (Top/Side/Front)",
-            
-            # Brush Tools
+            "Ctrl+Tab: Cycle 2D views",
             "Space: Clone selected brush/object",
             "H: Hide selected, Shift+H: Unhide all",
             "Delete: Remove selected brush/object",
-            "Shift+T: Apply texture to brush",
-            "Subtract: Cut geometry from solid brushes",
-            "Rotate: Flip dimensions in active 2D view",
-            "Tint: Change brush color permanently",
-            "Create Room: Hollows + auto-adds lights",
-            "Hollow: Creates empty space with wall thickness",
-            
-            # Textures & Materials
-            "Drag from Asset Browser onto brush faces",
-            "Apply Caulk: Invisible but solid",
-            "Select face in 2D view + texture: Apply to single face",
-            
-            # Things & Entities
             "Add Player Start before Play Mode",
             "Shift+Wheel on Light: Adjust radius",
             "Ctrl+Wheel on Light: Adjust intensity",
-            "Ctrl+Drag from Trigger: Connect to targets",
+            "Ctrl+Drag from Trigger to Connect",
             "Triggers activate movers, doors, etc.",
-            
-            # Play Mode
             "F5: Enter/Exit Play Mode",
-            "ESC: Exit Play Mode",
             "F3: Toggle System Monitor",
             "F4: Toggle sprite visibility",
             "F1: Toggle connection lines",
-            "E: Use/interact with objects",
-            
-            # 2D Views
-            "Grid size auto-snaps to power of 2",
-            "2D views show projections: Top(XZ), Side(YZ), Front(XY)",
-            
-            # Selection
             "Ctrl+Click: Multi-select",
-            "Click empty space: Clear selection",
-            
-            # Asset Browser
             "T: Toggle Asset Browser",
-            "Double-click: Preview asset",
-            
-            # Terrain
-            "Terrain Editor: Sculpt heightmaps",
-            "Terrain collision works in Play Mode",
-            
-            # UI & Layout
-            "Save/Load custom window layouts",
-            "Scene Hierarchy: Select by name",
-            "Property Editor: Fine-tune properties",
-            
-            # Advanced
-            "Subtract + Hollow: Create complex geometry",
-            "Locked brushes: Cannot be modified",
-            "Movers: Require direction vector",
-            "Doors: Auto-rotate around Z axis",
-            
-            # Generation
-            "Generate random maps from algorithms",
-            "Export collision tilemaps",
-            
-            # Performance
-            "Cull Distance: Hide distant objects",
-            "Display modes: Wireframe/Solid/Textured",
-            
-            # Undo/Redo
-            "Ctrl+Z: Undo, Ctrl+Y: Redo",
-            "Undo stack: 50 states max",
         ]
         self.last_tooltip_time = 0
         self.tooltip_interval = 120  # Seconds between occasional tooltips
@@ -309,6 +254,16 @@ class MainWindow(QMainWindow):
                     self.right_mouse_held = False
         
         return super().eventFilter(obj, event)
+
+    def toggle_asset_browser(self):
+        """Toggles the visibility of the Asset Browser dock."""
+        if hasattr(self, 'asset_browser_dock'):
+            is_visible = self.asset_browser_dock.isVisible()
+            self.asset_browser_dock.setVisible(not is_visible)
+            
+            # Update button state/tooltip if desired
+            state = "Hidden" if is_visible else "Visible"
+            self.statusBar().showMessage(f"Asset Browser {state}", 2000)
 
     def show_toast(self, message, is_error=False, duration=None):
         """Displays a notification"""
@@ -405,12 +360,19 @@ class MainWindow(QMainWindow):
         from PyQt5.QtWidgets import QProgressDialog
         from PyQt5.QtCore import Qt
         
-        # Create terrain if it doesn't exist
+       # Create terrain if it doesn't exist
         if self.terrain is None:
             # Show progress dialog BEFORE creating terrain
-            progress = QProgressDialog("Generating terrain...\nPlease wait.", None, 0, 0, self)
+            progress = QProgressDialog("Doing the thing...", None, 0, 0, self)
+            
+            # REVISION: Set window flags to force the dialog to the top of the Z-order
+            progress.setWindowFlags(progress.windowFlags() | Qt.WindowStaysOnTopHint | Qt.Dialog)
+            
             progress.setWindowTitle("Please Wait")
-            progress.setWindowModality(Qt.WindowModal)
+            
+            # REVISION: ApplicationModal is more aggressive than WindowModal for staying on top
+            progress.setWindowModality(Qt.ApplicationModal)
+            
             progress.setMinimumDuration(0)
             progress.setMinimumWidth(300)
             progress.setMinimumHeight(100)
@@ -533,9 +495,31 @@ class MainWindow(QMainWindow):
 
     def add_model_to_scene(self, filepath, rotation, scale):
         self.save_state()
-        new_model = Model(pos=[0, 0, 0], model_path=filepath, rotation=rotation, scale=scale)
+        
+        # Optional: Try to make path relative to project root for portability
+        try:
+            # Assuming self.root_dir is set, otherwise just use filepath
+            if hasattr(self, 'root_dir'):
+                assets_dir = os.path.join(self.root_dir, "assets")
+                rel_path = os.path.relpath(filepath, assets_dir)
+                if not rel_path.startswith(".."):
+                    filepath = os.path.join("assets", rel_path)
+        except Exception:
+            pass
+
+        # FIX: Initialize with only 'pos', then set properties
+        new_model = Model(pos=[0, 0, 0])
+        new_model.properties['model_path'] = filepath.replace('\\', '/') # Ensure forward slashes
+        new_model.properties['rotation'] = rotation
+        new_model.properties['scale'] = scale
+        
+        # Set a default name based on filename
+        model_name = os.path.splitext(os.path.basename(filepath))[0]
+        new_model.properties['name'] = model_name
+        
         self.state.things.append(new_model)
         self.set_selected_object(new_model)
+        self.show_toast(f"Added {model_name}")
 
     def set_selected_object(self, obj):
         """Set a single selected object (backwards compatibility)."""
@@ -779,7 +763,7 @@ class MainWindow(QMainWindow):
 
     def apply_caulk_to_brush(self):
         if not isinstance(self.state.selected_object, dict):
-            QMessageBox.warning(self, "No Brush Selected", "Please select a brush to apply caulk to.")
+            QMessageBox.warning(self, "No Brush Selected", "Select a brush to apply caulk to.")
             return
         self.save_state()
         if 'textures' not in self.state.selected_object:
@@ -788,15 +772,19 @@ class MainWindow(QMainWindow):
             self.state.selected_object['textures'][face] = 'caulk.jpg'
         self.update_views()
 
-    def apply_texture_to_brush(self):
+    def apply_texture_to_brush(self, texture_name=None):
         if not isinstance(self.state.selected_object, dict):
-            QMessageBox.warning(self, "No Brush Selected", "Please select a brush to apply the texture to.")
+            QMessageBox.warning(self, "No Brush Selected", "Select a brush to apply the texture to.")
             return
-        texture_path = self.asset_browser.get_selected_filepath()
-        if not texture_path:
-            QMessageBox.warning(self, "No Texture Selected", "Please select a texture from the Asset Browser.")
-            return
-        texture_name = os.path.basename(texture_path)
+
+        # Fallback if called without argument (e.g. from shortcut)
+        if texture_name is None:
+            texture_path = self.asset_browser.get_selected_filepath()
+            if not texture_path:
+                QMessageBox.warning(self, "No Texture Selected", "Select a texture from the Asset Browser.")
+                return
+            texture_name = os.path.basename(texture_path)
+
         self.save_state()
         if 'textures' not in self.state.selected_object:
             self.state.selected_object['textures'] = {}
@@ -810,7 +798,7 @@ class MainWindow(QMainWindow):
 
         texture_path = self.asset_browser.get_selected_filepath()
         if not texture_path:
-            QMessageBox.warning(self, "No Texture Selected", "Please select a texture from the Asset Browser.")
+            QMessageBox.warning(self, "No Texture Selected", "Select a texture from the Asset Browser.")
             return
 
         texture_name = os.path.basename(texture_path)
@@ -1140,7 +1128,7 @@ class MainWindow(QMainWindow):
 
     def perform_subtraction(self):
         if not isinstance(self.state.selected_object, dict):
-            QMessageBox.warning(self, "Invalid Selection", "Please select a brush to make it subtractive.")
+            QMessageBox.warning(self, "Invalid Selection", "Select a brush for CSG Subtract")
             return
 
         self.save_state()
@@ -1257,7 +1245,7 @@ class MainWindow(QMainWindow):
     def hollow_selected_brush(self):
         """Hollow out the selected brush by creating an inner subtraction brush."""
         if not isinstance(self.state.selected_object, dict):
-            QMessageBox.warning(self, "Invalid Selection", "Please select a brush to hollow.")
+            QMessageBox.warning(self, "Invalid Selection", "Select a brush to hollow.")
             return
 
         outer_brush = self.state.selected_object
@@ -1441,7 +1429,7 @@ class MainWindow(QMainWindow):
 
         current_view = self.right_tabs.currentWidget()
         if not isinstance(current_view, View2D):
-            QMessageBox.warning(self, "Invalid View", "Please select a 2D view (Top, Side, or Front) to define the rotation axis.")
+            QMessageBox.warning(self, "Invalid View", "Select a 2D view (Top, Side, or Front) to define the rotation axis.")
             return
 
         self.save_state()

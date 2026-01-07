@@ -330,3 +330,42 @@ class Model(Thing):
         self.properties.setdefault('model_path', "")
         self.properties.setdefault('rotation', [0, 0, 0])
         self.properties.setdefault('scale', [1, 1, 1])
+
+class LogicGate(Thing):
+    pixmap_path = "assets/sprites/logic_gate.png" # Fallback sprite
+    
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties.setdefault('type', 'logic_gate')
+        self.properties.setdefault('logic_type', 'AND') # AND, OR, XOR, NAND, NOR
+        self.properties.setdefault('target', '')
+        self.properties.setdefault('initial_state', 'off')
+
+    def get_instance_pixmap(self):
+        """
+        Dynamically load sprite based on logic type (e.g., 'logic_and.png').
+        """
+        l_type = self.properties.get('logic_type', 'and').lower()
+        # You can supply 'logic_and.png', 'logic_or.png', etc.
+        expected_path = f"assets/sprites/logic_{l_type}.png"
+        
+        # Check dynamic cache
+        if expected_path in self._pixmap_cache:
+            return self._pixmap_cache[expected_path]
+            
+        # Try to load
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+            abs_path = os.path.join(project_root, expected_path)
+            
+            if os.path.exists(abs_path):
+                pix = QPixmap(abs_path)
+                if not pix.isNull():
+                    self._pixmap_cache[expected_path] = pix
+                    return pix
+        except:
+            pass
+            
+        # Fallback to default class pixmap if specific type sprite missing
+        return super().get_instance_pixmap()

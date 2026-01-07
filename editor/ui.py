@@ -36,6 +36,7 @@ class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         MainWindow.setObjectName("MainWindow")
         
+        # --- 1. Initialize Views and Editors ---
         MainWindow.view_3d = QtGameView(MainWindow)
         MainWindow.view_3d.show_triggers_as_solid = True 
         
@@ -45,9 +46,11 @@ class Ui_MainWindow(object):
         MainWindow.property_editor = PropertyEditor(MainWindow)
         MainWindow.scene_hierarchy = SceneHierarchy(MainWindow)
 
+        # --- 2. Docking Configuration ---
         MainWindow.setDockOptions(QMainWindow.AnimatedDocks | QMainWindow.AllowNestedDocks | QMainWindow.AllowTabbedDocks)
         MainWindow.setTabPosition(Qt.AllDockWidgetAreas, QTabWidget.North)
 
+        # Scene Hierarchy Dock (Left)
         MainWindow.scene_hierarchy_dock = QDockWidget("Scene", MainWindow)
         MainWindow.scene_hierarchy_dock.setObjectName("SceneDock")
         MainWindow.scene_hierarchy_dock.setWidget(MainWindow.scene_hierarchy)
@@ -56,14 +59,16 @@ class Ui_MainWindow(object):
         screen_width = QApplication.primaryScreen().geometry().width()
         MainWindow.scene_hierarchy_dock.setMaximumWidth(int(screen_width * 0.10))
 
+        # 3D View Dock (Center/Right)
         MainWindow.view_3d_dock = QDockWidget("3D View", MainWindow)
         MainWindow.view_3d_dock.setObjectName("View3DDock")
         MainWindow.view_3d_dock.setWidget(MainWindow.view_3d)
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.view_3d_dock)
 
+        # 2D Views Dock (Right, Tabbed)
         MainWindow.right_dock = QDockWidget("2D Views", MainWindow)
         MainWindow.right_dock.setObjectName("2DViewsDock")
-        MainWindow.right_dock.setMinimumWidth(610)  # Prevent resizing smaller than 610px when docked
+        MainWindow.right_dock.setMinimumWidth(610)
         MainWindow.right_tabs = QTabWidget()
         MainWindow.right_tabs.addTab(MainWindow.view_top, "Top (XZ)")
         MainWindow.right_tabs.addTab(MainWindow.view_side, "Side (YZ)")
@@ -71,17 +76,20 @@ class Ui_MainWindow(object):
         MainWindow.right_dock.setWidget(MainWindow.right_tabs)
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.right_dock)
         
+        # Properties Dock (Right, Bottom)
         MainWindow.properties_dock = QDockWidget("Properties", MainWindow)
         MainWindow.properties_dock.setObjectName("PropertiesDock")
         MainWindow.properties_dock.setWidget(MainWindow.property_editor)
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.properties_dock)
 
+        # --- 3. Layout Adjustments ---
         MainWindow.splitDockWidget(MainWindow.view_3d_dock, MainWindow.right_dock, Qt.Horizontal)
         MainWindow.splitDockWidget(MainWindow.right_dock, MainWindow.properties_dock, Qt.Vertical)
 
         MainWindow.resizeDocks([MainWindow.view_3d_dock, MainWindow.right_dock], [800, 600], Qt.Horizontal)
         MainWindow.resizeDocks([MainWindow.right_dock, MainWindow.properties_dock], [600, 300], Qt.Vertical)
 
+        # Tab Styling
         MainWindow.right_tabs.setStyleSheet("""
             QTabBar::tab:selected { background: #F08000; color: white; }
             QTabBar::tab { background: #2b2b2b; color: #ccc; height: 35px; min-width: 150px; padding: 0px; border: 1px solid #222; }
@@ -89,9 +97,8 @@ class Ui_MainWindow(object):
             QTabBar::scroller { width: 0px; }
         """)
 
-        # Asset Browser Setup
+        # --- 4. Asset Browser Dock ---
         MainWindow.asset_browser_dock = QDockWidget("Asset Browser", MainWindow)
-
         texture_path = os.path.join(MainWindow.root_dir, "assets", "textures")
         
         MainWindow.asset_browser = AssetBrowser(texture_path, editor=MainWindow)
@@ -111,9 +118,19 @@ class Ui_MainWindow(object):
             main_window_center.x() - initial_width // 2,
             main_window_center.y() - initial_height // 2
         )
+
+        # --- 5. Actions Definition ---
+        # DEFINED BEFORE create_toolbars so it can be used there
+        self.action_asset_browser = QAction(MainWindow)
+        self.action_asset_browser.setObjectName("action_asset_browser")
+        self.action_asset_browser.setIcon(QIcon("assets/browser.png"))
+        self.action_asset_browser.setText("Asset Browser")
+        self.action_asset_browser.setToolTip("Toggle Asset Browser (T)")
+        self.action_asset_browser.setShortcut("T")
         
+        # --- 6. Menus and Toolbars ---
         self.create_menu_bar(MainWindow)
-        self.create_toolbars(MainWindow)
+        self.create_toolbars(MainWindow) # Now includes the browser button
         self.create_status_bar(MainWindow)
 
     def create_menu_bar(self, MainWindow):
@@ -168,10 +185,8 @@ class Ui_MainWindow(object):
         
         view_menu.addSeparator()
         
-        asset_browser_action = MainWindow.asset_browser_dock.toggleViewAction()
-        asset_browser_action.setText("Toggle Asset Browser")
-        asset_browser_action.setShortcut("T")
-        view_menu.addAction(asset_browser_action)
+        # Use our new action for the menu as well
+        view_menu.addAction(self.action_asset_browser)
         
         view_menu.addSeparator()
         MainWindow.save_layout_action = QAction("Save Layout", MainWindow)
@@ -258,20 +273,41 @@ class Ui_MainWindow(object):
         top_toolbar.addWidget(subtract_btn)
         top_toolbar.addWidget(tint_btn)
         
-        # Add separator before grid toggle
-        separator2 = QFrame()
-        separator2.setFrameShape(QFrame.VLine)
-        separator2.setFrameShadow(QFrame.Sunken)
-        separator2.setFixedWidth(2)
-        separator2.setStyleSheet("background-color: transparent;")
-        top_toolbar.addWidget(separator2)
+        # Add separator 
+        separator_terrain = QFrame()
+        separator_terrain.setFrameShape(QFrame.VLine)
+        separator_terrain.setFrameShadow(QFrame.Sunken)
+        separator_terrain.setFixedWidth(2)
+        separator_terrain.setStyleSheet("background-color: transparent;")
+        top_toolbar.addWidget(separator_terrain)
         
-        # === GRID TOGGLE ===
+        # === TERRAIN BUTTON ===
+        terrain_btn = QPushButton()
+        terrain_btn.setIcon(QIcon("assets/terrain.png"))
+        terrain_btn.setIconSize(QSize(icon_size_val, icon_size_val))
+        terrain_btn.setFixedSize(icon_size_val, icon_size_val)
+        terrain_btn.setToolTip("Terrain Editor")
+        terrain_btn.clicked.connect(MainWindow.open_terrain_editor)
+        top_toolbar.addWidget(terrain_btn)
+        MainWindow.terrain_btn = terrain_btn
+
+        # === ASSET BROWSER BUTTON (NEW) ===
+        browser_btn = QPushButton()
+        browser_btn.setIcon(QIcon("assets/browser.png"))
+        browser_btn.setIconSize(QSize(icon_size_val, icon_size_val))
+        browser_btn.setFixedSize(icon_size_val, icon_size_val)
+        browser_btn.setToolTip("Asset Browser (T)")
+        # Trigger the action we created in setupUi
+        browser_btn.clicked.connect(self.action_asset_browser.trigger)
+        top_toolbar.addWidget(browser_btn)
+        MainWindow.browser_btn = browser_btn
+
+         # === GRID TOGGLE ===
         grid_btn = QPushButton()
         grid_btn.setIcon(QIcon("assets/b_grid.png"))
         grid_btn.setIconSize(QSize(icon_size_val, icon_size_val))
         grid_btn.setFixedSize(icon_size_val, icon_size_val)
-        grid_btn.setToolTip("Toggle 3D View Grid (G)")
+        grid_btn.setToolTip("Toggle 3D Grid (G)")
         grid_btn.setCheckable(True)
         grid_btn.setChecked(True)  # Grid visible by default
         grid_btn.setStyleSheet("""
@@ -293,29 +329,11 @@ class Ui_MainWindow(object):
         grid_btn.toggled.connect(MainWindow.toggle_grid)
         top_toolbar.addWidget(grid_btn)
         MainWindow.grid_btn = grid_btn  # Store reference
-        # === TERRAIN BUTTON ===
-        separator_terrain = QFrame()
-        separator_terrain.setFrameShape(QFrame.VLine)
-        separator_terrain.setFrameShadow(QFrame.Sunken)
-        separator_terrain.setFixedWidth(2)
-        separator_terrain.setStyleSheet("background-color: transparent;")
-        top_toolbar.addWidget(separator_terrain)
-        
-        terrain_btn = QPushButton()
-        terrain_btn.setIcon(QIcon("assets/terrain.png"))
-        terrain_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        terrain_btn.setFixedSize(icon_size_val, icon_size_val)
-        terrain_btn.setToolTip("Terrain Editor (Low-Poly Terrain)")
-        terrain_btn.clicked.connect(MainWindow.open_terrain_editor)
-        top_toolbar.addWidget(terrain_btn)
-        MainWindow.terrain_btn = terrain_btn
-        
-
         
         # === FLOATING PLAY BUTTON ===
         MainWindow.play_button = QPushButton(QIcon("assets/b_test.png"), "Play", MainWindow)
         MainWindow.play_button.setIconSize(QSize(icon_size_val, icon_size_val))
-        MainWindow.play_button.setFixedSize(icon_size_val + 180, icon_size_val)
+        MainWindow.play_button.setFixedSize(icon_size_val + 190, icon_size_val)
         MainWindow.play_button.setToolTip("Drop in and play (F5)")
         MainWindow.play_button.setShortcut("f5")
         MainWindow.play_button.clicked.connect(MainWindow.enter_play_mode)

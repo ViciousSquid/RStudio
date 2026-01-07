@@ -5,7 +5,7 @@ import os
 from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
-from editor.things import Thing, Light, PlayerStart, Pickup, Speaker, Model
+from editor.things import Thing, Light, PlayerStart, Pickup, Speaker, Model, LogicGate
 from editor.scene_hierarchy import SceneHierarchy
 
 class View2D(QWidget):
@@ -91,19 +91,25 @@ class View2D(QWidget):
         self.connection_snap_target = None
         self.update()
 
-    def start_connection_mode(self, source_brush):
+    def start_connection_mode(self, source_obj):
         """Start connection mode programmatically (e.g., from property editor)."""
-        if not source_brush:
+        if not source_obj:
             return
         
         self.is_connecting = True
-        self.connection_source = source_brush
+        self.connection_source = source_obj
         self.connection_snap_target = None
         
-        # Set initial drag position to brush center
+        # Set initial drag position to object center
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
-        source_pos = source_brush['pos']
+        
+        # FIX: Handle Brush (dict) vs Thing (object)
+        if isinstance(source_obj, dict):
+            source_pos = source_obj['pos']
+        else:
+            source_pos = source_obj.pos
+            
         self.connection_drag_pos = QPointF(source_pos[ax_map[ax1]], source_pos[ax_map[ax2]])
         
         self.setCursor(Qt.CrossCursor)
@@ -111,17 +117,21 @@ class View2D(QWidget):
         self.update()
 
     def keyPressEvent(self, event):
-        """Handle key presses - ESC cancels connection mode."""
-        if event.key() == Qt.Key_Escape and self.is_connecting:
-            self.is_connecting = False
-            self.connection_source = None
-            self.connection_snap_target = None
-            self.setCursor(Qt.ArrowCursor)
-            self.update()
-            event.accept()
+        # F1 Synchronization ---
+        if event.key() == Qt.Key_F1:
+            # Toggle the global flag on the editor state
+            current_state = getattr(self.editor, 'show_logic_links', False)
+            self.editor.show_logic_links = not current_state
+            
+            # Force redraw of both views (2D and 3D)
+            self.editor.update_views()
+            
+            # Show toast
+            if hasattr(self.main_window, 'show_toast'):
+                status = "ON" if self.editor.show_logic_links else "OFF"
+                self.main_window.show_toast(f"Logic Links: {status}")
             return
-        
-        # Pass other keys to parent
+
         super().keyPressEvent(event)
 
     def _smooth_update_tick(self):
@@ -278,10 +288,7 @@ class View2D(QWidget):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(50, 50, 50))
         
-        # Calculate visible bounds once for culling
         visible_bounds = self.get_visible_world_bounds()
-        
-        # Skip drawing if visible bounds are invalid
         if visible_bounds.width() <= 0 or visible_bounds.height() <= 0:
             return
         
@@ -290,7 +297,13 @@ class View2D(QWidget):
         self.draw_brushes(painter, visible_bounds)
         self.draw_things(painter, visible_bounds)
         self.draw_camera(painter)
-        self.draw_trigger_connections(painter, visible_bounds)
+        
+        # --- REVISED: Logic/Trigger Connections ---
+        # Only draw if the global toggle is ON (F1)
+        show_f1_key = getattr(self.editor, 'show_logic_links', False)
+        
+        if show_f1_key:
+            self.draw_logic_connections(painter, visible_bounds)
 
         if self.is_drawing_brush:
             pen = QPen(QColor(255, 255, 0), 1, Qt.DashLine)
@@ -300,43 +313,105 @@ class View2D(QWidget):
             current_screen = self.world_to_screen(self.draw_current_pos)
             painter.drawRect(QRectF(start_screen, current_screen).normalized())
         
-        # Draw connection drag line
         if self.is_connecting and self.connection_source:
-            ax1, ax2 = self.get_axes()
-            ax_map = {'x': 0, 'y': 1, 'z': 2}
-            source_pos = self.connection_source['pos']
-            source_2d = QPointF(source_pos[ax_map[ax1]], source_pos[ax_map[ax2]])
+            self.draw_connection_drag(painter)
+
+    def draw_logic_connections(self, painter, visible_bounds):
+        """
+        Draws lines between Triggers/LogicGates and their Targets.
+        Respects 'Animate Connections' setting.
+        """
+        ax1, ax2 = self.get_axes()
+        if not ax1 or not ax2: return
+            
+        ax_map = {'x': 0, 'y': 1, 'z': 2}
+        axis1_idx = ax_map[ax1]
+        axis2_idx = ax_map[ax2]
+        
+        # Helper to find position by name
+        def get_pos_by_name(name):
+            for b in self.editor.state.brushes:
+                if b.get('name') == name: return b['pos']
+            for t in self.editor.state.things:
+                t_name = getattr(t, 'name', t.properties.get('name'))
+                if t_name == name: return t.pos
+            return None
+
+        # Check Animation Setting
+        should_animate = self.main_window.config.getboolean('Display', 'animate_connections', fallback=False)
+
+        current_connections = set()
+        connections_to_draw = []
+        
+        # 1. Collect Brushes (Triggers)
+        for brush in self.editor.state.brushes:
+            target_name = brush.get('target')
+            if not target_name: continue
+            if not (brush.get('is_trigger') or brush.get('is_mover')): continue
+            
+            source_pos = brush['pos']
+            target_pos = get_pos_by_name(target_name)
+            if target_pos:
+                connections_to_draw.append({
+                    'id': f"brush_{id(brush)}", 'target': target_name,
+                    'src': source_pos, 'dst': target_pos, 'is_logic': False
+                })
+
+        # 2. Collect Things (Logic Gates, Buttons)
+        for thing in self.editor.state.things:
+            target_name = thing.properties.get('target')
+            if not target_name: continue
+            
+            source_pos = thing.pos
+            target_pos = get_pos_by_name(target_name)
+            if target_pos:
+                is_logic = thing.properties.get('type') == 'logic_gate'
+                connections_to_draw.append({
+                    'id': f"thing_{id(thing)}", 'target': target_name,
+                    'src': source_pos, 'dst': target_pos, 'is_logic': is_logic
+                })
+
+        # 3. Draw
+        for conn in connections_to_draw:
+            source_2d = QPointF(conn['src'][axis1_idx], conn['src'][axis2_idx])
+            target_2d = QPointF(conn['dst'][axis1_idx], conn['dst'][axis2_idx])
+            
+            # Culling
+            margin = 100.0 
+            s_rect = QRectF(source_2d.x()-margin, source_2d.y()-margin, margin*2, margin*2)
+            t_rect = QRectF(target_2d.x()-margin, target_2d.y()-margin, margin*2, margin*2)
+            if not (visible_bounds.intersects(s_rect) or visible_bounds.intersects(t_rect)):
+                continue
+
+            conn_key = (conn['id'], conn['target'])
+            current_connections.add(conn_key)
             
             p1 = self.world_to_screen(source_2d)
-            p2 = self.world_to_screen(self.connection_drag_pos)
+            p2 = self.world_to_screen(target_2d)
             
-            # Color based on valid target detection
-            if self.connection_snap_target:
-                # Green = valid target found
-                line_color = QColor(0, 255, 0)
-                pen_width = 3
+            # Select Color
+            if conn['is_logic']:
+                color = QColor(255, 255, 0, 200) # Yellow for Logic
             else:
-                # Red = no valid target
-                line_color = QColor(255, 80, 80)
-                pen_width = 2
-            
-            # Draw the connection line
-            pen = QPen(line_color, pen_width)
+                color = QColor(0, 255, 255, 180) # Cyan for Standard Triggers
+                
+            pen = QPen(color, 2, Qt.DotLine)
             painter.setPen(pen)
             painter.drawLine(p1, p2)
             
-            # Draw arrow at end
-            self._draw_connection_arrow(painter, p1, p2, line_color)
-            
-            # Draw circle at source
-            painter.setBrush(QBrush(QColor(line_color.red(), line_color.green(), line_color.blue(), 100)))
-            painter.drawEllipse(p1, 8, 8)
-            
-            # Draw snap indicator at target if snapped
-            if self.connection_snap_target:
-                painter.setPen(QPen(QColor(0, 255, 0), 2))
-                painter.setBrush(QBrush(QColor(0, 255, 0, 80)))
-                painter.drawEllipse(p2, 12, 12)
+            # Draw Arrows based on setting
+            if should_animate:
+                # Initialize animation state if needed
+                if conn_key not in self.connection_animations:
+                    self.connection_animations[conn_key] = {'progress': 1.0, 'growing': True}
+                    self.arrow_travel_progress[conn_key] = [0.0]
+                
+                self._draw_traveling_arrows(painter, p1, p2, color, conn_key)
+            else:
+                # Draw a single static arrow head at the target end
+                self._draw_connection_arrow(painter, p1, p2, color)
+        
+        self.last_connections = current_connections
 
     def draw_grid(self, painter):
         # Don't draw grid if hidden or in play mode
@@ -1193,16 +1268,19 @@ class View2D(QWidget):
             painter.drawPolygon(QPolygonF([arrow_tip, arrow_p1, arrow_p2]))
     
     def _draw_connection_arrow(self, painter, p1, p2, color):
-        dx = p2.x() - p1.x()
-        dy = p2.y() - p1.y()
-        length = math.sqrt(dx * dx + dy * dy)
-        if length < 10: return
-        angle = math.atan2(dy, dx)
-        arrow_size = 8
-        arrow_p1 = QPointF(p2.x() - arrow_size * math.cos(angle - math.pi / 6), p2.y() - arrow_size * math.sin(angle - math.pi / 6))
-        arrow_p2 = QPointF(p2.x() - arrow_size * math.cos(angle + math.pi / 6), p2.y() - arrow_size * math.sin(angle + math.pi / 6))
+        """Draws a static arrowhead at the end of the line (p2)."""
+        angle = math.atan2(p2.y() - p1.y(), p2.x() - p1.x())
+        arrow_size = 10
+        
+        # Calculate arrow points
+        p_arrow1 = QPointF(p2.x() - arrow_size * math.cos(angle - math.pi / 6),
+                           p2.y() - arrow_size * math.sin(angle - math.pi / 6))
+        p_arrow2 = QPointF(p2.x() - arrow_size * math.cos(angle + math.pi / 6),
+                           p2.y() - arrow_size * math.sin(angle + math.pi / 6))
+        
+        painter.setPen(QPen(color, 2))
         painter.setBrush(QBrush(color))
-        painter.drawPolygon(QPolygonF([p2, arrow_p1, arrow_p2]))
+        painter.drawPolygon(QPolygonF([p2, p_arrow1, p_arrow2]))
     
     def _update_connection_animations(self):
         animation_speed = 0.05
@@ -1248,6 +1326,41 @@ class View2D(QWidget):
         
         if needs_update: 
             self.update()
+
+    def draw_connection_drag(self, painter):
+        ax1, ax2 = self.get_axes()
+        ax_map = {'x': 0, 'y': 1, 'z': 2}
+        
+        if isinstance(self.connection_source, dict):
+            source_pos = self.connection_source['pos']
+        else:
+            source_pos = self.connection_source.pos
+
+        source_2d = QPointF(source_pos[ax_map[ax1]], source_pos[ax_map[ax2]])
+        
+        p1 = self.world_to_screen(source_2d)
+        p2 = self.world_to_screen(self.connection_drag_pos)
+        
+        if self.connection_snap_target:
+            line_color = QColor(0, 255, 0)
+            pen_width = 3
+        else:
+            line_color = QColor(255, 80, 80)
+            pen_width = 2
+        
+        pen = QPen(line_color, pen_width)
+        painter.setPen(pen)
+        painter.drawLine(p1, p2)
+        
+        self._draw_connection_arrow(painter, p1, p2, line_color)
+        
+        painter.setBrush(QBrush(QColor(line_color.red(), line_color.green(), line_color.blue(), 100)))
+        painter.drawEllipse(p1, 8, 8)
+        
+        if self.connection_snap_target:
+            painter.setPen(QPen(QColor(0, 255, 0), 2))
+            painter.setBrush(QBrush(QColor(0, 255, 0, 80)))
+            painter.drawEllipse(p2, 12, 12)
 
     def get_resize_handles(self, rect):
         return [rect.topLeft(), rect.topRight(), rect.bottomLeft(), rect.bottomRight(),
@@ -1478,7 +1591,6 @@ class View2D(QWidget):
                 self.is_connecting = False
                 self.setCursor(Qt.ArrowCursor)
                 
-                # Use snapped target if available, otherwise check at cursor position
                 target_object = self.connection_snap_target
                 if not target_object:
                     target_object = self.get_object_at(event.pos())
@@ -1489,16 +1601,17 @@ class View2D(QWidget):
                     # Ensure target has a name
                     target_name = self._ensure_object_name(target_object)
                     
-                    # Set the trigger's target
-                    self.connection_source['target'] = target_name
+                    # Set target on Brush OR Thing
+                    if isinstance(self.connection_source, dict):
+                        self.connection_source['target'] = target_name
+                    else:
+                        self.connection_source.properties['target'] = target_name
                     
-                    # Show toast
                     self.main_window.show_toast(f"Connected to '{target_name}'")
                     
-                    # Refresh property editor if source is selected
+                    # Refresh property editor if needed
                     if self.editor.state.selected_object == self.connection_source:
                         self.main_window.property_editor.set_object(self.connection_source)
-                    # Also refresh if target is selected (to show "targeted by")
                     elif self.editor.state.selected_object == target_object:
                         self.main_window.property_editor.set_object(target_object)
                 
@@ -1534,6 +1647,30 @@ class View2D(QWidget):
     def contextMenuEvent(self, event):
         menu = QMenu(self)
         
+        # --- Styling ---
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #2c2c2c;
+                color: #ffffff;
+                border: 1px solid #3d3d3d;
+                border-top: 3px solid #FF8C00; /* Orange Strip */
+                padding-bottom: 2px;
+            }
+            QMenu::item {
+                padding: 6px 28px 6px 12px;
+                background-color: transparent;
+            }
+            QMenu::item:selected {
+                background-color: #3e3e3e;
+            }
+            /* REVISED: Large margin creates the "Gap" you wanted */
+            QMenu::separator {
+                height: 1px;
+                background: #555;
+                margin: 12px 0px; 
+            }
+        """)
+
         # Check if we clicked on a brush for brush-specific options
         clicked_brush = self.get_brush_at(event.pos())
         select_inside_action = None
@@ -1542,12 +1679,18 @@ class View2D(QWidget):
             select_inside_action = menu.addAction("Select Inside")
             menu.addSeparator()
         
-        add_light_action = menu.addAction("Add Light")
-        add_player_start_action = menu.addAction("Add Player Start")
-        add_pickup_action = menu.addAction("Add Pickup")
-        add_speaker_action = menu.addAction("Add Speaker")
+        # Standard Things
+        add_light_action = menu.addAction("+ Light")
+        add_player_start_action = menu.addAction("+ Player Start")
+        add_pickup_action = menu.addAction("+ Pickup")
+        add_speaker_action = menu.addAction("+ Speaker")
+        
+        # --- The Gap (One separator is now enough due to CSS) ---
         menu.addSeparator()
-        add_model_action = menu.addAction("Add Model...")
+        
+        # Advanced / Import
+        add_model_action = menu.addAction("+ Model...")
+        add_logic_gate_action = menu.addAction("+ LogicGate")
 
         action = menu.exec_(self.mapToGlobal(event.pos()))
         
@@ -1559,6 +1702,7 @@ class View2D(QWidget):
             self.select_brushes_inside(clicked_brush)
             return
         
+        # Calculate World Position for new object
         world_pos = self.snap_to_grid(self.screen_to_world(event.pos()))
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
@@ -1569,17 +1713,24 @@ class View2D(QWidget):
             pos_3d[1] = 40
 
         new_thing = None
+        
+        # Handle Object Creation
         if action == add_light_action: new_thing = Light(pos=pos_3d)
         elif action == add_player_start_action: new_thing = PlayerStart(pos=pos_3d)
         elif action == add_pickup_action: new_thing = Pickup(pos=pos_3d)
         elif action == add_speaker_action: new_thing = Speaker(pos=pos_3d)
+        
+        # Logic Gate
+        elif action == add_logic_gate_action:
+            new_thing = LogicGate(pos=pos_3d)
+            new_thing.properties['logic_type'] = 'AND' 
+        
+        # Model
         elif action == add_model_action:
             filepath, _ = QFileDialog.getOpenFileName(self, "Select OBJ Model", "assets/models", "OBJ Files (*.obj)")
             if filepath:
-                # Store relative path if possible
                 try:
                     rel_path = os.path.relpath(filepath, "assets")
-                    # On windows relpath might start with .. if drives differ, be careful
                     if rel_path.startswith(".."): rel_path = filepath
                     else: rel_path = os.path.join("assets", rel_path)
                 except:
@@ -1588,6 +1739,7 @@ class View2D(QWidget):
                 new_thing = Model(pos=pos_3d)
                 new_thing.properties['model_path'] = rel_path
 
+        # Finalize Creation
         if new_thing:
             self.main_window.save_state()
             self.editor.state.things.append(new_thing)

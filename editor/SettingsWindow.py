@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (
     QDialog, QCheckBox, QVBoxLayout, QDialogButtonBox, QGroupBox, QHBoxLayout,
     QLabel, QSpinBox, QPushButton, QTabWidget, QWidget, QFormLayout, QSlider,
-    QMessageBox
+    QMessageBox, QKeySequenceEdit, QFrame, QGridLayout
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QKeySequence
@@ -15,7 +15,7 @@ class SettingsWindow(QDialog):
     def __init__(self, config, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setMinimumWidth(500)
+        self.setMinimumWidth(600)  # Slightly wider to accommodate two columns
         self.config = config
         self.main_window = parent
         self.binding_in_progress = None
@@ -113,7 +113,7 @@ class SettingsWindow(QDialog):
         view_2d_group = QGroupBox("2D Views")
         view_2d_layout = QVBoxLayout()
         
-        self.show_connections_checkbox = QCheckBox("Show animated connection lines")
+        self.show_connections_checkbox = QCheckBox("Show connection lines")
         view_2d_layout.addWidget(self.show_connections_checkbox)
         
         self.locked_not_selectable_checkbox = QCheckBox("Locked items not selectable")
@@ -140,54 +140,47 @@ class SettingsWindow(QDialog):
         layout.addStretch()
 
     def _create_display_tab(self):
-        """Display tab: Visual appearance settings."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        self.tabs.addTab(widget, "Display")
+        """Display tab: Visual settings and UI scaling."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
         
-        # --- Appearance Section ---
-        appearance_group = QGroupBox("Appearance")
-        appearance_layout = QVBoxLayout()
+        self.show_fps_checkbox = QCheckBox("Show FPS Counter")
+        layout.addWidget(self.show_fps_checkbox)
         
-        self.show_fps_checkbox = QCheckBox("Show FPS in 3D view")
-        appearance_layout.addWidget(self.show_fps_checkbox)
+        self.always_show_sysmon_checkbox = QCheckBox("Always Show System Monitor (F3)")
+        layout.addWidget(self.always_show_sysmon_checkbox)
         
-        self.always_show_sysmon_checkbox = QCheckBox("Always show SysMon at launch")
-        appearance_layout.addWidget(self.always_show_sysmon_checkbox)
-        
-        self.disable_toasts_checkbox = QCheckBox("Disable toast notifications")
-        appearance_layout.addWidget(self.disable_toasts_checkbox)
-        
-        # Font size
+        self.disable_toasts_checkbox = QCheckBox("Disable Toast Notifications")
+        layout.addWidget(self.disable_toasts_checkbox)
+
         font_layout = QHBoxLayout()
-        font_layout.addWidget(QLabel("Font Size:"))
+        font_layout.addWidget(QLabel("UI Font Size:"))
         self.font_size_spinbox = QSpinBox()
         self.font_size_spinbox.setRange(8, 24)
         font_layout.addWidget(self.font_size_spinbox)
-        font_layout.addStretch()
-        appearance_layout.addLayout(font_layout)
+        layout.addLayout(font_layout)
         
-        appearance_group.setLayout(appearance_layout)
-        layout.addWidget(appearance_group)
-        
-        # --- Requires Restart Section ---
-        restart_group = QGroupBox("Requires Restart")
-        restart_layout = QVBoxLayout()
-        
-        self.vsync_checkbox = QCheckBox("Enable VSync (Sync to Monitor)")
-        self.vsync_checkbox.setToolTip("Syncs framerate to monitor refresh rate to prevent tearing.\nDisable for benchmarking.")
-        restart_layout.addWidget(self.vsync_checkbox)
+        self.vsync_checkbox = QCheckBox("Enable V-Sync")
+        layout.addWidget(self.vsync_checkbox)
         
         self.dpi_scaling_checkbox = QCheckBox("Enable High DPI Scaling")
-        restart_layout.addWidget(self.dpi_scaling_checkbox)
+        layout.addWidget(self.dpi_scaling_checkbox)
+
+        self.big_toolbar_buttons_checkbox = QCheckBox("Large Toolbar Buttons")
+        layout.addWidget(self.big_toolbar_buttons_checkbox)
         
-        self.big_toolbar_buttons_checkbox = QCheckBox("Big toolbar buttons")
-        restart_layout.addWidget(self.big_toolbar_buttons_checkbox)
+        # --- Connection Visualization Group ---
+        conn_group = QGroupBox("Connection Visualization")
+        conn_layout = QVBoxLayout()
         
-        restart_group.setLayout(restart_layout)
-        layout.addWidget(restart_group)
+        self.animate_connections_checkbox = QCheckBox("Animate Connection Lines (Moving Arrows)")
+        conn_layout.addWidget(self.animate_connections_checkbox)
         
+        conn_group.setLayout(conn_layout)
+        layout.addWidget(conn_group)
+
         layout.addStretch()
+        self.tabs.addTab(tab, "Display")
 
     def _create_play_mode_tab(self):
         """Play Mode tab: Physics and gameplay settings."""
@@ -232,15 +225,25 @@ class SettingsWindow(QDialog):
         layout.addStretch()
 
     def _create_keyboard_tab(self):
-        """Keyboard Shortcuts tab."""
-        shortcuts_widget = QWidget()
-        shortcuts_layout = QFormLayout(shortcuts_widget)
-        self.tabs.addTab(shortcuts_widget, "Keyboard")
+        """Keyboard Shortcuts tab - Split into columns for compactness."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        self.tabs.addTab(widget, "Keyboard")
 
-        # Asset Browser first
+        # --- Static Shortcuts Section (Split into two columns) ---
+        columns_layout = QHBoxLayout()
+        left_form = QFormLayout()
+        right_form = QFormLayout()
+        
+        # Adjust spacing
+        left_form.setContentsMargins(0, 0, 10, 0)
+        right_form.setContentsMargins(10, 0, 0, 0)
+
+        # 1. Asset Browser (First item)
         asset_browser_label = QLabel("T")
-        shortcuts_layout.addRow("Asset Browser:", asset_browser_label)
+        left_form.addRow("Asset Browser:", asset_browser_label)
 
+        # 2. Dictionary Items
         shortcut_definitions = {
             "apply_texture": "Shift+T",
             "Clone Brush": "SPACE",
@@ -253,24 +256,78 @@ class SettingsWindow(QDialog):
             "Increase Grid Size": "]",
             "Toggle play mode": "F5",
             "Use (play mode)": "E",
-            "Show connections (play)": "F1",
-            "Show sprites (play)": "F3",
-            "Connect trigger to target": "Ctrl+Drag",
-            "Light Radius (when selected)": "Shift+Wheel",
-            "Light Intensity (when selected)": "Ctrl+Wheel",
-            "Free Camera (3D view)": "Right Mouse+WASD",
-            "Move Camera (3D view)": "SPACE and C",
+            "Show connections": "F1",
+            "Show sprites": "F3",
+            "Connect trigger": "Ctrl+Drag",
+            "Light Radius": "Shift+Wheel",
+            "Light Intensity": "Ctrl+Wheel",
+            "Free Camera": "R-Click+WASD",
+            "Move Camera": "SPACE+C",
         }
         
         self.shortcut_labels = {}
-        for action_name, shortcut_text in shortcut_definitions.items():
-            label_text = action_name.replace('_', ' ').title()
+        
+        # Split items into left and right columns
+        items = list(shortcut_definitions.items())
+        mid_point = (len(items) // 2) + 1  # Offset slightly to balance Asset Browser
+        
+        for i, (action_name, shortcut_text) in enumerate(items):
+            label_text = action_name.replace('_', ' ').title() + ":"
             shortcut_label = QLabel(shortcut_text)
             self.shortcut_labels[action_name] = shortcut_label
-            shortcuts_layout.addRow(label_text, shortcut_label)
+            
+            if i < mid_point:
+                left_form.addRow(label_text, shortcut_label)
+            else:
+                right_form.addRow(label_text, shortcut_label)
 
+        # 3. Switch 2D Views (Last item)
         switch_2d_views_label = QLabel("Shift+Tab")
-        shortcuts_layout.addRow("Switch 2D Views:", switch_2d_views_label)
+        right_form.addRow("Switch 2D Views:", switch_2d_views_label)
+
+        # Add columns to main layout
+        columns_layout.addLayout(left_form)
+        columns_layout.addLayout(right_form)
+        layout.addLayout(columns_layout)
+
+        # --- SEPARATOR ---
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        layout.addSpacing(10)
+        layout.addWidget(line)
+        layout.addSpacing(10)
+        
+        header_label = QLabel("Function Keys (Rebindable)")
+        header_label.setStyleSheet("font-weight: bold;")
+        layout.addWidget(header_label)
+
+        # --- Rebindable Fields (Grid Layout 2x2) ---
+        rebind_grid = QGridLayout()
+        rebind_grid.setSpacing(10)
+        
+        # F1: Show Connections
+        self.key_f1_edit = QKeySequenceEdit()
+        rebind_grid.addWidget(QLabel("Show Logic Links:"), 0, 0)
+        rebind_grid.addWidget(self.key_f1_edit, 0, 1)
+        
+        # F2: Toggle Wireframe
+        self.key_f2_edit = QKeySequenceEdit()
+        rebind_grid.addWidget(QLabel("Toggle Wireframe:"), 0, 2)
+        rebind_grid.addWidget(self.key_f2_edit, 0, 3)
+
+        # F3: System Monitor
+        self.key_f3_edit = QKeySequenceEdit()
+        rebind_grid.addWidget(QLabel("System Monitor:"), 1, 0)
+        rebind_grid.addWidget(self.key_f3_edit, 1, 1)
+        
+        # F5: Play Mode
+        self.key_f5_edit = QKeySequenceEdit()
+        rebind_grid.addWidget(QLabel("Toggle Play Mode:"), 1, 2)
+        rebind_grid.addWidget(self.key_f5_edit, 1, 3)
+        
+        layout.addLayout(rebind_grid)
+        layout.addStretch()
 
     def _apply_stylesheet(self):
         """Apply the checkbox styling."""
@@ -335,6 +392,7 @@ class SettingsWindow(QDialog):
         self.vsync_checkbox.setChecked(self.config.getboolean('Display', 'vsync', fallback=False))
         self.dpi_scaling_checkbox.setChecked(self.config.getboolean('Display', 'high_dpi_scaling', fallback=False))
         self.big_toolbar_buttons_checkbox.setChecked(self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False))
+        self.animate_connections_checkbox.setChecked(self.config.getboolean('Display', 'animate_connections', fallback=False))
 
         # Play Mode settings
         self.physics_checkbox.setChecked(self.config.getboolean('Settings', 'physics', fallback=True))
@@ -343,6 +401,12 @@ class SettingsWindow(QDialog):
         # Controls settings
         self.invert_mouse_checkbox.setChecked(self.config.getboolean('Controls', 'invert_mouse', fallback=False))
         self.middle_click_drag_checkbox.setChecked(self.config.getboolean('Controls', 'MiddleClickDrag', fallback=False))
+        
+        # Shortcuts
+        self.key_f1_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_show_connections', fallback='F1')))
+        self.key_f2_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_toggle_wireframe', fallback='F2')))
+        self.key_f3_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_sysmon', fallback='F3')))
+        self.key_f5_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_play_mode', fallback='F5')))
 
     def accept(self):
         """Saves the current UI state back to the config object."""
@@ -350,13 +414,9 @@ class SettingsWindow(QDialog):
         super().accept()
 
     def change_key(self, control_name):
-        """Prepares to capture the next key press for a specific control."""
-        # This method is here for future use
         pass
 
     def keyPressEvent(self, event):
-        """Captures the key press if a binding is in progress."""
-        # This method is here for future use
         super().keyPressEvent(event)
 
     def _has_unsaved_work(self):
@@ -364,27 +424,22 @@ class SettingsWindow(QDialog):
         if not self.main_window:
             return False
         
-        # Check if there's content but no save file
         has_content = False
         if hasattr(self.main_window, 'state'):
             state = self.main_window.state
             has_content = (len(getattr(state, 'brushes', [])) > 0 or 
                           len(getattr(state, 'things', [])) > 0)
         
-        # Check if there's no file path (never saved)
         no_file = not getattr(self.main_window, 'file_path', None)
         
-        # Check undo stack for changes since last save
         has_undo_history = False
         if hasattr(self.main_window, 'undo_stack'):
             has_undo_history = len(self.main_window.undo_stack) > 0
         
-        # Consider unsaved if: has content with no file, or has undo history
         return (has_content and no_file) or has_undo_history
 
     def _apply_and_restart(self):
         """Save settings and restart the application."""
-        # Check for unsaved work
         if self._has_unsaved_work():
             reply = QMessageBox.warning(
                 self,
@@ -396,14 +451,11 @@ class SettingsWindow(QDialog):
             if reply != QMessageBox.Yes:
                 return
         
-        # Save the settings (calls accept's save logic)
         self._save_settings()
         
-        # Save config to file
         if self.main_window and hasattr(self.main_window, 'save_config'):
             self.main_window.save_config()
         
-        # Restart the application
         self._restart_application()
 
     def _save_settings(self):
@@ -428,6 +480,7 @@ class SettingsWindow(QDialog):
         self.config.set('Display', 'vsync', str(self.vsync_checkbox.isChecked()))
         self.config.set('Display', 'high_dpi_scaling', str(self.dpi_scaling_checkbox.isChecked()))
         self.config.set('Display', 'big_toolbar_buttons', str(self.big_toolbar_buttons_checkbox.isChecked()))
+        self.config.set('Display', 'animate_connections', str(self.animate_connections_checkbox.isChecked()))
         
         # Play Mode settings
         self.config.set('Display', 'show_hud', str(self.show_hud_checkbox.isChecked()))
@@ -441,20 +494,28 @@ class SettingsWindow(QDialog):
             self.config.add_section('Controls')
         self.config.set('Controls', 'invert_mouse', str(self.invert_mouse_checkbox.isChecked()))
         self.config.set('Controls', 'MiddleClickDrag', str(self.middle_click_drag_checkbox.isChecked()))
+        
+        # Shortcuts
+        if not self.config.has_section('Shortcuts'):
+            self.config.add_section('Shortcuts')
+        self.config.set('Shortcuts', 'key_show_connections', self.key_f1_edit.keySequence().toString())
+        self.config.set('Shortcuts', 'key_toggle_wireframe', self.key_f2_edit.keySequence().toString())
+        self.config.set('Shortcuts', 'key_sysmon', self.key_f3_edit.keySequence().toString())
+        self.config.set('Shortcuts', 'key_play_mode', self.key_f5_edit.keySequence().toString())
 
     def _restart_application(self):
         """Restart the application."""
         from PyQt5.QtWidgets import QApplication
         
-        # Get the executable and arguments
         python = sys.executable
         script = sys.argv[0]
         args = sys.argv[1:]
         
-        # Close the main window without triggering save prompts
         if self.main_window:
-            # Disconnect any close event handlers that might interfere
-            self.main_window.close()
+            try:
+                self.main_window.closeEvent = lambda e: e.accept()
+                self.main_window.close()
+            except:
+                pass
         
-        # Restart using os.execl (replaces current process)
         os.execl(python, python, script, *args)

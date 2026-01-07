@@ -467,10 +467,21 @@ class Renderer:
         gl.glDepthMask(gl.GL_TRUE)
         gl.glDisable(gl.GL_BLEND)
         
+        # --- MODIFIED: Proper dispatch for Textured vs Lit modes ---
+        brush_display_mode = config.get('brush_display_mode', 'Textured')
+
         if current_mode == RENDER_MODE_UNLIT: 
+            # Unlit mode (usually implies textured)
             self.draw_textured_brushes(projection, view, camera_pos, opaque_brushes, lights, config)
-        else: 
-            self.draw_lit_brushes(projection, view, camera_pos, opaque_brushes, lights, config)
+        elif current_mode == RENDER_MODE_LIT:
+            # Lit mode: check if user wants textures or solid lit
+            if brush_display_mode == 'Textured':
+                self.draw_textured_brushes(projection, view, camera_pos, opaque_brushes, lights, config)
+            else:
+                self.draw_lit_brushes(projection, view, camera_pos, opaque_brushes, lights, config)
+        else:
+             # Wireframe/Vertex
+             self.draw_lit_brushes(projection, view, camera_pos, opaque_brushes, lights, config)
 
         if models_to_render:
             self.draw_models(projection, view, camera_pos, models_to_render, lights, config)
@@ -491,8 +502,16 @@ class Renderer:
         
         self.draw_sprites(projection, view, final_sprites, self.sprite_textures, self.instance_textures)
         
-        if current_mode == RENDER_MODE_UNLIT: self.draw_textured_brushes(projection, view, camera_pos, transparent_brushes, lights, config)
-        else: self.draw_lit_brushes(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True)
+        # --- MODIFIED: Proper dispatch for Transparent pass ---
+        if current_mode == RENDER_MODE_UNLIT:
+            self.draw_textured_brushes(projection, view, camera_pos, transparent_brushes, lights, config)
+        elif current_mode == RENDER_MODE_LIT:
+            if brush_display_mode == 'Textured':
+                 self.draw_textured_brushes(projection, view, camera_pos, transparent_brushes, lights, config)
+            else:
+                 self.draw_lit_brushes(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True)
+        else:
+            self.draw_lit_brushes(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True)
             
         if current_mode == RENDER_MODE_LIT:
             self.draw_water_brushes(projection, view, camera_pos, water_brushes, lights, config)
@@ -1015,7 +1034,8 @@ class Renderer:
         model_loc = uniforms['model']
         batches = defaultdict(list)
         for brush in visible:
-            for i, key in enumerate(['south', 'north', 'west', 'east', 'bottom', 'top']):
+            # --- MODIFIED: 'bottom' -> 'down' key mismatch fix ---
+            for i, key in enumerate(['south', 'north', 'west', 'east', 'down', 'top']):
                 tex_name = brush.get('textures', {}).get(key, 'default.png')
                 if tex_name == 'caulk.jpg': continue
                 tex_id = self.texture_manager.get(os.path.join('textures', tex_name)) or self.load_texture_callback(tex_name, 'textures')
@@ -1032,6 +1052,7 @@ class Renderer:
                 gl.glDrawArrays(gl.GL_TRIANGLES, face_idx * 6, 6)
                 self.render_stats.draw_calls += 1
         gl.glBindVertexArray(0)
+
 
     def draw_selected_brush_outline(self, projection, view, brush):
         if 'simple' not in self.shaders: return

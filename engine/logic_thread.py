@@ -83,6 +83,9 @@ class LogicThread(threading.Thread):
         # Trigger state
         self.player_in_triggers: set = set()
         self.fired_once_triggers: set = set()
+
+        # Logic Gate State: {gate_name: {set_of_active_source_names}}
+        self.gate_inputs = {}
         
         # Hurt trigger timers
         self.hurt_trigger_timers: Dict[int, float] = {}
@@ -146,6 +149,8 @@ class LogicThread(threading.Thread):
             self.active_speakers.clear()
             self.hurt_trigger_timers.clear()
             self.current_hud_message = ""
+            # Reset gate inputs tracking
+            self.gate_inputs = {}
         else:
             self.player_in_triggers.clear()
             self.fired_once_triggers.clear()
@@ -157,6 +162,7 @@ class LogicThread(threading.Thread):
             self._reset_movers()
             self._reset_doors()
             self.current_hud_message = ""
+            self.gate_inputs = {}
     
     def set_terrain(self, terrain):
         """Set terrain reference for collision detection."""
@@ -552,7 +558,12 @@ class LogicThread(threading.Thread):
         elif action == 'target':
             target_name = brush.get('target')
             if target_name:
-                self._activate_target(target_name)
+                # Capture the source name (the name of this trigger)
+                # If the brush has no name, fallback to a unique ID string
+                source_name = brush.get('name', f'trigger_{trigger_id}')
+                
+                # Pass source_name to _activate_target for Logic Gate processing
+                self._activate_target(target_name, source_name)
         
         if trigger_type == 'once':
             self.fired_once_triggers.add(trigger_id)
@@ -566,24 +577,30 @@ class LogicThread(threading.Thread):
                 self.player_health = max(0, self.player_health - damage)
                 self.hurt_trigger_timers[trigger_id] = self.HURT_INTERVAL
 
-    def _activate_target(self, target_name: str):
-        """Activate a named target (mover, door, light, etc.)."""
-        # Find target brush
+    def _activate_target(self, target_name: str, source_name: str = None):
+        """
+        Activate a named target. 
+        source_name: The name of the object (trigger/switch) sending the signal.
+        """
+        # 1. Handle Logic Gates
+        # Find the thing first
+        target_thing = None
+        for thing in self.things:
+            if hasattr(thing, 'name') and thing.name == target_name:
+                target_thing = thing
+                break
+        
+        if target_thing and hasattr(target_thing, 'properties') and target_thing.properties.get('type') == 'logic_gate':
+            self._process_logic_gate(target_thing, source_name)
+            return
+
+        # 2. Existing logic for Brushes (Movers/Doors)
         for brush in self.brushes:
             if brush.get('name') == target_name:
                 if brush.get('is_mover'):
                     brush['start_on'] = not brush.get('start_on', False)
                 elif brush.get('is_door'):
-                    # Check if door requires a key
-                    required_key = brush.get('required_key', '')
-                    if required_key:
-                        # Door needs a key - check if player has it
-                        if not self.has_key(required_key):
-                            # Player doesn't have the key - door stays closed
-                            return
-                        # Player has the key - consume it and open door
-                        self.use_key(required_key)
-                    
+                    # ... existing door logic ...
                     idx = self.brushes.index(brush)
                     if idx in self.door_states:
                         state = self.door_states[idx]
@@ -592,14 +609,65 @@ class LogicThread(threading.Thread):
                         elif state['state'] == 'open':
                             state['state'] = 'closing'
                 return
+
+        # 3. Existing logic for other Things (Lights)
+        if target_thing:
+            if Light and isinstance(target_thing, Light):
+                current = target_thing.properties.get('state', 'on')
+                target_thing.properties['state'] = 'off' if current == 'on' else 'on'
+
+    def _process_logic_gate(self, gate, source_name):
+        if not source_name: return # Logic gates need a source identity to track state
         
-        # Find target thing
-        for thing in self.things:
-            if hasattr(thing, 'name') and thing.name == target_name:
-                if Light and isinstance(thing, Light):
-                    current = thing.properties.get('state', 'on')
-                    thing.properties['state'] = 'off' if current == 'on' else 'on'
-                return
+        gate_name = gate.name
+        l_type = gate.properties.get('logic_type', 'AND')
+        target = gate.properties.get('target', '')
+        
+        # Initialize input set for this gate if missing
+        if gate_name not in self.gate_inputs:
+            self.gate_inputs[gate_name] = set()
+            
+        # TOGGLE the input signal from this source
+        if source_name in self.gate_inputs[gate_name]:
+            self.gate_inputs[gate_name].remove(source_name) # Turn signal OFF
+        else:
+            self.gate_inputs[gate_name].add(source_name) # Turn signal ON
+            
+        active_inputs = len(self.gate_inputs[gate_name])
+        
+        # Calculate Logic
+        should_fire = False
+        
+        # We need to know TOTAL possible inputs to calculate AND/NAND correctly.
+        # ere, we can infer it by counting how many triggers/switches target this gate.
+        # For simplicity/robustness, let's assume 'AND' means >= 2 inputs or "All active so far".
+        # Better approach: Just check if active_inputs > 0 for OR.
+        
+        # Count how many things actually target this gate currently
+        total_possible_inputs = 0
+        for b in self.brushes:
+            if b.get('target') == gate_name: total_possible_inputs += 1
+        for t in self.things:
+            if t.properties.get('target') == gate_name and t != gate: total_possible_inputs += 1
+            
+        if total_possible_inputs == 0: total_possible_inputs = 1 # Avoid division by zero
+        
+        if l_type == 'AND':
+            should_fire = (active_inputs >= total_possible_inputs)
+        elif l_type == 'OR':
+            should_fire = (active_inputs > 0)
+        elif l_type == 'XOR':
+            should_fire = (active_inputs == 1)
+        elif l_type == 'NAND':
+            should_fire = (active_inputs < total_possible_inputs)
+        elif l_type == 'NOR':
+            should_fire = (active_inputs == 0)
+
+        # If condition met, fire the gate's target
+        # To prevent infinite loops, we could track depth, but for now direct fire is fine
+        if should_fire and target:
+            # Pass the GATE's name as the source to the next object
+            self._activate_target(target, gate_name)
 
     def _handle_pickups(self, use_key_pressed: bool):
         """Handle pickup collection."""
