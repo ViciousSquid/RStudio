@@ -1,3 +1,8 @@
+v1.0.12.6_stable_test
+
+* Gun pickup added (still experimental)
+
+
 v1.0.12.5 (Latest version)
 
 * Increased teerrain gen limits by 16x
@@ -16,5 +21,6 @@ v1.0.11.0  |  Delicious-Toast
 * First non-beta release
 
 * Added Toast notification area to UI
+
 
 
