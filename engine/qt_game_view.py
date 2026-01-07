@@ -36,7 +36,7 @@ class QtGameView(QOpenGLWidget):
         self.editor = editor
         
         # Rendering and view state
-        self.brush_display_mode = "Textured"
+        self.brush_display_mode = "Solid Lit"
         self.show_triggers_as_solid = False
         self.camera = Camera()
         self.camera.pos = glm.vec3(0, 150, 400)
@@ -48,6 +48,14 @@ class QtGameView(QOpenGLWidget):
         self.visibility_system = None
         self.show_visibility_debug = False
         self.grid_visible = True
+
+        # Initialize render mode names mapping for notifications
+        self.render_mode_names = {
+            RENDER_MODE_LIT: "Lit",
+            RENDER_MODE_UNLIT: "Unlit",
+            RENDER_MODE_WIREFRAME: "Wireframe",
+            RENDER_MODE_VERTEX: "Vertex"
+        }
 
         self.sysmon_expanded = False
         self.sysmon_stats = {

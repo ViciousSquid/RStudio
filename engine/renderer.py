@@ -450,6 +450,22 @@ class Renderer:
         
         opaque_brushes, transparent_brushes, sprite_things, fog_volumes, water_brushes, glass_brushes = self._sort_objects(brushes, things, config)
         
+        # --- SPLIT OPAQUE BRUSHES: Textured vs Solid/Tinted ---
+        textured_opaque = []
+        solid_opaque = []
+        for b in opaque_brushes:
+            is_textured = False
+            # Check if brush has any meaningful texture (not default or caulk)
+            if 'textures' in b:
+                for t_name in b['textures'].values():
+                    if t_name and t_name not in ['default.png', 'caulk.jpg']:
+                        is_textured = True
+                        break
+            if is_textured:
+                textured_opaque.append(b)
+            else:
+                solid_opaque.append(b)
+
         models_to_render = []
         final_sprites = []
         for thing in sprite_things:
@@ -467,20 +483,22 @@ class Renderer:
         gl.glDepthMask(gl.GL_TRUE)
         gl.glDisable(gl.GL_BLEND)
         
-        # --- MODIFIED: Proper dispatch for Textured vs Lit modes ---
         brush_display_mode = config.get('brush_display_mode', 'Textured')
 
         if current_mode == RENDER_MODE_UNLIT: 
-            # Unlit mode (usually implies textured)
-            self.draw_textured_brushes(projection, view, camera_pos, opaque_brushes, lights, config)
+            self.draw_textured_brushes(projection, view, camera_pos, textured_opaque, lights, config)
+            self.draw_lit_brushes(projection, view, camera_pos, solid_opaque, lights, config)
+            
         elif current_mode == RENDER_MODE_LIT:
-            # Lit mode: check if user wants textures or solid lit
-            if brush_display_mode == 'Textured':
-                self.draw_textured_brushes(projection, view, camera_pos, opaque_brushes, lights, config)
+            if brush_display_mode == 'Textured' or brush_display_mode == 'Solid Lit':
+                # Draw TEXTURED brushes using texture shader
+                self.draw_textured_brushes(projection, view, camera_pos, textured_opaque, lights, config)
+                # Draw SOLID brushes using lit shader (handles 'colour' property correctly)
+                self.draw_lit_brushes(projection, view, camera_pos, solid_opaque, lights, config)
             else:
+                # Wireframe/Fallback
                 self.draw_lit_brushes(projection, view, camera_pos, opaque_brushes, lights, config)
         else:
-             # Wireframe/Vertex
              self.draw_lit_brushes(projection, view, camera_pos, opaque_brushes, lights, config)
 
         if models_to_render:
@@ -502,14 +520,12 @@ class Renderer:
         
         self.draw_sprites(projection, view, final_sprites, self.sprite_textures, self.instance_textures)
         
-        # --- MODIFIED: Proper dispatch for Transparent pass ---
+        # Transparent pass for Triggers
         if current_mode == RENDER_MODE_UNLIT:
             self.draw_textured_brushes(projection, view, camera_pos, transparent_brushes, lights, config)
         elif current_mode == RENDER_MODE_LIT:
-            if brush_display_mode == 'Textured':
-                 self.draw_textured_brushes(projection, view, camera_pos, transparent_brushes, lights, config)
-            else:
-                 self.draw_lit_brushes(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True)
+             # Always use lit brushes for transparent pass (triggers) to show wireframe/color
+             self.draw_lit_brushes(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True)
         else:
             self.draw_lit_brushes(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True)
             
@@ -1031,20 +1047,22 @@ class Renderer:
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
         gl.glActiveTexture(gl.GL_TEXTURE0); gl.glUniform1i(uniforms['texture_diffuse'], 0)
         gl.glBindVertexArray(self.vaos['cube'])
+        
         model_loc = uniforms['model']
+        color_loc = getattr(uniforms, 'object_color', None) # Check if shader has this, usually modulated by texture
+        
         batches = defaultdict(list)
         for brush in visible:
-            # --- MODIFIED: 'bottom' -> 'down' key mismatch fix ---
             for i, key in enumerate(['south', 'north', 'west', 'east', 'down', 'top']):
                 tex_name = brush.get('textures', {}).get(key, 'default.png')
                 if tex_name == 'caulk.jpg': continue
                 tex_id = self.texture_manager.get(os.path.join('textures', tex_name)) or self.load_texture_callback(tex_name, 'textures')
                 batches[tex_id].append((brush, i))
+                
         current_tex = None
         for tex_id, items in batches.items():
             if tex_id != current_tex: gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id); current_tex = tex_id
             for brush, face_idx in items:
-                # Update triangle stats (each face is 2 triangles)
                 self.render_stats.visible_tris += 2
                 
                 model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))

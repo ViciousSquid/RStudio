@@ -397,7 +397,7 @@ class Ui_MainWindow(object):
         # 2. Mid-aligned Controls
         MainWindow.display_mode_combobox = QComboBox()
         MainWindow.display_mode_combobox.addItems(["Wireframe", "Solid Lit", "Textured"])
-        MainWindow.display_mode_combobox.setCurrentText("Textured")
+        MainWindow.display_mode_combobox.setCurrentText("Solid Lit")
         MainWindow.display_mode_combobox.currentTextChanged.connect(MainWindow.set_brush_display_mode)
         
         bottom_layout.addSpacing(20)
