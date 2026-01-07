@@ -8,6 +8,7 @@
 * Custom OpenGL/PyGame engine supports immediate "drop-in and play" (like CryEngine Editor)
 * Real-time lighting with optional stencil shadows and custom physics engine
 * Volumetric fog, glass & water shaders with configurable surface parms
-* Terrain generation, moving surfaces, pickups, OBJ model support 
+* Terrain generation, moving surfaces, pickups, OBJ model support
+* brushes can be **TRIGGERS** that activate objects in the world (lights, speakers)
 * `json` level format with `magic number` fingerprint
 
