@@ -4,13 +4,10 @@
 
 #### A brush-based CSG world editor inspired by QeRadiant and Worldcraft (from the old times!)
 
-* Editor anf game engine tightly integrated with unified renderer
+* Editor and game engine tightly integrated with unified renderer
 * Custom OpenGL/PyGame engine supports immediate "drop-in and play" (like CryEngine Editor)
-* Real-time lighting with optional stencil shadows
-* Volumetric fog
-* Terrain generation
-* `json` level format :-)
-* Custom physics engine with configurable parameters
-* OBJ model support
-* Moving brushes, doors, pickups
+* Real-time lighting with optional stencil shadows and custom physics engine
+* Volumetric fog, glass & water shaders with configurable surface parms
+* Terrain generation, moving surfaces, pickups, OBJ model support 
+* `json` level format with `magic number` fingerprint
 
