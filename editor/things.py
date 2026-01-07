@@ -177,12 +177,19 @@ class Monster(Thing):
 class Pickup(Thing):
     pixmap_path = "assets/sprites/pickup.png"
     
-    # Key sprite mappings: key_name -> sprite filename
+    
+    # Key sprite mappings
     KEY_SPRITES = {
         'blue_key': 'assets/sprites/bluekey.png',
         'red_key': 'assets/sprites/redkey.png',
         'yellow_key': 'assets/sprites/yellowkey.png',
         'green_key': 'assets/sprites/greenkey.png',
+    }
+
+    # NEW: Gun sprite mappings
+    GUN_SPRITES = {
+        'gun1': 'assets/sprites/gun1.png',
+        'gun2': 'assets/sprites/gun2.png'
     }
     
     # Cache for dynamically loaded sprites (keyed by path)
@@ -205,6 +212,9 @@ class Pickup(Thing):
         
         # Custom sprite override (user-selected sprite)
         self.properties.setdefault('custom_sprite', '')  # Path to custom sprite
+
+    def is_gun(self):
+        return self.properties.get('item_type') in ['gun1', 'gun2']
     
     def is_key(self):
         """Check if this pickup is a key."""
@@ -215,18 +225,23 @@ class Pickup(Thing):
         return self.properties.get('key_name', 'blue_key')
     
     def get_sprite_path(self):
-        """Get the appropriate sprite path based on item type, key name, or custom sprite."""
-        # Custom sprite takes highest priority (unless it's a key with no custom sprite)
+        """Get the appropriate sprite path based on item type."""
+        # Custom sprite takes highest priority (unless it's a key/gun logic override)
         custom = self.properties.get('custom_sprite', '')
-        if custom and not self.is_key():
+        if custom and not self.is_key() and not self.is_gun():
             return custom
         
         # For keys, use key-specific sprites
         if self.is_key():
             key_name = self.get_key_name()
             return self.KEY_SPRITES.get(key_name, 'assets/sprites/pickup.png')
+
+        # NEW: For guns, use gun-specific sprites
+        item_type = self.properties.get('item_type')
+        if item_type in self.GUN_SPRITES:
+            return self.GUN_SPRITES[item_type]
         
-        # Custom sprite for non-keys
+        # Custom sprite for generic pickups
         if custom:
             return custom
         

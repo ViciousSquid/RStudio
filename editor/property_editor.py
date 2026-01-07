@@ -1306,7 +1306,7 @@ class PropertyEditor(QWidget):
                 self.add_sound_file_widget(layout, thing, key, value)
             elif isinstance(thing, Pickup) and key == 'item_type':
                 widget = QComboBox()
-                item_types = ['health', 'key']
+                item_types = ['health', 'key', 'gun1']  #add 'gun2' in future update
                 widget.addItems(item_types)
                 widget.setCurrentText(value)
                 widget.currentTextChanged.connect(self.on_pickup_item_type_changed)
@@ -1521,6 +1521,7 @@ class PropertyEditor(QWidget):
         
         is_key = (item_type == 'key')
         is_health = (item_type == 'health')
+        is_gun = (item_type in ['gun1', 'gun2'])
         
         # Show/hide key name widgets
         if hasattr(self, '_pickup_key_widgets'):
@@ -1540,7 +1541,7 @@ class PropertyEditor(QWidget):
                 label.setVisible(not is_key)
                 widget.setVisible(not is_key)
         
-        # Health pickup restrictions
+        # Handle specific item type logic
         if is_health:
             # Set default sprite for health pickups
             self.update_object_prop('custom_sprite', 'assets/sprites/health.png')
@@ -1551,8 +1552,21 @@ class PropertyEditor(QWidget):
             if hasattr(self, '_pickup_activation_widget'):
                 self._pickup_activation_widget.setCurrentText('walk_over')
                 self._pickup_activation_widget.setEnabled(False)
+        
+        elif is_gun:
+            # Set default sprite for guns (e.g. assets/sprites/gun1.png)
+            sprite_path = f'assets/sprites/{item_type}.png'
+            self.update_object_prop('custom_sprite', sprite_path)
+            if hasattr(self, 'pickup_sprite_path'):
+                self.pickup_sprite_path.setText(sprite_path)
+            # Force walk_over activation for guns
+            self.update_object_prop('activation', 'walk_over')
+            if hasattr(self, '_pickup_activation_widget'):
+                self._pickup_activation_widget.setCurrentText('walk_over')
+                self._pickup_activation_widget.setEnabled(False)
+                
         else:
-            # Re-enable activation dropdown for non-health pickups
+            # Re-enable activation dropdown for generic pickups
             if hasattr(self, '_pickup_activation_widget'):
                 self._pickup_activation_widget.setEnabled(True)
         
