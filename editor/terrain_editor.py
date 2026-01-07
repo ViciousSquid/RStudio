@@ -3,6 +3,7 @@ Terrain Editor Window for RStudio
 
 A floating dialog with comprehensive terrain creation and editing tools.
 Now with separate controls for mountains, valleys, and plateaus.
+Includes new Scale tab for physical mesh scaling and tiling.
 """
 
 from PyQt5.QtWidgets import (
@@ -180,8 +181,6 @@ class TerrainEditorWindow(QDialog):
                 font-size: 16px;
             }
         """)
-        #header.setAlignment(Qt.AlignCenter)
-        #main_layout.addWidget(header)
         
         # Top controls row (Textures, Wireframe, Solid, Flat)
         controls_layout = QHBoxLayout()
@@ -189,44 +188,24 @@ class TerrainEditorWindow(QDialog):
         
         self.textures_checkbox = QCheckBox("Use Textures")
         self.textures_checkbox.setChecked(False)
-        self.textures_checkbox.setStyleSheet("""
-            QCheckBox::indicator:checked { background-color: #00AA00; border: 2px solid #333; border-radius: 3px; }
-            QCheckBox::indicator:unchecked { background-color: #555; border: 2px solid #333; border-radius: 3px; }
-            QCheckBox::indicator { width: 22px; height: 22px; }
-        """)
         self.textures_checkbox.toggled.connect(self.on_textures_changed)
         controls_layout.addWidget(self.textures_checkbox)
         
         self.wireframe_checkbox = QCheckBox("Wireframe")
         self.wireframe_checkbox.setChecked(self.terrain.wireframe)
-        self.wireframe_checkbox.setStyleSheet("""
-            QCheckBox::indicator:checked { background-color: #F08000; border: 2px solid #333; border-radius: 3px; }
-            QCheckBox::indicator:unchecked { background-color: #555; border: 2px solid #333; border-radius: 3px; }
-            QCheckBox::indicator { width: 22px; height: 22px; }
-        """)
         self.wireframe_checkbox.toggled.connect(self.on_wireframe_changed)
         controls_layout.addWidget(self.wireframe_checkbox)
         
-        # NEW: Flat Mode Checkbox
+        # Flat Mode Checkbox
         self.flat_checkbox = QCheckBox("Flat Mode")
         self.flat_checkbox.setChecked(self.terrain.flat_mode)
         self.flat_checkbox.setToolTip("Disable height and colors (Greyscale Flat)")
-        self.flat_checkbox.setStyleSheet("""
-            QCheckBox::indicator:checked { background-color: #888888; border: 2px solid #333; border-radius: 3px; }
-            QCheckBox::indicator:unchecked { background-color: #555; border: 2px solid #333; border-radius: 3px; }
-            QCheckBox::indicator { width: 22px; height: 22px; }
-        """)
         self.flat_checkbox.toggled.connect(self.on_flat_changed)
         controls_layout.addWidget(self.flat_checkbox)
         
         self.solid_checkbox = QCheckBox("Solid")
         self.solid_checkbox.setChecked(self.terrain.solid)
         self.solid_checkbox.setToolTip("Enable collision - player can walk on terrain")
-        self.solid_checkbox.setStyleSheet("""
-            QCheckBox::indicator:checked { background-color: #00AA00; border: 2px solid #333; border-radius: 3px; }
-            QCheckBox::indicator:unchecked { background-color: #555; border: 2px solid #333; border-radius: 3px; }
-            QCheckBox::indicator { width: 22px; height: 22px; }
-        """)
         self.solid_checkbox.toggled.connect(self.on_solid_changed)
         controls_layout.addWidget(self.solid_checkbox)
         
@@ -540,6 +519,75 @@ class TerrainEditorWindow(QDialog):
         
         size_layout.addStretch()
         tabs.addTab(size_tab, "Size")
+
+        # === SCALE TAB (NEW) ===
+        scale_tab = QWidget()
+        scale_layout = QVBoxLayout(scale_tab)
+        scale_layout.setSpacing(12)
+        scale_layout.setContentsMargins(8, 8, 8, 8)
+
+        # Physical Scale Group
+        scale_group = QGroupBox("Physical Mesh Scale (Chunk Size)")
+        scale_group_layout = QVBoxLayout(scale_group)
+        scale_group_layout.setSpacing(10)
+        scale_group_layout.setContentsMargins(12, 20, 12, 12)
+
+        scale_info = QLabel("Scales the physical dimensions of each chunk. 1x = 256 units.")
+        scale_info.setStyleSheet("color: #aaa; font-style: italic;")
+        scale_info.setWordWrap(True)
+        scale_group_layout.addWidget(scale_info)
+
+        scale_grid = QGridLayout()
+        scale_options = [
+            ("1x (Default)", 1.0),
+            ("2x Larger", 2.0),
+            ("4x Larger", 4.0),
+            ("8x Larger", 8.0),
+            ("16x Larger", 16.0),
+        ]
+        
+        for i, (label, factor) in enumerate(scale_options):
+            btn = QPushButton(label)
+            btn.clicked.connect(lambda checked, f=factor: self.apply_mesh_scale(f))
+            scale_grid.addWidget(btn, i // 2, i % 2)
+        
+        scale_group_layout.addLayout(scale_grid)
+        scale_group.setLayout(scale_group_layout)
+        scale_layout.addWidget(scale_group)
+
+        # Tiling Scale Group
+        tiling_group = QGroupBox("Tiling Scale (World Extent)")
+        tiling_layout = QVBoxLayout(tiling_group)
+        tiling_layout.setSpacing(10)
+        tiling_layout.setContentsMargins(12, 20, 12, 12)
+
+        tiling_info = QLabel("Multiplies the number of chunks to cover a larger area.")
+        tiling_info.setStyleSheet("color: #aaa; font-style: italic;")
+        tiling_info.setWordWrap(True)
+        tiling_layout.addWidget(tiling_info)
+
+        tiling_grid = QGridLayout()
+        tiling_options = [
+            ("2x Grid (Double)", 2),
+            ("4x Grid (Quadruple)", 4),
+            ("8x Grid (Massive)", 8),
+            ("Reset Grid", 1),
+        ]
+
+        for i, (label, factor) in enumerate(tiling_options):
+            btn = QPushButton(label)
+            if factor == 1:
+                btn.clicked.connect(lambda checked: self.apply_size_preset((-2, 2)))
+            else:
+                btn.clicked.connect(lambda checked, f=factor: self.apply_tiling_scale(f))
+            tiling_grid.addWidget(btn, i // 2, i % 2)
+
+        tiling_layout.addLayout(tiling_grid)
+        tiling_group.setLayout(tiling_layout)
+        scale_layout.addWidget(tiling_group)
+
+        scale_layout.addStretch()
+        tabs.addTab(scale_tab, "Scale")
         
         # === POSITION TAB ===
         pos_tab = QWidget()
@@ -860,6 +908,40 @@ class TerrainEditorWindow(QDialog):
         self.terrain.offset_y = self.y_offset_spin.value()
         self.terrain.mark_all_dirty()
         self.terrain_changed.emit()
+
+    def apply_mesh_scale(self, factor):
+        """Apply a physical scaling factor to chunk size."""
+        self.show_progress(f"Scaling mesh by {factor}x...")
+        # Default chunk size is 256.0
+        new_size = 256.0 * factor
+        self.terrain.chunk_size = new_size
+        
+        # Important: clear existing chunks so they are recreated with new size
+        self.terrain.cleanup()
+        self.terrain.mark_all_dirty()
+        self.update_size_info()
+        self.terrain_changed.emit()
+        self.hide_progress()
+
+    def apply_tiling_scale(self, factor):
+        """Apply a tiling factor to world bounds."""
+        self.show_progress(f"Expanding grid by {factor}x...")
+        current_min_x = self.min_x_spin.value()
+        current_max_x = self.max_x_spin.value()
+        current_min_z = self.min_z_spin.value()
+        current_max_z = self.max_z_spin.value()
+
+        # Update spinners which triggers on_bounds_changed
+        self._building_ui = True
+        self.min_x_spin.setValue(current_min_x * factor)
+        self.max_x_spin.setValue(current_max_x * factor)
+        self.min_z_spin.setValue(current_min_z * factor)
+        self.max_z_spin.setValue(current_max_z * factor)
+        self._building_ui = False
+        
+        # Trigger manually
+        self.on_bounds_changed(0)
+        self.hide_progress()
     
     def randomize_seed(self):
         import random
@@ -895,6 +977,9 @@ class TerrainEditorWindow(QDialog):
         self.x_offset_spin.setValue(0)
         self.z_offset_spin.setValue(0)
         self.y_offset_spin.setValue(0)
+        # Reset chunk scale to default 256.0
+        self.terrain.chunk_size = 256.0
+        self.terrain.cleanup()
         self._building_ui = False
         self.on_biome_changed(0)
         self.on_bounds_changed(0)
