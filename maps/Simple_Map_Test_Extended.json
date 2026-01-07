@@ -470,7 +470,7 @@
                 "down": "trigger.jpg"
             },
             "is_trigger": true,
-            "target": "Light_2"
+            "target": "Light_00"
         },
         {
             "pos": [
@@ -1776,7 +1776,7 @@
             ],
             "properties": {
                 "type": "light",
-                "name": "Light_2",
+                "name": "Light_00",
                 "color": "[255, 255, 200]",
                 "intensity": "1.0",
                 "radius": "768.0",
