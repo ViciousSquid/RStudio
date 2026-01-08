@@ -32,15 +32,6 @@ class LogicThread(threading.Thread):
     """
     Unified logic thread for both editor and play mode.
     Runs continuously at a fixed timestep (60 Hz).
-    
-    In EDITOR mode:
-      - Updates editor camera position/rotation based on input
-      - Performs frustum culling for visible brushes
-      
-    In PLAY mode:
-      - Updates player physics and position
-      - Handles triggers, pickups, doors, movers
-      - Performs frustum culling
     """
     
     TICK_RATE = 60
@@ -73,7 +64,6 @@ class LogicThread(threading.Thread):
         self.editor_camera.pos = glm.vec3(0, 150, 400)
         
         # Flag to enable editor camera keyboard movement
-        # Only moves when right mouse button is held (signaled by non-zero mouse delta history)
         self._editor_mouselook_active = False
         
         # Player stats
@@ -101,6 +91,10 @@ class LogicThread(threading.Thread):
         # Speaker state
         self.active_speakers: set = set()
         
+        # Initialize Mover/Door Lists
+        self.movers = []
+        self.doors = []
+        
         # Mover Animation State
         self.mover_states = {}
         
@@ -109,6 +103,10 @@ class LogicThread(threading.Thread):
         
         # Interaction State
         self.current_hud_message = ""
+        
+        # Visual FX
+        self.bullet_marks = []
+        self.BULLET_FADE_TIME = 20.0
         
         # Performance Monitoring
         self.actual_tps = 0.0
@@ -153,6 +151,8 @@ class LogicThread(threading.Thread):
             self.gate_inputs = {}
             # Reset active weapon
             self.active_weapon = None
+            # Reset visual fx
+            self.bullet_marks = []
         else:
             self.player_in_triggers.clear()
             self.fired_once_triggers.clear()
@@ -166,6 +166,7 @@ class LogicThread(threading.Thread):
             self.current_hud_message = ""
             self.gate_inputs = {}
             self.active_weapon = None
+            self.bullet_marks = []
     
     def set_terrain(self, terrain):
         """Set terrain reference for collision detection."""
@@ -187,26 +188,32 @@ class LogicThread(threading.Thread):
         self.frustum_aspect = aspect
 
     def _init_movers(self):
-        """Initialize mover states."""
+        """Initialize mover states and list."""
         self.mover_states = {}
+        self.movers = [] # Initialize list for physics
         for i, brush in enumerate(self.brushes):
-            if brush.get('is_mover') and not brush.get('move_once', False):
-                if 'original_pos' not in brush:
-                    brush['original_pos'] = list(brush['pos'])
-                self.mover_states[i] = {'progress': 0.0, 'forward': True}
+            if brush.get('is_mover'):
+                self.movers.append(brush)
+                if not brush.get('move_once', False):
+                    if 'original_pos' not in brush:
+                        brush['original_pos'] = list(brush['pos'])
+                    self.mover_states[i] = {'progress': 0.0, 'forward': True}
 
     def _reset_movers(self):
         """Reset movers to original positions."""
+        self.movers = []
         for i, brush in enumerate(self.brushes):
             if brush.get('is_mover') and 'original_pos' in brush:
                 brush['pos'] = list(brush['original_pos'])
         self.mover_states = {}
 
     def _init_doors(self):
-        """Initialize door states."""
+        """Initialize door states and list."""
         self.door_states = {}
+        self.doors = [] # Initialize list for physics
         for i, brush in enumerate(self.brushes):
             if brush.get('is_door'):
+                self.doors.append(brush)
                 if 'original_pos' not in brush:
                     brush['original_pos'] = list(brush['pos'])
                 self.door_states[i] = {
@@ -217,6 +224,7 @@ class LogicThread(threading.Thread):
 
     def _reset_doors(self):
         """Reset doors to original positions."""
+        self.doors = []
         for i, brush in enumerate(self.brushes):
             if brush.get('is_door') and 'original_pos' in brush:
                 brush['pos'] = list(brush['original_pos'])
@@ -281,25 +289,15 @@ class LogicThread(threading.Thread):
             self.editor_camera.yaw += dx * self.EDITOR_MOUSE_SENSITIVITY
             self.editor_camera.pitch -= dy * self.EDITOR_MOUSE_SENSITIVITY
             self.editor_camera.pitch = max(-89.0, min(89.0, self.editor_camera.pitch))
-        else:
-            # If no mouse movement, camera movement keys won't work
-            # (requires right-click hold which generates continuous deltas)
-            pass
         
         # Handle keyboard movement when mouselook is active
-        # In a typical editor, you hold right mouse and use WASD
         keys = self.game_state.get_keys()
         
         # Calculate movement direction based on camera orientation
         yaw_rad = math.radians(self.editor_camera.yaw)
-        pitch_rad = math.radians(self.editor_camera.pitch)
         
         # Forward vector (ignoring pitch for horizontal movement)
-        forward = glm.vec3(
-            math.cos(yaw_rad),
-            0,
-            math.sin(yaw_rad)
-        )
+        forward = glm.vec3(math.cos(yaw_rad), 0, math.sin(yaw_rad))
         forward = glm.normalize(forward)
         
         # Right vector
@@ -311,70 +309,151 @@ class LogicThread(threading.Thread):
         # Calculate movement
         move_dir = glm.vec3(0, 0, 0)
         
-        if Key_W in keys:
-            move_dir += forward
-        if Key_S in keys:
-            move_dir -= forward
-        if Key_A in keys:
-            move_dir -= right
-        if Key_D in keys:
-            move_dir += right
-        if Key_Space in keys:
-            move_dir += up
-        if Key_C in keys:
-            move_dir -= up
+        if Key_W in keys: move_dir += forward
+        if Key_S in keys: move_dir -= forward
+        if Key_A in keys: move_dir -= right
+        if Key_D in keys: move_dir += right
+        if Key_Space in keys: move_dir += up
+        if Key_C in keys: move_dir -= up
         
         # Apply movement
         if glm.length(move_dir) > 0.001:
             move_dir = glm.normalize(move_dir)
             speed = self.EDITOR_CAMERA_SPEED
-            
-            # Check for shift (fast movement)
             if Key_Shift in keys:
                 speed *= self.EDITOR_CAMERA_FAST_MULT
-            
             self.editor_camera.pos += move_dir * speed * delta
 
-    def _tick_play_mode(self, delta: float):
-        """Process play mode tick - player physics, triggers, etc."""
-        if not self.player:
-            return
+    def _tick_play_mode(self, delta):
+        if not self.player: return
         
-        # Get input
+        # --- CRITICAL FIX: Update Movers & Doors FIRST ---
+        # This prevents the player from falling through platforms moving downwards,
+        # and allows "carrying" logic to be applied before collision resolution.
+        self._update_respawns(delta)
+        self._update_movers(delta)
+        self._update_doors(delta)
+        
+        # Inputs
         keys = self.game_state.get_keys()
-        dx, dy = self.game_state.consume_mouse_delta()
+        mouse_dx, mouse_dy = self.game_state.consume_mouse_delta()
         use_key = self.game_state.consume_use_key()
         
-        # Update player look direction
-        if dx != 0 or dy != 0:
-            self.player.update_angle(dx, dy)
+        # Mouse Look
+        SENSITIVITY = 0.002
+        self.player.angle -= mouse_dx * SENSITIVITY
+        self.player.pitch -= mouse_dy * SENSITIVITY
+        self.player.pitch = max(-1.5, min(1.5, self.player.pitch))
         
-        # Update player physics and movement
-        self.player.update(keys, self.brushes, delta, terrain=self.terrain)
+        # Movement
+        move_dir = glm.vec3(0)
+        if Key_W in keys: move_dir.z += 1
+        if Key_S in keys: move_dir.z -= 1
         
-        # Handle triggers
+        if Key_A in keys: move_dir.x += 1  
+        if Key_D in keys: move_dir.x -= 1 
+        
+        jump = Key_Space in keys
+        crouch = Key_C in keys
+        
+        # Physics Update
+        self.player.update(delta, move_dir, jump, crouch, self.brushes, self.movers, self.doors, self.terrain)
+        
+        # Interaction / Gameplay
+        self._handle_interactions(use_key)
+        self._check_pickups()
         self._handle_triggers(use_key)
         
-        # Handle interactions (Doors & Pickups prompts)
-        self._handle_interactions(use_key)
+        # Shooting
+        if self.game_state.consume_shot():
+            self._handle_shooting()
+            
+        self._update_bullet_marks()
+
+    def _check_pickups(self):
+        """Helper to check specifically for walk-over pickups."""
+        self._handle_pickups(False)
+
+    def _handle_shooting(self):
+        """Raycast from player camera to find hit point."""
+        if not self.player or not self.active_weapon:
+            return
+
+        # Calculate Player Direction Vector
+        yaw_rad = self.player.angle
+        pitch_rad = self.player.pitch
         
-        # Handle pickups (actual collection)
-        self._handle_pickups(use_key)
+        # Convert polar to cartesian vector (Forward vector)
+        dir_x = math.sin(yaw_rad) * math.cos(pitch_rad)
+        dir_y = math.sin(pitch_rad)
+        dir_z = math.cos(yaw_rad) * math.cos(pitch_rad)
         
-        # Handle respawning
-        self._update_respawns(delta)
-        
-        # Update movers
-        self._update_movers(delta)
-        
-        # Update doors
-        self._update_doors(delta)
+        # Assuming Y-up coordinate system
+        ray_origin = glm.vec3(self.player.pos.x, self.player.pos.y + self.player.camera_height, self.player.pos.z)
+        ray_dir = glm.normalize(glm.vec3(dir_x, dir_y, dir_z))
+
+        closest_hit = None
+        closest_dist = float('inf')
+
+        # Raycast against all Brushes
+        for brush in self.brushes:
+            # Skip triggers, water, fog, hidden
+            if (brush.get('is_trigger') or brush.get('hidden') or 
+                brush.get('is_water') or brush.get('is_fog')):
+                continue
+
+            # Get AABB
+            pos = glm.vec3(brush['pos'])
+            size = glm.vec3(brush['size'])
+            min_b = pos - size * 0.5
+            max_b = pos + size * 0.5
+
+            hit, dist = self._intersect_ray_aabb(ray_origin, ray_dir, min_b, max_b)
+            
+            if hit and dist < closest_dist:
+                closest_dist = dist
+                closest_hit = ray_origin + ray_dir * dist
+
+        if closest_hit:
+            self.bullet_marks.append({
+                'pos': closest_hit,
+                'time': time.perf_counter()
+            })
+
+    def _intersect_ray_aabb(self, origin, direction, box_min, box_max):
+        """Standard Slab Method for Ray-AABB intersection."""
+        t_min = 0.0
+        t_max = 10000.0 # Max Range
+
+        for i in range(3):
+            if abs(direction[i]) < 1e-6:
+                if origin[i] < box_min[i] or origin[i] > box_max[i]:
+                    return False, 0
+            else:
+                inv_d = 1.0 / direction[i]
+                t1 = (box_min[i] - origin[i]) * inv_d
+                t2 = (box_max[i] - origin[i]) * inv_d
+                
+                t_near = min(t1, t2)
+                t_far = max(t1, t2)
+                
+                t_min = max(t_min, t_near)
+                t_max = min(t_max, t_far)
+                
+                if t_min > t_max:
+                    return False, 0
+
+        return True, t_min
+
+    def _update_bullet_marks(self):
+        current_time = time.perf_counter()
+        self.bullet_marks = [
+            m for m in self.bullet_marks 
+            if (current_time - m['time']) < self.BULLET_FADE_TIME
+        ]
 
     def _handle_interactions(self, use_key_pressed: bool):
-        """
-        Check for interactive objects (Doors, Pickups) in front of the player 
-        and handle 'E' interaction or display HUD messages.
-        """
+        """Check for interactive objects (Doors, Pickups) in front of the player."""
         self.current_hud_message = ""
         
         # --- 1. DOOR INTERACTION (Raycast & Touch) ---
@@ -382,67 +461,27 @@ class LogicThread(threading.Thread):
         found_door_brush = None
         
         reach_distance = 80.0
-        step_size = 16.0
         
         px, py, pz = self.player.pos
-        angle = self.player.angle
-        vx = math.cos(angle)
-        vz = math.sin(angle)
         
-        # Raycast step
-        for dist in np.arange(step_size, reach_distance + step_size, step_size):
-            check_x = px + vx * dist
-            check_z = pz + vz * dist
-            check_y = py 
+        # Simple proximity check since precise raycasting can be tricky with inconsistent angles
+        for i, brush in enumerate(self.brushes):
+            if not brush.get('is_door'): continue
             
-            for i, brush in enumerate(self.brushes):
-                if not brush.get('is_door'): continue
-                
-                pos = brush['pos']
-                size = brush['size']
-                
-                if (pos[0] - size[0]/2 <= check_x <= pos[0] + size[0]/2 and
-                    pos[2] - size[2]/2 <= check_z <= pos[2] + size[2]/2 and
-                    pos[1] - size[1]/2 <= check_y <= pos[1] + size[1]/2):
-                    
-                    found_door_idx = i
-                    found_door_brush = brush
-                    break 
+            pos = brush['pos']
+            size = brush['size']
             
-            if found_door_brush:
-                break 
-
-        # Touch check (fallback)
-        if not found_door_brush:
-            touch_radius = 24.0 
-            for i, brush in enumerate(self.brushes):
-                if not brush.get('is_door'): continue
-                pos = brush['pos']
-                size = brush['size']
-                
-                door_min_x = pos[0] - size[0]/2
-                door_max_x = pos[0] + size[0]/2
-                door_min_z = pos[2] - size[2]/2
-                door_max_z = pos[2] + size[2]/2
-                door_min_y = pos[1] - size[1]/2
-                door_max_y = pos[1] + size[1]/2
-
-                player_min_x = px - touch_radius
-                player_max_x = px + touch_radius
-                player_min_z = pz - touch_radius
-                player_max_z = pz + touch_radius
-                
-                overlap_x = (player_min_x < door_max_x) and (player_max_x > door_min_x)
-                overlap_z = (player_min_z < door_max_z) and (player_max_z > door_min_z)
-                overlap_y = (py > door_min_y) and (py < door_max_y)
-
-                if overlap_x and overlap_z and overlap_y:
-                    found_door_idx = i
-                    found_door_brush = brush
-                    break
+            dx = abs(pos[0] - px)
+            dy = abs(pos[1] - py)
+            dz = abs(pos[2] - pz)
+            
+            # Check within reach
+            if dx < size[0]/2 + reach_distance and dz < size[2]/2 + reach_distance and dy < size[1]/2 + 64:
+                found_door_idx = i
+                found_door_brush = brush
+                break
 
         if found_door_brush:
-            # Door Logic
             door_state = self.door_states.get(found_door_idx, {}).get('state', 'closed')
             if door_state != 'closed': return
             if found_door_brush.get('door_auto_open', False): return
@@ -464,18 +503,13 @@ class LogicThread(threading.Thread):
             else:
                 self.current_hud_message = "Press E to open"
                 if use_key_pressed: self._trigger_door_open(found_door_idx)
-            
-            # Return early if door is blocking interaction
             return
 
         # --- 2. PICKUP INTERACTION (Look-At) ---
         if Pickup:
-            best_pickup = None
-            closest_dist = float('inf')
-            
             p_pos = glm.vec3(px, py, pz)
-            # Player view direction (horizontal)
-            p_dir = glm.vec3(vx, 0, vz) 
+            # Re-calculate forward vector properly for look-at check
+            p_forward = glm.vec3(math.sin(self.player.angle), 0, math.cos(self.player.angle))
             
             for i, thing in enumerate(self.things):
                 if not isinstance(thing, Pickup): continue
@@ -485,23 +519,15 @@ class LogicThread(threading.Thread):
                 t_pos = glm.vec3(thing.pos)
                 dist = glm.distance(p_pos, t_pos)
                 
-                # Check distance (must be close)
-                if dist < 64.0:
-                    # Check angle (must be looking at it)
+                if dist < 80.0:
                     to_thing = glm.normalize(t_pos - p_pos)
-                    # Dot product > 0.8 is roughly within 35 degrees of center
-                    if glm.dot(p_dir, to_thing) > 0.8:
-                        if dist < closest_dist:
-                            closest_dist = dist
-                            best_pickup = thing
-            
-            if best_pickup:
-                item_name = best_pickup.properties.get('item_type', 'Item').replace('_', ' ').title()
-                if item_name == "Key":
-                    key_name = best_pickup.properties.get('key_name', 'Key').replace('_', ' ').title()
-                    self.current_hud_message = f"[E] Pick up {key_name}"
-                else:
-                    self.current_hud_message = f"[E] Pick up {item_name}"
+                    # Dot product check
+                    if glm.dot(p_forward, to_thing) > 0.8:
+                        item_name = thing.properties.get('item_type', 'Item').replace('_', ' ').title()
+                        self.current_hud_message = f"[E] Pick up {item_name}"
+                        if use_key_pressed:
+                            self._collect_pickup(thing, i)
+                        return
 
     def _trigger_door_open(self, door_idx: int):
         """Helper to force a door to start opening."""
@@ -512,15 +538,13 @@ class LogicThread(threading.Thread):
 
     def _handle_triggers(self, use_key_pressed: bool):
         """Check and activate triggers."""
-        if not self.player:
-            return
+        if not self.player: return
             
         player_pos = self.player.pos
         currently_in = set()
         
         for i, brush in enumerate(self.brushes):
-            if not brush.get('is_trigger'):
-                continue
+            if not brush.get('is_trigger'): continue
                 
             pos = glm.vec3(brush['pos'])
             size = glm.vec3(brush['size'])
@@ -533,12 +557,9 @@ class LogicThread(threading.Thread):
                 min_b.z <= player_pos.z <= max_b.z):
                 
                 currently_in.add(i)
-                
                 if i not in self.player_in_triggers:
-                    # Just entered trigger
                     self._activate_trigger(brush, i, use_key_pressed)
                 else:
-                    # Still in trigger - handle hurt triggers
                     if brush.get('trigger_action') == 'hurt':
                         self._process_hurt_trigger(brush, i)
         
@@ -547,7 +568,6 @@ class LogicThread(threading.Thread):
     def _activate_trigger(self, brush: dict, trigger_id: int, use_key: bool):
         """Activate a trigger."""
         trigger_type = brush.get('trigger_type', 'multiple')
-        
         if trigger_type == 'once' and trigger_id in self.fired_once_triggers:
             return
         
@@ -561,11 +581,7 @@ class LogicThread(threading.Thread):
         elif action == 'target':
             target_name = brush.get('target')
             if target_name:
-                # Capture the source name (the name of this trigger)
-                # If the brush has no name, fallback to a unique ID string
                 source_name = brush.get('name', f'trigger_{trigger_id}')
-                
-                # Pass source_name to _activate_target for Logic Gate processing
                 self._activate_target(target_name, source_name)
         
         if trigger_type == 'once':
@@ -581,12 +597,8 @@ class LogicThread(threading.Thread):
                 self.hurt_trigger_timers[trigger_id] = self.HURT_INTERVAL
 
     def _activate_target(self, target_name: str, source_name: str = None):
-        """
-        Activate a named target. 
-        source_name: The name of the object (trigger/switch) sending the signal.
-        """
+        """Activate a named target."""
         # 1. Handle Logic Gates
-        # Find the thing first
         target_thing = None
         for thing in self.things:
             if hasattr(thing, 'name') and thing.name == target_name:
@@ -597,13 +609,12 @@ class LogicThread(threading.Thread):
             self._process_logic_gate(target_thing, source_name)
             return
 
-        # 2. Existing logic for Brushes (Movers/Doors)
+        # 2. Handle Brushes (Movers/Doors)
         for brush in self.brushes:
             if brush.get('name') == target_name:
                 if brush.get('is_mover'):
                     brush['start_on'] = not brush.get('start_on', False)
                 elif brush.get('is_door'):
-                    # ... existing door logic ...
                     idx = self.brushes.index(brush)
                     if idx in self.door_states:
                         state = self.door_states[idx]
@@ -613,94 +624,63 @@ class LogicThread(threading.Thread):
                             state['state'] = 'closing'
                 return
 
-        # 3. Existing logic for other Things (Lights)
+        # 3. Handle Other Things (Lights)
         if target_thing:
             if Light and isinstance(target_thing, Light):
                 current = target_thing.properties.get('state', 'on')
                 target_thing.properties['state'] = 'off' if current == 'on' else 'on'
 
     def _process_logic_gate(self, gate, source_name):
-        if not source_name: return # Logic gates need a source identity to track state
+        if not source_name: return
         
         gate_name = gate.name
         l_type = gate.properties.get('logic_type', 'AND')
         target = gate.properties.get('target', '')
         
-        # Initialize input set for this gate if missing
         if gate_name not in self.gate_inputs:
             self.gate_inputs[gate_name] = set()
             
-        # TOGGLE the input signal from this source
         if source_name in self.gate_inputs[gate_name]:
-            self.gate_inputs[gate_name].remove(source_name) # Turn signal OFF
+            self.gate_inputs[gate_name].remove(source_name)
         else:
-            self.gate_inputs[gate_name].add(source_name) # Turn signal ON
+            self.gate_inputs[gate_name].add(source_name)
             
         active_inputs = len(self.gate_inputs[gate_name])
         
-        # Calculate Logic
-        should_fire = False
-        
-        # We need to know TOTAL possible inputs to calculate AND/NAND correctly.
-        # ere, we can infer it by counting how many triggers/switches target this gate.
-        # For simplicity/robustness, let's assume 'AND' means >= 2 inputs or "All active so far".
-        # Better approach: Just check if active_inputs > 0 for OR.
-        
-        # Count how many things actually target this gate currently
         total_possible_inputs = 0
         for b in self.brushes:
             if b.get('target') == gate_name: total_possible_inputs += 1
         for t in self.things:
             if t.properties.get('target') == gate_name and t != gate: total_possible_inputs += 1
             
-        if total_possible_inputs == 0: total_possible_inputs = 1 # Avoid division by zero
+        if total_possible_inputs == 0: total_possible_inputs = 1
         
-        if l_type == 'AND':
-            should_fire = (active_inputs >= total_possible_inputs)
-        elif l_type == 'OR':
-            should_fire = (active_inputs > 0)
-        elif l_type == 'XOR':
-            should_fire = (active_inputs == 1)
-        elif l_type == 'NAND':
-            should_fire = (active_inputs < total_possible_inputs)
-        elif l_type == 'NOR':
-            should_fire = (active_inputs == 0)
+        should_fire = False
+        if l_type == 'AND': should_fire = (active_inputs >= total_possible_inputs)
+        elif l_type == 'OR': should_fire = (active_inputs > 0)
+        elif l_type == 'XOR': should_fire = (active_inputs == 1)
+        elif l_type == 'NAND': should_fire = (active_inputs < total_possible_inputs)
+        elif l_type == 'NOR': should_fire = (active_inputs == 0)
 
-        # If condition met, fire the gate's target
-        # To prevent infinite loops, we could track depth, but for now direct fire is fine
         if should_fire and target:
-            # Pass the GATE's name as the source to the next object
             self._activate_target(target, gate_name)
 
     def _handle_pickups(self, use_key_pressed: bool):
-        """Handle pickup collection."""
-        if not self.player or not Pickup:
-            return
+        """Handle pickup collection (proximity check)."""
+        if not self.player or not Pickup: return
             
         player_pos = self.player.pos
         pickup_radius = 32.0
-        use_radius = 64.0
         
         for i, thing in enumerate(self.things):
-            if not isinstance(thing, Pickup):
-                continue
-            if thing.properties.get('collected', False):
-                continue
-            if i in self.collected_pickups:
-                continue
+            if not isinstance(thing, Pickup): continue
+            if thing.properties.get('collected', False): continue
+            if i in self.collected_pickups: continue
                 
             thing_pos = glm.vec3(thing.pos)
             distance = glm.distance(player_pos, thing_pos)
             
-            activation = thing.properties.get('activation', 'walk_over')
-            
-            should_collect = False
-            if activation == 'walk_over' and distance <= pickup_radius:
-                should_collect = True
-            elif activation == 'use' and use_key_pressed and distance <= use_radius:
-                should_collect = True
-                
-            if should_collect:
+            if thing.properties.get('activation') == 'walk_over' and distance <= pickup_radius:
                 self._collect_pickup(thing, i)
     
     def _collect_pickup(self, pickup, pickup_id: int):
@@ -717,39 +697,26 @@ class LogicThread(threading.Thread):
         elif item_type in ['gun1', 'gun2']:
             self.active_weapon = item_type
             self.current_hud_message = f"Picked up {item_type.upper()}"
-        elif item_type == 'ammo':
-            # Future: track ammo
-            pass
-        elif item_type == 'armour':
-            # Future: track armor
-            pass
         
         pickup.properties['collected'] = True
         self.collected_pickups.add(pickup_id)
         
-        # Check if pickup should respawn
         if pickup.properties.get('respawns', False):
             respawn_time = pickup.properties.get('respawn_time', 20.0)
             self.respawn_timers[pickup_id] = respawn_time
     
     def _update_respawns(self, delta: float):
         """Update respawn timers and respawn pickups when ready."""
-        if not Pickup:
-            return
+        if not Pickup: return
         
-        # List to track pickups that should respawn this tick
         to_respawn = []
-        
         for pickup_id, time_remaining in list(self.respawn_timers.items()):
             self.respawn_timers[pickup_id] = time_remaining - delta
             if self.respawn_timers[pickup_id] <= 0:
                 to_respawn.append(pickup_id)
         
-        # Respawn pickups
         for pickup_id in to_respawn:
             del self.respawn_timers[pickup_id]
-            
-            # Find the pickup by index
             if pickup_id < len(self.things):
                 thing = self.things[pickup_id]
                 if isinstance(thing, Pickup):
@@ -757,26 +724,13 @@ class LogicThread(threading.Thread):
                     self.collected_pickups.discard(pickup_id)
     
     def has_key(self, key_name: str) -> bool:
-        """Check if the player has a specific key."""
         return key_name in self.collected_keys
 
-    def use_key(self, key_name: str) -> bool:
-        """
-        Use (consume) a key from the player's inventory.
-        Returns True if the key was used, False if player doesn't have it.
-        """
-        if key_name in self.collected_keys:
-            self.collected_keys.remove(key_name)
-            return True
-        return False
-
     def _update_movers(self, delta: float):
-        """Update all active movers."""
+        """Update all active movers and carry the player."""
         for i, brush in enumerate(self.brushes):
-            if not brush.get('is_mover') or brush.get('move_once', False):
-                continue
-            if not brush.get('start_on', False):
-                continue
+            if not brush.get('is_mover') or brush.get('move_once', False): continue
+            if not brush.get('start_on', False): continue
             
             if i not in self.mover_states:
                 if 'original_pos' not in brush:
@@ -789,13 +743,9 @@ class LogicThread(threading.Thread):
             direction = np.array(brush.get('direction', [0, 1, 0]), dtype=float)
             
             dir_length = np.linalg.norm(direction)
-            if dir_length > 0:
-                direction = direction / dir_length
+            if dir_length > 0: direction = direction / dir_length
             
-            if distance > 0:
-                progress_delta = (speed * delta) / distance
-            else:
-                progress_delta = 0
+            progress_delta = (speed * delta) / distance if distance > 0 else 0
             
             if state['forward']:
                 state['progress'] += progress_delta
@@ -808,24 +758,29 @@ class LogicThread(threading.Thread):
                     state['progress'] = 0.0
                     state['forward'] = True
             
-            # Smooth easing
             t = state['progress']
-            if t < 0.5:
-                eased = 4 * t * t * t
-            else:
-                eased = 1 - pow(-2 * t + 2, 3) / 2
+            eased = 4 * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 3) / 2
             
             original = np.array(brush['original_pos'])
             offset = direction * distance * eased
-            brush['pos'] = (original + offset).tolist()
+            new_pos = original + offset
+            
+            # --- CRITICAL FIX: Velocity Inheritance ---
+            current_pos = np.array(brush['pos'])
+            move_delta = new_pos - current_pos
+            
+            # Apply new position to brush
+            brush['pos'] = new_pos.tolist()
+            
+            # If player was standing on this brush in the previous frame, apply delta
+            if self.player and self.player.ground_object == brush:
+                self.player.pos += glm.vec3(move_delta[0], move_delta[1], move_delta[2])
 
     def _update_doors(self, delta: float):
-        """Update door animations."""
+        """Update door animations and carry the player."""
         for i, brush in enumerate(self.brushes):
-            if not brush.get('is_door'):
-                continue
-            if i not in self.door_states:
-                continue
+            if not brush.get('is_door'): continue
+            if i not in self.door_states: continue
             
             state = self.door_states[i]
             speed = brush.get('speed', 128.0)
@@ -834,13 +789,9 @@ class LogicThread(threading.Thread):
             direction = np.array(brush.get('direction', [0, 1, 0]), dtype=float)
             
             dir_length = np.linalg.norm(direction)
-            if dir_length > 0:
-                direction = direction / dir_length
+            if dir_length > 0: direction = direction / dir_length
             
-            if distance > 0:
-                progress_delta = (speed * delta) / distance
-            else:
-                progress_delta = 0
+            progress_delta = (speed * delta) / distance if distance > 0 else 0
             
             if state['state'] == 'opening':
                 state['progress'] += progress_delta
@@ -860,204 +811,136 @@ class LogicThread(threading.Thread):
                     state['progress'] = 0.0
                     state['state'] = 'closed'
             
-            # Update position
             original = np.array(brush['original_pos'])
             offset = direction * distance * state['progress']
-            brush['pos'] = (original + offset).tolist()
+            new_pos = original + offset
+            
+            # --- CRITICAL FIX: Velocity Inheritance for Doors ---
+            current_pos = np.array(brush['pos'])
+            move_delta = new_pos - current_pos
+            
+            brush['pos'] = new_pos.tolist()
+            
+            # Carry player
+            if self.player and self.player.ground_object == brush:
+                self.player.pos += glm.vec3(move_delta[0], move_delta[1], move_delta[2])
 
-    # =====================================================
-    # FRUSTUM CULLING
-    # =====================================================
-    
     def _extract_frustum_planes(self, proj_view: glm.mat4):
-        """
-        Extract the 6 frustum planes from a projection*view matrix.
-        Returns list of (a, b, c, d) tuples representing plane equations ax + by + cz + d = 0
-        Planes point inward (positive = inside frustum).
-        """
+        """Extract the 6 frustum planes."""
         m = proj_view
         planes = []
-        
-        # Left:   row3 + row0
-        planes.append(self._normalize_plane(
-            m[0][3] + m[0][0],
-            m[1][3] + m[1][0],
-            m[2][3] + m[2][0],
-            m[3][3] + m[3][0]
-        ))
-        # Right:  row3 - row0
-        planes.append(self._normalize_plane(
-            m[0][3] - m[0][0],
-            m[1][3] - m[1][0],
-            m[2][3] - m[2][0],
-            m[3][3] - m[3][0]
-        ))
-        # Bottom: row3 + row1
-        planes.append(self._normalize_plane(
-            m[0][3] + m[0][1],
-            m[1][3] + m[1][1],
-            m[2][3] + m[2][1],
-            m[3][3] + m[3][1]
-        ))
-        # Top:    row3 - row1
-        planes.append(self._normalize_plane(
-            m[0][3] - m[0][1],
-            m[1][3] - m[1][1],
-            m[2][3] - m[2][1],
-            m[3][3] - m[3][1]
-        ))
-        # Near:   row3 + row2
-        planes.append(self._normalize_plane(
-            m[0][3] + m[0][2],
-            m[1][3] + m[1][2],
-            m[2][3] + m[2][2],
-            m[3][3] + m[3][2]
-        ))
-        # Far:    row3 - row2
-        planes.append(self._normalize_plane(
-            m[0][3] - m[0][2],
-            m[1][3] - m[1][2],
-            m[2][3] - m[2][2],
-            m[3][3] - m[3][2]
-        ))
-        
+        planes.append(self._normalize_plane(m[0][3] + m[0][0], m[1][3] + m[1][0], m[2][3] + m[2][0], m[3][3] + m[3][0])) # Left
+        planes.append(self._normalize_plane(m[0][3] - m[0][0], m[1][3] - m[1][0], m[2][3] - m[2][0], m[3][3] - m[3][0])) # Right
+        planes.append(self._normalize_plane(m[0][3] + m[0][1], m[1][3] + m[1][1], m[2][3] + m[2][1], m[3][3] + m[3][1])) # Bottom
+        planes.append(self._normalize_plane(m[0][3] - m[0][1], m[1][3] - m[1][1], m[2][3] - m[2][1], m[3][3] - m[3][1])) # Top
+        planes.append(self._normalize_plane(m[0][3] + m[0][2], m[1][3] + m[1][2], m[2][3] + m[2][2], m[3][3] + m[3][2])) # Near
+        planes.append(self._normalize_plane(m[0][3] - m[0][2], m[1][3] - m[1][2], m[2][3] - m[2][2], m[3][3] - m[3][2])) # Far
         return planes
 
     def _normalize_plane(self, a, b, c, d):
-        """Normalize a plane equation."""
         length = math.sqrt(a*a + b*b + c*c)
-        if length < 1e-8:
-            return (0, 0, 0, 0)
+        if length < 1e-8: return (0, 0, 0, 0)
         return (a/length, b/length, c/length, d/length)
 
     def _aabb_in_frustum(self, planes, center, half_size):
-        """
-        Test if an AABB is inside or intersects the frustum.
-        Uses the "p-vertex" optimization for fast rejection.
-        Returns True if potentially visible, False if definitely outside.
-        """
         for plane in planes:
             a, b, c, d = plane
-            
-            # Find the "positive vertex" (p-vertex) - the corner furthest in the plane's normal direction
             px = center[0] + half_size[0] if a >= 0 else center[0] - half_size[0]
             py = center[1] + half_size[1] if b >= 0 else center[1] - half_size[1]
             pz = center[2] + half_size[2] if c >= 0 else center[2] - half_size[2]
-            
-            # If p-vertex is outside this plane, the entire AABB is outside
-            if a*px + b*py + c*pz + d < 0:
-                return False
-        
+            if a*px + b*py + c*pz + d < 0: return False
         return True
 
     def _prepare_render_state(self):
         """Prepare render state with frustum culling."""
         write_state = self.game_state.get_write_state()
         
-        # Set mode flag
         write_state.is_play_mode = self.play_mode
         
-        # Get camera info based on mode
         if self.play_mode and self.player:
-            # Play mode - use player camera
             write_state.player_pos = glm.vec3(self.player.pos)
             write_state.player_angle = self.player.angle
             write_state.player_pitch = self.player.pitch
-            camera_pos = self.player.pos
             view_matrix = self.player.get_view_matrix()
-            fov = 90.0  # Player FOV
+            fov = 90.0
         else:
-            # Editor mode - use editor camera
             write_state.editor_camera_pos = glm.vec3(self.editor_camera.pos)
             write_state.editor_camera_yaw = self.editor_camera.yaw
             write_state.editor_camera_pitch = self.editor_camera.pitch
             write_state.editor_camera_fov = self.editor_camera.fov
-            camera_pos = self.editor_camera.pos
             view_matrix = self.editor_camera.get_view_matrix()
             fov = self.editor_camera.fov
         
         write_state.camera_view_matrix = view_matrix
         
-        # Player stats
         write_state.player_health = self.player_health
         write_state.player_max_health = self.player_max_health
         
-        # Key inventory (for HUD display)
         write_state.collected_keys = set(self.collected_keys)
-
-        # Pass the HUD message to the render state
         write_state.hud_message = self.current_hud_message
-
-        # Pass the active weapon to the render state
         write_state.active_weapon = self.active_weapon
 
-        # --- Ensure JSON-serializable light data ---
-        # Convert any glm vectors to lists in things before storing in render state
+        # Transfer Bullet Marks to Render State
+        current_time = time.perf_counter()
+        render_marks = []
+        for m in self.bullet_marks:
+            age = current_time - m['time']
+            if age < self.BULLET_FADE_TIME:
+                alpha = max(0.0, 1.0 - (age / self.BULLET_FADE_TIME))
+                render_marks.append({
+                    'pos': [m['pos'].x, m['pos'].y, m['pos'].z],
+                    'alpha': alpha
+                })
+        write_state.bullet_marks = render_marks
+
+        # Ensure JSON-serializable light data
         visible_things = []
         for i, thing in enumerate(self.things):
             if self.play_mode and Pickup and isinstance(thing, Pickup) and i in self.collected_pickups:
-                # Do not render collected keys
                 continue
-            
-            # Convert glm vectors to lists if they exist (for JSON compatibility)
             if Light and isinstance(thing, Light):
-                if hasattr(thing, 'pos'):
-                    # Check if pos is a glm vector (has 'x' attribute)
-                    if hasattr(thing.pos, 'x'):
-                        thing.pos = [thing.pos[0], thing.pos[1], thing.pos[2]]
-            
+                if hasattr(thing, 'pos') and hasattr(thing.pos, 'x'):
+                     thing.pos = [thing.pos[0], thing.pos[1], thing.pos[2]]
             visible_things.append(thing)
         
         write_state.visible_things = visible_things
 
-        # --- FRUSTUM CULLING ---
-        # Build projection matrix
+        # FRUSTUM CULLING
         projection = glm.perspective(glm.radians(fov), self.frustum_aspect, 1.0, 10000.0)
         proj_view = projection * view_matrix
         frustum_planes = self._extract_frustum_planes(proj_view)
         
-        # Build visible brush list with culling
         safe_brushes = []
         total_count = 0
         culled_count = 0
         
         for b in self.brushes:
             total_count += 1
-            
-            # Always skip hidden brushes
             if b.get('hidden', False):
                 culled_count += 1
                 continue
             
-            # Frustum cull check (only if culling is enabled)
             if self.culling_enabled:
                 pos = b.get('pos', [0, 0, 0])
                 size = b.get('size', [64, 64, 64])
                 center = (pos[0], pos[1], pos[2])
                 half_size = (size[0] / 2.0, size[1] / 2.0, size[2] / 2.0)
-                
                 if not self._aabb_in_frustum(frustum_planes, center, half_size):
                     culled_count += 1
                     continue
             
-            # Visible - add to render list
             if b.get('is_mover', False) or b.get('is_door', False):
-                # Movers and doors need copies because their positions are animated
                 safe_brushes.append(b.copy())
             else:
-                # Regular brushes can be passed by reference
                 safe_brushes.append(b)
 
         write_state.visible_brushes = safe_brushes
         write_state.total_brushes = total_count
         write_state.culled_brushes = culled_count
         
-        # Store ALL brushes (unculled) for shadow rendering
-        # Shadows need to render even when caster is off-screen
         all_brushes = []
         for b in self.brushes:
-            if b.get('hidden', False):
-                continue
+            if b.get('hidden', False): continue
             if b.get('is_mover', False) or b.get('is_door', False):
                 all_brushes.append(b.copy())
             else:
