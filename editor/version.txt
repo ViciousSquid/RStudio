@@ -1,1 +1,1 @@
-version v1.0.12.5 | Olives
+version v1.0.12.6
