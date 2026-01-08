@@ -115,7 +115,12 @@ class ThreadedGameState:
             return delta
 
     def set_use_key(self, pressed: bool):
+        """Sets the state of the use key explicitly (True/False)."""
         self._use_key_pressed = pressed
+    
+    def set_use_key_pressed(self):
+        """Convenience method called by main_window.py to trigger the use key."""
+        self._use_key_pressed = True
         
     def consume_use_key(self) -> bool:
         if self._use_key_pressed:
