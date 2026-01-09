@@ -1,9 +1,12 @@
-v1.0.12.6_stable_test
+v1.0.13.0 (Latest version)
 
-* Gun pickup added (still experimental)
+* Initial (beta) support for Gun pickup
+* Half-Life 2 style Entity I/O system & debugger
+* Recent File history, Auto-saving
+* Logic Entities (timers, gates and switches)
 
 
-v1.0.12.5 (Latest version)
+v1.0.12.5
 
 * Increased teerrain gen limits by 16x
 * Improvements to texturing/tinting brushes
@@ -21,6 +24,7 @@ v1.0.11.0  |  Delicious-Toast
 * First non-beta release
 
 * Added Toast notification area to UI
+
 
 
 
