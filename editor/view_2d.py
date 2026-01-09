@@ -5,8 +5,15 @@ import os
 from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
-from editor.things import Thing, Light, PlayerStart, Pickup, Speaker, Model, LogicGate
+from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, 
+                          LogicGate, LogicRelay, LogicTimer)
 from editor.scene_hierarchy import SceneHierarchy
+# I/O System imports for drawing connections
+try:
+    from editor.io_system import get_connections
+    IO_AVAILABLE = True
+except ImportError:
+    IO_AVAILABLE = False
 
 class View2D(QWidget):
     def __init__(self, editor, main_window, view_type):
@@ -318,7 +325,7 @@ class View2D(QWidget):
 
     def draw_logic_connections(self, painter, visible_bounds):
         """
-        Draws lines between Triggers/LogicGates and their Targets.
+        Draws I/O connections between entities.
         Respects 'Animate Connections' setting.
         """
         ax1, ax2 = self.get_axes()
@@ -343,35 +350,40 @@ class View2D(QWidget):
         current_connections = set()
         connections_to_draw = []
         
-        # 1. Collect Brushes (Triggers)
-        for brush in self.editor.state.brushes:
-            target_name = brush.get('target')
-            if not target_name: continue
-            if not (brush.get('is_trigger') or brush.get('is_mover')): continue
+        # Collect I/O System Connections
+        if IO_AVAILABLE:
+            # From brushes
+            for brush in self.editor.state.brushes:
+                io_conns = get_connections(brush)
+                for conn in io_conns:
+                    target_pos = get_pos_by_name(conn.target_name)
+                    if target_pos:
+                        # Determine if this is a logic entity
+                        is_logic = brush.get('is_trigger', False) or brush.get('is_mover', False) or brush.get('is_door', False)
+                        connections_to_draw.append({
+                            'id': f"io_brush_{id(brush)}_{conn.output_name}",
+                            'target': conn.target_name,
+                            'src': brush['pos'],
+                            'dst': target_pos,
+                            'is_logic': is_logic
+                        })
             
-            source_pos = brush['pos']
-            target_pos = get_pos_by_name(target_name)
-            if target_pos:
-                connections_to_draw.append({
-                    'id': f"brush_{id(brush)}", 'target': target_name,
-                    'src': source_pos, 'dst': target_pos, 'is_logic': False
-                })
+            # From things
+            for thing in self.editor.state.things:
+                io_conns = get_connections(thing)
+                for conn in io_conns:
+                    target_pos = get_pos_by_name(conn.target_name)
+                    if target_pos:
+                        is_logic = thing.properties.get('type') == 'logic_gate'
+                        connections_to_draw.append({
+                            'id': f"io_thing_{id(thing)}_{conn.output_name}",
+                            'target': conn.target_name,
+                            'src': thing.pos,
+                            'dst': target_pos,
+                            'is_logic': is_logic
+                        })
 
-        # 2. Collect Things (Logic Gates, Buttons)
-        for thing in self.editor.state.things:
-            target_name = thing.properties.get('target')
-            if not target_name: continue
-            
-            source_pos = thing.pos
-            target_pos = get_pos_by_name(target_name)
-            if target_pos:
-                is_logic = thing.properties.get('type') == 'logic_gate'
-                connections_to_draw.append({
-                    'id': f"thing_{id(thing)}", 'target': target_name,
-                    'src': source_pos, 'dst': target_pos, 'is_logic': is_logic
-                })
-
-        # 3. Draw
+        # Draw all collected connections
         for conn in connections_to_draw:
             source_2d = QPointF(conn['src'][axis1_idx], conn['src'][axis2_idx])
             target_2d = QPointF(conn['dst'][axis1_idx], conn['dst'][axis2_idx])
@@ -1680,17 +1692,23 @@ class View2D(QWidget):
             menu.addSeparator()
         
         # Standard Things
-        add_light_action = menu.addAction("+ Light")
-        add_player_start_action = menu.addAction("+ Player Start")
-        add_pickup_action = menu.addAction("+ Pickup")
-        add_speaker_action = menu.addAction("+ Speaker")
+        add_light_action = menu.addAction("Light")
+        add_player_start_action = menu.addAction("Player Start")
+        add_pickup_action = menu.addAction("Pickup")
+        add_speaker_action = menu.addAction("Speaker")
         
         # --- The Gap (One separator is now enough due to CSS) ---
         menu.addSeparator()
         
         # Advanced / Import
-        add_model_action = menu.addAction("+ Model...")
-        add_logic_gate_action = menu.addAction("+ LogicGate")
+        add_model_action = menu.addAction("Model...")
+        
+        # Logic Menu Sub-section
+        menu.addSeparator()
+        logic_menu = menu.addMenu("Logic Entities")
+        add_logic_relay_action = logic_menu.addAction("LogicRelay")
+        add_logic_timer_action = logic_menu.addAction("LogicTimer")
+        add_logic_gate_action = logic_menu.addAction("LogicGate")
 
         action = menu.exec_(self.mapToGlobal(event.pos()))
         
@@ -1720,7 +1738,9 @@ class View2D(QWidget):
         elif action == add_pickup_action: new_thing = Pickup(pos=pos_3d)
         elif action == add_speaker_action: new_thing = Speaker(pos=pos_3d)
         
-        # Logic Gate
+        # Logic Entities
+        elif action == add_logic_relay_action: new_thing = LogicRelay(pos=pos_3d)
+        elif action == add_logic_timer_action: new_thing = LogicTimer(pos=pos_3d)
         elif action == add_logic_gate_action:
             new_thing = LogicGate(pos=pos_3d)
             new_thing.properties['logic_type'] = 'AND' 

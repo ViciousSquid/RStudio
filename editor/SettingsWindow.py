@@ -77,12 +77,28 @@ class SettingsWindow(QDialog):
         layout = QVBoxLayout(widget)
         self.tabs.addTab(widget, "Editor")
         
-        # --- 3D View Section ---
+        # Autosave Section
+        autosave_group = QGroupBox("Autosave")
+        autosave_layout = QHBoxLayout()
+        
+        self.autosave_checkbox = QCheckBox("Enable Autosave")
+        autosave_layout.addWidget(self.autosave_checkbox)
+        
+        autosave_layout.addWidget(QLabel("Interval (min):"))
+        self.autosave_interval_spin = QSpinBox()
+        self.autosave_interval_spin.setRange(5, 60)
+        self.autosave_interval_spin.setValue(10)
+        autosave_layout.addWidget(self.autosave_interval_spin)
+        
+        autosave_group.setLayout(autosave_layout)
+        layout.addWidget(autosave_group)
+
+        # 3D View Section
         view_3d_group = QGroupBox("3D View")
         view_3d_layout = QVBoxLayout()
         
         self.show_caulk_checkbox = QCheckBox("Show Caulk textures")
-        view_3d_layout.addWidget(self.show_caulk_checkbox)
+        #view_3d_layout.addWidget(self.show_caulk_checkbox)
         
         self.sync_selection_checkbox = QCheckBox("Highlight selected brushes")
         view_3d_layout.addWidget(self.sync_selection_checkbox)
@@ -149,6 +165,11 @@ class SettingsWindow(QDialog):
         
         self.always_show_sysmon_checkbox = QCheckBox("Always Show System Monitor (F3)")
         layout.addWidget(self.always_show_sysmon_checkbox)
+        
+        # NEW: Option to control IO Debug Console at launch
+        self.always_show_io_debug_checkbox = QCheckBox("Always Show IO Debug Console")
+        self.always_show_io_debug_checkbox.setToolTip("If enabled, the debug console will open automatically when the app starts.")
+        layout.addWidget(self.always_show_io_debug_checkbox)
         
         self.disable_toasts_checkbox = QCheckBox("Disable Toast Notifications")
         layout.addWidget(self.disable_toasts_checkbox)
@@ -387,6 +408,9 @@ class SettingsWindow(QDialog):
         # Display settings
         self.show_fps_checkbox.setChecked(self.config.getboolean('Display', 'show_fps', fallback=True))
         self.always_show_sysmon_checkbox.setChecked(self.config.getboolean('Display', 'always_show_sysmon', fallback=False))
+        # NEW: Load IO Debug setting - FALLBACK SET TO FALSE
+        self.always_show_io_debug_checkbox.setChecked(self.config.getboolean('Display', 'always_show_io_debug', fallback=False))
+        
         self.disable_toasts_checkbox.setChecked(self.config.getboolean('Display', 'disable_toasts', fallback=False))
         self.font_size_spinbox.setValue(self.config.getint('Display', 'font_size', fallback=10))
         self.vsync_checkbox.setChecked(self.config.getboolean('Display', 'vsync', fallback=False))
@@ -475,6 +499,9 @@ class SettingsWindow(QDialog):
         # Display settings
         self.config.set('Display', 'show_fps', str(self.show_fps_checkbox.isChecked()))
         self.config.set('Display', 'always_show_sysmon', str(self.always_show_sysmon_checkbox.isChecked()))
+        # NEW: Save IO Debug setting
+        self.config.set('Display', 'always_show_io_debug', str(self.always_show_io_debug_checkbox.isChecked()))
+        
         self.config.set('Display', 'disable_toasts', str(self.disable_toasts_checkbox.isChecked()))
         self.config.set('Display', 'font_size', str(self.font_size_spinbox.value()))
         self.config.set('Display', 'vsync', str(self.vsync_checkbox.isChecked()))

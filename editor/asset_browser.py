@@ -9,7 +9,6 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame,
 from PyQt5.QtCore import Qt, QSize, QDir, QRect, QPointF
 from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QIcon, QPen, QPolygonF
 
-# ... (render_obj_thumbnail function remains the same) ...
 def render_obj_thumbnail(filepath, width, height):
     """
     Simple software renderer to generate a wireframe thumbnail from an OBJ file.
@@ -19,7 +18,7 @@ def render_obj_thumbnail(filepath, width, height):
     
     try:
         # Limit processing to avoid freezing on huge files
-        max_lines = 5000 
+        max_lines = 10000 
         line_count = 0
         
         with open(filepath, 'r') as f:
@@ -60,7 +59,6 @@ def render_obj_thumbnail(filepath, width, height):
     if scale == 0: scale = 1
     
     # 3D Transformation (isometric-ish view)
-    # Rotate Y 45, X 30
     import math
     angle_y = math.radians(45)
     angle_x = math.radians(30)
@@ -82,7 +80,6 @@ def render_obj_thumbnail(filepath, width, height):
         
         # Rotate X
         ry = y * cos_x - rz * sin_x
-        # rz = y * sin_x + rz * cos_x # Depth not needed for wireframe logic here
         
         # Map to screen
         screen_x = width/2 + rx * (width * 0.4)
@@ -125,7 +122,6 @@ def render_obj_thumbnail(filepath, width, height):
     painter.end()
     return pixmap
 
-# ... (AssetItem class remains the same) ...
 class AssetItem(QWidget):
     """
     A widget representing a single asset (file) in the grid view.
@@ -234,13 +230,14 @@ class AssetBrowserTab(QWidget):
     """
     A single tab content for the Asset Browser (e.g., Textures or Models).
     """
-    def __init__(self, root_path, file_extensions, editor=None, is_model_tab=False):
+    def __init__(self, root_path, file_extensions, editor=None, is_model_tab=False, parent_browser=None):
         super().__init__()
         self.root_path = root_path
         self.current_asset_folder = root_path
         self.extensions = file_extensions
         self.is_model_tab = is_model_tab
         self.editor = editor
+        self.parent_browser = parent_browser
         self.selected_item = None
         self.items = []
 
@@ -254,7 +251,7 @@ class AssetBrowserTab(QWidget):
         self.splitter = QSplitter(Qt.Horizontal)
         self.layout.addWidget(self.splitter)
 
-        # 1. Left Pane
+        # 1. Left Pane (Folder Tree)
         self.tree_frame = QFrame()
         tree_layout = QVBoxLayout(self.tree_frame)
         tree_layout.setContentsMargins(0, 0, 0, 0)
@@ -267,7 +264,7 @@ class AssetBrowserTab(QWidget):
         self.home_btn.setStyleSheet("""
             QPushButton {
                 text-align: left;
-                padding: 8px 12px;
+                padding: 6px 12px;
                 background-color: #333;
                 border: none;
                 border-bottom: 1px solid #444;
@@ -302,7 +299,7 @@ class AssetBrowserTab(QWidget):
         tree_layout.addWidget(self.tree_view)
         self.splitter.addWidget(self.tree_frame)
 
-        # 2. Middle Pane
+        # 2. Middle Pane (Grid View)
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setStyleSheet("background-color: #2b2b2b; border: none;")
@@ -313,78 +310,32 @@ class AssetBrowserTab(QWidget):
         self.scroll_area.setWidget(self.grid_container)
         self.splitter.addWidget(self.scroll_area)
 
-        # 3. Right Pane
+        # 3. Right Pane (Preview) - COMPACT
         self.details_frame = QFrame()
-        self.details_frame.setMinimumWidth(250)
+        self.details_frame.setMinimumWidth(180)
         self.details_frame.setStyleSheet("background-color: #333; border-left: 1px solid #444;")
         details_layout = QVBoxLayout(self.details_frame)
         details_layout.setContentsMargins(10, 10, 10, 10)
         
-        self.preview_label = QLabel("Select an item")
+        # Reduced size for preview to save vertical space
+        self.preview_label = QLabel("Select Item")
         self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setFixedSize(230, 230)
-        self.preview_label.setStyleSheet("background-color: #252525; border: 1px solid #444; border-radius: 4px;")
+        self.preview_label.setFixedSize(140, 140) 
+        self.preview_label.setStyleSheet("background-color: #252525; border: 1px solid #444; border-radius: 4px; color: #666;")
         details_layout.addWidget(self.preview_label)
         
         self.name_info_label = QLabel("")
         self.name_info_label.setWordWrap(True)
-        self.name_info_label.setStyleSheet("color: white; font-weight: bold; margin-top: 10px;")
+        self.name_info_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.name_info_label.setStyleSheet("color: white; font-weight: bold; margin-top: 5px; font-size: 11px;")
         details_layout.addWidget(self.name_info_label)
         
-        # --- NEW BUTTONS ---
-        if self.is_model_tab:
-            # Model Button
-            self.add_btn = QPushButton("Add to Scene")
-            self.add_btn.setStyleSheet(self._get_green_btn_style())
-            self.add_btn.clicked.connect(self.add_current_model)
-            self.add_btn.setEnabled(False)
-            details_layout.addWidget(self.add_btn)
-        else:
-            # Texture Buttons
-            self.apply_btn = QPushButton("Apply to Brush")
-            self.apply_btn.setStyleSheet(self._get_green_btn_style())
-            self.apply_btn.clicked.connect(self.apply_texture)
-            self.apply_btn.setToolTip("Apply texture to the selected brush(es)")
-            self.apply_btn.setEnabled(False)
-            details_layout.addWidget(self.apply_btn)
-            
-            self.face_btn = QPushButton("Apply to Face")
-            self.face_btn.setCheckable(True)
-            self.face_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #444;
-                    color: white;
-                    padding: 8px;
-                    border: 1px solid #555;
-                    border-radius: 4px;
-                    margin-top: 5px;
-                }
-                QPushButton:checked {
-                    background-color: #F08000;
-                    border: 1px solid #FF9020;
-                }
-                QPushButton:hover { background-color: #555; }
-            """)
-            self.face_btn.clicked.connect(self.toggle_face_mode)
-            self.face_btn.setToolTip("Click a face in 3D view to apply this texture")
-            self.face_btn.setEnabled(False)
-            #details_layout.addWidget(self.face_btn)
+        # Buttons removed from here, now handled by AssetBrowser global button
         
         details_layout.addStretch()
         self.splitter.addWidget(self.details_frame)
-        self.splitter.setSizes([200, 500, 250])
+        self.splitter.setSizes([180, 600, 180])
         self.load_directory(self.current_asset_folder)
-
-    def _get_green_btn_style(self):
-        return """
-            QPushButton {
-                background-color: #2E7D32; color: white; font-weight: bold;
-                padding: 8px; border: 1px solid #1B5E20; border-radius: 4px; margin-top: 10px;
-            }
-            QPushButton:hover { background-color: #388E3C; }
-            QPushButton:pressed { background-color: #1B5E20; }
-            QPushButton:disabled { background-color: #555; color: #888; }
-        """
 
     def go_to_root(self):
         self.load_directory(self.root_path)
@@ -430,10 +381,11 @@ class AssetBrowserTab(QWidget):
 
     def update_details_pane(self, item):
         if not item:
-            self.preview_label.setText("Select an item")
+            self.preview_label.setText("Select Item")
             self.preview_label.setPixmap(QPixmap())
             self.name_info_label.setText("")
-            self._set_buttons_enabled(False)
+            # Disable global buttons
+            if self.parent_browser: self.parent_browser.set_action_enabled(False)
             return
 
         self.name_info_label.setText(item.name_text)
@@ -442,55 +394,47 @@ class AssetBrowserTab(QWidget):
             base = os.path.splitext(item.file_path)[0]
             if os.path.exists(base + ".png"): pixmap.load(base + ".png")
             else: 
-                gen = render_obj_thumbnail(item.file_path, 230, 230)
+                gen = render_obj_thumbnail(item.file_path, 140, 140)
                 pixmap = gen if gen else QPixmap()
         else:
             pixmap.load(item.file_path)
             
         if not pixmap.isNull():
-            if self.is_model_tab and not os.path.exists(os.path.splitext(item.file_path)[0] + ".png"):
-                self.preview_label.setPixmap(pixmap)
-            else:
-                self.preview_label.setPixmap(pixmap.scaled(230, 230, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.preview_label.setPixmap(pixmap.scaled(140, 140, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         else:
             self.preview_label.setText("No Preview")
 
-        self._set_buttons_enabled(True)
+        # Enable global buttons
+        if self.parent_browser: self.parent_browser.set_action_enabled(True)
 
-    def _set_buttons_enabled(self, enabled):
-        if self.is_model_tab and hasattr(self, 'add_btn'):
-            self.add_btn.setEnabled(enabled)
-        elif not self.is_model_tab:
-            if hasattr(self, 'apply_btn'): self.apply_btn.setEnabled(enabled)
-            if hasattr(self, 'face_btn'): self.face_btn.setEnabled(enabled)
+    def perform_main_action(self, tiled=False):
+        """Called by the parent browser's global button."""
+        if not self.selected_item: return
+        
+        if self.is_model_tab:
+            self.add_current_model()
+        else:
+            self.apply_texture(tiled)
 
     def add_current_model(self):
         if self.editor and self.selected_item:
             self.editor.add_model_to_scene(self.selected_item.file_path, [0,0,0], [1,1,1])
 
-    def apply_texture(self):
+    def apply_texture(self, tiled=False):
         """Apply texture to whole brush"""
         if self.editor and hasattr(self.editor, 'apply_texture_to_brush') and self.selected_item:
-            # Calculate path relative to the assets root (e.g., 'brick.png' or 'walls/brick.png')
             rel_path = os.path.relpath(self.selected_item.file_path, self.root_path)
-            # Ensure forward slashes for cross-platform consistency
             rel_path = rel_path.replace('\\', '/')
-            self.editor.apply_texture_to_brush(rel_path)
-
-    def toggle_face_mode(self):
-        """Toggle face painting mode in the editor"""
-        if self.editor and hasattr(self.editor, 'toggle_face_paint_mode'):
-            # The button state is handled by the user clicking, we just sync the editor
-            # But the editor might turn it off (e.g. on tool change), so we sync logic there
-            self.editor.toggle_face_paint_mode(self.face_btn.isChecked())
+            self.editor.apply_texture_to_brush(rel_path, tiled=tiled)
 
 class AssetBrowser(QWidget):
-    # ... (AssetBrowser class remains largely same, just wrapping tabs) ...
     def __init__(self, initial_path, editor=None):
         super().__init__()
         self.editor = editor
-        self.resize(1280, 600)
-        self.setMinimumWidth(1000)
+        
+        # Enforce compact vertical size preference
+        # FIX: Changed from Maximum to Expanding to allow resizing when floating
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
         if initial_path.endswith("textures"):
             self.assets_root = os.path.dirname(initial_path)
@@ -513,18 +457,131 @@ class AssetBrowser(QWidget):
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
         
+        # --- Container for Corner Widgets ---
+        self.corner_widget_container = QWidget()
+        self.corner_layout = QHBoxLayout(self.corner_widget_container)
+        self.corner_layout.setContentsMargins(0, 0, 0, 0)
+        self.corner_layout.setSpacing(2)
+        
+        # --- Global Action Button in Tab Bar ---
+        self.action_btn = QPushButton("FIT")
+        self.action_btn.setObjectName("AssetActionBtn")
+        self.action_btn.setCursor(Qt.PointingHandCursor)
+        self.action_btn.setEnabled(False) 
+        self.action_btn.clicked.connect(self.on_global_action_clicked)
+        
+        # --- Tile Button ---
+        self.tile_btn = QPushButton("TILE")
+        self.tile_btn.setObjectName("AssetTileBtn")
+        self.tile_btn.setCursor(Qt.PointingHandCursor)
+        self.tile_btn.setEnabled(False)
+        self.tile_btn.clicked.connect(self.on_tile_action_clicked)
+        self.tile_btn.setToolTip("Apply texture and tile it based on brush size")
+
+        # --- Face Mode Button ---
+        self.face_btn = QPushButton("FACE")
+        self.face_btn.setObjectName("AssetFaceBtn")
+        self.face_btn.setCursor(Qt.PointingHandCursor)
+        self.face_btn.setCheckable(True)
+        self.face_btn.setEnabled(True) # Always enabled to toggle mode
+        self.face_btn.clicked.connect(self.on_face_mode_clicked)
+        self.face_btn.setToolTip("Toggle Face Selection Mode (Purple highlight). Left click to apply texture.")
+
+        green_style = """
+            QPushButton {
+                background-color: #2E7D32; 
+                color: white; 
+                font-weight: bold;
+                padding: 4px 15px; 
+                border: 1px solid #1B5E20; 
+                border-radius: 3px; 
+                margin: 2px 2px;
+                min-width: 60px;
+            }
+            QPushButton:hover { background-color: #388E3C; }
+            QPushButton:pressed { background-color: #1B5E20; }
+            QPushButton:disabled { background-color: #444; color: #888; border: 1px solid #555; }
+        """
+        
+        purple_style = """
+            QPushButton {
+                background-color: #7B1FA2; 
+                color: white; 
+                font-weight: bold;
+                padding: 4px 15px; 
+                border: 1px solid #4A148C; 
+                border-radius: 3px; 
+                margin: 2px 2px;
+                min-width: 60px;
+            }
+            QPushButton:hover { background-color: #8E24AA; }
+            QPushButton:pressed { background-color: #4A148C; }
+            QPushButton:checked { background-color: #D500F9; border: 1px solid white; }
+            QPushButton:disabled { background-color: #444; color: #888; border: 1px solid #555; }
+        """
+        
+        self.action_btn.setStyleSheet(green_style)
+        self.tile_btn.setStyleSheet(green_style)
+        self.face_btn.setStyleSheet(purple_style)
+
+        self.corner_layout.addWidget(self.action_btn)
+        self.corner_layout.addWidget(self.tile_btn)
+        self.corner_layout.addWidget(self.face_btn)
+        
+        self.tabs.setCornerWidget(self.corner_widget_container, Qt.TopRightCorner)
+        
         self.tabs.setStyleSheet("""
             QTabWidget::pane { border: 1px solid #3d3d3d; background-color: #2b2b2b; }
-            QTabBar::tab { background: #1e1e1e; color: #aaa; min-width: 100px; padding: 8px; border-top-left-radius: 4px; border-top-right-radius: 4px; margin-right: 2px; }
+            QTabBar::tab { background: #1e1e1e; color: #aaa; min-width: 100px; padding: 6px; border-top-left-radius: 4px; border-top-right-radius: 4px; margin-right: 2px; }
             QTabBar::tab:selected { background: #F08000; color: white; font-weight: bold; }
             QTabBar::tab:hover:!selected { background: #333; }
         """)
 
-        self.tab_textures = AssetBrowserTab(self.textures_path, ['.png', '.jpg', '.jpeg', '.tga', '.bmp'], editor)
+        # Pass 'self' as parent_browser so tabs can update button state
+        self.tab_textures = AssetBrowserTab(self.textures_path, ['.png', '.jpg', '.jpeg', '.tga', '.bmp'], editor, parent_browser=self)
         self.tabs.addTab(self.tab_textures, "Textures")
         
-        self.tab_models = AssetBrowserTab(self.models_path, ['.obj'], editor, is_model_tab=True)
+        self.tab_models = AssetBrowserTab(self.models_path, ['.obj'], editor, is_model_tab=True, parent_browser=self)
         self.tabs.addTab(self.tab_models, "Models")
+        
+        self.tabs.currentChanged.connect(self.on_tab_changed)
+
+    def on_tab_changed(self, index):
+        # Update button text based on tab type
+        current_tab = self.tabs.widget(index)
+        if current_tab.is_model_tab:
+            self.action_btn.setText("Add to Scene")
+            self.tile_btn.hide()
+            self.face_btn.hide() # Hide face mode for models
+        else:
+            self.action_btn.setText("FIT")
+            self.tile_btn.show()
+            self.face_btn.show()
+        
+        # Update enabled state based on that tab's current selection
+        enabled = current_tab.selected_item is not None
+        self.action_btn.setEnabled(enabled)
+        self.tile_btn.setEnabled(enabled)
+
+    def on_global_action_clicked(self):
+        # Delegate click to current tab
+        current_tab = self.tabs.currentWidget()
+        if current_tab:
+            current_tab.perform_main_action(tiled=False)
+
+    def on_tile_action_clicked(self):
+        # Delegate click to current tab with tiled=True
+        current_tab = self.tabs.currentWidget()
+        if current_tab:
+            current_tab.perform_main_action(tiled=True)
+            
+    def on_face_mode_clicked(self):
+        if self.editor and hasattr(self.editor, 'toggle_face_mode'):
+            self.editor.toggle_face_mode(self.face_btn.isChecked())
+
+    def set_action_enabled(self, enabled):
+        self.action_btn.setEnabled(enabled)
+        self.tile_btn.setEnabled(enabled)
 
     @property
     def selected_item(self):
@@ -545,6 +602,6 @@ if __name__ == '__main__':
     window = QMainWindow()
     browser = AssetBrowser(tex_dir)
     window.setCentralWidget(browser)
-    window.resize(1280, 600)
+    window.resize(1000, 300)
     window.show()
     sys.exit(app.exec_())

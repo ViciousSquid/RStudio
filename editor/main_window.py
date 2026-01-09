@@ -11,7 +11,7 @@ import time
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QMessageBox, QFileDialog, QWidget, QLabel, QVBoxLayout,
-    QGraphicsOpacityEffect, QInputDialog, QColorDialog, QProgressDialog
+    QGraphicsOpacityEffect, QInputDialog, QColorDialog, QProgressDialog, QAction
 )
 from PyQt5.QtWidgets import QShortcut
 from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, QRect, QPoint
@@ -27,6 +27,7 @@ from editor.view_2d import View2D
 from editor.editor_state import EditorState
 from editor.terrain_editor import TerrainEditorWindow
 from engine.terrain import Terrain
+from editor.debug_console import DebugConsole
 
 
 class Toast(QLabel):
@@ -121,11 +122,18 @@ class Toast(QLabel):
         self.anim.setDirection(QPropertyAnimation.Backward)
         self.anim.setEndValue(0)
         self.anim.start()
-
+        
 class MainWindow(QMainWindow):
     def __init__(self, root_dir):
         super().__init__()
         self.root_dir = root_dir
+        
+
+        self.unsaved_changes = False
+        self.file_path = None
+        self.recent_files = []
+
+
         self.setWindowTitle("RStudio")
         self.setGeometry(100, 100, 1600, 900)
         self.setMinimumSize(1280, 800)
@@ -134,21 +142,24 @@ class MainWindow(QMainWindow):
         self.config_path = 'settings.ini'
         self.load_config()
         self.state = EditorState()
+        self.load_recent_files()
         
         # Initialize selected_objects list for multi-selection support
         if not hasattr(self.state, 'selected_objects'):
             self.state.selected_objects = []
         if not hasattr(self.state, 'selected_object'):
             self.state.selected_object = None
-        
+            
         self.keys_pressed = set()
-        self.file_path = None
         self.grid_visible = True
         self.preview_timer = QTimer()
         self.preview_timer.timeout.connect(self.update_mover_preview)
         self.preview_data = {} 
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
+        self.update_recent_files_menu()
+        self.update_title()
+        
         QTimer.singleShot(0, self.reposition_overlays)
         self.ctrl_tab_shortcut = QShortcut(QKeySequence("Ctrl+Tab"), self)
         self.ctrl_tab_shortcut.activated.connect(self.cycle_2d_view)
@@ -158,6 +169,15 @@ class MainWindow(QMainWindow):
         
         self.terrain = None
         self.terrain_editor_window = None
+
+        self.debug_console = DebugConsole(self)
+        
+        # Only show debug console if setting is enabled (defaults to False)
+        if self.config.getboolean('Display', 'always_show_io_debug', fallback=False):
+            self.debug_console.show()
+        else:
+            self.debug_console.hide()
+            
         self.ui.action_asset_browser.triggered.connect(self.toggle_asset_browser)
 
         # Enable sysmon at launch if configured
@@ -205,10 +225,161 @@ class MainWindow(QMainWindow):
         
         # Show startup tooltip after window is shown
         QTimer.singleShot(1500, self._show_startup_tooltip)
+        
+        # Autosave Timer
+        self.autosave_timer = QTimer(self)
+        self.autosave_timer.timeout.connect(self.autosave)
+        self.setup_autosave()
+
+    def update_title(self):
+        """Updates window title with filename and dirty status."""
+        fname = os.path.basename(self.file_path) if self.file_path else "Untitled"
+        dirty_marker = "*" if self.unsaved_changes else ""
+        self.setWindowTitle(f"RStudio - {fname} {dirty_marker}")
+
+    def mark_as_modified(self):
+        """Mark the project as having unsaved changes."""
+        if not self.unsaved_changes:
+            self.unsaved_changes = True
+            self.update_title()
+
+    def check_unsaved_changes(self):
+        """
+        Checks for unsaved changes. Returns True if it's safe to proceed 
+        (changes saved, discarded, or no changes), False if canceled.
+        """
+        if not self.unsaved_changes:
+            return True
+            
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Question)
+        msg.setWindowTitle("Unsaved Changes")
+        msg.setText("You have unsaved changes.")
+        msg.setInformativeText("Do you want to save your changes?")
+        msg.setStandardButtons(QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        msg.setDefaultButton(QMessageBox.Save)
+        
+        ret = msg.exec_()
+        
+        if ret == QMessageBox.Save:
+            self.save_level()
+            # If save failed (user cancelled file dialog), unsaved is still True
+            return not self.unsaved_changes 
+        elif ret == QMessageBox.Discard:
+            self.unsaved_changes = False
+            return True
+        else: # Cancel
+            return False
+
+    def load_recent_files(self):
+        # Ensure the list exists by default (fixes AttributeError on first run)
+        self.recent_files = [] 
+
+        if self.config.has_section('History') and self.config.has_option('History', 'recent_files'):
+            try:
+                raw_data = self.config.get('History', 'recent_files')
+                if raw_data:
+                    self.recent_files = json.loads(raw_data)
+            except Exception:
+                # Fallback to empty list on JSON error
+                self.recent_files = []
+
+    def save_recent_files(self):
+        if not self.config.has_section('History'):
+            self.config.add_section('History')
+        self.config.set('History', 'recent_files', json.dumps(self.recent_files))
+        self.save_config()
+
+    def add_recent_file(self, file_path):
+        # Normalize path
+        file_path = os.path.abspath(file_path)
+        
+        if file_path in self.recent_files:
+            self.recent_files.remove(file_path)
+        
+        self.recent_files.insert(0, file_path)
+        
+        # Keep only last 5
+        if len(self.recent_files) > 5:
+            self.recent_files = self.recent_files[:5]
+            
+        self.save_recent_files()
+        self.update_recent_files_menu()
+
+    def update_recent_files_menu(self):
+        if not hasattr(self, 'recent_menu'):
+            return
+            
+        self.recent_menu.clear()
+        
+        if not self.recent_files:
+            dummy = QAction("No recent files", self)
+            dummy.setEnabled(False)
+            self.recent_menu.addAction(dummy)
+            return
+            
+        for path in self.recent_files:
+            # Check if file still exists
+            if not os.path.exists(path):
+                continue
+                
+            fname = os.path.basename(path)
+            action = QAction(fname, self)
+            action.setToolTip(path)
+            # Use lambda with default arg to capture variable in loop
+            action.triggered.connect(lambda checked, p=path: self.load_level_file(p))
+            self.recent_menu.addAction(action)
+
+    def setup_autosave(self):
+        enabled = self.config.getboolean('Editor', 'autosave_enabled', fallback=True)
+        interval_min = self.config.getint('Editor', 'autosave_interval', fallback=10)
+        
+        if enabled:
+            # Convert minutes to milliseconds
+            self.autosave_timer.start(interval_min * 60 * 1000)
+        else:
+            self.autosave_timer.stop()
+
+    def autosave(self):
+        """Background autosave to a specific autosave file."""
+        if not self.unsaved_changes:
+            return # Nothing to save
+            
+        try:
+            # Ensure maps directory exists
+            autosave_dir = os.path.join(self.root_dir, "maps")
+            if not os.path.exists(autosave_dir):
+                os.makedirs(autosave_dir)
+                
+            # Use a generic autosave name or derived from current file
+            if self.file_path:
+                base = os.path.splitext(os.path.basename(self.file_path))[0]
+                save_name = f"{base}_autosave.json"
+            else:
+                save_name = "untitled_autosave.json"
+                
+            save_path = os.path.join(autosave_dir, save_name)
+            
+            with open(save_path, 'w') as f:
+                json.dump(self.state.get_level_data(), f, indent=4)
+                
+            print(f"[Autosave] Saved to {save_path}")
+            # Do NOT clear unsaved_changes flag on autosave
+            
+        except Exception as e:
+            print(f"Autosave failed: {e}")
+
 
     def moveEvent(self, event):
         """Handle window move."""
         super().moveEvent(event)
+
+    def toggle_debug_console(self):
+        """Toggle the debug console visibility."""
+        self.debug_console.toggle()
+        # Sync menu checkbox state
+        if hasattr(self, 'debug_console_action'):
+            self.debug_console_action.setChecked(self.debug_console.isVisible())
 
 
     def cycle_2d_view(self):
@@ -259,11 +430,12 @@ class MainWindow(QMainWindow):
         """Toggles the visibility of the Asset Browser dock."""
         if hasattr(self, 'asset_browser_dock'):
             is_visible = self.asset_browser_dock.isVisible()
-            self.asset_browser_dock.setVisible(not is_visible)
-            
-            # Update button state/tooltip if desired
-            state = "Hidden" if is_visible else "Visible"
-            self.statusBar().showMessage(f"Asset Browser {state}", 2000)
+            if is_visible:
+                self.asset_browser_dock.hide()
+            else:
+                self.asset_browser_dock.show()
+                # Ensure it is raised if tabbed or floating
+                self.asset_browser_dock.raise_()
 
     def show_toast(self, message, is_error=False, duration=None):
         """Displays a notification"""
@@ -725,15 +897,27 @@ class MainWindow(QMainWindow):
         QApplication.setFont(font)
 
     def show_settings_dialog(self):
+        # Store old values to check for changes
         old_dpi_setting = self.config.getboolean('Display', 'high_dpi_scaling', fallback=False)
         old_font_size = self.config.getint('Display', 'font_size', fallback=10)
         old_show_caulk = self.config.getboolean('Display', 'show_caulk', fallback=True)
         old_big_toolbar_buttons = self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
+        
+        # New: Autosave setting check
+        old_autosave = self.config.getboolean('Editor', 'autosave_enabled', fallback=True)
+        old_autosave_interval = self.config.getint('Editor', 'autosave_interval', fallback=10)
 
         dialog = SettingsWindow(self.config, self)
         if dialog.exec_():
             self.save_config()
             self.update_shortcuts()
+            
+            # Update Autosave if changed
+            new_autosave = self.config.getboolean('Editor', 'autosave_enabled', fallback=True)
+            new_autosave_interval = self.config.getint('Editor', 'autosave_interval', fallback=10)
+            
+            if new_autosave != old_autosave or new_autosave_interval != old_autosave_interval:
+                self.setup_autosave()
             
             # Track which settings require restart
             restart_required = []
@@ -772,7 +956,49 @@ class MainWindow(QMainWindow):
             self.state.selected_object['textures'][face] = 'caulk.jpg'
         self.update_views()
 
-    def apply_texture_to_brush(self, texture_name=None):
+    def toggle_face_mode(self, active):
+        """Toggles the Face Mode in the 3D view."""
+        if not hasattr(self, 'view_3d'): return
+
+        self.view_3d.face_mode_active = active
+        
+        # Sync button state if triggered via ESC or other means
+        if hasattr(self, 'asset_browser') and hasattr(self.asset_browser, 'face_btn'):
+             self.asset_browser.face_btn.blockSignals(True)
+             self.asset_browser.face_btn.setChecked(active)
+             self.asset_browser.face_btn.blockSignals(False)
+        
+        if active:
+            self.show_toast("FACE MODE: Select a face to texture (Purple)", duration=3000)
+            self.set_selected_object(None) # Deselect current object to clear gizmos and allow clean hover
+            
+            # Change cursor to indicate mode
+            self.view_3d.setCursor(Qt.CrossCursor)
+        else:
+            self.show_toast("FACE MODE: OFF")
+            self.view_3d.hovered_face_info = None # Clear highlight
+            self.view_3d.setCursor(Qt.ArrowCursor)
+            
+        self.view_3d.update()
+
+    def apply_texture_to_specific_face(self, brush, face_name):
+        """Applies currently selected asset texture to the specific face of a brush."""
+        texture_path = self.asset_browser.get_selected_filepath()
+        if not texture_path:
+            self.show_toast("Select a texture first", is_error=True)
+            return
+
+        texture_name = os.path.basename(texture_path)
+        self.save_state()
+        
+        if 'textures' not in brush:
+            brush['textures'] = {}
+
+        brush['textures'][face_name] = texture_name
+        self.update_views()
+        self.show_toast(f"Applied to {face_name}")
+
+    def apply_texture_to_brush(self, texture_name=None, tiled=False):
         if not isinstance(self.state.selected_object, dict):
             QMessageBox.warning(self, "No Brush Selected", "Select a brush to apply the texture to.")
             return
@@ -790,7 +1016,14 @@ class MainWindow(QMainWindow):
             self.state.selected_object['textures'] = {}
         for face in ['south', 'north', 'west', 'east', 'down', 'top']:
             self.state.selected_object['textures'][face] = texture_name
+            
+        # Update tiling property
+        self.state.selected_object['texture_tiling'] = tiled
+        
         self.update_views()
+        
+        mode_str = "Tiled" if tiled else "Stretched"
+        self.show_toast(f"Applied {texture_name} ({mode_str})")
 
     def apply_texture_to_selected_face(self, face_name):
         if not isinstance(self.state.selected_object, dict):
@@ -1024,13 +1257,16 @@ class MainWindow(QMainWindow):
 
     def save_state(self):
         self.state.save_state()
+        self.mark_as_modified() # Mark as dirty when state is saved for undo
 
     def undo(self):
         if self.state.undo():
+            self.mark_as_modified() # Undo changes state
             self.update_all_ui()
 
     def redo(self):
         if self.state.redo():
+            self.mark_as_modified() # Redo changes state
             self.update_all_ui()
 
     def set_render_mode(self, mode):
@@ -1068,8 +1304,14 @@ class MainWindow(QMainWindow):
         msg_box.exec_()
 
     def new_map(self):
+        # Check for unsaved changes
+        if not self.check_unsaved_changes():
+            return
+            
         self.state.clear_scene()
         self.file_path = None
+        self.unsaved_changes = False # Reset dirty flag
+        self.update_title()
         self.update_all_ui()
 
     def show_random_map_dialog(self):
@@ -1492,9 +1734,25 @@ class MainWindow(QMainWindow):
                 if hasattr(self.view_3d, 'game_state') and self.view_3d.game_state:
                     self.view_3d.game_state.set_use_key_pressed()
                 self.keys_pressed.add(event.key())
+            elif event.key() == Qt.Key_QuoteLeft:  # Tilde/backtick key (~)
+                self.toggle_debug_console()
             else:
                 self.keys_pressed.add(event.key())
             return
+
+        # Tilde key toggles debug console (works in both modes)
+        if event.key() == Qt.Key_QuoteLeft:
+            self.toggle_debug_console()
+            return
+
+        # NEW: Handle ESC to exit Face Mode
+        if event.key() == Qt.Key_Escape:
+            if getattr(self.view_3d, 'face_mode_active', False):
+                self.toggle_face_mode(False)
+                return
+            if self.state.selected_object:
+                self.set_selected_object(None)
+                return
 
         # Editor mode key presses below
         if self.state.selected_object:
@@ -1521,10 +1779,6 @@ class MainWindow(QMainWindow):
             if event.key() == Qt.Key_Space:
                 self.clone_selected_object()
                 return
-
-        if event.key() == Qt.Key_Escape and self.state.selected_object:
-            self.set_selected_object(None)
-            return
 
         # G key toggles grid visibility (editor mode only)
         if event.key() == Qt.Key_G:
@@ -1584,7 +1838,9 @@ class MainWindow(QMainWindow):
             self.view_3d.update()
 
     def save_level_as(self):
+        # Ensure 'filePath' is defined here
         filePath, _ = QFileDialog.getSaveFileName(self, "Save Level As", "maps", "JSON Files (*.json)")
+        
         if filePath:
             self.file_path = filePath
             self.save_level()
@@ -1597,18 +1853,31 @@ class MainWindow(QMainWindow):
             with open(self.file_path, 'w') as f:
                 json.dump(self.state.get_level_data(), f, indent=4)
             print(f"Level saved to {self.file_path}")
-            # Success Toast
+            
+            self.unsaved_changes = False
+            self.update_title()
+            self.add_recent_file(self.file_path)
+            
             self.show_toast("Saved!")
         except Exception as e:
-            # Error Toast (Dark Red)
             self.show_toast(f"Error saving: {e}", is_error=True)
             print(f"Error saving level: {e}")
 
     def load_level(self):
-        filePath, _ = QFileDialog.getOpenFileName(self, "Load Level", "maps", "JSON Files (*.json)")
-        if not filePath:
+        """Opens the file dialog to select a level, then loads it."""
+        # 1. Check for unsaved changes first
+        if not self.check_unsaved_changes():
             return
 
+        # 2. Ask user for the file (Defines 'filePath')
+        filePath, _ = QFileDialog.getOpenFileName(self, "Load Level", "maps", "JSON Files (*.json)")
+        
+        # 3. If the user selected a file (didn't cancel), load it
+        if filePath:
+            self.load_level_file(filePath)
+
+    def load_level_file(self, filePath):
+        """Loads the level data from the given path. Used by 'Open' and 'Recent Files'."""
         try:
             with open(filePath, 'r') as f:
                 level_data = json.load(f)
@@ -1656,8 +1925,14 @@ class MainWindow(QMainWindow):
                 self.view_3d.camera.pitch = -15
                 self.view_3d.camera.yaw = -90
 
+            # --- Update Application State ---
             self.file_path = filePath
             self.set_selected_object(None)
+            
+            # Update Recent Files List and Title Bar
+            self.add_recent_file(filePath) 
+            self.unsaved_changes = False
+            self.update_title()
             
             filename = os.path.basename(filePath)
             self.show_toast(f"Loaded {filename}")
@@ -1709,26 +1984,44 @@ class MainWindow(QMainWindow):
         self.view_3d_dock.setFloating(False)
         self.right_dock.setFloating(False)
         self.properties_dock.setFloating(False)
-        self.asset_browser_dock.setFloating(True)
+        self.asset_browser_dock.setFloating(False) # CHANGE: Dock it
         
         self.addDockWidget(Qt.LeftDockWidgetArea, self.scene_hierarchy_dock)
         self.addDockWidget(Qt.RightDockWidgetArea, self.view_3d_dock)
+        
+        # CHANGE: Add Asset Browser to bottom
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.asset_browser_dock)
+        self.asset_browser_dock.setVisible(True)
+
         self.splitDockWidget(self.view_3d_dock, self.right_dock, Qt.Horizontal)
         self.splitDockWidget(self.right_dock, self.properties_dock, Qt.Vertical)
         
+        # Resize logic
         self.resizeDocks([self.view_3d_dock, self.right_dock], [800, 600], Qt.Horizontal)
         self.resizeDocks([self.right_dock, self.properties_dock], [600, 300], Qt.Vertical)
+        
+        # Optional: Set initial height for bottom dock
+        self.resizeDocks([self.view_3d_dock, self.asset_browser_dock], [600, 250], Qt.Vertical)
+
         self.statusBar().showMessage("Layout reset to default.", 2000)
 
     def closeEvent(self, event):
-        # Stop tooltip timer
+        # NEW: Check for unsaved changes
+        if not self.check_unsaved_changes():
+            event.ignore()
+            return
+            
+        # Stop timers
         if hasattr(self, 'tooltip_timer'):
             self.tooltip_timer.stop()
+        if hasattr(self, 'autosave_timer'):
+            self.autosave_timer.stop()
         
-        # Save layout
         self.save_layout()
+
+        if hasattr(self, 'debug_console'):
+            self.debug_console.close()
         
-        # Stop logic thread
         if hasattr(self, 'view_3d') and self.view_3d.logic_thread:
             self.view_3d.logic_thread.stop()
             self.view_3d.logic_thread.join(timeout=1.0)

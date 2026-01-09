@@ -8,6 +8,15 @@ from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QFont
 from editor.things import Thing, Light, Pickup, Monster, Model, Speaker, LogicGate
 
+# I/O System imports
+try:
+    from editor.io_editor_widget import IOEditorWidget, IOInputsWidget
+    from editor.io_system import get_entity_type_for_io, IO_REGISTRY
+    IO_AVAILABLE = True
+except ImportError:
+    IO_AVAILABLE = False
+
+
 class ClickableLineEdit(QLineEdit):
     clicked_while_empty = pyqtSignal()
     def mousePressEvent(self, event):
@@ -37,8 +46,11 @@ class PropertyEditor(QWidget):
         self.set_object(None)
     
     def _find_targeting_sources(self, target_name):
+        """Find all entities that target the given entity name (legacy + I/O)."""
         if not target_name: return []
         sources = []
+        
+        # Check legacy 'target' property on brushes
         for brush in self.editor.state.brushes:
             brush_target = brush.get('target', '')
             if brush_target == target_name:
@@ -48,6 +60,22 @@ class PropertyEditor(QWidget):
                     source_name = brush.get('name', 'unnamed')
                     source_type = 'trigger' if is_trigger else 'mover'
                     sources.append((source_name, source_type))
+            
+            # Also check I/O connections
+            io_connections = brush.get('_io_connections', [])
+            for conn in io_connections:
+                if isinstance(conn, dict) and conn.get('target') == target_name:
+                    source_name = brush.get('name', 'unnamed')
+                    sources.append((source_name, f"I/O: {conn.get('output', '?')}"))
+        
+        # Check I/O connections on Things
+        for thing in self.editor.state.things:
+            io_connections = thing.properties.get('_io_connections', [])
+            for conn in io_connections:
+                if isinstance(conn, dict) and conn.get('target') == target_name:
+                    source_name = thing.properties.get('name', 'unnamed')
+                    sources.append((source_name, f"I/O: {conn.get('output', '?')}"))
+        
         return sources
     
     def _check_target_exists(self, target_name):
@@ -59,17 +87,6 @@ class PropertyEditor(QWidget):
             if thing_name == target_name: return True
         return False
     
-    def _start_connection_from_field(self, obj):
-        """Helper to start connection mode from the UI."""
-        # Fix: Check if obj is a dict (Brush) before using .get()
-        if isinstance(obj, dict):
-            # If it's a brush, ensure it's a trigger or mover
-            if not obj.get('is_trigger') and not obj.get('is_mover'): 
-                return
-        
-        # If it's a LogicGate (or other Thing), we assume it's valid
-        if hasattr(self.editor, 'view_2d'):
-            self.editor.view_2d.start_connection_mode(obj)
 
     def clear_layout(self):
         while self.main_layout.count():
@@ -242,11 +259,89 @@ class PropertyEditor(QWidget):
         appearance_tab = self._create_appearance_tab(brush)
         self.tab_widget.addTab(appearance_tab, "Appearance")
         
+        # === I/O TAB (for triggers, movers, doors) ===
+        if IO_AVAILABLE and (is_trigger or is_mover or is_door):
+            io_tab = self._create_io_tab_for_brush(brush)
+            self.io_tab_index = self.tab_widget.addTab(io_tab, "⚡ I/O")
+        
         content_layout.addWidget(self.tab_widget)
         content_layout.addStretch()
         
         scroll.setWidget(content_widget)
         self.main_layout.addWidget(scroll)
+
+    def _create_io_tab_for_brush(self, brush):
+        """Create I/O editor tab for brushes (triggers, movers, doors)."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(4, 4, 4, 4)
+        
+        # Determine entity type for I/O registry lookup
+        if brush.get('is_trigger'):
+            entity_type = 'trigger'
+        elif brush.get('is_door'):
+            entity_type = 'door'
+        elif brush.get('is_mover'):
+            entity_type = 'mover'
+        else:
+            entity_type = 'brush'
+        
+        # Create I/O editor widget with the ACTUAL brush entity
+        io_editor = IOEditorWidget(
+            entity=brush,  # FIX: Pass the actual brush dict, not the Thing class
+            entity_type=entity_type,
+            editor_state=self.editor.state,
+            editor=self.editor
+        )
+        io_editor.connections_changed.connect(self._on_io_connections_changed)
+        layout.addWidget(io_editor)
+        self._widgets['io_editor'] = io_editor
+        
+        # Add inputs reference section
+        inputs_widget = IOInputsWidget()
+        inputs_widget.set_entity(entity_type)
+        layout.addWidget(inputs_widget)
+        
+        return tab
+
+    def _create_io_tab_for_thing(self, thing):
+        """Create I/O editor tab for Things."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(4, 4, 4, 4)
+        
+        entity_type = get_entity_type_for_io(thing)
+        
+        io_editor = IOEditorWidget(
+            entity=thing,
+            entity_type=entity_type,
+            editor_state=self.editor.state,
+            editor=self.editor
+        )
+        io_editor.connections_changed.connect(self._on_io_connections_changed)
+        layout.addWidget(io_editor)
+        self._widgets['io_editor'] = io_editor
+        
+        # Add inputs reference section
+        inputs_widget = IOInputsWidget()
+        inputs_widget.set_entity(entity_type)
+        layout.addWidget(inputs_widget)
+        
+        return tab
+
+    def _on_io_connections_changed(self):
+        """Called when I/O connections are modified."""
+        # Save state for undo/redo
+        if hasattr(self.editor.state, 'save_state'):
+            self.editor.state.save_state()
+        
+        # Mark document as dirty
+        if hasattr(self.editor, 'mark_dirty'):
+            self.editor.mark_dirty()
+        
+        # Refresh targeting indicators
+        if not self._populating:
+            self.editor.update_all_ui()
 
     def _create_general_tab(self, brush):
         """Create the General tab with type toggles."""
@@ -338,23 +433,6 @@ class PropertyEditor(QWidget):
         form = QFormLayout()
         form.setSpacing(8)
         
-        # Target field
-        target_input = ClickableLineEdit(brush.get('target', ''))
-        target_input.setPlaceholderText("Click to connect...")
-        target_input.clicked_while_empty.connect(lambda: self._start_connection_from_field(brush))
-        
-        has_valid_target = False
-        target_name = brush.get('target', '')
-        if target_name and self._check_target_exists(target_name):
-            has_valid_target = True
-            target_input.setStyleSheet("QLineEdit { background-color: #1a3d1a; border: 2px solid #00AA00; color: #00FF00; font-weight: bold; padding: 4px; border-radius: 3px; }")
-        elif target_name:
-            target_input.setStyleSheet("QLineEdit { background-color: #3d1a1a; border: 2px solid #AA0000; color: #FF6666; font-weight: bold; padding: 4px; border-radius: 3px; }")
-        
-        target_input.editingFinished.connect(lambda: self.update_object_prop('target', target_input.text()))
-        form.addRow("Target:", target_input)
-        self._widgets['target_input'] = target_input
-        
         # Trigger type
         type_combo = QComboBox()
         type_combo.addItems(['Once', 'Multiple'])
@@ -362,8 +440,6 @@ class PropertyEditor(QWidget):
         type_combo.currentTextChanged.connect(lambda t: self.update_object_prop('trigger_type', t))
         form.addRow("Trigger Type:", type_combo)
         self._widgets['trigger_type_combo'] = type_combo
-        
-        layout.addLayout(form)
         
         # Damage section
         damage_group = QGroupBox("Damage")
@@ -407,6 +483,7 @@ class PropertyEditor(QWidget):
         # Show/hide damage amount based on hurt checkbox
         damage_spin.setEnabled(brush.get('hurt', False))
         
+        layout.addLayout(form)
         layout.addWidget(damage_group)
         layout.addStretch()
         return widget
@@ -419,14 +496,6 @@ class PropertyEditor(QWidget):
         
         form = QFormLayout()
         form.setSpacing(8)
-        
-        # Target (for triggering)
-        target_input = ClickableLineEdit(brush.get('target', ''))
-        target_input.setPlaceholderText("Click to connect...")
-        target_input.clicked_while_empty.connect(lambda: self._start_connection_from_field(brush))
-        target_input.editingFinished.connect(lambda: self.update_object_prop('target', target_input.text()))
-        form.addRow("Target:", target_input)
-        self._widgets['mover_target_input'] = target_input
         
         # Speed
         speed_input = QLineEdit(str(brush.get('speed', 64.0)))
@@ -452,6 +521,72 @@ class PropertyEditor(QWidget):
         dir_z = QLineEdit(str(direction[2]))
         for inp in [dir_x, dir_y, dir_z]:
             inp.setFixedWidth(50)
+        
+        def update_direction():
+            try:
+                d = [float(dir_x.text()), float(dir_y.text()), float(dir_z.text())]
+                self.update_object_prop('direction', d)
+            except ValueError: pass
+        
+        dir_x.editingFinished.connect(update_direction)
+        dir_y.editingFinished.connect(update_direction)
+        dir_z.editingFinished.connect(update_direction)
+        
+        dir_layout.addWidget(QLabel("X:")); dir_layout.addWidget(dir_x)
+        dir_layout.addWidget(QLabel("Y:")); dir_layout.addWidget(dir_y)
+        dir_layout.addWidget(QLabel("Z:")); dir_layout.addWidget(dir_z)
+        dir_layout.addStretch()
+        form.addRow("Direction:", dir_widget)
+        self._widgets['dir_x'] = dir_x
+        self._widgets['dir_y'] = dir_y
+        self._widgets['dir_z'] = dir_z
+        
+        layout.addLayout(form)
+        
+        # Options
+        options_group = QGroupBox("Options")
+        options_group.setStyleSheet("""
+            QGroupBox { 
+                font-weight: bold; 
+                color: #F08000; 
+                border: 1px solid #F08000;
+                border-radius: 4px;
+                margin-top: 12px;
+                padding-top: 8px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 8px;
+                padding: 0 4px;
+                background-color: #2b3d3b;
+            }
+        """)
+        options_layout = QVBoxLayout(options_group)
+        
+        start_on_cb = QCheckBox("Start moving immediately")
+        start_on_cb.setStyleSheet(self._checkbox_style())
+        start_on_cb.setChecked(brush.get('start_on', False))
+        start_on_cb.toggled.connect(lambda checked: self.update_object_prop('start_on', checked))
+        options_layout.addWidget(start_on_cb)
+        self._widgets['start_on_cb'] = start_on_cb
+        
+        layout.addWidget(options_group)
+        
+        # Preview button
+        preview_btn = QPushButton("▶ Preview Movement")
+        preview_btn.setCheckable(True)
+        preview_btn.setStyleSheet("""
+            QPushButton { background-color: #425F5D; color: white; border-radius: 4px; padding: 8px; font-weight: bold; }
+            QPushButton:checked { background-color: #0056b3; }
+            QPushButton:hover { background-color: #5a7a82; }
+        """)
+        preview_btn.toggled.connect(self.toggle_mover_preview)
+        layout.addWidget(preview_btn)
+        self._widgets['mover_preview_btn'] = preview_btn
+        
+        layout.addStretch()
+        return widget
         
         def update_direction():
             try:
@@ -1146,6 +1281,8 @@ class PropertyEditor(QWidget):
             if is_trigger:
                 self.tab_widget.setCurrentIndex(self.trigger_tab_index)
         
+        # Rebuild to add/remove I/O tab
+        self.set_object(self.current_object)
         self.editor.update_all_ui()
 
     def on_mover_changed(self, is_mover):
@@ -1163,6 +1300,8 @@ class PropertyEditor(QWidget):
             if is_mover:
                 self.tab_widget.setCurrentIndex(self.mover_tab_index)
         
+        # Rebuild to add/remove I/O tab
+        self.set_object(self.current_object)
         self.editor.update_all_ui()
 
     def on_door_changed(self, is_door):
@@ -1181,6 +1320,8 @@ class PropertyEditor(QWidget):
             if is_door:
                 self.tab_widget.setCurrentIndex(self.door_tab_index)
         
+        # Rebuild to add/remove I/O tab
+        self.set_object(self.current_object)
         self.editor.update_all_ui()
 
     def on_hurt_changed(self, is_hurt):
@@ -1233,6 +1374,18 @@ class PropertyEditor(QWidget):
 
     def populate_for_thing(self, thing):
         """Populate property editor for a Thing."""
+        
+        # Create scrollable content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(4)
+        
+        # Basic properties layout
         layout = QFormLayout()
         
         name_lbl = QLabel("Name:")
@@ -1257,24 +1410,11 @@ class PropertyEditor(QWidget):
             self.add_model_path_widget(layout, thing)
             self.add_vector3_widget(layout, thing, 'scale')
             self.add_vector3_widget(layout, thing, 'rotation')
-
-        if isinstance(thing, LogicGate):
-            # --- Logic Type Dropdown ---
-            type_label = QLabel("Logic Type:")
-            type_combo = QComboBox()
-            type_combo.addItems(['AND', 'OR', 'XOR', 'NAND', 'NOR'])
-            type_combo.setCurrentText(thing.properties.get('logic_type', 'AND'))
-            type_combo.currentTextChanged.connect(lambda t: self.update_object_prop('logic_type', t))
-            layout.addRow(type_label, type_combo)
-
-            # --- Target Field ---
-            target_label = QLabel("Target:")
-            target_input = ClickableLineEdit(thing.properties.get('target', ''))
-            target_input.setPlaceholderText("Object to activate...")
-            # Reuse your existing connection logic
-            target_input.clicked_while_empty.connect(lambda: self._start_connection_from_field(thing))
-            target_input.editingFinished.connect(lambda: self.update_object_prop('target', target_input.text()))
-            layout.addRow(target_label, target_input)
+            
+            if IO_AVAILABLE:
+                io_note = QLabel("💡 Use the I/O tab for advanced targeting")
+                io_note.setStyleSheet("QLabel { color: #88AAFF; font-style: italic; padding: 4px; }")
+                layout.addRow("", io_note)
 
         if isinstance(thing, Light):
             self.add_color_picker_widget(layout, thing, 'colour')
@@ -1289,6 +1429,7 @@ class PropertyEditor(QWidget):
         
         for key, value in sorted(thing.properties.items()):
             if key == 'name': continue
+            if key == '_io_connections': continue  # Skip I/O connections - handled in I/O tab
             if isinstance(thing, Light) and key in ['colour', 'type']: continue
             if isinstance(thing, Model) and key in ['model_path', 'scale', 'rotation', 'type']: continue
             # Skip these - we handle them specially for Pickup
@@ -1304,6 +1445,13 @@ class PropertyEditor(QWidget):
                 layout.addRow(label_text, widget)
             elif isinstance(thing, Speaker) and key == 'sound_file':
                 self.add_sound_file_widget(layout, thing, key, value)
+            # === NEW: Specific handling for Logic Gate Type ===
+            elif isinstance(thing, LogicGate) and key == 'logic_type':
+                widget = QComboBox()
+                widget.addItems(['AND', 'OR', 'XOR', 'NAND', 'NOR'])
+                widget.setCurrentText(value)
+                widget.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
+                layout.addRow("Logic Type:", widget)
             elif isinstance(thing, Pickup) and key == 'item_type':
                 widget = QComboBox()
                 item_types = ['health', 'key', 'gun1']  #add 'gun2' in future update
@@ -1449,7 +1597,29 @@ class PropertyEditor(QWidget):
             
             layout.addRow("", respawn_widget)
         
-        self.main_layout.addLayout(layout)
+        content_layout.addLayout(layout)
+        
+        # === TAB WIDGET FOR I/O (if available) ===
+        if IO_AVAILABLE:
+            entity_type = get_entity_type_for_io(thing)
+            if entity_type and entity_type in IO_REGISTRY:
+                # Create tab widget for I/O
+                self.tab_widget = QTabWidget()
+                self.tab_widget.setStyleSheet("""
+                    QTabBar::tab:selected { background: #F08000; color: white; }
+                    QTabBar::tab { background: #425f5d; color: #ccc; padding: 8px 16px; border: 1px solid #333; }
+                    QTabBar::tab:hover { background: #5a7a82; }
+                """)
+                
+                # Add I/O tab
+                io_tab = self._create_io_tab_for_thing(thing)
+                self.tab_widget.addTab(io_tab, "⚡ I/O")
+                
+                content_layout.addWidget(self.tab_widget)
+        
+        content_layout.addStretch()
+        scroll.setWidget(content_widget)
+        self.main_layout.addWidget(scroll)
 
     def on_respawn_toggled(self, state):
         """Handle respawn checkbox toggle."""
@@ -1629,7 +1799,7 @@ class PropertyEditor(QWidget):
             if not os.path.exists(start_path): os.makedirs(start_path)
             filepath, _ = QFileDialog.getOpenFileName(self, "Select Sound File", start_path, "Sound Files (*.wav *.mp3)")
             if filepath:
-                try: relative_path = os.path.relpath(filepath, 'assets').replace('\\', '/')
+                try: relative_path = os.path.relpath(filepath, ".").replace('\\', '/')
                 except ValueError: relative_path = os.path.basename(filepath)
                 self.update_object_prop(key, relative_path)
                 line_edit.setText(relative_path)

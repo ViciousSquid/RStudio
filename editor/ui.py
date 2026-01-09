@@ -49,6 +49,8 @@ class Ui_MainWindow(object):
         # --- 2. Docking Configuration ---
         MainWindow.setDockOptions(QMainWindow.AnimatedDocks | QMainWindow.AllowNestedDocks | QMainWindow.AllowTabbedDocks)
         MainWindow.setTabPosition(Qt.AllDockWidgetAreas, QTabWidget.North)
+        MainWindow.setCorner(Qt.BottomLeftCorner, Qt.LeftDockWidgetArea)
+        MainWindow.setCorner(Qt.BottomRightCorner, Qt.RightDockWidgetArea)
 
         # Scene Hierarchy Dock (Left)
         MainWindow.scene_hierarchy_dock = QDockWidget("Scene", MainWindow)
@@ -97,27 +99,30 @@ class Ui_MainWindow(object):
             QTabBar::scroller { width: 0px; }
         """)
 
-        # --- 4. Asset Browser Dock ---
+        ## --- 4. Asset Browser Dock ---
         MainWindow.asset_browser_dock = QDockWidget("Asset Browser", MainWindow)
+        MainWindow.asset_browser_dock.setObjectName("AssetBrowserDock") # Added object name for state saving
         texture_path = os.path.join(MainWindow.root_dir, "assets", "textures")
         
         MainWindow.asset_browser = AssetBrowser(texture_path, editor=MainWindow)
         MainWindow.asset_browser.main_window = MainWindow
 
         MainWindow.asset_browser_dock.setWidget(MainWindow.asset_browser)
-        MainWindow.asset_browser_dock.setAllowedAreas(Qt.NoDockWidgetArea)
-        MainWindow.asset_browser_dock.setFloating(True)
-        MainWindow.asset_browser_dock.setVisible(False)
         
-        initial_width = 1280
-        initial_height = 600
-        MainWindow.asset_browser_dock.resize(initial_width, initial_height)
+        # CHANGED: Allow docking and set initial visibility
+        MainWindow.asset_browser_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
+        MainWindow.asset_browser_dock.setFloating(False)
+        MainWindow.asset_browser_dock.setVisible(True)
+
+        # CHANGED: Dock logic to match screenshot (Under 3D View)
+        # We add it to the Right area first (same as others) then split the 3D view vertically
+        MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.asset_browser_dock)
+        MainWindow.splitDockWidget(MainWindow.view_3d_dock, MainWindow.asset_browser_dock, Qt.Vertical)
+
+        # REMOVED: The manual floating window resize/center logic
         
-        main_window_center = MainWindow.geometry().center()
-        MainWindow.asset_browser_dock.move(
-            main_window_center.x() - initial_width // 2,
-            main_window_center.y() - initial_height // 2
-        )
+        # NEW: Set initial height ratio (3D View tall, Browser short)
+        MainWindow.resizeDocks([MainWindow.view_3d_dock, MainWindow.asset_browser_dock], [10000, 1], Qt.Vertical)
 
         # --- 5. Actions Definition ---
         # DEFINED BEFORE create_toolbars so it can be used there
@@ -151,6 +156,10 @@ class Ui_MainWindow(object):
 
         file_menu.addAction(QAction('New Map', MainWindow, shortcut='Ctrl+N', triggered=MainWindow.new_map))
         file_menu.addAction(QAction('&Open...', MainWindow, shortcut='Ctrl+O', triggered=MainWindow.load_level))
+        
+        MainWindow.recent_menu = file_menu.addMenu('Recent')
+        file_menu.addSeparator()
+        
         file_menu.addAction(QAction('&Save', MainWindow, shortcut='Ctrl+S', triggered=MainWindow.save_level))
         file_menu.addAction(QAction('Save &As...', MainWindow, shortcut='Ctrl+Shift+S', triggered=MainWindow.save_level_as))
         file_menu.addSeparator()
@@ -207,6 +216,14 @@ class Ui_MainWindow(object):
         system_monitor_action.setShortcut('F3')
         system_monitor_action.triggered.connect(MainWindow.toggle_system_monitor)
         view_menu.addAction(system_monitor_action)
+
+        # Debug Console action
+        debug_console_action = QAction('Debug Console', MainWindow, checkable=True)
+        debug_console_action.setShortcut('`')  # Tilde/backtick
+        debug_console_action.setToolTip("Toggle I/O debug console (~)")
+        debug_console_action.triggered.connect(MainWindow.toggle_debug_console)
+        view_menu.addAction(debug_console_action)
+        MainWindow.debug_console_action = debug_console_action  # Store reference
 
         modern_action = QAction('Modern (Shaders)', MainWindow, checkable=True, checked=True)
         immediate_action = QAction('Immediate (Legacy)', MainWindow, checkable=True)
