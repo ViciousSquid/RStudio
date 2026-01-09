@@ -1,5 +1,6 @@
 
- <img src="https://github.com/user-attachments/assets/cf016759-f700-4a47-b716-2ed19ae0e6e6" width="900">
+ <img width="2039" height="1171" alt="image" src="https://github.com/user-attachments/assets/0422c267-5131-4306-a25d-cc2f716e5eae" />
+
 
 
 #### A brush-based CSG world editor inspired by QeRadiant and Worldcraft (from the old times!)
