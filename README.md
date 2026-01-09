@@ -7,10 +7,11 @@
 
 #### [Download v1.0.12.5 for Windows](https://github.com/ViciousSquid/RStudio/releases)
 
-* Editor and game engine tightly integrated with unified renderer
-* Custom OpenGL/PyGame engine supports immediate "drop-in and play" (like CryEngine Editor)
-* Real-time lighting with optional stencil shadows and custom physics engine
-* Volumetric fog, glass & water shaders with configurable surface parms
+* **Editor and game engine** tightly integrated with unified renderer
+* **Custom OpenGL/PyGame engine** supports immediate "drop-in and play" (like CryEngine Editor)
+* **Real-time lighting** with optional stencil shadows and custom physics engine
+* **Volumetric fog, glass & water shaders** with configurable surface parms
+* **Entity I/O system** _inspired by Half-Life 2_
 * Terrain generation, moving surfaces, pickups, OBJ model support
 * brushes can be **TRIGGERS** that activate objects in the world (lights, speakers)
 * `json` level format with `magic number` fingerprint
