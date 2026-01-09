@@ -5,7 +5,7 @@
 
 #### A brush-based CSG world editor inspired by QeRadiant and Worldcraft (from the old times!)
 
-#### [Download v1.0.12.5 for Windows](https://github.com/ViciousSquid/RStudio/releases)
+#### [Download v1.0.13.0 for Windows](https://github.com/ViciousSquid/RStudio/releases)
 
 * **Editor and game engine** tightly integrated with unified renderer
 * **Custom OpenGL/PyGame engine** supports immediate "drop-in and play" (like CryEngine Editor)
