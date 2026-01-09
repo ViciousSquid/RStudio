@@ -17,8 +17,9 @@ void main() {
     'simple.frag': """#version 330 core
 out vec4 FragColor;
 uniform vec3 color;
+uniform float alpha;
 void main() {
-    FragColor = vec4(color, 1.0);
+    FragColor = vec4(color, alpha);
 }""",
 
     'lit.vert': """#version 330 core
@@ -62,32 +63,44 @@ void main() {
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
 layout (location = 2) in vec2 aTexCoords;
+
 out vec3 FragPos;
 out vec3 Normal;
 out vec2 TexCoords;
+
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
+uniform vec2 tex_scale; // Controls tiling (1.0 = stretch, >1.0 = repeat)
+
 void main() {
     FragPos = vec3(model * vec4(aPos, 1.0));
     Normal = mat3(transpose(inverse(model))) * aNormal;
-    TexCoords = aTexCoords;
+    
+    // Apply tiling scale to UV coordinates
+    TexCoords = aTexCoords * tex_scale;
+    
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }""",
     'textured.frag': """#version 330 core
 out vec4 FragColor;
+
 in vec3 FragPos;
 in vec3 Normal;
 in vec2 TexCoords;
+
 uniform sampler2D texture_diffuse;
 struct Light { vec3 position; vec3 color; float intensity; float radius; };
 uniform Light lights[8];
 uniform int active_lights;
+
 void main() {
     vec4 texColor = texture(texture_diffuse, TexCoords);
     if(texColor.a < 0.1) discard;
+    
     vec3 norm = normalize(Normal);
-    vec3 result = vec3(0.1) * texColor.rgb;
+    vec3 result = vec3(0.1) * texColor.rgb; // Ambient
+    
     for(int i = 0; i < active_lights; i++) {
         float distance = length(lights[i].position - FragPos);
         if(distance < lights[i].radius) {

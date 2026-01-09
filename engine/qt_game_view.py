@@ -20,6 +20,7 @@ from engine import shaders
 from engine.threaded_game_state import ThreadedGameState, RenderState
 from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
+from editor.debug_console import DebugConsole, get_debug_logger
 
 
 def perspective_projection(fov, aspect, near, far):
@@ -38,7 +39,8 @@ class QtGameView(QOpenGLWidget):
         self.show_triggers_as_solid = False
         self.camera = Camera()
         self.camera.pos = glm.vec3(0, 150, 400)
-        self.grid_size, self.world_size = 16, 1024
+        self.debug_console_window = DebugConsole()
+        self.grid_size, self.world_size = 16, 2048
         self.grid_dirty = True
         self.culling_enabled = True 
         self.selected_object = None
@@ -46,12 +48,10 @@ class QtGameView(QOpenGLWidget):
         self.visibility_system = None
         self.show_visibility_debug = False
         self.grid_visible = True
-        self.shoot_sound = QSoundEffect()
         
-        # Audio setup
-        sound_path = os.path.join(os.getcwd(), 'assets', 'sounds', 'shoot.wav')
-        self.shoot_sound.setSource(QUrl.fromLocalFile(sound_path))
-        self.shoot_sound.setVolume(0.5)
+        # Audio setup: Initialize Sound Pool
+        self.sound_pool = {} # Map of filename -> list of QSoundEffect
+        self._init_sound_system()
 
         # Initialize render mode names mapping for notifications
         self.render_mode_names = {
@@ -71,11 +71,17 @@ class QtGameView(QOpenGLWidget):
             'culled_surfaces': 0
         }
 
-        # Threading
+        # Threading Initialization
         self.game_state = ThreadedGameState()
+        self.game_state.sound_queue = [] 
+        
         self.logic_thread: Optional[LogicThread] = None
         self.use_threading = True 
-        self._thread_started = False
+        self._thread_started = False  # <--- THIS WAS MISSING causing the error
+
+        # Face Mode Initialization
+        self.face_mode_active = False
+        self.hovered_face_info = None
 
         # Input state
         self.mouselook_active = False
@@ -145,7 +151,83 @@ class QtGameView(QOpenGLWidget):
         self.setFocusPolicy(Qt.ClickFocus)
         self.setMouseTracking(True)
 
-    # ... (initializeGL and other methods remain unchanged) ...
+    def _init_sound_system(self):
+        """Preload all sounds in assets/sounds to avoid lag during playback."""
+        sound_dir = os.path.join(os.getcwd(), 'assets', 'sounds')
+        if not os.path.exists(sound_dir):
+            print("Warning: assets/sounds directory not found.")
+            return
+
+        print("Preloading sounds...")
+        count = 0
+        for f in os.listdir(sound_dir):
+            if f.lower().endswith(('.wav', '.mp3')):
+                full_path = os.path.join(sound_dir, f)
+                # Create pool for this file
+                self._preload_sound_file(f, full_path)
+                count += 1
+        
+        # Explicitly ensure shoot.wav is cached even if outside standard scan or needed urgently
+        self.ensure_sound_cached('shoot.wav')
+        
+        print(f"Preloaded {count} sound files.")
+
+    def ensure_sound_cached(self, sound_name):
+        """Public method to force-cache a specific sound (e.g., when a gun is placed)."""
+        if sound_name not in self.sound_pool:
+            # Try to find it in assets/sounds
+            path = os.path.join(os.getcwd(), 'assets', 'sounds', sound_name)
+            if os.path.exists(path):
+                print(f"Caching sound on demand: {sound_name}")
+                self._preload_sound_file(sound_name, path)
+            else:
+                # If specific path lookup fails, just try to create it anyway so QSoundEffect handles the error
+                self._preload_sound_file(sound_name, sound_name)
+
+    def _preload_sound_file(self, name, path, pool_size=4):
+        """Creates a pool of QSoundEffects for a specific file to allow polyphony."""
+        if name in self.sound_pool:
+            return
+
+        self.sound_pool[name] = []
+        url = QUrl.fromLocalFile(path)
+        
+        for _ in range(pool_size):
+            effect = QSoundEffect(self)
+            effect.setSource(url)
+            self.sound_pool[name].append(effect)
+
+    def _get_sound_instance(self, name):
+        """Retrieve an available sound instance from the pool."""
+        # Handle full paths by stripping directory
+        clean_name = os.path.basename(name)
+        
+        # Lazy load if not found (e.g. added during runtime or missed)
+        if clean_name not in self.sound_pool:
+            path = os.path.join(os.getcwd(), 'assets', 'sounds', clean_name)
+            if os.path.exists(path):
+                self._preload_sound_file(clean_name, path)
+            else:
+                return None
+        
+        pool = self.sound_pool[clean_name]
+        
+        # 1. Find an instance that isn't playing
+        for effect in pool:
+            if not effect.isPlaying():
+                return effect
+        
+        # 2. If all are playing, create a new one using the same source (efficient)
+        #    and add it to the pool for future use.
+        if pool:
+            source_url = pool[0].source()
+            new_effect = QSoundEffect(self)
+            new_effect.setSource(source_url)
+            pool.append(new_effect)
+            return new_effect
+            
+        return None
+
     def initializeGL(self):
         gl.glClearColor(0.1, 0.1, 0.15, 1.0)
         try:
@@ -162,6 +244,10 @@ class QtGameView(QOpenGLWidget):
         
         self._start_logic_thread()
         self._init_debug_resources()
+
+        # Show the debug console immediately after loading finishes.
+        if hasattr(self, 'debug_console_window'):
+            QTimer.singleShot(1000, self.debug_console_window.show)
 
     def _init_debug_resources(self):
         try:
@@ -249,12 +335,37 @@ class QtGameView(QOpenGLWidget):
             self.frame_count = 0
             self.last_fps_time = current_time
         self.frame_times.append(delta * 1000.0)
+        self._process_sound_queue()
         if self.use_threading and self.logic_thread:
             self.game_state.set_keys(self.editor.keys_pressed)
             if self.game_state.try_swap(): self.update()
         else: self.update()
 
-    # --- THIS IS THE FIXED METHOD ---
+    def _process_sound_queue(self):
+        """Checks the game state for new sound requests and plays them using pooled objects."""
+        if not hasattr(self.game_state, 'sound_queue'):
+            return
+
+        while self.game_state.sound_queue:
+            # Pop the next sound request
+            request = self.game_state.sound_queue.pop(0)
+            sound_file = request.get('file')
+            volume = request.get('volume', 1.0)
+            
+            if not sound_file:
+                continue
+
+            # Retrieve preloaded instance from pool
+            effect = self._get_sound_instance(sound_file)
+            
+            if effect:
+                effect.setVolume(volume)
+                effect.play()
+            else:
+                # Debug only: warn if sound missing
+                pass
+
+
     def paintGL(self):
         if not self.renderer: return
 
@@ -289,10 +400,9 @@ class QtGameView(QOpenGLWidget):
         
         self.projection_matrix = perspective_projection(self.camera.fov, self._cached_aspect_ratio, 0.1, 10000.0)
 
-        # --- FIX: Set these pointers so _render_bullet_marks can use them ---
+        # Update matrix pointers for raw OpenGL calls
         self._proj_ptr = glm.value_ptr(self.projection_matrix)
         self._view_ptr = glm.value_ptr(self.view_matrix)
-        # -------------------------------------------------------------------
 
         self._render_config["culling_enabled"] = self.culling_enabled
         self._render_config["brush_display_mode"] = self.brush_display_mode
@@ -322,8 +432,11 @@ class QtGameView(QOpenGLWidget):
         if render_state and hasattr(render_state, 'bullet_marks'):
              self._render_bullet_marks(render_state.bullet_marks)
 
-        if getattr(self.editor, 'show_logic_links', True):
-            self.render_logic_connections()
+        # Face Mode Highlight
+        if self.face_mode_active and self.hovered_face_info:
+            brush, face_name = self.hovered_face_info
+            if hasattr(self.renderer, 'draw_face_highlight'):
+                self.renderer.draw_face_highlight(self.projection_matrix, self.view_matrix, brush, face_name)
 
         if render_state:
             self.sysmon_stats['visible_brushes'] = len(render_state.visible_brushes)
@@ -348,9 +461,61 @@ class QtGameView(QOpenGLWidget):
             painter.setFont(QFont("Arial", 10, QFont.Bold))
             painter.drawText(10, self.height() - 40, "LINKS VISIBLE [F1]")
             
+        # Draw Face Mode UI Text
+        if self.face_mode_active:
+            # Fonts
+            font_top = QFont("Arial", 14, QFont.Bold) 
+            font_bot = QFont("Arial", 10, QFont.Bold)
+            
+            msg_top = "Select a FACE for texturing"
+            msg_bot = "Press ESC to cancel"
+            
+            # Metrics for Top Line
+            painter.setFont(font_top)
+            mt = painter.fontMetrics()
+            wt = mt.horizontalAdvance(msg_top)
+            ht = mt.height()
+            
+            # Metrics for Bottom Line
+            painter.setFont(font_bot)
+            mb = painter.fontMetrics()
+            wb = mb.horizontalAdvance(msg_bot)
+            hb = mb.height()
+            
+            # Layout
+            cx = self.width() // 2
+            margin_bottom = 30
+            spacing = 5
+            padding_x = 20
+            padding_y = 10
+            
+            total_text_h = ht + hb + spacing
+            box_w = max(wt, wb) + (padding_x * 2)
+            box_h = total_text_h + (padding_y * 2)
+            
+            rect_x = cx - box_w // 2
+            rect_y = self.height() - box_h - margin_bottom
+            
+            # Background
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(0, 0, 0, 180))
+            painter.drawRoundedRect(rect_x, rect_y, box_w, box_h, 8, 8)
+            
+            # Draw Text
+            painter.setPen(QColor(255, 255, 255))
+            
+            # Draw Top Line
+            painter.setFont(font_top)
+            # Center horizontally relative to box, vertical offset includes padding + ascent
+            painter.drawText(rect_x + (box_w - wt)//2, rect_y + padding_y + mt.ascent(), msg_top)
+            
+            # Draw Bottom Line
+            painter.setPen(QColor(200, 200, 200)) # Slightly dimmer
+            painter.setFont(font_bot)
+            painter.drawText(rect_x + (box_w - wb)//2, rect_y + padding_y + ht + spacing + mb.ascent(), msg_bot)
+
         painter.end()
 
-    # ... (Rest of the class methods: _render_bullet_marks, render_logic_connections, etc. remain the same) ...
     def _render_bullet_marks(self, marks):
         """Draw simple black dots at hit locations."""
         if not marks or 'simple' not in self.renderer.shaders: return
@@ -390,54 +555,6 @@ class QtGameView(QOpenGLWidget):
         gl.glBindVertexArray(0)
         gl.glDisable(gl.GL_BLEND)
 
-    def render_logic_connections(self):
-        """Draws connections using modern OpenGL (Core Profile Compatible)."""
-        if not self.debug_shader or not self.debug_vao: return
-        gl.glDisable(gl.GL_DEPTH_TEST)
-        name_to_pos = {}
-        for b in self.editor.state.brushes:
-            if b.get('name'): name_to_pos[b['name']] = b['pos']
-        for t in self.editor.state.things:
-            t_name = getattr(t, 'name', t.properties.get('name'))
-            if t_name: name_to_pos[t_name] = t.pos
-        logic_lines = []
-        trigger_lines = []
-        for t in self.editor.state.things:
-            tgt = t.properties.get('target')
-            if tgt and tgt in name_to_pos:
-                start = t.pos
-                end = name_to_pos[tgt]
-                is_gate = t.properties.get('type') == 'logic_gate'
-                line_data = [start[0], start[1], start[2], end[0], end[1], end[2]]
-                if is_gate: logic_lines.extend(line_data)
-                else: trigger_lines.extend(line_data)
-        for b in self.editor.state.brushes:
-            tgt = b.get('target')
-            if tgt and tgt in name_to_pos:
-                start = b['pos']
-                end = name_to_pos[tgt]
-                trigger_lines.extend([start[0], start[1], start[2], end[0], end[1], end[2]])
-        gl.glUseProgram(self.debug_shader)
-        view_loc = gl.glGetUniformLocation(self.debug_shader, "view")
-        proj_loc = gl.glGetUniformLocation(self.debug_shader, "projection")
-        color_loc = gl.glGetUniformLocation(self.debug_shader, "color")
-        gl.glUniformMatrix4fv(view_loc, 1, gl.GL_FALSE, glm.value_ptr(self.view_matrix))
-        gl.glUniformMatrix4fv(proj_loc, 1, gl.GL_FALSE, glm.value_ptr(self.projection_matrix))
-        gl.glBindVertexArray(self.debug_vao)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.debug_vbo)
-        if logic_lines:
-            data = np.array(logic_lines, dtype=np.float32)
-            gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data.nbytes, data)
-            gl.glUniform3f(color_loc, 1.0, 1.0, 0.0)
-            gl.glDrawArrays(gl.GL_LINES, 0, len(logic_lines)//3)
-        if trigger_lines:
-            data = np.array(trigger_lines, dtype=np.float32)
-            gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data.nbytes, data)
-            gl.glUniform3f(color_loc, 0.0, 1.0, 1.0)
-            gl.glDrawArrays(gl.GL_LINES, 0, len(trigger_lines)//3)
-        gl.glBindVertexArray(0)
-        gl.glUseProgram(0)
-        gl.glEnable(gl.GL_DEPTH_TEST)
 
     def keyPressEvent(self, event):
         def check_key(cfg_key, default):
@@ -844,6 +961,44 @@ class QtGameView(QOpenGLWidget):
                 closest_brush = brush
         return closest_thing if closest_thing else closest_brush
 
+    def get_brush_face_at_coords(self, x, y):
+        """Raycasts to find the closest brush face under the mouse coordinates."""
+        ray_o, ray_d = self.get_ray_from_mouse(x, y)
+        best_t = float('inf')
+        best_hit = None # (brush, face_name)
+        
+        for brush in self.editor.state.brushes:
+            if brush.get('hidden', False): continue
+            
+            # 1. AABB intersection
+            pos, size = glm.vec3(brush['pos']), glm.vec3(brush['size'])
+            bmin, bmax = pos - size/2.0, pos + size/2.0
+            hit_box, t_box = self.intersect_ray_aabb(ray_o, ray_d, bmin, bmax)
+            
+            if hit_box and t_box < best_t:
+                # 2. Determine which face was hit
+                hit_pt = ray_o + ray_d * t_box
+                local = hit_pt - pos
+                half = size * 0.5
+                
+                # Normalize 0..1 relative to half-extents
+                # Add small epsilon to avoid div/0
+                rel = abs(local) / (half + 0.0001) 
+                
+                # The component closest to 1.0 indicates the axis of the face
+                face = 'north'
+                if rel.x > rel.y and rel.x > rel.z:
+                    face = 'east' if local.x > 0 else 'west'
+                elif rel.y > rel.x and rel.y > rel.z:
+                    face = 'top' if local.y > 0 else 'down'
+                else:
+                    face = 'north' if local.z > 0 else 'south'
+                
+                best_t = t_box
+                best_hit = (brush, face)
+                
+        return best_hit
+
     def mousePressEvent(self, event):
         if self.debug_mode_active and event.button() == Qt.LeftButton:
             if self.debug_window_rect.contains(event.pos()):
@@ -851,19 +1006,32 @@ class QtGameView(QOpenGLWidget):
                     self.debug_mode_active = False
                     if self.play_mode: QApplication.setOverrideCursor(Qt.BlankCursor)
                 return
+        
+        # Face Mode Click - Apply Texture (Left Click Only)
+        if self.face_mode_active and event.button() == Qt.LeftButton:
+            if self.hovered_face_info:
+                brush, face = self.hovered_face_info
+                self.editor.apply_texture_to_specific_face(brush, face)
+            return
+
+        # Legacy Face Selection (Ctrl+Click) - Keep compatibility
+        if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ControlModifier and not self.play_mode:
+            face = self.get_face_at(event.pos())
+            if face: self.editor.selected_face = face; self.update(); return
+
         if self.play_mode and event.button() == Qt.LeftButton:
             render_state = self.game_state.get_render_state()
             active_weapon = getattr(render_state, 'active_weapon', None)
             if active_weapon:
                 self.game_state.queue_shot()
-                if self.shoot_sound.status() == QSoundEffect.Ready: self.shoot_sound.play()
+                effect = self._get_sound_instance('shoot.wav')
+                if effect: effect.play()
                 return 
-        if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ControlModifier and not self.play_mode:
-            face = self.get_face_at(event.pos())
-            if face: self.editor.selected_face = face; self.update(); return
+
         if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ShiftModifier and not self.play_mode:
             obj = self.get_object_at_3d(event.x(), event.y())
             if obj: self.editor.save_state(); self.editor.set_selected_object(obj); self.update(); return
+            
         if event.button() == Qt.LeftButton and self.editor.state.selected_object and not self.play_mode:
             obj_pos = self.get_selected_object_pos()
             if obj_pos:
@@ -883,21 +1051,29 @@ class QtGameView(QOpenGLWidget):
                     self.drag_start_on_axis = start_pt
                     self.setCursor(Qt.ClosedHandCursor)
                     return
+        
+        # Right click enables mouselook (works in Face Mode because face logic only traps LeftButton)
         if not self.play_mode and event.button() == Qt.RightButton:
             self.mouselook_active = True
             self.last_mouse_pos = event.pos()
             self.setCursor(Qt.BlankCursor)
+            
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if self.is_dragging_gizmo:
-            ray_o, ray_d = self.get_ray_from_mouse(event.x(), event.y())
-            axis_vec = {'x': glm.vec3(1,0,0), 'y': glm.vec3(0,1,0), 'z': glm.vec3(0,0,1)}[self.gizmo_drag_axis]
-            pt, _ = self.intersect_ray_with_axis(ray_o, ray_d, self.gizmo_object_start_pos, axis_vec)
-            if pt:
-                diff = pt - self.drag_start_on_axis
-                self.set_selected_object_pos(self.gizmo_object_start_pos + diff)
+        # 1. Handle Mouselook (Priority over Face Hover)
+        # This ensures we can look around while holding RMB even in face mode
+        if self.mouselook_active:
+            dx, dy = event.x() - self.last_mouse_pos.x(), event.y() - self.last_mouse_pos.y()
+            if self.use_threading and self.logic_thread: self.game_state.set_mouse_delta(float(dx), float(dy))
+            else: self.camera.rotate(dx, dy)
+            center = self.mapToGlobal(self.rect().center())
+            QCursor.setPos(center)
+            self.last_mouse_pos = self.mapFromGlobal(center)
+            self.editor.update_views()
             return
+
+        # 2. Handle Play Mode Mouse
         if self.play_mode:
             if self.debug_mode_active: return
             cp = event.pos()
@@ -908,15 +1084,23 @@ class QtGameView(QOpenGLWidget):
             QCursor.setPos(center)
             self.last_mouse_pos = self.mapFromGlobal(center)
             return
-        if self.mouselook_active:
-            dx, dy = event.x() - self.last_mouse_pos.x(), event.y() - self.last_mouse_pos.y()
-            if self.use_threading and self.logic_thread: self.game_state.set_mouse_delta(float(dx), float(dy))
-            else: self.camera.rotate(dx, dy)
-            center = self.mapToGlobal(self.rect().center())
-            QCursor.setPos(center)
-            self.last_mouse_pos = self.mapFromGlobal(center)
-            self.editor.update_views()
+
+        # 3. Handle Gizmo Drag
+        if self.is_dragging_gizmo:
+            ray_o, ray_d = self.get_ray_from_mouse(event.x(), event.y())
+            axis_vec = {'x': glm.vec3(1,0,0), 'y': glm.vec3(0,1,0), 'z': glm.vec3(0,0,1)}[self.gizmo_drag_axis]
+            pt, _ = self.intersect_ray_with_axis(ray_o, ray_d, self.gizmo_object_start_pos, axis_vec)
+            if pt:
+                diff = pt - self.drag_start_on_axis
+                self.set_selected_object_pos(self.gizmo_object_start_pos + diff)
             return
+
+        # 4. Handle Face Mode Hover (Lowest priority for movement)
+        if self.face_mode_active:
+            self.hovered_face_info = self.get_brush_face_at_coords(event.x(), event.y())
+            self.update() # Force redraw to show highlight
+            return
+        
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):

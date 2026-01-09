@@ -27,12 +27,12 @@ class ShaderLoader:
     def _ensure_defaults(self):
         for filename, source in DEFAULT_SHADERS.items():
             filepath = os.path.join(self.shader_dir, filename)
-            if not os.path.exists(filepath):
-                try:
-                    with open(filepath, 'w') as f:
-                        f.write(source)
-                except Exception as e:
-                    print(f"Error generating shader {filename}: {e}")
+            # FORCE WRITE: Ensure shaders are updated if code changes
+            try:
+                with open(filepath, 'w') as f:
+                    f.write(source)
+            except Exception as e:
+                print(f"Error generating shader {filename}: {e}")
 
     def _read_source(self, filename):
         filepath = os.path.join(self.shader_dir, filename)
@@ -179,11 +179,11 @@ class Renderer:
                 shader = self.shader_loader.compile_shader_program(*files)
                 self.shaders[name] = shader
                 self.uniforms[name] = UniformCache(shader)
-            
-            self.uniforms['simple'].preload(['projection', 'view', 'model', 'color'])
+
+            self.uniforms['simple'].preload(['projection', 'view', 'model', 'color', 'alpha'])
             self._preload_lit_uniforms('lit')
             self._preload_lit_uniforms('textured')
-            self.uniforms['textured'].preload(['texture_diffuse'])
+            self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale'])
             self.uniforms['sprite'].preload(['projection', 'view', 'sprite_texture', 'sprite_pos_world', 'sprite_size'])
             self.uniforms['shadow_volume'].preload(['projection', 'view', 'model', 'light_pos'])
             self._preload_lit_uniforms('fog')
@@ -236,6 +236,90 @@ class Renderer:
         self.load_texture('caulk', 'textures')
         self._proj_ptr = None
         self._view_ptr = None
+
+    def draw_face_highlight(self, projection, view, brush, face_name):
+        """Draws a highlighted quad over a specific face of a brush."""
+        if 'simple' not in self.shaders: return
+        shader, uniforms = self.shaders['simple'], self.uniforms['simple']
+        gl.glUseProgram(shader)
+        
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
+        gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
+        
+        # Configure Blending
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        
+        # Color: Purple
+        gl.glUniform3f(uniforms['color'], 0.8, 0.2, 0.9) 
+        
+        # Alpha: 0.4 (60% transparent)
+        gl.glUniform1f(uniforms['alpha'], 0.4) 
+        
+        pos, size = brush['pos'], brush['size']
+        hx, hy, hz = size[0]/2, size[1]/2, size[2]/2
+        cx, cy, cz = pos[0], pos[1], pos[2]
+        
+        bias = 0.5 
+        
+        verts = []
+        if face_name == 'north': # +Z
+            z = cz + hz + bias
+            verts = [cx-hx, cy-hy, z,  cx+hx, cy-hy, z,  cx+hx, cy+hy, z,
+                     cx-hx, cy-hy, z,  cx+hx, cy+hy, z,  cx-hx, cy+hy, z]
+        elif face_name == 'south': # -Z
+            z = cz - hz - bias
+            verts = [cx+hx, cy-hy, z,  cx-hx, cy-hy, z,  cx-hx, cy+hy, z,
+                     cx+hx, cy-hy, z,  cx-hx, cy+hy, z,  cx+hx, cy+hy, z]
+        elif face_name == 'east': # +X
+            x = cx + hx + bias
+            verts = [x, cy-hy, cz+hz,  x, cy-hy, cz-hz,  x, cy+hy, cz-hz,
+                     x, cy-hy, cz+hz,  x, cy+hy, cz-hz,  x, cy+hy, cz+hz]
+        elif face_name == 'west': # -X
+            x = cx - hx - bias
+            verts = [x, cy-hy, cz-hz,  x, cy-hy, cz+hz,  x, cy+hy, cz+hz,
+                     x, cy-hy, cz-hz,  x, cy+hy, cz+hz,  x, cy+hy, cz-hz]
+        elif face_name == 'top': # +Y
+            y = cy + hy + bias
+            verts = [cx-hx, y, cz+hz,  cx+hx, y, cz+hz,  cx+hx, y, cz-hz,
+                     cx-hx, y, cz+hz,  cx+hx, y, cz-hz,  cx-hx, y, cz-hz]
+        elif face_name == 'down': # -Y
+            y = cy - hy - bias
+            verts = [cx-hx, y, cz-hz,  cx+hx, y, cz-hz,  cx+hx, y, cz+hz,
+                     cx-hx, y, cz-hz,  cx+hx, y, cz+hz,  cx-hx, y, cz+hz]
+            
+        if not verts: return
+
+        v_data = np.array(verts, dtype=np.float32)
+        
+        if not hasattr(self, 'face_highlight_vao'):
+            self.face_highlight_vao = gl.glGenVertexArrays(1)
+            self.face_highlight_vbo = gl.glGenBuffers(1)
+            gl.glBindVertexArray(self.face_highlight_vao)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.face_highlight_vbo)
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, 6 * 3 * 4, None, gl.GL_DYNAMIC_DRAW) 
+            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+            gl.glEnableVertexAttribArray(0)
+            gl.glBindVertexArray(0)
+            
+        gl.glBindVertexArray(self.face_highlight_vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.face_highlight_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, v_data.nbytes, v_data)
+        
+        # Draw transparent fill
+        gl.glDrawArrays(gl.GL_TRIANGLES, 0, 6)
+        
+        # Draw outline
+        gl.glUniform3f(uniforms['color'], 1.0, 1.0, 1.0) # White
+        gl.glUniform1f(uniforms['alpha'], 1.0) # Opaque outline
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
+        gl.glDrawArrays(gl.GL_TRIANGLES, 0, 6)
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        
+        gl.glBindVertexArray(0)
+        gl.glDisable(gl.GL_BLEND)
+        gl.glUseProgram(0)
 
     def _preload_lit_uniforms(self, shader_name):
         uniforms = self.uniforms[shader_name]
@@ -1000,6 +1084,7 @@ class Renderer:
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
         gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
         gl.glUniform3f(uniforms['color'], 0.2, 0.2, 0.2)
+        gl.glUniform1f(uniforms['alpha'], 1.0)
         gl.glBindVertexArray(self.vaos['grid']); gl.glDrawArrays(gl.GL_LINES, 0, grid_indices_count); gl.glBindVertexArray(0)
 
     def draw_lit_brushes(self, projection, view, camera_pos, brushes, lights, config, is_transparent_pass=False):
@@ -1040,35 +1125,73 @@ class Renderer:
         if not brushes or 'textured' not in self.shaders: return
         visible = self._cull_brushes(projection, view, camera_pos, brushes)
         if not visible: return
+        
         shader, uniforms = self.shaders['textured'], self.uniforms['textured']
-        gl.glUseProgram(shader); gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl.glUseProgram(shader)
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        
         self._set_light_uniforms_cached('textured', lights)
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
-        gl.glActiveTexture(gl.GL_TEXTURE0); gl.glUniform1i(uniforms['texture_diffuse'], 0)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(uniforms['texture_diffuse'], 0)
         gl.glBindVertexArray(self.vaos['cube'])
         
         model_loc = uniforms['model']
-        color_loc = getattr(uniforms, 'object_color', None) # Check if shader has this, usually modulated by texture
+        tex_scale_loc = uniforms._cache.get('tex_scale', -1) 
+        if tex_scale_loc == -1:
+            tex_scale_loc = gl.glGetUniformLocation(shader, "tex_scale")
         
         batches = defaultdict(list)
+        is_play = config.get('play_mode', False)
+
         for brush in visible:
             for i, key in enumerate(['south', 'north', 'west', 'east', 'down', 'top']):
                 tex_name = brush.get('textures', {}).get(key, 'default.png')
+                
+                # Culling Logic
                 if tex_name == 'caulk.jpg': continue
+                # NEW: Skip 'nodraw.jpg' faces only when in Play Mode
+                if is_play and tex_name == 'nodraw.jpg': continue
+
                 tex_id = self.texture_manager.get(os.path.join('textures', tex_name)) or self.load_texture_callback(tex_name, 'textures')
                 batches[tex_id].append((brush, i))
                 
         current_tex = None
         for tex_id, items in batches.items():
-            if tex_id != current_tex: gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id); current_tex = tex_id
+            if tex_id != current_tex: 
+                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                current_tex = tex_id
+                
             for brush, face_idx in items:
                 self.render_stats.visible_tris += 2
                 
                 model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
                 gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+                
+                if tex_scale_loc != -1:
+                    if brush.get('texture_tiling', False):
+                        size = brush['size']
+                        scale_x, scale_y = 1.0, 1.0
+                        tex_unit_size = 128.0 
+                        
+                        if face_idx == 0 or face_idx == 1: # South/North
+                            scale_x = size[0] / tex_unit_size
+                            scale_y = size[1] / tex_unit_size
+                        elif face_idx == 2 or face_idx == 3: # West/East
+                            scale_x = size[2] / tex_unit_size
+                            scale_y = size[1] / tex_unit_size
+                        elif face_idx == 4 or face_idx == 5: # Down/Top
+                            scale_x = size[0] / tex_unit_size
+                            scale_y = size[2] / tex_unit_size
+                            
+                        gl.glUniform2f(tex_scale_loc, scale_x, scale_y)
+                    else:
+                        gl.glUniform2f(tex_scale_loc, 1.0, 1.0)
+                
                 gl.glDrawArrays(gl.GL_TRIANGLES, face_idx * 6, 6)
                 self.render_stats.draw_calls += 1
+                
         gl.glBindVertexArray(0)
 
 
@@ -1081,27 +1204,17 @@ class Renderer:
         model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
         gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
         gl.glUniform3f(uniforms['color'], 1.0, 1.0, 0.0)
+        gl.glUniform1f(uniforms['alpha'], 1.0) # Opaque
         
-        # Draw only the 12 edges of the cube (no diagonals)
-        # Create edge VAO if not exists
         if not hasattr(self, '_edge_vao') or self._edge_vao is None:
             # 8 corners of unit cube, 12 edges as line pairs
             edge_vertices = np.array([
-                # Bottom face edges
-                -0.5, -0.5, -0.5,  0.5, -0.5, -0.5,  # edge 1
-                 0.5, -0.5, -0.5,  0.5, -0.5,  0.5,  # edge 2
-                 0.5, -0.5,  0.5, -0.5, -0.5,  0.5,  # edge 3
-                -0.5, -0.5,  0.5, -0.5, -0.5, -0.5,  # edge 4
-                # Top face edges
-                -0.5,  0.5, -0.5,  0.5,  0.5, -0.5,  # edge 5
-                 0.5,  0.5, -0.5,  0.5,  0.5,  0.5,  # edge 6
-                 0.5,  0.5,  0.5, -0.5,  0.5,  0.5,  # edge 7
-                -0.5,  0.5,  0.5, -0.5,  0.5, -0.5,  # edge 8
-                # Vertical edges
-                -0.5, -0.5, -0.5, -0.5,  0.5, -0.5,  # edge 9
-                 0.5, -0.5, -0.5,  0.5,  0.5, -0.5,  # edge 10
-                 0.5, -0.5,  0.5,  0.5,  0.5,  0.5,  # edge 11
-                -0.5, -0.5,  0.5, -0.5,  0.5,  0.5,  # edge 12
+                -0.5, -0.5, -0.5,  0.5, -0.5, -0.5,  0.5, -0.5, -0.5,  0.5, -0.5,  0.5,
+                 0.5, -0.5,  0.5, -0.5, -0.5,  0.5, -0.5, -0.5,  0.5, -0.5, -0.5, -0.5,
+                -0.5,  0.5, -0.5,  0.5,  0.5, -0.5,  0.5,  0.5, -0.5,  0.5,  0.5,  0.5,
+                 0.5,  0.5,  0.5, -0.5,  0.5,  0.5, -0.5,  0.5,  0.5, -0.5,  0.5, -0.5,
+                -0.5, -0.5, -0.5, -0.5,  0.5, -0.5,  0.5, -0.5, -0.5,  0.5,  0.5, -0.5,
+                 0.5, -0.5,  0.5,  0.5,  0.5,  0.5, -0.5, -0.5,  0.5, -0.5,  0.5,  0.5,
             ], dtype=np.float32)
             self._edge_vao = gl.glGenVertexArrays(1)
             gl.glBindVertexArray(self._edge_vao)
@@ -1114,7 +1227,7 @@ class Renderer:
         
         gl.glLineWidth(1.0)
         gl.glBindVertexArray(self._edge_vao)
-        gl.glDrawArrays(gl.GL_LINES, 0, 24)  # 12 edges * 2 vertices
+        gl.glDrawArrays(gl.GL_LINES, 0, 24) 
         gl.glBindVertexArray(0)
 
     def draw_sprites(self, projection, view, things_to_draw, sprite_textures, instance_textures=None):
@@ -1223,6 +1336,9 @@ class Renderer:
         pos_vec = glm.vec3(*position) if isinstance(position, (list, tuple)) else position
         base = glm.scale(glm.translate(self._identity_mat4, pos_vec), glm.vec3(32.0))
         model_loc, color_loc = uniforms['model'], uniforms['color']
+        
+        gl.glUniform1f(uniforms['alpha'], 1.0) # Opaque
+        
         gl.glBindVertexArray(self.vao_gizmo_lines)
         gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(base))
         for i, c in enumerate([(1,0,0), (0,1,0), (0,0,1)]):
