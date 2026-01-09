@@ -129,6 +129,16 @@ dark_stylesheet = """
         padding-top: 3px;
         padding-bottom: 3px;
     }
+    /* NEW: Make control buttons always visible */
+    QDockWidget::close-button, QDockWidget::float-button {
+        background-color: #444;
+        border: 1px solid #666;
+        padding: 2px;
+        margin: 1px;
+    }
+    QDockWidget::close-button:hover, QDockWidget::float-button:hover {
+        background-color: #666;
+    }
     QMenuBar {
         background-color: #4a4a4a;
         color: #f0f0f0;
