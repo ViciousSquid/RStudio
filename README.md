@@ -15,4 +15,4 @@
 * Terrain generation, moving surfaces, pickups, OBJ model support
 * brushes can be **TRIGGERS** that activate objects in the world (lights, speakers)
 * `json` level format with `magic number` fingerprint
-
+* Fully modular and open source (MIT License)
