@@ -166,23 +166,7 @@ class QtGameView(QOpenGLWidget):
                 # Create pool for this file
                 self._preload_sound_file(f, full_path)
                 count += 1
-        
-        # Explicitly ensure shoot.wav is cached even if outside standard scan or needed urgently
-        self.ensure_sound_cached('shoot.wav')
-        
         print(f"Preloaded {count} sound files.")
-
-    def ensure_sound_cached(self, sound_name):
-        """Public method to force-cache a specific sound (e.g., when a gun is placed)."""
-        if sound_name not in self.sound_pool:
-            # Try to find it in assets/sounds
-            path = os.path.join(os.getcwd(), 'assets', 'sounds', sound_name)
-            if os.path.exists(path):
-                print(f"Caching sound on demand: {sound_name}")
-                self._preload_sound_file(sound_name, path)
-            else:
-                # If specific path lookup fails, just try to create it anyway so QSoundEffect handles the error
-                self._preload_sound_file(sound_name, sound_name)
 
     def _preload_sound_file(self, name, path, pool_size=4):
         """Creates a pool of QSoundEffects for a specific file to allow polyphony."""
@@ -234,7 +218,9 @@ class QtGameView(QOpenGLWidget):
             pass
         except: pass
 
-        self.renderer = Renderer(self.load_texture, self.grid_size, self.world_size)
+        # Pass config to renderer for ARM mode and shadow settings
+        config = getattr(self.editor, 'config', None)
+        self.renderer = Renderer(self.load_texture, self.grid_size, self.world_size, config)
         self.set_cull_distance(self.cull_distance)
         
         self._preload_assets()

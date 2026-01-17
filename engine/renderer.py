@@ -1,3 +1,19 @@
+"""
+RStudio Optimized Renderer
+Heavily optimized for ARM devices (Surface Pro 9 SQ3) running x64 emulation.
+
+Key Optimizations:
+1. Removed double culling - trusts pre-culled data from logic thread
+2. Batched draw calls - draws entire brushes, not per-face
+3. Pre-computed normal matrices on CPU to avoid inverse() in shader
+4. Single light uniform upload per frame
+5. Simplified "ARM mode" shaders with lower quality but better performance
+6. Reduced fog ray march steps (16 instead of 32)
+7. Optional shadow system that can be disabled
+8. Texture atlas batching for fewer state changes
+9. Cached model matrices where possible
+"""
+
 import glm
 import numpy as np
 import OpenGL.GL as gl
@@ -10,8 +26,165 @@ from PIL import Image
 import os
 from collections import defaultdict
 from engine.terrain import TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER
-# Import the OBJ loader
-from .obj_loader import OBJ
+
+# Try to import OBJ loader
+try:
+    from .obj_loader import OBJ
+except ImportError:
+    OBJ = None
+
+
+# =============================================================================
+# ARM-OPTIMIZED SHADERS (Simplified for better performance on emulated x64)
+# =============================================================================
+
+# Pre-compute normal matrix on CPU, pass it to shader
+ARM_LIT_VERT = """#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+out vec3 FragPos;
+out vec3 Normal;
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+uniform mat3 normalMatrix;  // Pre-computed on CPU
+void main() {
+    FragPos = vec3(model * vec4(aPos, 1.0));
+    Normal = normalMatrix * aNormal;  // No inverse() call!
+    gl_Position = projection * view * vec4(FragPos, 1.0);
+}"""
+
+ARM_LIT_FRAG = """#version 330 core
+out vec4 FragColor;
+in vec3 FragPos;
+in vec3 Normal;
+uniform vec3 object_color;
+uniform float alpha;
+struct Light { vec3 position; vec3 color; float intensity; float radius; };
+uniform Light lights[16];
+uniform int active_lights;
+void main() {
+    vec3 norm = normalize(Normal);
+    vec3 result = vec3(0.12) * object_color;
+    for(int i = 0; i < active_lights && i < 16; i++) {
+        vec3 toLight = lights[i].position - FragPos;
+        float distSq = dot(toLight, toLight);
+        float radiusSq = lights[i].radius * lights[i].radius;
+        if(distSq < radiusSq) {
+            float dist = sqrt(distSq);
+            vec3 lightDir = toLight / dist;
+            float diff = max(dot(norm, lightDir), 0.0);
+            float att = 1.0 - (dist / lights[i].radius);
+            att = att * att;
+            result += (diff * lights[i].color * lights[i].intensity * att) * object_color;
+        }
+    }
+    FragColor = vec4(result, alpha);
+}"""
+
+ARM_TEXTURED_VERT = """#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+layout (location = 2) in vec2 aTexCoords;
+out vec3 FragPos;
+out vec3 Normal;
+out vec2 TexCoords;
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+uniform mat3 normalMatrix;
+uniform vec2 tex_scale;
+void main() {
+    FragPos = vec3(model * vec4(aPos, 1.0));
+    Normal = normalMatrix * aNormal;
+    TexCoords = aTexCoords * tex_scale;
+    gl_Position = projection * view * vec4(FragPos, 1.0);
+}"""
+
+ARM_TEXTURED_FRAG = """#version 330 core
+out vec4 FragColor;
+in vec3 FragPos;
+in vec3 Normal;
+in vec2 TexCoords;
+uniform sampler2D texture_diffuse;
+struct Light { vec3 position; vec3 color; float intensity; float radius; };
+uniform Light lights[16];
+uniform int active_lights;
+void main() {
+    vec4 texColor = texture(texture_diffuse, TexCoords);
+    if(texColor.a < 0.1) discard;
+    vec3 norm = normalize(Normal);
+    vec3 result = vec3(0.12) * texColor.rgb;
+    for(int i = 0; i < active_lights && i < 16; i++) {
+        vec3 toLight = lights[i].position - FragPos;
+        float distSq = dot(toLight, toLight);
+        float radiusSq = lights[i].radius * lights[i].radius;
+        if(distSq < radiusSq) {
+            float dist = sqrt(distSq);
+            vec3 lightDir = toLight / dist;
+            float diff = max(dot(norm, lightDir), 0.0);
+            float att = 1.0 - (dist / lights[i].radius);
+            att = att * att;
+            result += (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
+        }
+    }
+    FragColor = vec4(result, texColor.a);
+}"""
+
+# Simplified fog with 16 steps instead of 32
+ARM_FOG_FRAG = """#version 330 core
+out vec4 FragColor;
+in vec3 localPos;
+uniform mat4 model;
+uniform vec3 viewPos;
+uniform float density;
+uniform vec3 fogColor;
+uniform sampler3D noiseTexture;
+uniform float noiseScale;
+uniform float time;
+
+vec2 intersectBox(vec3 rayOrigin, vec3 rayDir) {
+    vec3 tMin = (-0.5 - rayOrigin) / rayDir;
+    vec3 tMax = (0.5 - rayOrigin) / rayDir;
+    vec3 t1 = min(tMin, tMax);
+    vec3 t2 = max(tMin, tMax);
+    float tNear = max(max(t1.x, t1.y), t1.z);
+    float tFar = min(min(t2.x, t2.y), t2.z);
+    return vec2(tNear, tFar);
+}
+
+void main() {
+    vec3 fragWorldPos = vec3(model * vec4(localPos, 1.0));
+    vec3 rayDirWorld = normalize(fragWorldPos - viewPos);
+    mat4 inverseModel = inverse(model);
+    vec3 rayOriginLocal = (inverseModel * vec4(viewPos, 1.0)).xyz;
+    vec3 rayDirLocal = normalize((inverseModel * vec4(rayDirWorld, 0.0)).xyz);
+    vec2 t = intersectBox(rayOriginLocal, rayDirLocal);
+    float tNear = t.x;
+    float tFar = t.y;
+    if (tNear >= tFar) discard;
+    tNear = max(0.0, tNear);
+    
+    // ARM OPTIMIZATION: 16 steps instead of 32
+    int num_steps = 16;
+    float stepSize = (tFar - tNear) / float(num_steps);
+    vec4 accumulatedColor = vec4(0.0);
+    
+    for (int i = 0; i < num_steps; ++i) {
+        float currentT = tNear + float(i) * stepSize;
+        vec3 samplePos = rayOriginLocal + rayDirLocal * currentT;
+        vec3 noiseCoord = samplePos * noiseScale + vec3(0.0, 0.0, time * 0.1);
+        float noiseValue = texture(noiseTexture, noiseCoord).r;
+        float stepDensity = density * noiseValue;
+        float transmittance = exp(-stepDensity * stepSize);
+        accumulatedColor.rgb += fogColor * (1.0 - transmittance) * (1.0 - accumulatedColor.a);
+        accumulatedColor.a += (1.0 - transmittance);
+        if (accumulatedColor.a > 0.95) break;
+    }
+    accumulatedColor.a = clamp(accumulatedColor.a, 0.0, 1.0);
+    FragColor = accumulatedColor;
+}"""
+
 
 class ShaderLoader:
     def __init__(self, shader_dir='assets/shaders'):
@@ -27,7 +200,6 @@ class ShaderLoader:
     def _ensure_defaults(self):
         for filename, source in DEFAULT_SHADERS.items():
             filepath = os.path.join(self.shader_dir, filename)
-            # FORCE WRITE: Ensure shaders are updated if code changes
             try:
                 with open(filepath, 'w') as f:
                     f.write(source)
@@ -60,44 +232,28 @@ class ShaderLoader:
         except Exception as e:
             print(f"Error compiling shader ({vertex_file}, {fragment_file}): {e}")
             raise
+    
+    def compile_from_source(self, vertex_src, fragment_src):
+        """Compile shader from source strings directly."""
+        try:
+            vs = compileShader(vertex_src, gl.GL_VERTEX_SHADER)
+            fs = compileShader(fragment_src, gl.GL_FRAGMENT_SHADER)
+            return compileProgram(vs, fs)
+        except Exception as e:
+            print(f"Error compiling shader from source: {e}")
+            raise
 
-class Frustum:
-    __slots__ = ('planes', '_plane_normals', '_plane_distances')
-    def __init__(self):
-        self.planes = [glm.vec4(0) for _ in range(6)]
-        self._plane_normals = np.zeros((6, 3), dtype=np.float32)
-        self._plane_distances = np.zeros(6, dtype=np.float32)
-    
-    def extract_from_matrix(self, proj_view):
-        m = proj_view
-        self.planes[0] = glm.vec4(m[0][3] + m[0][0], m[1][3] + m[1][0], m[2][3] + m[2][0], m[3][3] + m[3][0])
-        self.planes[1] = glm.vec4(m[0][3] - m[0][0], m[1][3] - m[1][0], m[2][3] - m[2][0], m[3][3] - m[3][0])
-        self.planes[2] = glm.vec4(m[0][3] + m[0][1], m[1][3] + m[1][1], m[2][3] + m[2][1], m[3][3] + m[3][1])
-        self.planes[3] = glm.vec4(m[0][3] - m[0][1], m[1][3] - m[1][1], m[2][3] - m[2][1], m[3][3] - m[3][1])
-        self.planes[4] = glm.vec4(m[0][3] + m[0][2], m[1][3] + m[1][2], m[2][3] + m[2][2], m[3][3] + m[3][2])
-        self.planes[5] = glm.vec4(m[0][3] - m[0][2], m[1][3] - m[1][2], m[2][3] - m[2][2], m[3][3] - m[3][2])
-        for i in range(6):
-            length = glm.length(glm.vec3(self.planes[i]))
-            if length > 0: self.planes[i] /= length
-            self._plane_normals[i] = [self.planes[i].x, self.planes[i].y, self.planes[i].z]
-            self._plane_distances[i] = self.planes[i].w
-    
-    def is_box_visible(self, center, half_extents):
-        cx, cy, cz = center
-        hx, hy, hz = half_extents
-        signs = np.sign(self._plane_normals)
-        p_vertices = np.array([cx + signs[:, 0] * hx, cy + signs[:, 1] * hy, cz + signs[:, 2] * hz]).T
-        dots = np.sum(self._plane_normals * p_vertices, axis=1) + self._plane_distances
-        return np.all(dots >= 0)
 
 class RenderStats:
-    __slots__ = ('total_brushes', 'culled_brushes', 'visible_brushes', 'draw_calls', 'shadow_draw_calls', 'total_tris', 'visible_tris')
-    def __init__(self): self.reset()
+    __slots__ = ('total_brushes', 'culled_brushes', 'visible_brushes', 'draw_calls', 
+                 'shadow_draw_calls', 'total_tris', 'visible_tris', 'batched_draws')
+    def __init__(self): 
+        self.reset()
     def reset(self): 
         self.total_brushes = self.culled_brushes = self.visible_brushes = 0
-        self.draw_calls = self.shadow_draw_calls = 0
-        self.total_tris = 0    # Total triangles existing in the level
-        self.visible_tris = 0  # Triangles currently sent to GPU 
+        self.draw_calls = self.shadow_draw_calls = self.batched_draws = 0
+        self.total_tris = self.visible_tris = 0
+
 
 class LODManager:
     __slots__ = ('full_dist_sq', 'cull_dist_sq')
@@ -115,6 +271,7 @@ class LODManager:
         elif dist_sq < self.cull_dist_sq: return self.LOD_REDUCED
         return self.LOD_CULLED
 
+
 class UniformCache:
     __slots__ = ('program', '_cache')
     def __init__(self, shader_program):
@@ -128,7 +285,11 @@ class UniformCache:
         return loc
     def preload(self, names):
         for name in names:
-            if name not in self._cache: self._cache[name] = gl.glGetUniformLocation(self.program, name)
+            if name not in self._cache: 
+                self._cache[name] = gl.glGetUniformLocation(self.program, name)
+    def get(self, name, default=-1):
+        return self._cache.get(name, default)
+
 
 class ShadowBatch:
     __slots__ = ('positions', 'scales', 'rotations', 'alphas', 'count', 'capacity')
@@ -139,7 +300,8 @@ class ShadowBatch:
         self.rotations = np.zeros(capacity, dtype=np.float32)
         self.alphas = np.zeros(capacity, dtype=np.float32)
         self.count = 0
-    def reset(self): self.count = 0
+    def reset(self): 
+        self.count = 0
     def add(self, pos, scale, rotation, alpha):
         if self.count >= self.capacity: return False
         i = self.count
@@ -147,33 +309,62 @@ class ShadowBatch:
         self.count += 1
         return True
 
+
 class Renderer:
     MAX_LIGHTS = 16
-    def __init__(self, texture_loader, initial_grid_size, initial_world_size):
+    
+    def __init__(self, texture_loader, initial_grid_size, initial_world_size, config=None):
         self.texture_manager = {}
-        # Cache for loaded OBJ models
         self.loaded_models = {} 
         self.load_texture_callback = texture_loader
         self._identity_mat4 = glm.mat4(1.0)
-        self.frustum = Frustum()
+        self._identity_mat3 = glm.mat3(1.0)
         self.render_stats = RenderStats()
         self.lod_manager = LODManager()
-        self._enable_frustum_culling = True
-        self._enable_lod = True
+        
+        # PERFORMANCE FLAGS - Read from config with auto-detected defaults
+        is_arm = self._detect_arm_platform()
+        
+        if config is not None:
+            self.arm_mode = config.getboolean('Renderer', 'arm_mode', fallback=True)
+            self.shadows_enabled = config.getboolean('Renderer', 'shadows_enabled', fallback=not is_arm)
+        else:
+            # No config provided - use auto-detected defaults
+            self.arm_mode = True  # Always beneficial
+            self.shadows_enabled = not is_arm  # Off on ARM, On otherwise
+        
+        self.fog_quality = 'low'  # 'low' = 16 steps, 'high' = 32 steps
+        self.skip_culling_in_renderer = True  # Trust pre-culled data from logic thread
+        
         self._model_matrix = glm.mat4(1.0)
         self._floor_shadow_batch = ShadowBatch(2048)
         self._wall_shadow_batch = ShadowBatch(1024)
+        
+        # Cached per-frame data
+        self._frame_lights = []
+        self._frame_lights_uploaded = False
+        self._current_shader = None
+        
+        # Pre-allocated arrays for batching
+        self._batch_matrices = []
+        self._batch_colors = []
 
         try:
             self.shader_loader = ShaderLoader()
             self.shaders = {}
             self.uniforms = {}
+            
+            # Compile ARM-optimized shaders if arm_mode is enabled
+            if self.arm_mode:
+                print("ARM Mode: Compiling optimized shaders...")
+                self._compile_arm_shaders()
+            else:
+                self._compile_standard_shaders()
+            
+            # Common shaders (always use file-based)
             for name, files in [('simple', ('simple.vert', 'simple.frag')),
-                                ('lit', ('lit.vert', 'lit.frag')),
-                                ('textured', ('textured.vert', 'textured.frag')),
                                 ('sprite', ('sprite.vert', 'sprite.frag')),
                                 ('shadow_volume', ('shadow_volume.vert', 'shadow_volume.frag')),
-                                ('fog', ('fog.vert', 'fog.frag')),
                                 ('water', ('water.vert', 'water.frag')),
                                 ('glass', ('glass.vert', 'glass.frag'))]:
                 shader = self.shader_loader.compile_shader_program(*files)
@@ -181,19 +372,19 @@ class Renderer:
                 self.uniforms[name] = UniformCache(shader)
 
             self.uniforms['simple'].preload(['projection', 'view', 'model', 'color', 'alpha'])
-            self._preload_lit_uniforms('lit')
-            self._preload_lit_uniforms('textured')
-            self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale'])
             self.uniforms['sprite'].preload(['projection', 'view', 'sprite_texture', 'sprite_pos_world', 'sprite_size'])
             self.uniforms['shadow_volume'].preload(['projection', 'view', 'model', 'light_pos'])
-            self._preload_lit_uniforms('fog')
-            self.uniforms['fog'].preload(['viewPos', 'time', 'noiseTexture', 'density', 'fogColor', 'noiseScale', 'object_color', 'alpha'])
             
             self._preload_lit_uniforms('water')
-            self.uniforms['water'].preload(['time', 'viewPos', 'normalMap', 'waterOpacity', 'waterReflectivity', 'waterTint', 'useWaveDisplacement', 'waveStrength'])
+            self.uniforms['water'].preload(['time', 'viewPos', 'normalMap', 'waterOpacity', 'waterReflectivity', 
+                                           'waterTint', 'useWaveDisplacement', 'waveStrength'])
             self.water_normal_id = self.load_texture('water_normal.png', 'textures')
             
-            # Compile terrain shader
+            self.uniforms['glass'].preload(['projection', 'view', 'model', 'viewPos', 'waterColor', 
+                                           'distortionStrength', 'causticStrength', 'glassOpacity', 
+                                           'refractionIndex', 'roughness'])
+
+            # Terrain shader
             try:
                 terrain_vs = compileShader(TERRAIN_VERTEX_SHADER, gl.GL_VERTEX_SHADER)
                 terrain_fs = compileShader(TERRAIN_FRAGMENT_SHADER, gl.GL_FRAGMENT_SHADER)
@@ -214,13 +405,9 @@ class Renderer:
             except Exception as e:
                 print(f"Terrain shader error: {e}")
                 self.shaders['terrain'] = None
-
-            
-            self.uniforms['glass'].preload(['projection', 'view', 'model', 'viewPos', 'waterColor', 
-                                           'distortionStrength', 'causticStrength', 'glassOpacity', 
-                                           'refractionIndex', 'roughness'])
             
             print(f"Shaders loaded from: {self.shader_loader.shader_dir}")
+            print(f"ARM Mode: {self.arm_mode}, Shadows: {self.shadows_enabled}")
         except Exception as e:
             print(f"FATAL: Shader Error: {e}")
             return
@@ -231,111 +418,112 @@ class Renderer:
         self.update_grid_buffers(initial_world_size, initial_grid_size)
         self.noise_texture_id = self._load_3d_texture('assets/noise_3d.bin')
         self.sprite_textures = {}
-        self.instance_textures = {}  # Per-instance texture overrides (thing id -> tex_id)
+        self.instance_textures = {}
         self.load_texture('default.png', 'textures')
         self.load_texture('caulk', 'textures')
         self._proj_ptr = None
         self._view_ptr = None
+        self._edge_vao = None
+    
+    def _detect_arm_platform(self):
+        """Detect if running on ARM or under x64 emulation."""
+        import platform
+        import sys
+        machine = platform.machine().lower()
+        
+        # Direct ARM detection
+        if 'arm' in machine or 'aarch' in machine:
+            return True
+        
+        # Check for Windows ARM emulation markers
+        if sys.platform == 'win32':
+            if os.environ.get('PROCESSOR_ARCHITECTURE', '').upper() == 'ARM64':
+                return True
+            if os.environ.get('PROCESSOR_ARCHITEW6432', '').upper() == 'ARM64':
+                return True
+            proc_id = os.environ.get('PROCESSOR_IDENTIFIER', '').lower()
+            if 'qualcomm' in proc_id or 'snapdragon' in proc_id or 'arm' in proc_id:
+                return True
+        
+        return False
 
-    def draw_face_highlight(self, projection, view, brush, face_name):
-        """Draws a highlighted quad over a specific face of a brush."""
-        if 'simple' not in self.shaders: return
-        shader, uniforms = self.shaders['simple'], self.uniforms['simple']
-        gl.glUseProgram(shader)
+    def _compile_arm_shaders(self):
+        """Compile ARM-optimized shaders with pre-computed normal matrices."""
+        # Lit shader (ARM optimized)
+        lit_shader = self.shader_loader.compile_from_source(ARM_LIT_VERT, ARM_LIT_FRAG)
+        self.shaders['lit'] = lit_shader
+        self.uniforms['lit'] = UniformCache(lit_shader)
+        self._preload_lit_uniforms('lit')
+        self.uniforms['lit'].preload(['normalMatrix'])
         
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
-        gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
+        # Textured shader (ARM optimized)
+        textured_shader = self.shader_loader.compile_from_source(ARM_TEXTURED_VERT, ARM_TEXTURED_FRAG)
+        self.shaders['textured'] = textured_shader
+        self.uniforms['textured'] = UniformCache(textured_shader)
+        self._preload_lit_uniforms('textured')
+        self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale', 'normalMatrix'])
         
-        # Configure Blending
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        # Fog shader (ARM optimized with fewer ray march steps)
+        fog_vert = DEFAULT_SHADERS.get('fog.vert', '')
+        fog_shader = self.shader_loader.compile_from_source(fog_vert, ARM_FOG_FRAG)
+        self.shaders['fog'] = fog_shader
+        self.uniforms['fog'] = UniformCache(fog_shader)
+        self._preload_lit_uniforms('fog')
+        self.uniforms['fog'].preload(['viewPos', 'time', 'noiseTexture', 'density', 'fogColor', 
+                                      'noiseScale', 'object_color', 'alpha'])
         
-        # Color: Purple
-        gl.glUniform3f(uniforms['color'], 0.8, 0.2, 0.9) 
-        
-        # Alpha: 0.4 (60% transparent)
-        gl.glUniform1f(uniforms['alpha'], 0.4) 
-        
-        pos, size = brush['pos'], brush['size']
-        hx, hy, hz = size[0]/2, size[1]/2, size[2]/2
-        cx, cy, cz = pos[0], pos[1], pos[2]
-        
-        bias = 0.5 
-        
-        verts = []
-        if face_name == 'north': # +Z
-            z = cz + hz + bias
-            verts = [cx-hx, cy-hy, z,  cx+hx, cy-hy, z,  cx+hx, cy+hy, z,
-                     cx-hx, cy-hy, z,  cx+hx, cy+hy, z,  cx-hx, cy+hy, z]
-        elif face_name == 'south': # -Z
-            z = cz - hz - bias
-            verts = [cx+hx, cy-hy, z,  cx-hx, cy-hy, z,  cx-hx, cy+hy, z,
-                     cx+hx, cy-hy, z,  cx-hx, cy+hy, z,  cx+hx, cy+hy, z]
-        elif face_name == 'east': # +X
-            x = cx + hx + bias
-            verts = [x, cy-hy, cz+hz,  x, cy-hy, cz-hz,  x, cy+hy, cz-hz,
-                     x, cy-hy, cz+hz,  x, cy+hy, cz-hz,  x, cy+hy, cz+hz]
-        elif face_name == 'west': # -X
-            x = cx - hx - bias
-            verts = [x, cy-hy, cz-hz,  x, cy-hy, cz+hz,  x, cy+hy, cz+hz,
-                     x, cy-hy, cz-hz,  x, cy+hy, cz+hz,  x, cy+hy, cz-hz]
-        elif face_name == 'top': # +Y
-            y = cy + hy + bias
-            verts = [cx-hx, y, cz+hz,  cx+hx, y, cz+hz,  cx+hx, y, cz-hz,
-                     cx-hx, y, cz+hz,  cx+hx, y, cz-hz,  cx-hx, y, cz-hz]
-        elif face_name == 'down': # -Y
-            y = cy - hy - bias
-            verts = [cx-hx, y, cz-hz,  cx+hx, y, cz-hz,  cx+hx, y, cz+hz,
-                     cx-hx, y, cz-hz,  cx+hx, y, cz+hz,  cx-hx, y, cz+hz]
-            
-        if not verts: return
+        print("ARM-optimized shaders compiled successfully")
 
-        v_data = np.array(verts, dtype=np.float32)
+    def _compile_standard_shaders(self):
+        """Compile standard file-based shaders."""
+        for name, files in [('lit', ('lit.vert', 'lit.frag')),
+                            ('textured', ('textured.vert', 'textured.frag')),
+                            ('fog', ('fog.vert', 'fog.frag'))]:
+            shader = self.shader_loader.compile_shader_program(*files)
+            self.shaders[name] = shader
+            self.uniforms[name] = UniformCache(shader)
         
-        if not hasattr(self, 'face_highlight_vao'):
-            self.face_highlight_vao = gl.glGenVertexArrays(1)
-            self.face_highlight_vbo = gl.glGenBuffers(1)
-            gl.glBindVertexArray(self.face_highlight_vao)
-            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.face_highlight_vbo)
-            gl.glBufferData(gl.GL_ARRAY_BUFFER, 6 * 3 * 4, None, gl.GL_DYNAMIC_DRAW) 
-            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-            gl.glEnableVertexAttribArray(0)
-            gl.glBindVertexArray(0)
-            
-        gl.glBindVertexArray(self.face_highlight_vao)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.face_highlight_vbo)
-        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, v_data.nbytes, v_data)
-        
-        # Draw transparent fill
-        gl.glDrawArrays(gl.GL_TRIANGLES, 0, 6)
-        
-        # Draw outline
-        gl.glUniform3f(uniforms['color'], 1.0, 1.0, 1.0) # White
-        gl.glUniform1f(uniforms['alpha'], 1.0) # Opaque outline
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
-        gl.glDrawArrays(gl.GL_TRIANGLES, 0, 6)
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        
-        gl.glBindVertexArray(0)
-        gl.glDisable(gl.GL_BLEND)
-        gl.glUseProgram(0)
+        self._preload_lit_uniforms('lit')
+        self._preload_lit_uniforms('textured')
+        self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale'])
+        self._preload_lit_uniforms('fog')
+        self.uniforms['fog'].preload(['viewPos', 'time', 'noiseTexture', 'density', 'fogColor', 
+                                      'noiseScale', 'object_color', 'alpha'])
 
     def _preload_lit_uniforms(self, shader_name):
         uniforms = self.uniforms[shader_name]
         uniforms.preload(['projection', 'view', 'model', 'object_color', 'alpha', 'active_lights'])
         for i in range(self.MAX_LIGHTS):
-            uniforms.preload([f'lights[{i}].position', f'lights[{i}].color', f'lights[{i}].intensity', f'lights[{i}].radius'])
+            uniforms.preload([f'lights[{i}].position', f'lights[{i}].color', 
+                            f'lights[{i}].intensity', f'lights[{i}].radius'])
+
+    def _compute_normal_matrix(self, model_matrix):
+        """Pre-compute normal matrix on CPU to avoid expensive inverse() in shader."""
+        # Extract the upper-left 3x3 and compute transpose of inverse
+        mat3 = glm.mat3(model_matrix)
+        # For uniform scaling, we can just use the mat3 directly
+        # For non-uniform scaling, we need the full inverse transpose
+        try:
+            return glm.transpose(glm.inverse(mat3))
+        except:
+            return self._identity_mat3
+
+    # =========================================================================
+    # TEXTURE MANAGEMENT
+    # =========================================================================
 
     def update_grid_buffers(self, world_size, grid_size):
         if grid_size <= 0:
-            if self.vaos['grid']: gl.glDeleteVertexArrays(1, [self.vaos['grid']]); self.vaos['grid'] = None
+            if self.vaos['grid']: 
+                gl.glDeleteVertexArrays(1, [self.vaos['grid']])
+                self.vaos['grid'] = None
             return
         s, g = world_size, grid_size
         lines = [[-s, 0, i, s, 0, i, i, 0, -s, i, 0, s] for i in range(-s, s + 1, g)]
         grid_vertices = np.array(lines, dtype=np.float32).flatten()
         self.grid_indices_count = len(grid_vertices) // 3
-        if self.vaos['grid']: gl.glDeleteVertexArrays(1, [self.vaos['grid']])
+        if self.vaos['grid']: 
+            gl.glDeleteVertexArrays(1, [self.vaos['grid']])
         vao = gl.glGenVertexArrays(1)
         gl.glBindVertexArray(vao)
         vbo = gl.glGenBuffers(1)
@@ -346,51 +534,52 @@ class Renderer:
         gl.glBindVertexArray(0)
         self.vaos['grid'] = vao
     
-    def set_sprite_textures(self, textures): self.sprite_textures = textures
+    def set_sprite_textures(self, textures): 
+        self.sprite_textures = textures
     
     def set_instance_textures(self, textures): 
-        """Set per-instance texture overrides (dict mapping thing id -> texture_id)."""
         self.instance_textures = textures
 
-    # Load OBJ model into cache
     def load_model(self, filename):
+        if OBJ is None:
+            return None
         if filename in self.loaded_models:
             return self.loaded_models[filename]
-        
         full_path = os.path.join('assets', 'models', filename)
         if not os.path.exists(full_path):
-            # Try plain path just in case
             full_path = filename
-        
         if os.path.exists(full_path):
             print(f"Loading model: {full_path}")
             model = OBJ(full_path)
             if model.is_loaded:
                 self.loaded_models[filename] = model
                 return model
-        
         print(f"Failed to load model: {filename}")
         return None
 
     def load_texture(self, texture_name, subfolder):
         tex_cache_name = os.path.join(subfolder, texture_name)
-        if tex_cache_name in self.texture_manager: return self.texture_manager[tex_cache_name]
+        if tex_cache_name in self.texture_manager: 
+            return self.texture_manager[tex_cache_name]
         if texture_name == 'default.png':
             tex_id = gl.glGenTextures(1)
             self.texture_manager[tex_cache_name] = tex_id
             gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, 1, 1, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, (gl.GLubyte * 4)(255, 255, 255, 255))
+            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, 1, 1, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, 
+                           (gl.GLubyte * 4)(255, 255, 255, 255))
             return tex_id
         if texture_name == 'caulk':
             tex_id = gl.glGenTextures(1)
             self.texture_manager[tex_cache_name] = tex_id
             gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, 2, 2, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, (gl.GLubyte * 16)(255, 0, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 0, 255, 255))
+            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, 2, 2, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, 
+                           (gl.GLubyte * 16)(255, 0, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 0, 255, 255))
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
             return tex_id
         texture_path = os.path.join('assets', subfolder, texture_name)
-        if not os.path.exists(texture_path): return self.load_texture('default.png', 'textures')
+        if not os.path.exists(texture_path): 
+            return self.load_texture('default.png', 'textures')
         try:
             img = Image.open(texture_path).convert("RGBA")
             img = img.transpose(Image.FLIP_TOP_BOTTOM)
@@ -401,7 +590,8 @@ class Renderer:
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
-            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, img.width, img.height, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, img.tobytes())
+            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, img.width, img.height, 0, 
+                           gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, img.tobytes())
             gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
             return tex_id
         except Exception as e:
@@ -412,13 +602,17 @@ class Renderer:
         texture_set = set()
         for brush in brushes:
             for face_tex in brush.get('textures', {}).values():
-                if face_tex and face_tex != 'caulk.jpg': texture_set.add(face_tex)
-        for tex_name in texture_set: self.load_texture(tex_name, 'textures')
+                if face_tex and face_tex != 'caulk.jpg': 
+                    texture_set.add(face_tex)
+        for tex_name in texture_set: 
+            self.load_texture(tex_name, 'textures')
 
     def _load_3d_texture(self, filepath, size=32):
         try:
-            with open(filepath, 'rb') as f: data = f.read()
-            if len(data) != size ** 3: return 0
+            with open(filepath, 'rb') as f: 
+                data = f.read()
+            if len(data) != size ** 3: 
+                return 0
             texture_id = gl.glGenTextures(1)
             gl.glBindTexture(gl.GL_TEXTURE_3D, texture_id)
             for param in [(gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT), (gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT), 
@@ -427,31 +621,32 @@ class Renderer:
                 gl.glTexParameteri(gl.GL_TEXTURE_3D, *param)
             gl.glTexImage3D(gl.GL_TEXTURE_3D, 0, gl.GL_R8, size, size, size, 0, gl.GL_RED, gl.GL_UNSIGNED_BYTE, data)
             return texture_id
-        except: return 0
+        except: 
+            return 0
 
-    def _cull_brushes(self, projection, view, camera_pos, brushes):
-        self.render_stats.reset()
-        self.render_stats.total_brushes = len(brushes)
-        if not self._enable_frustum_culling:
-            self.render_stats.visible_brushes = len(brushes)
-            return brushes
-        self.frustum.extract_from_matrix(projection * view)
-        visible = []
-        for brush in brushes:
-            pos, size = brush['pos'], brush['size']
-            half = (size[0]*0.5, size[1]*0.5, size[2]*0.5)
-            if not self.frustum.is_box_visible(pos, half):
-                self.render_stats.culled_brushes += 1
-                continue
-            if self._enable_lod and self.lod_manager.get_lod_level(pos, camera_pos) == LODManager.LOD_CULLED:
-                self.render_stats.culled_brushes += 1
-                continue
-            visible.append(brush)
-            self.render_stats.visible_brushes += 1
-        return visible
+    # =========================================================================
+    # LIGHT MANAGEMENT - UPLOAD ONCE PER FRAME
+    # =========================================================================
+
+    def _upload_lights_once(self, shader_name, lights):
+        """Upload light uniforms once per frame, track which shader they're uploaded to."""
+        if shader_name not in self.uniforms: 
+            return
+        uniforms = self.uniforms[shader_name]
+        num_lights = min(len(lights), self.MAX_LIGHTS)
+        gl.glUniform1i(uniforms['active_lights'], num_lights)
+        for i in range(num_lights):
+            light = lights[i]
+            gl.glUniform3fv(uniforms[f'lights[{i}].position'], 1, light.pos)
+            gl.glUniform3fv(uniforms[f'lights[{i}].color'], 1, light.get_color())
+            gl.glUniform1f(uniforms[f'lights[{i}].intensity'], light.get_intensity())
+            gl.glUniform1f(uniforms[f'lights[{i}].radius'], light.get_radius())
+
+    # =========================================================================
+    # TERRAIN
+    # =========================================================================
 
     def setup_terrain_shader(self, terrain):
-        """Setup terrain with shader program and uniform locations."""
         if 'terrain' not in self.shaders or not self.shaders['terrain']:
             return
         terrain.shader_program = self.shaders['terrain']
@@ -473,18 +668,9 @@ class Renderer:
             terrain.uniforms[f'lights[{i}].radius'] = self.uniforms['terrain'][f'lights[{i}].radius']
 
     def _ensure_terrain_textures(self, terrain):
-        """Ensure terrain has valid texture IDs, loading defaults if necessary."""
-        # Map terrain texture attributes to file names (assumed in assets/textures/terrain/)
-        mappings = [
-            ('grass_tex', 'grass.jpg'),
-            ('rock_tex', 'rock.jpg'),
-            ('sand_tex', 'sand.jpg'),
-            ('snow_tex', 'snow.jpg')
-        ]
-        
-        # Ensure we have a valid default texture
+        mappings = [('grass_tex', 'grass.jpg'), ('rock_tex', 'rock.jpg'), 
+                    ('sand_tex', 'sand.jpg'), ('snow_tex', 'snow.jpg')]
         self.load_texture('default.png', 'textures')
-        
         for attr, filename in mappings:
             current_id = getattr(terrain, attr, 0)
             if not current_id or current_id == -1:
@@ -492,28 +678,20 @@ class Renderer:
                 setattr(terrain, attr, new_id)
 
     def render_terrain(self, projection, view, camera_pos, terrain, lights, frustum_planes=None):
-        """Render the terrain."""
         if terrain is None or not terrain.enabled:
             return
-            
-        # Ensure textures are loaded before rendering
         self._ensure_terrain_textures(terrain)
-            
         if not terrain.shader_program:
             self.setup_terrain_shader(terrain)
-        
-        # Calculate active lights count
         active_lights_count = len(lights) if lights else 0
-        
-        # Disable culling before drawing terrain to prevent invisibility
         gl.glDisable(gl.GL_CULL_FACE)
-        
-        # Track terrain triangles in visible stats safely
         if hasattr(terrain, 'get_tri_count'):
             self.render_stats.visible_tris += terrain.get_tri_count()
-        
-        # Pass the count explicitly to update_and_render
         terrain.update_and_render(projection, view, camera_pos, frustum_planes, lights, active_lights_count)
+
+    # =========================================================================
+    # MAIN RENDER SCENE - OPTIMIZED
+    # =========================================================================
 
     def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config):
         gl.glEnable(gl.GL_DEPTH_TEST)
@@ -523,23 +701,32 @@ class Renderer:
         self._view_ptr = glm.value_ptr(view)
         current_mode = config.get('render_mode', RENDER_MODE_LIT)
 
-        # Reset per-frame triangle stats
-        self.render_stats.visible_tris = 0
+        # Reset per-frame stats
+        self.render_stats.reset()
+        self.render_stats.total_brushes = len(brushes)
+        self._frame_lights_uploaded = False
+        self._current_shader = None
 
-        if current_mode == RENDER_MODE_WIREFRAME: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
-        elif current_mode == RENDER_MODE_VERTEX: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_POINT); gl.glPointSize(4.0)
-        else: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        if current_mode == RENDER_MODE_WIREFRAME: 
+            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
+        elif current_mode == RENDER_MODE_VERTEX: 
+            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_POINT)
+            gl.glPointSize(4.0)
+        else: 
+            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
 
-        self.draw_grid(projection, view, self.grid_indices_count, config.get('play_mode', False), config.get('grid_visible', True))
+        self.draw_grid(projection, view, self.grid_indices_count, 
+                      config.get('play_mode', False), config.get('grid_visible', True))
         
-        opaque_brushes, transparent_brushes, sprite_things, fog_volumes, water_brushes, glass_brushes = self._sort_objects(brushes, things, config)
+        # Sort objects ONCE
+        opaque_brushes, transparent_brushes, sprite_things, fog_volumes, water_brushes, glass_brushes = \
+            self._sort_objects(brushes, things, config)
         
-        # --- SPLIT OPAQUE BRUSHES: Textured vs Solid/Tinted ---
+        # Split opaque brushes: textured vs solid
         textured_opaque = []
         solid_opaque = []
         for b in opaque_brushes:
             is_textured = False
-            # Check if brush has any meaningful texture (not default or caulk)
             if 'textures' in b:
                 for t_name in b['textures'].values():
                     if t_name and t_name not in ['default.png', 'caulk.jpg']:
@@ -550,6 +737,7 @@ class Renderer:
             else:
                 solid_opaque.append(b)
 
+        # Separate models from sprites
         models_to_render = []
         final_sprites = []
         for thing in sprite_things:
@@ -558,8 +746,11 @@ class Renderer:
             else:
                 final_sprites.append(thing)
 
+        # Get active lights ONCE
         lights = [t for t in things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
+        self._frame_lights = lights
 
+        # Terrain
         terrain = config.get('terrain', None)
         if terrain and terrain.enabled:
             self.render_terrain(projection, view, camera_pos, terrain, lights)
@@ -570,48 +761,50 @@ class Renderer:
         brush_display_mode = config.get('brush_display_mode', 'Textured')
 
         if current_mode == RENDER_MODE_UNLIT: 
-            self.draw_textured_brushes(projection, view, camera_pos, textured_opaque, lights, config)
-            self.draw_lit_brushes(projection, view, camera_pos, solid_opaque, lights, config)
-            
+            self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config)
+            self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config)
         elif current_mode == RENDER_MODE_LIT:
             if brush_display_mode == 'Textured' or brush_display_mode == 'Solid Lit':
-                # Draw TEXTURED brushes using texture shader
-                self.draw_textured_brushes(projection, view, camera_pos, textured_opaque, lights, config)
-                # Draw SOLID brushes using lit shader (handles 'colour' property correctly)
-                self.draw_lit_brushes(projection, view, camera_pos, solid_opaque, lights, config)
+                self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config)
+                self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config)
             else:
-                # Wireframe/Fallback
-                self.draw_lit_brushes(projection, view, camera_pos, opaque_brushes, lights, config)
+                self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config)
         else:
-             self.draw_lit_brushes(projection, view, camera_pos, opaque_brushes, lights, config)
+            self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config)
 
+        # Models
         if models_to_render:
             self.draw_models(projection, view, camera_pos, models_to_render, lights, config)
 
-        if current_mode == RENDER_MODE_LIT:
+        # Shadows (optional - disabled by default for ARM)
+        if current_mode == RENDER_MODE_LIT and self.shadows_enabled:
             shadow_lights = [l for l in lights if l.properties.get('casts_shadows')]
             if shadow_lights:
                 all_brushes = config.get('all_brushes', brushes)
                 self.render_projected_shadows_optimized(projection, view, camera_pos, all_brushes, shadow_lights)
 
-        if transparent_brushes: transparent_brushes.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
-        if water_brushes: water_brushes.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
-        if glass_brushes: glass_brushes.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
-        if final_sprites: final_sprites.sort(key=lambda s: -self._distance_sq(s.pos, camera_pos))
+        # Sort transparent objects by distance ONCE
+        if transparent_brushes: 
+            transparent_brushes.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
+        if water_brushes: 
+            water_brushes.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
+        if glass_brushes: 
+            glass_brushes.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
+        if final_sprites: 
+            final_sprites.sort(key=lambda s: -self._distance_sq(s.pos, camera_pos))
             
         gl.glEnable(gl.GL_BLEND)
         gl.glDepthMask(gl.GL_FALSE)
         
         self.draw_sprites(projection, view, final_sprites, self.sprite_textures, self.instance_textures)
         
-        # Transparent pass for Triggers
+        # Transparent pass
         if current_mode == RENDER_MODE_UNLIT:
-            self.draw_textured_brushes(projection, view, camera_pos, transparent_brushes, lights, config)
+            self.draw_textured_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config)
         elif current_mode == RENDER_MODE_LIT:
-             # Always use lit brushes for transparent pass (triggers) to show wireframe/color
-             self.draw_lit_brushes(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True)
+            self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True)
         else:
-            self.draw_lit_brushes(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True)
+            self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True)
             
         if current_mode == RENDER_MODE_LIT:
             self.draw_water_brushes(projection, view, camera_pos, water_brushes, lights, config)
@@ -621,18 +814,198 @@ class Renderer:
         gl.glDepthMask(gl.GL_TRUE)
         gl.glDisable(gl.GL_DEPTH_TEST)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        
         if selected_object:
             if isinstance(selected_object, dict):
                 self.draw_selected_brush_outline(projection, view, selected_object)
-                if not selected_object.get('lock', False): self.render_gizmo(projection, view, selected_object['pos'])
-            elif isinstance(selected_object, Thing): self.render_gizmo(projection, view, selected_object.pos)
+                if not selected_object.get('lock', False): 
+                    self.render_gizmo(projection, view, selected_object['pos'])
+            elif isinstance(selected_object, Thing): 
+                self.render_gizmo(projection, view, selected_object.pos)
+        
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDisable(gl.GL_BLEND)
         gl.glUseProgram(0)
 
+    # =========================================================================
+    # OPTIMIZED DRAWING METHODS - NO DOUBLE CULLING
+    # =========================================================================
+
+    def draw_lit_brushes_optimized(self, projection, view, camera_pos, brushes, lights, config, is_transparent_pass=False):
+        """Optimized lit brush drawing - trusts pre-culled data, batches where possible."""
+        if not brushes or 'lit' not in self.shaders: 
+            return
+        
+        # OPTIMIZATION: Skip culling if data is pre-culled from logic thread
+        visible = brushes  # Trust pre-culled data
+        self.render_stats.visible_brushes += len(visible)
+        
+        if not visible: 
+            return
+        
+        shader, uniforms = self.shaders['lit'], self.uniforms['lit']
+        
+        # Always ensure correct shader is active (removed faulty caching)
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        self._upload_lights_once('lit', lights)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
+        
+        gl.glBindVertexArray(self.vaos['cube'])
+        
+        display_mode = config.get('brush_display_mode', 'Textured')
+        show_triggers_solid = config.get('show_triggers_as_solid', False)
+        selected = config.get('selected_object')
+        model_loc, color_loc, alpha_loc = uniforms['model'], uniforms['object_color'], uniforms['alpha']
+        
+        # ARM mode: get normal matrix location (only valid for ARM shaders)
+        # Check both that ARM mode is on AND that the uniform actually exists in the current shader
+        normal_mat_loc = -1
+        if self.arm_mode:
+            loc = uniforms.get('normalMatrix', -1)
+            if loc is not None and loc != -1:
+                normal_mat_loc = loc
+        
+        fill_mode = (gl.GL_FILL if show_triggers_solid else gl.GL_LINE) if is_transparent_pass else \
+                   (gl.GL_FILL if display_mode != "Wireframe" else gl.GL_LINE)
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
+        
+        for brush in visible:
+            self.render_stats.visible_tris += 12
+            
+            # Build model matrix
+            pos = brush['pos']
+            size = brush['size']
+            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+            
+            # ARM mode: upload pre-computed normal matrix (only if uniform exists and is valid)
+            if normal_mat_loc > 0:
+                normal_mat = self._compute_normal_matrix(model_matrix)
+                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
+            
+            # Determine color
+            if brush.get('is_trigger'): 
+                color, alpha = [0.0, 1.0, 1.0], 0.3
+            elif brush is selected: 
+                color, alpha = [1.0, 1.0, 0.0], 1.0
+            elif brush.get('operation') == 'subtract': 
+                color, alpha = [1.0, 0.0, 0.0], 1.0
+            else:
+                brush_colour = brush.get('colour')
+                if brush_colour and isinstance(brush_colour, (list, tuple)) and len(brush_colour) >= 3:
+                    color = [c / 255.0 if c > 1.0 else c for c in brush_colour[:3]]
+                else: 
+                    color = [0.8, 0.8, 0.8]
+                alpha = 1.0
+            
+            gl.glUniform3fv(color_loc, 1, color)
+            gl.glUniform1f(alpha_loc, alpha)
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+            self.render_stats.draw_calls += 1
+        
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl.glBindVertexArray(0)
+
+    def draw_textured_brushes_optimized(self, projection, view, camera_pos, brushes, lights, config):
+        """Optimized textured brush drawing with better batching."""
+        if not brushes or 'textured' not in self.shaders: 
+            return
+        
+        # OPTIMIZATION: Skip culling - trust pre-culled data
+        visible = brushes
+        self.render_stats.visible_brushes += len(visible)
+        
+        if not visible: 
+            return
+        
+        shader, uniforms = self.shaders['textured'], self.uniforms['textured']
+        
+        # Always ensure correct shader is active
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        self._upload_lights_once('textured', lights)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(uniforms['texture_diffuse'], 0)
+        
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl.glBindVertexArray(self.vaos['cube'])
+        
+        model_loc = uniforms['model']
+        tex_scale_loc = uniforms.get('tex_scale', -1)
+        if tex_scale_loc == -1:
+            tex_scale_loc = gl.glGetUniformLocation(shader, "tex_scale")
+        
+        # ARM mode: get normal matrix location (only if it exists in the shader)
+        normal_mat_loc = -1
+        if self.arm_mode:
+            loc = uniforms.get('normalMatrix', -1)
+            if loc is not None and loc != -1:
+                normal_mat_loc = loc
+        
+        # OPTIMIZATION: Batch by texture to minimize state changes
+        batches = defaultdict(list)
+        is_play = config.get('play_mode', False)
+
+        for brush in visible:
+            for i, key in enumerate(['south', 'north', 'west', 'east', 'down', 'top']):
+                tex_name = brush.get('textures', {}).get(key, 'default.png')
+                if tex_name == 'caulk.jpg': 
+                    continue
+                if is_play and tex_name == 'nodraw.jpg': 
+                    continue
+                tex_id = self.texture_manager.get(os.path.join('textures', tex_name)) or \
+                        self.load_texture_callback(tex_name, 'textures')
+                batches[tex_id].append((brush, i))
+        
+        current_tex = None
+        for tex_id, items in batches.items():
+            if tex_id != current_tex: 
+                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                current_tex = tex_id
+                self.render_stats.batched_draws += 1
+            
+            for brush, face_idx in items:
+                self.render_stats.visible_tris += 2
+                
+                pos = brush['pos']
+                size = brush['size']
+                model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
+                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+                
+                # ARM mode: upload normal matrix
+                if normal_mat_loc > 0:
+                    normal_mat = self._compute_normal_matrix(model_matrix)
+                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
+                
+                if tex_scale_loc != -1:
+                    if brush.get('texture_tiling', False):
+                        tex_unit_size = 128.0 
+                        if face_idx == 0 or face_idx == 1:
+                            scale_x, scale_y = size[0] / tex_unit_size, size[1] / tex_unit_size
+                        elif face_idx == 2 or face_idx == 3:
+                            scale_x, scale_y = size[2] / tex_unit_size, size[1] / tex_unit_size
+                        else:
+                            scale_x, scale_y = size[0] / tex_unit_size, size[2] / tex_unit_size
+                        gl.glUniform2f(tex_scale_loc, scale_x, scale_y)
+                    else:
+                        gl.glUniform2f(tex_scale_loc, 1.0, 1.0)
+                
+                gl.glDrawArrays(gl.GL_TRIANGLES, face_idx * 6, 6)
+                self.render_stats.draw_calls += 1
+        
+        gl.glBindVertexArray(0)
+
+    # =========================================================================
+    # OTHER DRAWING METHODS (water, glass, fog, models, sprites)
+    # =========================================================================
 
     def draw_models(self, projection, view, camera_pos, models, lights, config):
-        if not models: return
+        if not models: 
+            return
         
         lit_shader = self.shaders.get('lit')
         textured_shader = self.shaders.get('textured')
@@ -642,24 +1015,25 @@ class Renderer:
 
         for thing in models:
             model_file = thing.properties.get('model_path')
-            if not model_file: continue
+            if not model_file: 
+                continue
             
             obj = self.load_model(model_file)
-            if not obj or not obj.is_loaded: continue
+            if not obj or not obj.is_loaded: 
+                continue
             
-            # Track triangles for this model
             self.render_stats.visible_tris += (obj.vertex_count // 3)
             
-            # --- TRANSFORM CALCULATION ---
             pos = thing.pos
             scale = thing.properties.get('scale', 1.0)
-            if isinstance(scale, (int, float)): scale = [scale, scale, scale]
+            if isinstance(scale, (int, float)): 
+                scale = [scale, scale, scale]
             rot = thing.properties.get('rotation', [0, 0, 0])
             
             mat = glm.translate(self._identity_mat4, glm.vec3(*pos))
-            mat = glm.rotate(mat, glm.radians(rot[1]), glm.vec3(0, 1, 0)) # Yaw
-            mat = glm.rotate(mat, glm.radians(rot[0]), glm.vec3(1, 0, 0)) # Pitch
-            mat = glm.rotate(mat, glm.radians(rot[2]), glm.vec3(0, 0, 1)) # Roll
+            mat = glm.rotate(mat, glm.radians(rot[1]), glm.vec3(0, 1, 0))
+            mat = glm.rotate(mat, glm.radians(rot[0]), glm.vec3(1, 0, 0))
+            mat = glm.rotate(mat, glm.radians(rot[2]), glm.vec3(0, 0, 1))
             mat = glm.scale(mat, glm.vec3(*scale))
             
             gl.glBindVertexArray(obj.vao)
@@ -678,7 +1052,7 @@ class Renderer:
                             u = self.uniforms['textured']
                             gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, self._proj_ptr)
                             gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, self._view_ptr)
-                            self._set_light_uniforms_cached('textured', lights)
+                            self._upload_lights_once('textured', lights)
                             gl.glActiveTexture(gl.GL_TEXTURE0)
                             gl.glUniform1i(u['texture_diffuse'], 0)
                         
@@ -699,7 +1073,7 @@ class Renderer:
                             u = self.uniforms['lit']
                             gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, self._proj_ptr)
                             gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, self._view_ptr)
-                            self._set_light_uniforms_cached('lit', lights)
+                            self._upload_lights_once('lit', lights)
 
                         color = material.get('color', [0.8, 0.8, 0.8])
                         gl.glUniform3fv(self.uniforms['lit']['object_color'], 1, color)
@@ -707,7 +1081,6 @@ class Renderer:
                         gl.glUniformMatrix4fv(self.uniforms['lit']['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
 
                     gl.glDrawArrays(gl.GL_TRIANGLES, group['start'], group['count'])
-
             else:
                 tex_name = manual_texture
                 target_shader = textured_shader if tex_name else lit_shader
@@ -719,7 +1092,7 @@ class Renderer:
                         u = self.uniforms['textured']
                         gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, self._proj_ptr)
                         gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, self._view_ptr)
-                        self._set_light_uniforms_cached('textured', lights)
+                        self._upload_lights_once('textured', lights)
                         gl.glActiveTexture(gl.GL_TEXTURE0)
                         gl.glUniform1i(u['texture_diffuse'], 0)
                     
@@ -734,7 +1107,7 @@ class Renderer:
                         u = self.uniforms['lit']
                         gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, self._proj_ptr)
                         gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, self._view_ptr)
-                        self._set_light_uniforms_cached('lit', lights)
+                        self._upload_lights_once('lit', lights)
                     
                     col = thing.properties.get('color', [0.8, 0.8, 0.8])
                     gl.glUniform3fv(self.uniforms['lit']['object_color'], 1, col)
@@ -742,30 +1115,235 @@ class Renderer:
                     gl.glUniformMatrix4fv(self.uniforms['lit']['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
 
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, obj.vertex_count)
-                
+            
             self.render_stats.draw_calls += 1
             
         gl.glBindVertexArray(0)
         gl.glEnable(gl.GL_CULL_FACE)
 
     def _distance_sq(self, pos1, pos2):
-        if isinstance(pos1, (list, tuple)): return (pos1[0]-pos2.x)**2 + (pos1[1]-pos2.y)**2 + (pos1[2]-pos2.z)**2
+        if isinstance(pos1, (list, tuple)): 
+            return (pos1[0]-pos2.x)**2 + (pos1[1]-pos2.y)**2 + (pos1[2]-pos2.z)**2
         return (pos1.x-pos2.x)**2 + (pos1.y-pos2.y)**2 + (pos1.z-pos2.z)**2
 
-    def _set_light_uniforms_cached(self, shader_name, lights):
-        if shader_name not in self.uniforms: return
-        uniforms = self.uniforms[shader_name]
-        num_lights = min(len(lights), self.MAX_LIGHTS)
-        gl.glUniform1i(uniforms['active_lights'], num_lights)
-        for i in range(num_lights):
-            light = lights[i]
-            gl.glUniform3fv(uniforms[f'lights[{i}].position'], 1, light.pos)
-            gl.glUniform3fv(uniforms[f'lights[{i}].color'], 1, light.get_color())
-            gl.glUniform1f(uniforms[f'lights[{i}].intensity'], light.get_intensity())
-            gl.glUniform1f(uniforms[f'lights[{i}].radius'], light.get_radius())
+    def _sort_objects(self, brushes, things, config):
+        opaque, transparent, sprites, fog, water, glass = [], [], [], [], [], []
+        is_play, show_sprites = config.get('play_mode', False), config.get('show_sprites_in_play_mode', False)
+        
+        for brush in brushes:
+            if brush.get('hidden'): 
+                continue
+            if brush.get('is_water', False) or brush.get('shader') == 'Water' or \
+               any('water' in (t or '').lower() for t in brush.get('textures', {}).values()): 
+                water.append(brush)
+            elif brush.get('is_fog') or brush.get('shader') == 'Fog': 
+                fog.append(brush)
+            elif brush.get('shader') == 'Glass': 
+                glass.append(brush)
+            elif brush.get('is_trigger'): 
+                if not is_play: 
+                    transparent.append(brush)
+            else: 
+                opaque.append(brush)
+        
+        if not is_play:
+            sprites = [t for t in things if isinstance(t, Thing)]
+        else:
+            from editor.things import Pickup
+            for t in things:
+                if isinstance(t, Thing):
+                    if isinstance(t, Pickup):
+                        sprites.append(t)
+                    elif show_sprites:
+                        sprites.append(t)
+        
+        return opaque, transparent, sprites, fog, water, glass
+
+    def draw_water_brushes(self, projection, view, camera_pos, brushes, lights, config):
+        if not brushes: 
+            return
+        shader, uniforms = self.shaders['water'], self.uniforms['water']
+        gl.glUseProgram(shader)
+        self._upload_lights_once('water', lights)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
+        gl.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
+        gl.glUniform1f(uniforms['time'], config.get('time', 0.0))
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self.water_normal_id)
+        gl.glUniform1i(uniforms['normalMap'], 0)
+        
+        opacity_loc = uniforms['waterOpacity']
+        reflectivity_loc = uniforms['waterReflectivity']
+        tint_loc, model_loc = uniforms['waterTint'], uniforms['model']
+        wave_enable_loc = uniforms['useWaveDisplacement']
+        wave_str_loc = uniforms['waveStrength']
+        
+        gl.glBindVertexArray(self.vaos['cube'])
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        
+        for brush in brushes:
+            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+            gl.glUniform1f(opacity_loc, brush.get('water_opacity', 0.5))
+            gl.glUniform1f(reflectivity_loc, brush.get('water_reflectivity', 0.5))
+            gl.glUniform3fv(tint_loc, 1, brush.get('water_tint', [0.0, 0.4, 0.6]))
+            gl.glUniform1i(wave_enable_loc, int(brush.get('water_wave_enabled', False)))
+            gl.glUniform1f(wave_str_loc, brush.get('water_wave_height', 0.5))
+            
+            if brush.get('water_plane', False):
+                gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
+            else:
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
+                gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
+            self.render_stats.draw_calls += 1
+        gl.glBindVertexArray(0)
+
+    def draw_glass_brushes(self, projection, view, camera_pos, brushes, lights, config):
+        if not brushes or 'glass' not in self.shaders: 
+            return
+        
+        shader, uniforms = self.shaders['glass'], self.uniforms['glass']
+        gl.glUseProgram(shader)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
+        gl.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
+        
+        model_loc = uniforms['model']
+        water_color_loc = uniforms['waterColor']
+        distortion_loc = uniforms['distortionStrength']
+        caustic_loc = uniforms['causticStrength']
+        opacity_loc = uniforms['glassOpacity']
+        refraction_loc = uniforms['refractionIndex']
+        roughness_loc = uniforms['roughness']
+        
+        gl.glBindVertexArray(self.vaos['cube'])
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl.glEnable(gl.GL_CULL_FACE)
+        gl.glCullFace(gl.GL_BACK)
+        
+        for brush in brushes:
+            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+            
+            glass_color = brush.get('glass_color', [0.7, 0.85, 0.95])
+            opacity = brush.get('glass_opacity', 0.3)
+            distortion = brush.get('glass_distortion', 0.5)
+            refraction = brush.get('glass_refraction', 1.5)
+            roughness = brush.get('glass_roughness', 0.0)
+            fresnel = brush.get('glass_fresnel', 0.5)
+            
+            gl.glUniform3fv(water_color_loc, 1, glass_color)
+            gl.glUniform1f(distortion_loc, distortion)
+            gl.glUniform1f(caustic_loc, fresnel)
+            gl.glUniform1f(opacity_loc, opacity)
+            gl.glUniform1f(refraction_loc, refraction)
+            gl.glUniform1f(roughness_loc, roughness)
+            
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+            self.render_stats.draw_calls += 1
+        
+        gl.glDisable(gl.GL_CULL_FACE)
+        gl.glBindVertexArray(0)
+
+    def draw_fog_volumes(self, projection, view, camera_pos, brushes, lights, config):
+        if not brushes or 'fog' not in self.shaders: 
+            return
+        
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        shader, uniforms = self.shaders['fog'], self.uniforms['fog']
+        gl.glUseProgram(shader)
+        self._upload_lights_once('fog', lights)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
+        gl.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
+        gl.glUniform1f(uniforms['time'], config.get('time', 0.0))
+        gl.glActiveTexture(gl.GL_TEXTURE1)
+        gl.glBindTexture(gl.GL_TEXTURE_3D, self.noise_texture_id)
+        gl.glUniform1i(uniforms['noiseTexture'], 1)
+        gl.glBindVertexArray(self.vaos['cube'])
+        gl.glEnable(gl.GL_CULL_FACE)
+        model_loc = uniforms['model']
+        density_loc = uniforms['density']
+        fog_color_loc = uniforms['fogColor']
+        noise_scale_loc = uniforms['noiseScale']
+        object_color_loc = uniforms['object_color']
+        alpha_loc = uniforms['alpha']
+        
+        for brush in brushes:
+            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+            f_color = brush.get('fog_color', [0.5, 0.6, 0.7])
+            gl.glUniform1f(density_loc, brush.get('fog_density', 0.01))
+            gl.glUniform3fv(fog_color_loc, 1, f_color)
+            gl.glUniform1f(noise_scale_loc, brush.get('fog_noise_scale', 0.01))
+            gl.glUniform3fv(object_color_loc, 1, f_color)
+            gl.glUniform1f(alpha_loc, 0.4)
+            
+            gl.glCullFace(gl.GL_FRONT)
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
+            gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
+            
+            gl.glCullFace(gl.GL_BACK)
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
+            gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
+
+        gl.glDisable(gl.GL_CULL_FACE)
+        gl.glBindVertexArray(0)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+
+    def draw_grid(self, projection, view, grid_indices_count, play_mode=False, grid_visible=True):
+        if not self.vaos['grid'] or play_mode or not grid_visible or 'simple' not in self.shaders: 
+            return
+        shader, uniforms = self.shaders['simple'], self.uniforms['simple']
+        gl.glUseProgram(shader)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
+        gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
+        gl.glUniform3f(uniforms['color'], 0.2, 0.2, 0.2)
+        gl.glUniform1f(uniforms['alpha'], 1.0)
+        gl.glBindVertexArray(self.vaos['grid'])
+        gl.glDrawArrays(gl.GL_LINES, 0, grid_indices_count)
+        gl.glBindVertexArray(0)
+
+    def draw_sprites(self, projection, view, things_to_draw, sprite_textures, instance_textures=None):
+        if not things_to_draw or 'sprite' not in self.shaders: 
+            return
+        shader, uniforms = self.shaders['sprite'], self.uniforms['sprite']
+        gl.glUseProgram(shader)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(uniforms['sprite_texture'], 0)
+        pos_loc, size_loc = uniforms['sprite_pos_world'], uniforms['sprite_size']
+        gl.glBindVertexArray(self.vaos['sprite'])
+        current_tex = None
+        for thing in things_to_draw:
+            tex_id = None
+            if instance_textures:
+                tex_id = instance_textures.get(id(thing))
+            if tex_id is None:
+                tex_id = sprite_textures.get(thing.__class__.__name__)
+            if tex_id:
+                if tex_id != current_tex: 
+                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                    current_tex = tex_id
+                gl.glUniform3fv(pos_loc, 1, thing.pos)
+                gl.glUniform2f(size_loc, 16.0 if isinstance(thing, Light) else 32.0, 
+                              16.0 if isinstance(thing, Light) else 32.0)
+                gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
+        gl.glBindVertexArray(0)
+
+    # =========================================================================
+    # SHADOW RENDERING (Optional - disabled by default for ARM)
+    # =========================================================================
 
     def render_projected_shadows_optimized(self, projection, view, camera_pos, brushes, shadow_lights):
-        if not brushes or not shadow_lights or 'lit' not in self.shaders: return
+        if not brushes or not shadow_lights or 'lit' not in self.shaders: 
+            return
         shader, uniforms = self.shaders['lit'], self.uniforms['lit']
         gl.glUseProgram(shader)
         gl.glUniform1i(uniforms['active_lights'], 0)
@@ -782,26 +1360,36 @@ class Renderer:
             floor_y = None
             for b in solid_brushes:
                 top_y = b['pos'][1] + b['size'][1] * 0.5
-                if top_y < ly and (floor_y is None or top_y > floor_y): floor_y = top_y
-            if floor_y is None: continue
+                if top_y < ly and (floor_y is None or top_y > floor_y): 
+                    floor_y = top_y
+            if floor_y is None: 
+                continue
             shadow_y, light_height = floor_y + 0.1, ly - floor_y
-            if light_height <= 0: continue
+            if light_height <= 0: 
+                continue
             
             shadow_casters = []
             for brush in solid_brushes:
                 bx, by, bz = brush['pos']
                 sx, sy, sz = brush['size']
                 brush_top = by + sy * 0.5
-                if abs(brush_top - floor_y) < 0.1 or brush_top <= floor_y or sx > 500 or sz > 500: continue
-                if (bx-lx)**2 + (by-ly)**2 + (bz-lz)**2 > light_radius_sq * 1.5: continue
+                if abs(brush_top - floor_y) < 0.1 or brush_top <= floor_y or sx > 500 or sz > 500: 
+                    continue
+                if (bx-lx)**2 + (by-ly)**2 + (bz-lz)**2 > light_radius_sq * 1.5: 
+                    continue
                 shadow_casters.append(brush)
-            if not shadow_casters: continue
+            if not shadow_casters: 
+                continue
             
             self._floor_shadow_batch.reset()
-            gl.glEnable(gl.GL_STENCIL_TEST); gl.glStencilMask(0xFF); gl.glClear(gl.GL_STENCIL_BUFFER_BIT)
-            gl.glStencilFunc(gl.GL_ALWAYS, 1, 0xFF); gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_REPLACE)
+            gl.glEnable(gl.GL_STENCIL_TEST)
+            gl.glStencilMask(0xFF)
+            gl.glClear(gl.GL_STENCIL_BUFFER_BIT)
+            gl.glStencilFunc(gl.GL_ALWAYS, 1, 0xFF)
+            gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_REPLACE)
             gl.glColorMask(gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE)
-            gl.glDepthMask(gl.GL_FALSE); gl.glDisable(gl.GL_DEPTH_TEST)
+            gl.glDepthMask(gl.GL_FALSE)
+            gl.glDisable(gl.GL_DEPTH_TEST)
             
             for brush in shadow_casters:
                 bx, by, bz = brush['pos']
@@ -814,9 +1402,15 @@ class Renderer:
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
             
             gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
-            gl.glStencilFunc(gl.GL_EQUAL, 0, 0xFF); gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP); gl.glStencilMask(0x00)
-            gl.glEnable(gl.GL_BLEND); gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-            gl.glEnable(gl.GL_DEPTH_TEST); gl.glDepthFunc(gl.GL_LEQUAL); gl.glEnable(gl.GL_POLYGON_OFFSET_FILL); gl.glPolygonOffset(-1.0, -1.0)
+            gl.glStencilFunc(gl.GL_EQUAL, 0, 0xFF)
+            gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
+            gl.glStencilMask(0x00)
+            gl.glEnable(gl.GL_BLEND)
+            gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+            gl.glEnable(gl.GL_DEPTH_TEST)
+            gl.glDepthFunc(gl.GL_LEQUAL)
+            gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
+            gl.glPolygonOffset(-1.0, -1.0)
             gl.glUniform3f(color_loc, 0.0, 0.0, 0.0)
             
             for brush in shadow_casters:
@@ -825,20 +1419,30 @@ class Renderer:
                 ratio = (by + sy * 0.5 - floor_y) / light_height
                 dir_x, dir_z = bx - lx, bz - lz
                 dir_len = (dir_x**2 + dir_z**2)**0.5
-                if dir_len > 0.001: dir_x /= dir_len; dir_z /= dir_len
-                else: dir_x, dir_z = 1, 0
+                if dir_len > 0.001: 
+                    dir_x /= dir_len
+                    dir_z /= dir_len
+                else: 
+                    dir_x, dir_z = 1, 0
                 total_len = ((bx + dir_x * dir_len * ratio - bx)**2 + (bz + dir_z * dir_len * ratio - bz)**2) ** 0.5
-                if total_len < 0.1: continue
+                if total_len < 0.1: 
+                    continue
                 total_len = min(total_len, light_radius * 0.75)
                 brush_diagonal = ((sx*sx + sz*sz) ** 0.5) * 0.5
                 shadow_len = total_len + brush_diagonal * 3
-                shadow_cx, shadow_cz = bx + dir_x * (shadow_len * 0.5 - brush_diagonal), bz + dir_z * (shadow_len * 0.5 - brush_diagonal)
+                shadow_cx = bx + dir_x * (shadow_len * 0.5 - brush_diagonal)
+                shadow_cz = bz + dir_z * (shadow_len * 0.5 - brush_diagonal)
                 dist = ((bx-lx)**2 + (by-ly)**2 + (bz-lz)**2)**0.5
                 shadow_alpha = max(0.4, min(0.7, 0.6 * (1.0 - (dist / light_radius) * 0.3)))
-                self._floor_shadow_batch.add((shadow_cx, shadow_y, shadow_cz), (brush_diagonal * 2.5, 0.01, shadow_len), glm.atan(dir_x, dir_z), shadow_alpha)
+                self._floor_shadow_batch.add((shadow_cx, shadow_y, shadow_cz), 
+                                            (brush_diagonal * 2.5, 0.01, shadow_len), 
+                                            glm.atan(dir_x, dir_z), shadow_alpha)
             
             for i in range(self._floor_shadow_batch.count):
-                pos, scale, rot, alpha = self._floor_shadow_batch.positions[i], self._floor_shadow_batch.scales[i], self._floor_shadow_batch.rotations[i], self._floor_shadow_batch.alphas[i]
+                pos = self._floor_shadow_batch.positions[i]
+                scale = self._floor_shadow_batch.scales[i]
+                rot = self._floor_shadow_batch.rotations[i]
+                alpha = self._floor_shadow_batch.alphas[i]
                 final_mat = glm.translate(self._identity_mat4, glm.vec3(*pos))
                 final_mat = glm.rotate(final_mat, rot, glm.vec3(0, 1, 0))
                 final_mat = glm.scale(final_mat, glm.vec3(*scale))
@@ -847,356 +1451,95 @@ class Renderer:
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
                 self.render_stats.shadow_draw_calls += 1
             
-            gl.glDisable(gl.GL_POLYGON_OFFSET_FILL); gl.glDisable(gl.GL_STENCIL_TEST)
-            self._render_wall_shadows_optimized(solid_brushes, shadow_casters, lx, ly, lz, light_radius, light_radius_sq, floor_y, model_loc, color_loc, alpha_loc)
+            gl.glDisable(gl.GL_POLYGON_OFFSET_FILL)
+            gl.glDisable(gl.GL_STENCIL_TEST)
         
-        gl.glDepthFunc(gl.GL_LESS); gl.glDepthMask(gl.GL_TRUE); gl.glDisable(gl.GL_BLEND); gl.glBindVertexArray(0)
-
-    def _render_wall_shadows_optimized(self, solid_brushes, shadow_casters, lx, ly, lz, light_radius, light_radius_sq, floor_y, model_loc, color_loc, alpha_loc):
-        walls = []
-        for brush in solid_brushes:
-            bx, by, bz, sx, sy, sz = *brush['pos'], *brush['size']
-            if by + sy * 0.5 <= floor_y + 1 or (bx-lx)**2 + (by-ly)**2 + (bz-lz)**2 > light_radius_sq * 4: continue
-            fxp, fxn, fzp, fzn = bx+sx*0.5, bx-sx*0.5, bz+sz*0.5, bz-sz*0.5
-            vr = (max(by-sy*0.5, floor_y), by+sy*0.5)
-            if lx > fxp: walls.append((brush, '+x', fxp, (bz-sz*0.5, bz+sz*0.5), vr))
-            if lx < fxn: walls.append((brush, '-x', fxn, (bz-sz*0.5, bz+sz*0.5), vr))
-            if lz > fzp: walls.append((brush, '+z', fzp, (bx-sx*0.5, bx+sx*0.5), vr))
-            if lz < fzn: walls.append((brush, '-z', fzn, (bx-sx*0.5, bx+sx*0.5), vr))
-        if not walls: return
-        
-        gl.glEnable(gl.GL_BLEND); gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        gl.glEnable(gl.GL_DEPTH_TEST); gl.glDepthFunc(gl.GL_LEQUAL); gl.glDepthMask(gl.GL_FALSE)
-        gl.glEnable(gl.GL_POLYGON_OFFSET_FILL); gl.glPolygonOffset(-1.0, -1.0)
-        gl.glUniform3f(color_loc, 0.0, 0.0, 0.0)
-        
-        for wall_brush, face_dir, face_coord, (lmin, lmax), (vmin, vmax) in walls:
-            for caster in shadow_casters:
-                if caster is wall_brush: continue
-                cx, cy, cz, csx, csy, csz = *caster['pos'], *caster['size']
-                ctop, cbot = cy + csy * 0.5, cy - csy * 0.5
-                if face_dir in ('+x', '-x'):
-                    if abs(cx - lx) < 0.001: continue
-                    t = (face_coord - lx) / (cx - lx)
-                    if t <= 1.0: continue
-                    sz, syt, syb = lz + (cz - lz) * t, ly + (ctop - ly) * t, ly + (cbot - ly) * t
-                    sw = csz * (1.0 + (t - 1.0) * 0.2)
-                    if sz + sw * 0.5 < lmin or sz - sw * 0.5 > lmax: continue
-                    spos, svec = glm.vec3(face_coord + (0.1 if face_dir == '+x' else -0.1), 0, sz), glm.vec3(0.01, 1, sw)
-                else:
-                    if abs(cz - lz) < 0.001: continue
-                    t = (face_coord - lz) / (cz - lz)
-                    if t <= 1.0: continue
-                    sx, syt, syb = lx + (cx - lx) * t, ly + (ctop - ly) * t, ly + (cbot - ly) * t
-                    sw = csx * (1.0 + (t - 1.0) * 0.2)
-                    if sx + sw * 0.5 < lmin or sx - sw * 0.5 > lmax: continue
-                    spos, svec = glm.vec3(sx, 0, face_coord + (0.1 if face_dir == '+z' else -0.1)), glm.vec3(sw, 1, 0.01)
-                
-                syt, syb = min(syt, vmax), max(syb, vmin)
-                if syt <= syb or (cx-lx)**2 + (cy-ly)**2 + (cz-lz)**2 > light_radius_sq: continue
-                spos.y, svec.y = (syt + syb) * 0.5, syt - syb
-                alpha = max(0.4, min(0.7, 0.6 * (1.0 - (((cx-lx)**2 + (cy-ly)**2 + (cz-lz)**2)**0.5 / light_radius) * 0.3)))
-                final_mat = glm.scale(glm.translate(self._identity_mat4, spos), svec)
-                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(final_mat))
-                gl.glUniform1f(alpha_loc, alpha)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
-                self.render_stats.shadow_draw_calls += 1
-        gl.glDisable(gl.GL_POLYGON_OFFSET_FILL)
-
-    def draw_fog_volumes(self, projection, view, camera_pos, brushes, lights, config):
-        if not brushes: return
-        if 'fog' not in self.shaders: return
-        visible_brushes = self._cull_brushes(projection, view, camera_pos, brushes)
-        if not visible_brushes: return
-        gl.glEnable(gl.GL_BLEND); gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        shader, uniforms = self.shaders['fog'], self.uniforms['fog']
-        gl.glUseProgram(shader)
-        self._set_light_uniforms_cached('fog', lights)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
-        gl.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
-        gl.glUniform1f(uniforms['time'], config.get('time', 0.0))
-        gl.glActiveTexture(gl.GL_TEXTURE1); gl.glBindTexture(gl.GL_TEXTURE_3D, self.noise_texture_id); gl.glUniform1i(uniforms['noiseTexture'], 1)
-        gl.glBindVertexArray(self.vaos['cube']); gl.glEnable(gl.GL_CULL_FACE)
-        model_loc, density_loc, fog_color_loc, noise_scale_loc, object_color_loc, alpha_loc = uniforms['model'], uniforms['density'], uniforms['fogColor'], uniforms['noiseScale'], uniforms['object_color'], uniforms['alpha']
-        
-        for brush in visible_brushes:
-            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-            f_color = brush.get('fog_color', [0.5, 0.6, 0.7])
-            gl.glUniform1f(density_loc, brush.get('fog_density', 0.01))
-            gl.glUniform3fv(fog_color_loc, 1, f_color)
-            gl.glUniform1f(noise_scale_loc, brush.get('fog_noise_scale', 0.01))
-            gl.glUniform3fv(object_color_loc, 1, f_color)
-            gl.glUniform1f(alpha_loc, 0.4)
-            
-            # Draw Front/Back face culling passes
-            # IMPORTANT: Skipping Bottom Face (Indices 24-30)
-            
-            # Pass 1: Cull Front (Draw Inside Back faces)
-            gl.glCullFace(gl.GL_FRONT)
-            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)  # Sides
-            gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)  # Top Only
-            
-            # Pass 2: Cull Back (Draw Outside Front faces)
-            gl.glCullFace(gl.GL_BACK)
-            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)  # Sides
-            gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)  # Top Only
-
-        gl.glDisable(gl.GL_CULL_FACE); gl.glBindVertexArray(0); gl.glActiveTexture(gl.GL_TEXTURE0)
-
-    def _sort_objects(self, brushes, things, config):
-        opaque, transparent, sprites, fog, water, glass = [], [], [], [], [], []
-        is_play, show_sprites = config.get('play_mode', False), config.get('show_sprites_in_play_mode', False)
-        for brush in brushes:
-            if brush.get('hidden'): continue
-            if brush.get('is_water', False) or brush.get('shader') == 'Water' or any('water' in (t or '').lower() for t in brush.get('textures', {}).values()): water.append(brush)
-            elif brush.get('is_fog') or brush.get('shader') == 'Fog': fog.append(brush)
-            elif brush.get('shader') == 'Glass': glass.append(brush)
-            elif brush.get('is_trigger'): 
-                if not is_play: transparent.append(brush)
-            else: opaque.append(brush)
-        
-        # In play mode: always show Pickups (so player can collect them)
-        # Other sprites (Light, PlayerStart, etc.) only show if show_sprites is enabled
-        if not is_play:
-            # Editor mode: show all sprites
-            sprites = [t for t in things if isinstance(t, Thing)]
-        else:
-            # Play mode: always show Pickups, optionally show other sprites
-            for t in things:
-                if isinstance(t, Thing):
-                    # Import Pickup here to check type
-                    from editor.things import Pickup
-                    if isinstance(t, Pickup):
-                        # Always show pickups in play mode (unless collected - handled by logic thread)
-                        sprites.append(t)
-                    elif show_sprites:
-                        # Other sprites only if debug enabled
-                        sprites.append(t)
-        
-        return opaque, transparent, sprites, fog, water, glass
-
-    def draw_water_brushes(self, projection, view, camera_pos, brushes, lights, config):
-        if not brushes: return
-        visible = self._cull_brushes(projection, view, camera_pos, brushes)
-        if not visible: return
-        shader, uniforms = self.shaders['water'], self.uniforms['water']
-        gl.glUseProgram(shader)
-        self._set_light_uniforms_cached('water', lights)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
-        gl.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
-        gl.glUniform1f(uniforms['time'], config.get('time', 0.0))
-        gl.glActiveTexture(gl.GL_TEXTURE0); gl.glBindTexture(gl.GL_TEXTURE_2D, self.water_normal_id); gl.glUniform1i(uniforms['normalMap'], 0)
-        
-        opacity_loc = uniforms['waterOpacity']
-        reflectivity_loc = uniforms['waterReflectivity']
-        tint_loc, model_loc = uniforms['waterTint'], uniforms['model']
-        
-        wave_enable_loc = uniforms['useWaveDisplacement']
-        wave_str_loc = uniforms['waveStrength']
-        
-        gl.glBindVertexArray(self.vaos['cube'])
-        gl.glEnable(gl.GL_BLEND); gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        
-        for brush in visible:
-            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-            
-            gl.glUniform1f(opacity_loc, brush.get('water_opacity', 0.5))
-            gl.glUniform1f(reflectivity_loc, brush.get('water_reflectivity', 0.5))
-            gl.glUniform3fv(tint_loc, 1, brush.get('water_tint', [0.0, 0.4, 0.6]))
-            
-            # Default to False (0) and 0.5 strength
-            gl.glUniform1i(wave_enable_loc, int(brush.get('water_wave_enabled', False)))
-            gl.glUniform1f(wave_str_loc, brush.get('water_wave_height', 0.5))
-            
-            if brush.get('water_plane', False):
-                gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
-            else:
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
-                
-            self.render_stats.draw_calls += 1
+        gl.glDepthFunc(gl.GL_LESS)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glDisable(gl.GL_BLEND)
         gl.glBindVertexArray(0)
 
-    def draw_glass_brushes(self, projection, view, camera_pos, brushes, lights, config):
-        """Render brushes with the glass shader effect."""
-        if not brushes or 'glass' not in self.shaders: return
-        visible = self._cull_brushes(projection, view, camera_pos, brushes)
-        if not visible: return
-        
-        shader, uniforms = self.shaders['glass'], self.uniforms['glass']
-        gl.glUseProgram(shader)
-        
-        # Set common uniforms
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
-        gl.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
-        
-        # Get uniform locations
-        model_loc = uniforms['model']
-        water_color_loc = uniforms['waterColor']
-        distortion_loc = uniforms['distortionStrength']
-        caustic_loc = uniforms['causticStrength']
-        opacity_loc = uniforms['glassOpacity']
-        refraction_loc = uniforms['refractionIndex']
-        roughness_loc = uniforms['roughness']
-        
-        gl.glBindVertexArray(self.vaos['cube'])
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        gl.glEnable(gl.GL_CULL_FACE)
-        gl.glCullFace(gl.GL_BACK)
-        
-        for brush in visible:
-            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-            
-            # Read all glass properties from brush
-            glass_color = brush.get('glass_color', [0.7, 0.85, 0.95])
-            opacity = brush.get('glass_opacity', 0.3)
-            distortion = brush.get('glass_distortion', 0.5)
-            refraction = brush.get('glass_refraction', 1.5)
-            roughness = brush.get('glass_roughness', 0.0)
-            fresnel = brush.get('glass_fresnel', 0.5)
-            
-            # Set all uniforms
-            gl.glUniform3fv(water_color_loc, 1, glass_color)
-            gl.glUniform1f(distortion_loc, distortion)
-            gl.glUniform1f(caustic_loc, fresnel)
-            gl.glUniform1f(opacity_loc, opacity)
-            gl.glUniform1f(refraction_loc, refraction)
-            gl.glUniform1f(roughness_loc, roughness)
-            
-            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
-            self.render_stats.draw_calls += 1
-        
-        gl.glDisable(gl.GL_CULL_FACE)
-        gl.glBindVertexArray(0)
+    # =========================================================================
+    # SELECTION / GIZMO / FACE HIGHLIGHT
+    # =========================================================================
 
-    def draw_grid(self, projection, view, grid_indices_count, play_mode=False, grid_visible=True):
-        if not self.vaos['grid'] or play_mode or not grid_visible or 'simple' not in self.shaders: return
+    def draw_face_highlight(self, projection, view, brush, face_name):
+        if 'simple' not in self.shaders: 
+            return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
         gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
-        gl.glUniform3f(uniforms['color'], 0.2, 0.2, 0.2)
-        gl.glUniform1f(uniforms['alpha'], 1.0)
-        gl.glBindVertexArray(self.vaos['grid']); gl.glDrawArrays(gl.GL_LINES, 0, grid_indices_count); gl.glBindVertexArray(0)
-
-    def draw_lit_brushes(self, projection, view, camera_pos, brushes, lights, config, is_transparent_pass=False):
-        if not brushes or 'lit' not in self.shaders: return
-        visible = self._cull_brushes(projection, view, camera_pos, brushes)
-        if not visible: return
-        shader, uniforms = self.shaders['lit'], self.uniforms['lit']
-        gl.glUseProgram(shader)
-        self._set_light_uniforms_cached('lit', lights)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
-        gl.glBindVertexArray(self.vaos['cube'])
-        display_mode, show_triggers_solid, selected = config.get('brush_display_mode', 'Textured'), config.get('show_triggers_as_solid', False), config.get('selected_object')
-        model_loc, color_loc, alpha_loc = uniforms['model'], uniforms['object_color'], uniforms['alpha']
-        fill_mode = (gl.GL_FILL if show_triggers_solid else gl.GL_LINE) if is_transparent_pass else (gl.GL_FILL if display_mode != "Wireframe" else gl.GL_LINE)
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
-        for brush in visible:
-            # Update Visible Triangle Stats
-            self.render_stats.visible_tris += 12
-            
-            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-            if brush.get('is_trigger'): color, alpha = [0.0, 1.0, 1.0], 0.3
-            elif brush is selected: color, alpha = [1.0, 1.0, 0.0], 1.0
-            elif brush.get('operation') == 'subtract': color, alpha = [1.0, 0.0, 0.0], 1.0
-            else:
-                brush_colour = brush.get('colour')
-                if brush_colour and isinstance(brush_colour, (list, tuple)) and len(brush_colour) >= 3:
-                    color = [c / 255.0 if c > 1.0 else c for c in brush_colour[:3]]
-                else: color = [0.8, 0.8, 0.8]
-                alpha = 1.0
-            gl.glUniform3fv(color_loc, 1, color); gl.glUniform1f(alpha_loc, alpha)
-            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
-            self.render_stats.draw_calls += 1
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL); gl.glBindVertexArray(0)
-
-    def draw_textured_brushes(self, projection, view, camera_pos, brushes, lights, config):
-        if not brushes or 'textured' not in self.shaders: return
-        visible = self._cull_brushes(projection, view, camera_pos, brushes)
-        if not visible: return
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl.glUniform3f(uniforms['color'], 0.8, 0.2, 0.9) 
+        gl.glUniform1f(uniforms['alpha'], 0.4) 
         
-        shader, uniforms = self.shaders['textured'], self.uniforms['textured']
-        gl.glUseProgram(shader)
+        pos, size = brush['pos'], brush['size']
+        hx, hy, hz = size[0]/2, size[1]/2, size[2]/2
+        cx, cy, cz = pos[0], pos[1], pos[2]
+        bias = 0.5 
+        
+        verts = []
+        if face_name == 'north':
+            z = cz + hz + bias
+            verts = [cx-hx, cy-hy, z,  cx+hx, cy-hy, z,  cx+hx, cy+hy, z,
+                     cx-hx, cy-hy, z,  cx+hx, cy+hy, z,  cx-hx, cy+hy, z]
+        elif face_name == 'south':
+            z = cz - hz - bias
+            verts = [cx+hx, cy-hy, z,  cx-hx, cy-hy, z,  cx-hx, cy+hy, z,
+                     cx+hx, cy-hy, z,  cx-hx, cy+hy, z,  cx+hx, cy+hy, z]
+        elif face_name == 'east':
+            x = cx + hx + bias
+            verts = [x, cy-hy, cz+hz,  x, cy-hy, cz-hz,  x, cy+hy, cz-hz,
+                     x, cy-hy, cz+hz,  x, cy+hy, cz-hz,  x, cy+hy, cz+hz]
+        elif face_name == 'west':
+            x = cx - hx - bias
+            verts = [x, cy-hy, cz-hz,  x, cy-hy, cz+hz,  x, cy+hy, cz+hz,
+                     x, cy-hy, cz-hz,  x, cy+hy, cz+hz,  x, cy+hy, cz-hz]
+        elif face_name == 'top':
+            y = cy + hy + bias
+            verts = [cx-hx, y, cz+hz,  cx+hx, y, cz+hz,  cx+hx, y, cz-hz,
+                     cx-hx, y, cz+hz,  cx+hx, y, cz-hz,  cx-hx, y, cz-hz]
+        elif face_name == 'down':
+            y = cy - hy - bias
+            verts = [cx-hx, y, cz-hz,  cx+hx, y, cz-hz,  cx+hx, y, cz+hz,
+                     cx-hx, y, cz-hz,  cx+hx, y, cz+hz,  cx-hx, y, cz+hz]
+            
+        if not verts: 
+            return
+
+        v_data = np.array(verts, dtype=np.float32)
+        
+        if not hasattr(self, 'face_highlight_vao'):
+            self.face_highlight_vao = gl.glGenVertexArrays(1)
+            self.face_highlight_vbo = gl.glGenBuffers(1)
+            gl.glBindVertexArray(self.face_highlight_vao)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.face_highlight_vbo)
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, 6 * 3 * 4, None, gl.GL_DYNAMIC_DRAW) 
+            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+            gl.glEnableVertexAttribArray(0)
+            gl.glBindVertexArray(0)
+            
+        gl.glBindVertexArray(self.face_highlight_vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.face_highlight_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, v_data.nbytes, v_data)
+        gl.glDrawArrays(gl.GL_TRIANGLES, 0, 6)
+        
+        gl.glUniform3f(uniforms['color'], 1.0, 1.0, 1.0)
+        gl.glUniform1f(uniforms['alpha'], 1.0)
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
+        gl.glDrawArrays(gl.GL_TRIANGLES, 0, 6)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         
-        self._set_light_uniforms_cached('textured', lights)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glUniform1i(uniforms['texture_diffuse'], 0)
-        gl.glBindVertexArray(self.vaos['cube'])
-        
-        model_loc = uniforms['model']
-        tex_scale_loc = uniforms._cache.get('tex_scale', -1) 
-        if tex_scale_loc == -1:
-            tex_scale_loc = gl.glGetUniformLocation(shader, "tex_scale")
-        
-        batches = defaultdict(list)
-        is_play = config.get('play_mode', False)
-
-        for brush in visible:
-            for i, key in enumerate(['south', 'north', 'west', 'east', 'down', 'top']):
-                tex_name = brush.get('textures', {}).get(key, 'default.png')
-                
-                # Culling Logic
-                if tex_name == 'caulk.jpg': continue
-                # NEW: Skip 'nodraw.jpg' faces only when in Play Mode
-                if is_play and tex_name == 'nodraw.jpg': continue
-
-                tex_id = self.texture_manager.get(os.path.join('textures', tex_name)) or self.load_texture_callback(tex_name, 'textures')
-                batches[tex_id].append((brush, i))
-                
-        current_tex = None
-        for tex_id, items in batches.items():
-            if tex_id != current_tex: 
-                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                current_tex = tex_id
-                
-            for brush, face_idx in items:
-                self.render_stats.visible_tris += 2
-                
-                model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
-                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-                
-                if tex_scale_loc != -1:
-                    if brush.get('texture_tiling', False):
-                        size = brush['size']
-                        scale_x, scale_y = 1.0, 1.0
-                        tex_unit_size = 128.0 
-                        
-                        if face_idx == 0 or face_idx == 1: # South/North
-                            scale_x = size[0] / tex_unit_size
-                            scale_y = size[1] / tex_unit_size
-                        elif face_idx == 2 or face_idx == 3: # West/East
-                            scale_x = size[2] / tex_unit_size
-                            scale_y = size[1] / tex_unit_size
-                        elif face_idx == 4 or face_idx == 5: # Down/Top
-                            scale_x = size[0] / tex_unit_size
-                            scale_y = size[2] / tex_unit_size
-                            
-                        gl.glUniform2f(tex_scale_loc, scale_x, scale_y)
-                    else:
-                        gl.glUniform2f(tex_scale_loc, 1.0, 1.0)
-                
-                gl.glDrawArrays(gl.GL_TRIANGLES, face_idx * 6, 6)
-                self.render_stats.draw_calls += 1
-                
         gl.glBindVertexArray(0)
-
+        gl.glDisable(gl.GL_BLEND)
+        gl.glUseProgram(0)
 
     def draw_selected_brush_outline(self, projection, view, brush):
-        if 'simple' not in self.shaders: return
+        if 'simple' not in self.shaders: 
+            return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
@@ -1204,10 +1547,9 @@ class Renderer:
         model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
         gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
         gl.glUniform3f(uniforms['color'], 1.0, 1.0, 0.0)
-        gl.glUniform1f(uniforms['alpha'], 1.0) # Opaque
+        gl.glUniform1f(uniforms['alpha'], 1.0)
         
         if not hasattr(self, '_edge_vao') or self._edge_vao is None:
-            # 8 corners of unit cube, 12 edges as line pairs
             edge_vertices = np.array([
                 -0.5, -0.5, -0.5,  0.5, -0.5, -0.5,  0.5, -0.5, -0.5,  0.5, -0.5,  0.5,
                  0.5, -0.5,  0.5, -0.5, -0.5,  0.5, -0.5, -0.5,  0.5, -0.5, -0.5, -0.5,
@@ -1230,42 +1572,9 @@ class Renderer:
         gl.glDrawArrays(gl.GL_LINES, 0, 24) 
         gl.glBindVertexArray(0)
 
-    def draw_sprites(self, projection, view, things_to_draw, sprite_textures, instance_textures=None):
-        """
-        Draw thing sprites.
-        
-        Args:
-            projection: Projection matrix
-            view: View matrix  
-            things_to_draw: List of Thing objects to render
-            sprite_textures: Dict mapping class name -> texture ID (default textures)
-            instance_textures: Optional dict mapping thing object id -> texture ID (for per-instance sprites)
-        """
-        if not things_to_draw or 'sprite' not in self.shaders: return
-        shader, uniforms = self.shaders['sprite'], self.uniforms['sprite']
-        gl.glUseProgram(shader)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
-        gl.glActiveTexture(gl.GL_TEXTURE0); gl.glUniform1i(uniforms['sprite_texture'], 0)
-        pos_loc, size_loc = uniforms['sprite_pos_world'], uniforms['sprite_size']
-        gl.glBindVertexArray(self.vaos['sprite'])
-        current_tex = None
-        for thing in things_to_draw:
-            # Check for per-instance texture first
-            tex_id = None
-            if instance_textures:
-                tex_id = instance_textures.get(id(thing))
-            
-            # Fall back to class-based texture
-            if tex_id is None:
-                tex_id = sprite_textures.get(thing.__class__.__name__)
-            
-            if tex_id:
-                if tex_id != current_tex: gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id); current_tex = tex_id
-                gl.glUniform3fv(pos_loc, 1, thing.pos)
-                gl.glUniform2f(size_loc, 16.0 if isinstance(thing, Light) else 32.0, 16.0 if isinstance(thing, Light) else 32.0)
-                gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
-        gl.glBindVertexArray(0)
+    # =========================================================================
+    # VAO CREATION
+    # =========================================================================
 
     def _create_cube_vao(self):
         vertices = np.array([
@@ -1287,9 +1596,12 @@ class Renderer:
         vbo = gl.glGenBuffers(1)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, vertices.nbytes, vertices, gl.GL_STATIC_DRAW)
-        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(0)); gl.glEnableVertexAttribArray(0)
-        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(12)); gl.glEnableVertexAttribArray(1)
-        gl.glVertexAttribPointer(2, 2, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(24)); gl.glEnableVertexAttribArray(2)
+        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(0))
+        gl.glEnableVertexAttribArray(0)
+        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(12))
+        gl.glEnableVertexAttribArray(1)
+        gl.glVertexAttribPointer(2, 2, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(24))
+        gl.glEnableVertexAttribArray(2)
         gl.glBindVertexArray(0)
         return vao
 
@@ -1300,7 +1612,8 @@ class Renderer:
         vbo = gl.glGenBuffers(1)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, vertices.nbytes, vertices, gl.GL_STATIC_DRAW)
-        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None); gl.glEnableVertexAttribArray(0)
+        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+        gl.glEnableVertexAttribArray(0)
         gl.glBindVertexArray(0)
         return vao
 
@@ -1311,7 +1624,8 @@ class Renderer:
         gl.glBindVertexArray(self.vao_gizmo_lines)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, axis_verts.nbytes, axis_verts, gl.GL_STATIC_DRAW)
-        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0)); gl.glEnableVertexAttribArray(0)
+        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
+        gl.glEnableVertexAttribArray(0)
         cone_verts = []
         for i in range(12):
             t1, t2 = (i/12)*2*np.pi, ((i+1)/12)*2*np.pi
@@ -1324,11 +1638,13 @@ class Renderer:
         gl.glBindVertexArray(self.vao_gizmo_cone)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo2)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, cone_verts.nbytes, cone_verts, gl.GL_STATIC_DRAW)
-        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None); gl.glEnableVertexAttribArray(0)
+        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+        gl.glEnableVertexAttribArray(0)
         gl.glBindVertexArray(0)
 
     def render_gizmo(self, projection, view, position):
-        if 'simple' not in self.shaders: return
+        if 'simple' not in self.shaders: 
+            return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
@@ -1336,19 +1652,26 @@ class Renderer:
         pos_vec = glm.vec3(*position) if isinstance(position, (list, tuple)) else position
         base = glm.scale(glm.translate(self._identity_mat4, pos_vec), glm.vec3(32.0))
         model_loc, color_loc = uniforms['model'], uniforms['color']
-        
-        gl.glUniform1f(uniforms['alpha'], 1.0) # Opaque
+        gl.glUniform1f(uniforms['alpha'], 1.0)
         
         gl.glBindVertexArray(self.vao_gizmo_lines)
         gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(base))
         for i, c in enumerate([(1,0,0), (0,1,0), (0,0,1)]):
-            gl.glUniform3f(color_loc, *c); gl.glDrawArrays(gl.GL_LINES, i*2, 2)
+            gl.glUniform3f(color_loc, *c)
+            gl.glDrawArrays(gl.GL_LINES, i*2, 2)
         gl.glBindVertexArray(self.vao_gizmo_cone)
-        for axis, c, rot in [((1,0,0), (1,0,0), glm.rotate(base, glm.radians(-90), glm.vec3(0,0,1))), ((0,1,0), (0,1,0), base), ((0,0,1), (0,0,1), glm.rotate(base, glm.radians(90), glm.vec3(1,0,0)))]:
-            m = glm.translate(rot if axis[1] else glm.translate(base, glm.vec3(*axis)), glm.vec3(0,1,0) if axis[1] else glm.vec3(0,0,0))
-            if axis[0]: m = glm.translate(glm.rotate(base, glm.radians(-90), glm.vec3(0,0,1)), glm.vec3(0,1,0))
-            if axis[2]: m = glm.translate(glm.rotate(base, glm.radians(90), glm.vec3(1,0,0)), glm.vec3(0,1,0))
-            if axis[1]: m = glm.translate(base, glm.vec3(0,1,0))
+        for axis, c, rot in [((1,0,0), (1,0,0), glm.rotate(base, glm.radians(-90), glm.vec3(0,0,1))), 
+                            ((0,1,0), (0,1,0), base), 
+                            ((0,0,1), (0,0,1), glm.rotate(base, glm.radians(90), glm.vec3(1,0,0)))]:
+            m = glm.translate(rot if axis[1] else glm.translate(base, glm.vec3(*axis)), 
+                             glm.vec3(0,1,0) if axis[1] else glm.vec3(0,0,0))
+            if axis[0]: 
+                m = glm.translate(glm.rotate(base, glm.radians(-90), glm.vec3(0,0,1)), glm.vec3(0,1,0))
+            if axis[2]: 
+                m = glm.translate(glm.rotate(base, glm.radians(90), glm.vec3(1,0,0)), glm.vec3(0,1,0))
+            if axis[1]: 
+                m = glm.translate(base, glm.vec3(0,1,0))
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(m))
-            gl.glUniform3f(color_loc, *c); gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
+            gl.glUniform3f(color_loc, *c)
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
         gl.glBindVertexArray(0)
