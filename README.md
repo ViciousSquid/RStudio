@@ -3,7 +3,7 @@
 
 
 
-#### A brush-based CSG world editor inspired by QeRadiant and Worldcraft (from the old times!)
+#### A brush-based CSG world editor inspired by Radiant and Worldcraft/Hammer (from the old times!)
 
 #### [Download v1.0.13.0 for Windows](https://github.com/ViciousSquid/RStudio/releases) | Please consider testing [prerelease 1.0.14.0](https://github.com/ViciousSquid/RStudio/releases/tag/v1.0.14.0_prerelease) with performance enhancements
 
