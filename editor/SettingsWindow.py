@@ -199,9 +199,104 @@ class SettingsWindow(QDialog):
         
         conn_group.setLayout(conn_layout)
         layout.addWidget(conn_group)
+        
+        # --- Renderer Performance Group ---
+        renderer_group = QGroupBox("Renderer Performance")
+        renderer_layout = QVBoxLayout()
+        
+        # Auto-detect label
+        self.arm_detected_label = QLabel()
+        self._update_arm_detection_label()
+        renderer_layout.addWidget(self.arm_detected_label)
+        
+        self.arm_mode_checkbox = QCheckBox("ARM Optimized Shaders")
+        self.arm_mode_checkbox.setToolTip(
+            "Use optimized shaders that pre-compute normal matrices on CPU.\n"
+            "Recommended for ARM devices (Surface Pro X/9, Apple Silicon) and\n"
+            "x64 emulation. Safe to enable on all devices - no quality loss."
+        )
+        renderer_layout.addWidget(self.arm_mode_checkbox)
+        
+        self.shadows_enabled_checkbox = QCheckBox("Enable Dynamic Shadows")
+        self.shadows_enabled_checkbox.setToolTip(
+            "Enable projected shadows from lights with 'casts_shadows' enabled.\n"
+            "Disable for better performance on slower devices."
+        )
+        renderer_layout.addWidget(self.shadows_enabled_checkbox)
+        
+        # Auto-detect button
+        auto_detect_btn = QPushButton("Auto-Detect Best Settings")
+        auto_detect_btn.clicked.connect(self._auto_detect_renderer_settings)
+        renderer_layout.addWidget(auto_detect_btn)
+        
+        renderer_group.setLayout(renderer_layout)
+        layout.addWidget(renderer_group)
 
         layout.addStretch()
         self.tabs.addTab(tab, "Display")
+    
+    def _detect_arm_platform(self):
+        """Detect if running on ARM or under x64 emulation."""
+        import platform
+        machine = platform.machine().lower()
+        
+        # Direct ARM detection
+        if 'arm' in machine or 'aarch' in machine:
+            return True, "ARM processor detected"
+        
+        # Check for Windows ARM emulation markers
+        if sys.platform == 'win32':
+            # Check environment variable set by Windows on ARM
+            if os.environ.get('PROCESSOR_ARCHITECTURE', '').upper() == 'ARM64':
+                return True, "Windows ARM64 detected"
+            if os.environ.get('PROCESSOR_ARCHITEW6432', '').upper() == 'ARM64':
+                return True, "Running under x64 emulation on ARM64"
+            
+            # Check for Qualcomm/Snapdragon in processor name
+            proc_id = os.environ.get('PROCESSOR_IDENTIFIER', '').lower()
+            if 'qualcomm' in proc_id or 'snapdragon' in proc_id or 'arm' in proc_id:
+                return True, "Qualcomm/ARM processor detected"
+        
+        return False, "x64/x86 processor detected"
+    
+    def _update_arm_detection_label(self):
+        """Update the ARM detection status label."""
+        is_arm, reason = self._detect_arm_platform()
+        if is_arm:
+            self.arm_detected_label.setText(f"⚠️ {reason} - optimizations recommended")
+            self.arm_detected_label.setStyleSheet("color: #FFA500;")  # Orange
+        else:
+            self.arm_detected_label.setText(f"✓ {reason}")
+            self.arm_detected_label.setStyleSheet("color: #90EE90;")  # Light green
+    
+    def _auto_detect_renderer_settings(self):
+        """Auto-detect and apply optimal renderer settings for this platform."""
+        is_arm, reason = self._detect_arm_platform()
+        
+        if is_arm:
+            self.arm_mode_checkbox.setChecked(True)
+            self.shadows_enabled_checkbox.setChecked(False)
+            QMessageBox.information(
+                self,
+                "Auto-Detect Complete",
+                f"Detected: {reason}\n\n"
+                "Applied ARM-optimized settings:\n"
+                "• ARM Optimized Shaders: ON\n"
+                "• Dynamic Shadows: OFF\n\n"
+                "These settings improve performance on ARM devices."
+            )
+        else:
+            self.arm_mode_checkbox.setChecked(True)  # Still beneficial, no downside
+            self.shadows_enabled_checkbox.setChecked(True)
+            QMessageBox.information(
+                self,
+                "Auto-Detect Complete", 
+                f"Detected: {reason}\n\n"
+                "Applied standard settings:\n"
+                "• ARM Optimized Shaders: ON (no quality loss)\n"
+                "• Dynamic Shadows: ON\n\n"
+                "Full quality rendering enabled."
+            )
 
     def _create_play_mode_tab(self):
         """Play Mode tab: Physics and gameplay settings."""
@@ -408,8 +503,8 @@ class SettingsWindow(QDialog):
         # Display settings
         self.show_fps_checkbox.setChecked(self.config.getboolean('Display', 'show_fps', fallback=True))
         self.always_show_sysmon_checkbox.setChecked(self.config.getboolean('Display', 'always_show_sysmon', fallback=False))
-        # NEW: Load IO Debug setting - FALLBACK SET TO FALSE
-        self.always_show_io_debug_checkbox.setChecked(self.config.getboolean('Display', 'always_show_io_debug', fallback=False))
+        # NEW: Load IO Debug setting
+        self.always_show_io_debug_checkbox.setChecked(self.config.getboolean('Display', 'always_show_io_debug', fallback=True))
         
         self.disable_toasts_checkbox.setChecked(self.config.getboolean('Display', 'disable_toasts', fallback=False))
         self.font_size_spinbox.setValue(self.config.getint('Display', 'font_size', fallback=10))
@@ -417,6 +512,13 @@ class SettingsWindow(QDialog):
         self.dpi_scaling_checkbox.setChecked(self.config.getboolean('Display', 'high_dpi_scaling', fallback=False))
         self.big_toolbar_buttons_checkbox.setChecked(self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False))
         self.animate_connections_checkbox.setChecked(self.config.getboolean('Display', 'animate_connections', fallback=False))
+        
+        # Renderer Performance settings - auto-detect defaults based on platform
+        is_arm, _ = self._detect_arm_platform()
+        default_arm_mode = True  # Always beneficial
+        default_shadows = not is_arm  # Off by default on ARM, On otherwise
+        self.arm_mode_checkbox.setChecked(self.config.getboolean('Renderer', 'arm_mode', fallback=default_arm_mode))
+        self.shadows_enabled_checkbox.setChecked(self.config.getboolean('Renderer', 'shadows_enabled', fallback=default_shadows))
 
         # Play Mode settings
         self.physics_checkbox.setChecked(self.config.getboolean('Settings', 'physics', fallback=True))
@@ -508,6 +610,12 @@ class SettingsWindow(QDialog):
         self.config.set('Display', 'high_dpi_scaling', str(self.dpi_scaling_checkbox.isChecked()))
         self.config.set('Display', 'big_toolbar_buttons', str(self.big_toolbar_buttons_checkbox.isChecked()))
         self.config.set('Display', 'animate_connections', str(self.animate_connections_checkbox.isChecked()))
+        
+        # Renderer Performance settings
+        if not self.config.has_section('Renderer'): 
+            self.config.add_section('Renderer')
+        self.config.set('Renderer', 'arm_mode', str(self.arm_mode_checkbox.isChecked()))
+        self.config.set('Renderer', 'shadows_enabled', str(self.shadows_enabled_checkbox.isChecked()))
         
         # Play Mode settings
         self.config.set('Display', 'show_hud', str(self.show_hud_checkbox.isChecked()))
