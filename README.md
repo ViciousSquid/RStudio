@@ -16,6 +16,3 @@
 * brushes can be **TRIGGERS** that activate objects in the world (lights, speakers)
 * `json` level format with `magic number` fingerprint
 * Fully modular and open source (MIT License)
-
-
-<img width="1875" height="1697" alt="image" src="https://github.com/user-attachments/assets/3daa1eba-369f-4293-8df5-73d31fe68da5" />

@@ -1,0 +1,26 @@
+python -m nuitka --standalone `
+    --mingw64 `
+    --enable-plugin=pyqt5 `
+    --enable-plugin=numpy `
+    --enable-plugin=anti-bloat `
+    --show-progress `
+    --follow-imports `
+    --include-package=engine `
+    --include-package=editor `
+    --include-package=PIL `
+    --include-data-dir=assets=assets `
+    --include-data-dir=maps=maps `
+    --include-data-files=settings.ini=settings.ini `
+    --output-dir=nuitka_output `
+    --output-filename="RStudio" `
+    --remove-output `
+    --windows-icon-from-ico=assets/icon.ico `
+    --company-name="Rufus Pearce" `
+    --product-name="RStudio" `
+    --file-version="1.0.14.0" `
+    --product-version="1.0.14.0" `
+    --file-description="3D editing tool" `
+    --copyright="MIT License 2026 Rufus Pearce" `
+    --windows-console-mode=force `
+    --lto=yes `
+    main.py
