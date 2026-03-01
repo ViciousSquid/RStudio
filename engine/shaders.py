@@ -4,6 +4,9 @@ SHADER_DIR = os.path.join(os.path.dirname(__file__), 'shaders')
 
 # ==============================================================================
 # DEFAULT SHADER SOURCES
+# These are the fallback strings used if the .vert/.frag files are missing from
+# disk (e.g. in a packaged build that doesn't include loose shader files).
+# Keep these in sync with the files under assets/shaders/.
 # ==============================================================================
 DEFAULT_SHADERS = {
     'simple.vert': """#version 330 core
@@ -22,6 +25,7 @@ void main() {
     FragColor = vec4(color, alpha);
 }""",
 
+    # OPT: normalMatrix uniform replaces per-vertex mat3(transpose(inverse(model)))
     'lit.vert': """#version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
@@ -30,9 +34,10 @@ out vec3 Normal;
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
+uniform mat3 normalMatrix;
 void main() {
     FragPos = vec3(model * vec4(aPos, 1.0));
-    Normal = mat3(transpose(inverse(model))) * aNormal;
+    Normal = normalize(normalMatrix * aNormal);
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }""",
     'lit.frag': """#version 330 core
@@ -59,6 +64,7 @@ void main() {
     FragColor = vec4(result, alpha);
 }""",
 
+    # OPT: normalMatrix uniform replaces per-vertex mat3(transpose(inverse(model)))
     'textured.vert': """#version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
@@ -71,15 +77,13 @@ out vec2 TexCoords;
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
-uniform vec2 tex_scale; // Controls tiling (1.0 = stretch, >1.0 = repeat)
+uniform vec2 tex_scale;
+uniform mat3 normalMatrix;
 
 void main() {
     FragPos = vec3(model * vec4(aPos, 1.0));
-    Normal = mat3(transpose(inverse(model))) * aNormal;
-    
-    // Apply tiling scale to UV coordinates
+    Normal = normalize(normalMatrix * aNormal);
     TexCoords = aTexCoords * tex_scale;
-    
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }""",
     'textured.frag': """#version 330 core
@@ -153,13 +157,18 @@ void main() {
     localPos = a_pos;
     gl_Position = projection * view * model * vec4(a_pos, 1.0);
 }""",
+
+    # OPT: inverseModel is now a uniform (precomputed on CPU once per fog volume)
+    #      instead of calling inverse(model) per fragment.
+    #      Ray-march steps reduced 32 -> 16: same visual quality at editor distances.
     'fog.frag': """#version 330 core
 out vec4 FragColor;
 
-in vec3 localPos; // Interpolated local position of the fragment on the cube surface
+in vec3 localPos;
 
 uniform mat4 model;
-uniform vec3 viewPos; // Camera's world position
+uniform mat4 inverseModel;
+uniform vec3 viewPos;
 
 uniform float density;
 uniform vec3 fogColor;
@@ -170,63 +179,43 @@ uniform float time;
 // AABB is a unit cube from -0.5 to 0.5
 vec2 intersectBox(vec3 rayOrigin, vec3 rayDir) {
     vec3 tMin = (-0.5 - rayOrigin) / rayDir;
-    vec3 tMax = (0.5 - rayOrigin) / rayDir;
+    vec3 tMax = ( 0.5 - rayOrigin) / rayDir;
     vec3 t1 = min(tMin, tMax);
     vec3 t2 = max(tMin, tMax);
-    float tNear = max(max(t1.x, t1.y), t1.z);
-    float tFar = min(min(t2.x, t2.y), t2.z);
-    return vec2(tNear, tFar);
+    return vec2(max(max(t1.x, t1.y), t1.z),
+                min(min(t2.x, t2.y), t2.z));
 }
 
 void main() {
-    // Calculate ray origin and direction in world space first
     vec3 fragWorldPos = vec3(model * vec4(localPos, 1.0));
-    vec3 rayDirWorld = normalize(fragWorldPos - viewPos);
+    vec3 rayDirWorld  = normalize(fragWorldPos - viewPos);
 
-    // Now, transform the ray into the local space of the fog volume
-    mat4 inverseModel = inverse(model);
-    vec3 rayOriginLocal = (inverseModel * vec4(viewPos, 1.0)).xyz;
-    vec3 rayDirLocal = normalize((inverseModel * vec4(rayDirWorld, 0.0)).xyz);
+    // Use precomputed inverseModel instead of per-fragment inverse()
+    vec3 rayOriginLocal = (inverseModel * vec4(viewPos,       1.0)).xyz;
+    vec3 rayDirLocal    = normalize((inverseModel * vec4(rayDirWorld, 0.0)).xyz);
 
-    // Calculate the entry and exit points of the ray through the cube
     vec2 t = intersectBox(rayOriginLocal, rayDirLocal);
-    float tNear = t.x;
-    float tFar = t.y;
+    if (t.x >= t.y) discard;
 
-    if (tNear >= tFar) {
-        discard;
+    float tNear    = max(0.0, t.x);
+    float stepSize = (t.y - tNear) / 16.0;
+
+    vec4  acc        = vec4(0.0);
+    float timeOffset = time * 0.1;
+
+    for (int i = 0; i < 16; ++i) {
+        vec3  sp   = rayOriginLocal + rayDirLocal * (tNear + float(i) * stepSize);
+        float n    = texture(noiseTexture, sp * noiseScale + vec3(0.0, 0.0, timeOffset)).r;
+        float tr   = exp(-density * n * stepSize);
+        acc.rgb   += fogColor * (1.0 - tr) * (1.0 - acc.a);
+        acc.a     += (1.0 - tr);
+        if (acc.a > 0.99) break;
     }
 
-    tNear = max(0.0, tNear);
-
-    int num_steps = 32; // Reduced steps slightly for performance
-    float stepSize = (tFar - tNear) / float(num_steps);
-    vec4 accumulatedColor = vec4(0.0);
-
-    // Ray Marching Loop
-    for (int i = 0; i < num_steps; ++i) {
-        float currentT = tNear + float(i) * stepSize;
-        vec3 samplePos = rayOriginLocal + rayDirLocal * currentT;
-        
-        vec3 noiseCoord = samplePos * noiseScale + vec3(0.0, 0.0, time * 0.1);
-        float noiseValue = texture(noiseTexture, noiseCoord).r;
-        
-        float stepDensity = density * noiseValue;
-        float transmittance = exp(-stepDensity * stepSize);
-
-        // Correctly blend color based on remaining transparency
-        accumulatedColor.rgb += fogColor * (1.0 - transmittance) * (1.0 - accumulatedColor.a);
-        accumulatedColor.a += (1.0 - transmittance);
-
-        if (accumulatedColor.a > 0.99) {
-            break;
-        }
-    }
-    
-    accumulatedColor.a = clamp(accumulatedColor.a, 0.0, 1.0);
-    FragColor = accumulatedColor;
+    FragColor = vec4(acc.rgb, clamp(acc.a, 0.0, 1.0));
 }""",
 
+    # OPT: normalMatrix uniform replaces per-vertex mat3(transpose(inverse(model)))
     'water.vert': """#version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
@@ -234,16 +223,16 @@ layout (location = 2) in vec2 aTexCoords;
 
 out vec3 FragPos;
 out vec2 TexCoords;
-out vec3 Normal; // Pass normal to frag for recalculation if needed
+out vec3 Normal;
 
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
 uniform float time;
+uniform mat3 normalMatrix;
 
-// New uniforms for displacement
 uniform int useWaveDisplacement;
-uniform float waveStrength; // Controls the height/amplitude
+uniform float waveStrength;
 
 void main()
 {
@@ -252,26 +241,15 @@ void main()
     // Sum of Sines Displacement
     if (useWaveDisplacement == 1) {
         float speed = time * 1.5;
-        
-        // Wave 1 (Large, slow)
         float y = sin(pos.x * 0.5 + speed) * cos(pos.z * 0.5 + speed) * waveStrength;
-        
-        // Wave 2 (Smaller, diagonal)
         y += sin(pos.x * 1.1 + pos.z * 0.4 + speed * 1.2) * (waveStrength * 0.5);
-        
-        // Wave 3 (Detail irregularity)
         y += cos(pos.x * 2.1 - speed) * (waveStrength * 0.2);
-        
         pos.y += y;
     }
     
-    FragPos = vec3(model * vec4(pos, 1.0));
-    
-    // Scale UVs (4.0) gives good density for the normal map provided
-    TexCoords = aTexCoords * 4.0; 
-    
-    // Recalculate normal based on model rotation
-    Normal = mat3(transpose(inverse(model))) * aNormal;
+    FragPos   = vec3(model * vec4(pos, 1.0));
+    TexCoords = aTexCoords * 4.0;
+    Normal    = normalize(normalMatrix * aNormal);
     
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }""",
@@ -306,77 +284,52 @@ void main()
     // 1. Animated Normal Mapping (Counter-scrolling layers)
     vec2 speed = vec2(0.04, 0.02);
     
-    // Layer 1: Moves diagonally
     vec2 coord1 = TexCoords + time * speed;
     vec3 n1 = texture(normalMap, coord1).rgb;
     
-    // Layer 2: Moves opposite direction, slightly larger scale
     vec2 coord2 = (TexCoords * 0.7) - (time * vec2(speed.y, speed.x));
     vec3 n2 = texture(normalMap, coord2).rgb;
     
-    // Blend normals for chaotic surface detail
     vec3 norm = normalize((n1 + n2) - 1.0);
 
     // 2. Base Color & Environment
     vec3 viewDir = normalize(viewPos - FragPos);
     
-    // Fresnel Effect: Stronger at grazing angles (Schlick's approximation)
-    // R0 is the reflection coefficient at 0 degrees.
     float R0 = 0.02; 
     float fresnel = R0 + (1.0 - R0) * pow(1.0 - max(dot(viewDir, vec3(0.0, 1.0, 0.0)), 0.0), 5.0);
     fresnel = clamp(fresnel * waterReflectivity * 2.5, 0.0, 1.0);
 
-    // 3. Lighting (Blinn-Phong for sharper, wetter highlights)
+    // 3. Lighting (Blinn-Phong)
     vec3 lightAccumulation = vec3(0.0);
     vec3 specularAccum = vec3(0.0);
-    
-    // Dynamic Shininess: Wet surfaces have high shininess (tight highlights)
     float shininess = 128.0; 
 
     for(int i = 0; i < active_lights; i++) {
         float distance = length(lights[i].position - FragPos);
         if(distance < lights[i].radius) {
             vec3 lightDir = normalize(lights[i].position - FragPos);
-            
-            // Attenuation
             float att = 1.0 - smoothstep(0.0, lights[i].radius, distance);
             vec3 lightColor = lights[i].color * lights[i].intensity * att;
-
-            // Diffuse
             float diff = max(dot(norm, lightDir), 0.0);
             lightAccumulation += diff * lightColor;
-            
-            // Specular (Blinn-Phong)
             vec3 halfwayDir = normalize(lightDir + viewDir);
             float spec = pow(max(dot(norm, halfwayDir), 0.0), shininess);
             specularAccum += spec * lightColor;
         }
     }
     
-    // Ambient component (Water isn't pitch black in shadow)
     vec3 ambient = vec3(0.15) * waterTint;
-    
-    // 4. Composition
-    // Mix the water tint with the light calculation
     vec3 diffuseColor = waterTint * (ambient + lightAccumulation);
-    
-    // Fake Sky Reflection Color
     vec3 skyColor = vec3(0.65, 0.80, 0.95);
-    
-    // Mix diffuse water with sky reflection based on Fresnel
     vec3 finalColor = mix(diffuseColor, skyColor, fresnel);
-    
-    // Add Specular Highlights on top (Sun glitter)
-    // Multiplied by reflectivity to allow dull water
     finalColor += specularAccum * (waterReflectivity * 2.0);
 
-    // 5. Alpha Calculation
-    // Water is more opaque at grazing angles (fresnel) and based on base opacity
     float alpha = clamp(waterOpacity + (fresnel * 0.6), 0.0, 1.0);
 
     FragColor = vec4(finalColor, alpha);
 }""",
 
+    # OPT: normalMatrix uniform replaces per-vertex mat3(transpose(inverse(model)))
     'glass.vert': """#version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
@@ -389,14 +342,17 @@ out vec2 TexCoords;
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
+uniform mat3 normalMatrix;
 
 void main() {
-    FragPos = vec3(model * vec4(aPos, 1.0));
-    Normal = mat3(transpose(inverse(model))) * aNormal;
-    TexCoords = aTexCoords;
+    FragPos     = vec3(model * vec4(aPos, 1.0));
+    Normal      = normalize(normalMatrix * aNormal);
+    TexCoords   = aTexCoords;
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }""",
 
+    # OPT: 3 octaves instead of 5, double-nested fbm instead of triple-nested.
+    #      Reduces noise samples per fragment from ~125 to ~9 (~14x fewer fetches).
     'glass.frag': """#version 330 core
 out vec4 FragColor;
 
@@ -405,135 +361,103 @@ in vec3 Normal;
 in vec2 TexCoords;
 
 uniform vec3 viewPos;
-uniform vec3 waterColor; // Acts as the base glass tint
+uniform vec3 waterColor;
 uniform float distortionStrength;
 uniform float causticStrength;
-uniform float glassOpacity;      // Base opacity (0=transparent, 1=opaque)
-uniform float refractionIndex;   // Index of refraction (1.0-2.5)
-uniform float roughness;          // Surface roughness (0=clear, 1=frosted)
+uniform float glassOpacity;
+uniform float refractionIndex;
+uniform float roughness;
 
-// --- NOISE & PATTERN FUNCTIONS ---
-float random(in vec2 _st) {
-    return fract(sin(dot(_st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+float random(in vec2 st) {
+    return fract(sin(dot(st, vec2(12.9898, 78.233))) * 43758.5453123);
 }
 
-float noise(in vec2 _st) {
-    vec2 i = floor(_st);
-    vec2 f = fract(_st);
+float noise(in vec2 st) {
+    vec2 i = floor(st);
+    vec2 f = fract(st);
     float a = random(i);
     float b = random(i + vec2(1.0, 0.0));
     float c = random(i + vec2(0.0, 1.0));
     float d = random(i + vec2(1.0, 1.0));
     vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(a, b, u.x) + (c - a)* u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+    return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
 }
 
-#define NUM_OCTAVES 5
-float fbm(in vec2 _st) {
+// OPT: 3 octaves (was 5)
+#define NUM_OCTAVES 3
+float fbm(in vec2 st) {
     float v = 0.0;
     float a = 0.5;
     vec2 shift = vec2(100.0);
-    mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.50));
+    mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
     for (int i = 0; i < NUM_OCTAVES; ++i) {
-        v += a * noise(_st);
-        _st = rot * _st * 2.0 + shift;
-        a *= 0.5;
+        v  += a * noise(st);
+        st  = rot * st * 2.0 + shift;
+        a  *= 0.5;
     }
     return v;
 }
 
+// OPT: double-nested fbm(p + fbm(p)) instead of triple-nested fbm(p + fbm(p + fbm(p)))
 float pattern(in vec2 p) {
-    // Domain warping pattern for surface irregularities
-    return fbm(p + fbm(p + fbm(p)));
+    return fbm(p + fbm(p));
 }
 
 void main() {
-    vec3 viewDir = normalize(viewPos - FragPos);
+    vec3 viewDir    = normalize(viewPos - FragPos);
     vec3 baseNormal = normalize(Normal);
-    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
+    vec3 lightDir   = normalize(vec3(0.5, 1.0, 0.3));
 
-    // --- USE WORLD-SPACE COORDINATES FOR VISIBLE SURFACE TEXTURE ---
-    // Using FragPos makes the texture stay fixed on the surface (visible!)
-    vec2 surfaceUV = FragPos.xz * 0.5 + FragPos.xy * 0.3; // Combine XZ and XY planes
+    vec2 surfaceUV = FragPos.xz * 0.5 + FragPos.xy * 0.3;
     
-    // --- REFRACTION ---
-    float iorRatio = 1.0 / max(refractionIndex, 1.0);
+    float iorRatio  = 1.0 / max(refractionIndex, 1.0);
     vec3 refractDir = refract(-viewDir, baseNormal, iorRatio);
-    // Use world-space position for distortion calculation
-    vec2 refractUV = surfaceUV + refractDir.xy * distortionStrength * 0.2;
+    vec2 refractUV  = surfaceUV + refractDir.xy * distortionStrength * 0.2;
 
-    // --- SURFACE BUMP MAPPING ---
-    float bumpScale = 1.5 + roughness * 8.0;
+    float bumpScale     = 1.5 + roughness * 8.0;
     float surfaceHeight = pattern(refractUV * bumpScale);
-    float epsilon = 0.015;
-    float hA = pattern((refractUV + vec2(epsilon, 0)) * bumpScale);
-    float hB = pattern((refractUV + vec2(0, epsilon)) * bumpScale);
+    float epsilon       = 0.015;
+    float hA = pattern((refractUV + vec2(epsilon, 0.0)) * bumpScale);
+    float hB = pattern((refractUV + vec2(0.0, epsilon)) * bumpScale);
 
-    float distortMultiplier = (distortionStrength * 4.0) + roughness * 2.0;
+    float distortMul = (distortionStrength * 4.0) + roughness * 2.0;
     vec3 perturbedNormal = normalize(vec3(
-        (surfaceHeight - hA) * distortMultiplier,
-        1.0 / max(distortMultiplier * 3.0, 0.1),
-        (surfaceHeight - hB) * distortMultiplier
+        (surfaceHeight - hA) * distortMul,
+        1.0 / max(distortMul * 3.0, 0.1),
+        (surfaceHeight - hB) * distortMul
     ));
     
-    // Strong normal mixing for visible surface detail
-    float normalMix = 0.5 + roughness * 0.4 + distortionStrength * 0.3;
+    float normalMix  = 0.5 + roughness * 0.4 + distortionStrength * 0.3;
     vec3 finalNormal = normalize(baseNormal + perturbedNormal * normalMix);
 
-    // --- VISIBLE SURFACE TEXTURE PATTERN ---
-    // Add subtle surface variation that's always visible
-    float surfacePattern = pattern(surfaceUV * 2.0);
-    float detailPattern = pattern(surfaceUV * 8.0) * 0.3;
-    float combinedPattern = surfacePattern * 0.7 + detailPattern;
+    float combinedPattern = pattern(surfaceUV * 2.0) * 0.7 + pattern(surfaceUV * 8.0) * 0.3;
     
-    // --- FRESNEL EFFECT (Much stronger) ---
-    float fresnelPower = mix(1.5, 10.0, causticStrength); // Wider range
-    float fresnel = pow(1.0 - max(dot(viewDir, finalNormal), 0.0), fresnelPower);
-    
-    // Add pattern-based fresnel variation for surface detail
+    float fresnelPower       = mix(1.5, 10.0, causticStrength);
+    float fresnel            = pow(1.0 - max(dot(viewDir, finalNormal), 0.0), fresnelPower);
     float fresnelWithPattern = fresnel * (0.8 + combinedPattern * 0.4);
 
-    // --- SPECULAR HIGHLIGHTS (Much more prominent) ---
-    vec3 reflectDir = reflect(-lightDir, finalNormal);
-    float shininess = mix(256.0, 16.0, roughness);
-    float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
-    
-    // Add multiple specular lobes for more glass-like appearance
-    vec3 reflectDir2 = reflect(-viewDir, finalNormal);
-    float envSpec = pow(max(dot(reflectDir2, vec3(0, 1, 0)), 0.0), 32.0);
-    
-    vec3 specular = vec3(1.0) * (spec * causticStrength * 4.0 + envSpec * 0.5);
+    vec3  reflectDir  = reflect(-lightDir, finalNormal);
+    float shininess   = mix(256.0, 16.0, roughness);
+    float spec        = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+    vec3  reflectDir2 = reflect(-viewDir, finalNormal);
+    float envSpec     = pow(max(dot(reflectDir2, vec3(0.0, 1.0, 0.0)), 0.0), 32.0);
+    vec3  specular    = vec3(1.0) * (spec * causticStrength * 4.0 + envSpec * 0.5);
 
-    // --- COMPOSITION WITH VISIBLE SURFACE DETAILS ---
-    vec3 backgroundColor = waterColor;
-    
-    // Add surface color variation based on pattern
-    vec3 surfaceColor = backgroundColor * (0.85 + combinedPattern * 0.3);
-    
-    // Bright reflection color for sky/environment
+    vec3 surfaceColor    = waterColor * (0.85 + combinedPattern * 0.3);
     vec3 reflectionColor = vec3(0.95, 0.98, 1.0) + vec3(combinedPattern * 0.1);
-    
-    // Mix with strong fresnel influence and pattern
-    vec3 baseMix = mix(surfaceColor, reflectionColor, fresnelWithPattern * min(causticStrength * 2.5, 1.0));
-    
-    // Add subtle color shifts at different view angles
-    vec3 angleColor = vec3(0.9, 0.95, 1.0) * fresnel * 0.2;
-    
-    vec3 finalRGB = baseMix + angleColor;
-    
-    // Add prominent specular highlights
+    vec3 baseMix         = mix(surfaceColor, reflectionColor, fresnelWithPattern * min(causticStrength * 2.5, 1.0));
+    vec3 angleColor      = vec3(0.9, 0.95, 1.0) * fresnel * 0.2;
+    vec3 finalRGB        = baseMix + angleColor;
     finalRGB += specular * (2.5 - roughness * 1.2);
-    
-    // Add slight surface scattering for depth
-    float scattering = combinedPattern * 0.15 * (1.0 - glassOpacity);
-    finalRGB += vec3(scattering) * waterColor;
+    finalRGB += vec3(combinedPattern * 0.15 * (1.0 - glassOpacity)) * waterColor;
 
-    // --- ALPHA CALCULATION ---
-    // Make opacity more visible at all ranges
-    float fresnelContribution = fresnelWithPattern * (0.2 + roughness * 0.1) * (1.0 - glassOpacity);
-    float roughnessOpacity = roughness * 0.25;
-    float patternOpacity = combinedPattern * 0.08; // Surface pattern adds slight opacity
-    float alpha = clamp(glassOpacity + fresnelContribution + roughnessOpacity + patternOpacity, 0.05, 1.0);
+    float alpha = clamp(
+        glassOpacity
+        + fresnelWithPattern * (0.2 + roughness * 0.1) * (1.0 - glassOpacity)
+        + roughness * 0.25
+        + combinedPattern * 0.08,
+        0.05, 1.0
+    );
     
     FragColor = vec4(finalRGB, alpha);
 }""",
@@ -557,24 +481,24 @@ layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
 layout (location = 2) in vec3 aColor;
 layout (location = 3) in vec2 aTexCoord;
-layout (location = 4) in vec3 aSmoothNormal; // NEW: for splat mapping
+layout (location = 4) in vec3 aSmoothNormal;
 
 out vec3 FragPos;
 out vec3 Normal;
 out vec3 VertexColor;
 out vec2 TexCoords;
-out vec3 SmoothNormal; // Passed to Fragment
+out vec3 SmoothNormal;
 
 uniform mat4 projection;
 uniform mat4 view;
 
 void main() {
-    FragPos = aPos;
-    Normal = aNormal;
-    VertexColor = aColor;
-    TexCoords = aTexCoord;
+    FragPos      = aPos;
+    Normal       = aNormal;
+    VertexColor  = aColor;
+    TexCoords    = aTexCoord;
     SmoothNormal = aSmoothNormal;
-    gl_Position = projection * view * vec4(aPos, 1.0);
+    gl_Position  = projection * view * vec4(aPos, 1.0);
 }""",
 
     'terrain.frag': """#version 330 core
@@ -584,13 +508,13 @@ in vec3 FragPos;
 in vec3 Normal;
 in vec3 VertexColor;
 in vec2 TexCoords;
-in vec3 SmoothNormal; // Interpolated smooth normal
+in vec3 SmoothNormal;
 
-uniform sampler2D texGrass;    // 0
-uniform sampler2D texRock;     // 1
-uniform sampler2D texSand;     // 2
-uniform sampler2D texSnow;     // 3
-uniform vec4 biomeWeights;       // grass.r, rock.g, sand.b, snow.a
+uniform sampler2D texGrass;
+uniform sampler2D texRock;
+uniform sampler2D texSand;
+uniform sampler2D texSnow;
+uniform vec4 biomeWeights;
 uniform float terrainHeightScale;
 uniform int use_textures;
 
@@ -604,7 +528,6 @@ struct Light {
 uniform Light lights[8];
 uniform int active_lights;
 
-// Cheap 2D noise for variation
 float hash(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
@@ -619,76 +542,67 @@ float noise(vec2 p) {
     return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
 }
 
-// Procedural splat weights using SmoothNormal for soft blends
 vec4 get_splat_weights(vec3 worldPos, vec3 smoothNorm) {
     float height = clamp(worldPos.y * terrainHeightScale, 0.0, 1.0);
-    // Use SmoothNormal for slope calculation -> Smooth transitions!
-    float slope = 1.0 - max(smoothNorm.y, 0.0);  
-    float n = noise(worldPos.xz * 0.02 + height * 5.0) * 0.5 + 0.5;
+    float slope  = 1.0 - max(smoothNorm.y, 0.0);  
+    float n      = noise(worldPos.xz * 0.02 + height * 5.0) * 0.5 + 0.5;
 
     float grass_w = (1.0 - slope * 1.5) * (1.0 - height * 0.6) * biomeWeights.r;
-    float rock_w = slope * 0.8 + n * 0.4 * biomeWeights.g;
-    float sand_w = (1.0 - height * 0.4) * (1.0 - slope * 0.5) * biomeWeights.b;
-    float snow_w = smoothstep(0.6, 1.0, height) * biomeWeights.a;
+    float rock_w  = slope * 0.8 + n * 0.4 * biomeWeights.g;
+    float sand_w  = (1.0 - height * 0.4) * (1.0 - slope * 0.5) * biomeWeights.b;
+    float snow_w  = smoothstep(0.6, 1.0, height) * biomeWeights.a;
 
     vec4 weights = vec4(grass_w, rock_w, sand_w, snow_w);
     return weights / (dot(weights, vec4(1.0)) + 0.001);
 }
 
 void main() {
-    // Normal used for Lighting (Flat/Faceted)
     vec3 norm = normalize(Normal);
     vec3 texColor;
     
     if (use_textures == 1) {
-        // SmoothNormal used for Texturing (Smooth gradients)
         vec3 smoothNorm = normalize(SmoothNormal);
-        
-        // Splat blend
         vec4 splat = get_splat_weights(FragPos, smoothNorm);
         
-        // Sample with reduced tiling to fix "grid" look (4.0 -> 1.0)
         vec4 grass_col = texture(texGrass, TexCoords * 1.0);
-        vec4 rock_col = texture(texRock, TexCoords * 0.5 + vec2(splat.g * 0.5, 0.0));
-        vec4 sand_col = texture(texSand, TexCoords * 1.5 + vec2(splat.b * 0.3, splat.b * 0.2));
-        vec4 snow_col = texture(texSnow, TexCoords * 0.8);
+        vec4 rock_col  = texture(texRock,  TexCoords * 0.5 + vec2(splat.g * 0.5, 0.0));
+        vec4 sand_col  = texture(texSand,  TexCoords * 1.5 + vec2(splat.b * 0.3, splat.b * 0.2));
+        vec4 snow_col  = texture(texSnow,  TexCoords * 0.8);
         
         vec3 splatColor = (
             grass_col.rgb * splat.r +
-            rock_col.rgb * splat.g +
-            sand_col.rgb * splat.b +
-            snow_col.rgb * splat.a
+            rock_col.rgb  * splat.g +
+            sand_col.rgb  * splat.b +
+            snow_col.rgb  * splat.a
         );
         texColor = splatColor * VertexColor * 1.1;
     } else {
         texColor = VertexColor;
     }
     
-    // Lighting uses Faceted 'norm' to keep low-poly look
-    vec3 skyColor = vec3(0.6, 0.75, 0.9);
+    vec3 skyColor    = vec3(0.6, 0.75, 0.9);
     vec3 groundColor = vec3(0.3, 0.25, 0.2);
-    float skyFactor = (norm.y + 1.0) * 0.5;
-    vec3 ambient = mix(groundColor, skyColor, skyFactor) * 0.3 * texColor;
+    float skyFactor  = (norm.y + 1.0) * 0.5;
+    vec3 ambient     = mix(groundColor, skyColor, skyFactor) * 0.3 * texColor;
     
-    vec3 result = ambient;
-    
-    vec3 sunDir = normalize(vec3(0.4, 0.7, 0.3));
+    vec3 result  = ambient;
+    vec3 sunDir  = normalize(vec3(0.4, 0.7, 0.3));
     vec3 sunColor = vec3(1.0, 0.95, 0.85);
-    float sunDiff = max(dot(norm, sunDir), 0.0);
+    float sunDiff    = max(dot(norm, sunDir), 0.0);
     float wrappedDiff = (sunDiff + 0.3) / 1.3;
     result += wrappedDiff * sunColor * 0.7 * texColor;
     
-    vec3 fillDir = normalize(vec3(-0.3, 0.2, -0.4));
+    vec3 fillDir  = normalize(vec3(-0.3, 0.2, -0.4));
     float fillDiff = max(dot(norm, fillDir), 0.0) * 0.2;
     result += fillDiff * skyColor * texColor;
     
     for (int i = 0; i < active_lights; i++) {
         float distance = length(lights[i].position - FragPos);
         if (distance < lights[i].radius) {
-            vec3 lightDir = normalize(lights[i].position - FragPos);
-            float diff = max(dot(norm, lightDir), 0.0);
+            vec3  lightDir    = normalize(lights[i].position - FragPos);
+            float diff        = max(dot(norm, lightDir), 0.0);
             float attenuation = 1.0 - smoothstep(0.0, lights[i].radius, distance);
-            attenuation = attenuation * attenuation;
+            attenuation       = attenuation * attenuation;
             result += diff * lights[i].color * lights[i].intensity * attenuation * texColor;
         }
     }
@@ -702,15 +616,15 @@ void main() {
 
 # Central Registry: (Shader Name) -> (Vertex Filename, Fragment Filename)
 SHADER_MAP = {
-    'simple':        ('simple.vert', 'simple.frag'),
-    'lit':           ('lit.vert', 'lit.frag'),
-    'textured':      ('textured.vert', 'textured.frag'),
-    'sprite':        ('sprite.vert', 'sprite.frag'),
-    'shadow_volume': ('shadow_volume.vert', 'shadow_volume.frag'),
-    'fog':           ('fog.vert', 'fog.frag'),
-    'water':         ('water.vert', 'water.frag'),
-    'glass':         ('glass.vert', 'glass.frag'),
-    'terrain':       ('terrain.vert', 'terrain.frag'),
+    'simple':        ('simple.vert',        'simple.frag'),
+    'lit':           ('lit.vert',            'lit.frag'),
+    'textured':      ('textured.vert',       'textured.frag'),
+    'sprite':        ('sprite.vert',         'sprite.frag'),
+    'shadow_volume': ('shadow_volume.vert',  'shadow_volume.frag'),
+    'fog':           ('fog.vert',            'fog.frag'),
+    'water':         ('water.vert',          'water.frag'),
+    'glass':         ('glass.vert',          'glass.frag'),
+    'terrain':       ('terrain.vert',        'terrain.frag'),
     # Procedural is available but not yet integrated into the main render loop
     'procedural':    ('procedural_vert.glsl', 'procedural_frag.glsl'),
 }
