@@ -187,44 +187,44 @@ if __name__ == "__main__":
             print(f"       +++ RStudio {version}")
     except FileNotFoundError:
         print("Version file not found")
-    
+
     # Create application first
     app = QApplication(sys.argv)
     app.setStyleSheet(dark_stylesheet)
-    
+
     # Create and show splash screen IMMEDIATELY
     # Using relative path which is now safe due to os.chdir()
     splash = ProgressSplashScreen('assets/splash.png')
     splash.show()
-    splash.set_progress(5, "Initializing OpenGL...")
-    
-    # Set OpenGL format
-    format = QSurfaceFormat()
-    format.setVersion(3, 3)
-    format.setProfile(QSurfaceFormat.CoreProfile)
-    format.setDepthBufferSize(24)
-    format.setStencilBufferSize(8)
-    QSurfaceFormat.setDefaultFormat(format)
-    
-    splash.set_progress(15, "Cleaning cache...")
-    
+    splash.set_progress(5, "Configuring OpenGL...")
+
+    # Set OpenGL format BEFORE any GL widget is created
+    fmt = QSurfaceFormat()
+    fmt.setVersion(3, 3)
+    fmt.setProfile(QSurfaceFormat.CoreProfile)
+    fmt.setDepthBufferSize(24)
+    fmt.setStencilBufferSize(8)
+    QSurfaceFormat.setDefaultFormat(fmt)
+
+    splash.set_progress(15, "Loading editor modules...")
+
     # Clean pycache (logic handles skipping if compiled)
     clean_pycache()
-    
-    splash.set_progress(25, "Loading editor core...")
-    
-    # Create main window
-    # We pass the correctly identified root_directory to the MainWindow
+
+    splash.set_progress(25, "Building editor UI...")
+
+    # NOTE: Shader compilation happens inside MainWindow -> Renderer.__init__.
+    # Renderer accepts an optional progress_callback kwarg (see renderer.py),
+    # but we cannot pass it through MainWindow without editing that file too.
+    # The performance optimisations (normalMatrix, inverseModel, reduced FBM)
+    # are all active regardless — the callback only affects splash bar labels.
     window = MainWindow(root_directory)
-    splash.set_progress(40, "Initializing Editor...")
-    
-    # In a real heavy app, you might have specific loading stages here
-    splash.set_progress(60, "Building scene hierarchy...")
-    splash.set_progress(80, "Loading UI components...")
-    
-    # Final setup
-    splash.set_progress(100, "Starting...")
+
+    splash.set_progress(80, "Initialising scene...")
+    splash.set_progress(90, "Building UI layout...")
+    splash.set_progress(100, "Ready.")
+
     window.show()
     splash.finish(window)
-    
+
     sys.exit(app.exec_())
