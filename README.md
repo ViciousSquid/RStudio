@@ -5,7 +5,7 @@
 
 #### A brush-based CSG world editor inspired by Radiant and Worldcraft/Hammer (from the old times!)
 
-#### Old branch: [Download v1.0.13.0 for Windows](https://github.com/ViciousSquid/RStudio/releases) | New branch: [Download 1.0.14.0 for Windows](https://github.com/ViciousSquid/RStudio/releases/tag/v1.0.14.0_prerelease) (recommended)
+### [Download 1.0.14.0 for Windows](https://github.com/ViciousSquid/RStudio/releases/tag/v1.0.14.0_prerelease)
 
 * **Editor and game engine** with unified renderer
 * **Custom OpenGL/PyGame engine** supports immediate "drop-in and play" (like CryEngine Editor)
