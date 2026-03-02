@@ -1,4 +1,12 @@
-v1.0.13.0 (Latest version)
+v1.0.15.0
+
+* Optimised shaders
+
+v1.0.14.0
+
+* Engine optimisations for ARM CPUs
+
+v1.0.13.0
 
 * Initial (beta) support for Gun pickup
 * Half-Life 2 style Entity I/O system & debugger
@@ -24,6 +32,7 @@ v1.0.11.0  |  Delicious-Toast
 
 * First non-beta release
 * Added Toast notification area to UI
+
 
 
 
