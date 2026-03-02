@@ -5,16 +5,16 @@ layout (location = 2) in vec2 aTexCoords;
 
 out vec3 FragPos;
 out vec2 TexCoords;
-out vec3 Normal; // Pass normal to frag for recalculation if needed
+out vec3 Normal;
 
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
 uniform float time;
+uniform mat3 normalMatrix;
 
-// New uniforms for displacement
 uniform int useWaveDisplacement;
-uniform float waveStrength; // Controls the height/amplitude
+uniform float waveStrength;
 
 void main()
 {
@@ -23,26 +23,15 @@ void main()
     // Sum of Sines Displacement
     if (useWaveDisplacement == 1) {
         float speed = time * 1.5;
-        
-        // Wave 1 (Large, slow)
         float y = sin(pos.x * 0.5 + speed) * cos(pos.z * 0.5 + speed) * waveStrength;
-        
-        // Wave 2 (Smaller, diagonal)
         y += sin(pos.x * 1.1 + pos.z * 0.4 + speed * 1.2) * (waveStrength * 0.5);
-        
-        // Wave 3 (Detail irregularity)
         y += cos(pos.x * 2.1 - speed) * (waveStrength * 0.2);
-        
         pos.y += y;
     }
     
-    FragPos = vec3(model * vec4(pos, 1.0));
-    
-    // Scale UVs (4.0) gives good density for the normal map provided
-    TexCoords = aTexCoords * 4.0; 
-    
-    // Recalculate normal based on model rotation
-    Normal = mat3(transpose(inverse(model))) * aNormal;
+    FragPos   = vec3(model * vec4(pos, 1.0));
+    TexCoords = aTexCoords * 4.0;
+    Normal    = normalize(normalMatrix * aNormal);
     
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }
