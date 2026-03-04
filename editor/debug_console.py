@@ -18,7 +18,6 @@ import re
 class DebugLogger(QObject):
     """
     Global singleton that collects debug messages and emits signals.
-    This allows the io_system to log without direct widget dependencies.
     """
     message_logged = pyqtSignal(str, str)  # (category, message)
     
@@ -36,15 +35,12 @@ class DebugLogger(QObject):
         super().__init__()
         self._initialized = True
         self._enabled = True
-        self._buffer = deque(maxlen=1000)  # Keep last 1000 messages
+        self._buffer = deque(maxlen=1000)
     
     def log(self, category: str, message: str):
-        """Log a message with a category tag."""
         if not self._enabled:
             return
-        
         full_msg = f"[{category}] {message}"
-        
         self._buffer.append((category, full_msg))
         self.message_logged.emit(category, full_msg)
     
@@ -55,19 +51,15 @@ class DebugLogger(QObject):
         return self._enabled
     
     def get_buffer(self):
-        """Get all buffered messages."""
         return list(self._buffer)
     
     def clear_buffer(self):
-        """Clear the message buffer."""
         self._buffer.clear()
 
 
-# Global logger instance
 _debug_logger = None
 
 def get_debug_logger() -> DebugLogger:
-    """Get the global debug logger instance."""
     global _debug_logger
     if _debug_logger is None:
         _debug_logger = DebugLogger()
@@ -75,17 +67,15 @@ def get_debug_logger() -> DebugLogger:
 
 
 def debug_log(category: str, message: str):
-    """Convenience function to log a debug message."""
     get_debug_logger().log(category, message)
 
 
 class DebugConsole(QWidget):
     """
     Floating debug console window – STRICT SINGLETON.
-    Only one instance ever exists. Use DebugConsole.get_instance() everywhere.
+    Minimum font size is now 10 (global minimum enforced here).
     """
     
-    # Category colors
     CATEGORY_COLORS = {
         'IO': '#4FC3F7',
         'Speaker': '#81C784',
@@ -97,7 +87,7 @@ class DebugConsole(QWidget):
         'Info': '#FFFFFF',
     }
 
-    FONT_SIZE_MIN = 6
+    FONT_SIZE_MIN = 10
     FONT_SIZE_MAX = 24
     FONT_SIZE_DEFAULT = 10
 
@@ -105,13 +95,21 @@ class DebugConsole(QWidget):
 
     @classmethod
     def get_instance(cls, parent=None):
-        """THE ONLY correct way to get the console."""
+        # Check if instance exists AND hasn't been deleted by the C++ side
+        if cls._instance is None or not cls._instance.isVisible() and cls._instance.parent() is None and not cls._instance:
+            # The check 'not cls._instance' handles cases where the C++ object is deleted
+            try:
+                # Attempt to access a property to see if it's still alive
+                cls._instance.windowTitle() 
+            except (RuntimeError, AttributeError):
+                cls._instance = None
+        
         if cls._instance is None:
             cls._instance = cls(parent)
-        else:
-            cls._instance.show()
-            cls._instance.raise_()
-            cls._instance.activateWindow()
+        
+        cls._instance.show()
+        cls._instance.raise_()
+        cls._instance.activateWindow()
         return cls._instance
 
     def __init__(self, parent=None):
@@ -137,12 +135,10 @@ class DebugConsole(QWidget):
         self._load_buffer()
 
     def _setup_ui(self):
-        """Complete UI setup with toolbar defined before use."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
         
-        # ====================== TOOLBAR ======================
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
         
@@ -182,7 +178,6 @@ class DebugConsole(QWidget):
         sep2.setStyleSheet("color: #444;")
         toolbar.addWidget(sep2)
 
-        # ====================== FONT SIZE ======================
         font_label = QLabel("Size:")
         font_label.setStyleSheet("color: #888;")
         toolbar.addWidget(font_label)
@@ -229,7 +224,6 @@ class DebugConsole(QWidget):
         
         layout.addLayout(toolbar)
         
-        # ====================== CONSOLE ======================
         self.console = QTextBrowser()
         self.console.setReadOnly(True)
         self.console.setOpenLinks(False)
@@ -245,85 +239,68 @@ class DebugConsole(QWidget):
         
         self.setStyleSheet("QWidget { background-color: #2b2b2b; }")
         
-        # Apply initial font
         self._apply_font_size()
 
-    # ====================== FONT SIZE (now works correctly) ======================
     def _increase_font_size(self):
         if self.font_size < self.FONT_SIZE_MAX:
             self.font_size += 1
             self._apply_font_size()
 
     def _decrease_font_size(self):
-        if self.font_size > self.FONT_SIZE_MIN:
+        if self.font_size > self.FONT_SIZE_MIN:   # now enforced at 10
             self.font_size -= 1
             self._apply_font_size()
 
     def _apply_font_size(self):
-        """Changes ONLY the console text size (no tooltip side-effects)."""
         self.font_size_label.setText(str(self.font_size))
         font = QFont("Consolas", self.font_size)
         self.console.setFont(font)
         self.console.document().setDefaultFont(font)
         self._refresh_console()
 
-    # ====================== REMAINING METHODS (unchanged from your original) ======================
     def _connect_logger(self):
-        """Connect to the global debug logger."""
         logger = get_debug_logger()
         logger.message_logged.connect(self._on_message)
     
     def _load_buffer(self):
-        """Load any buffered messages that were logged before the console opened."""
         logger = get_debug_logger()
         for category, message in logger.get_buffer():
             self._append_message(category, message)
     
     def _on_message(self, category: str, message: str):
-        """Handle a new log message."""
         self._append_message(category, message)
 
     def _on_anchor_clicked(self, url: QUrl):
-        """Handle clicking on an entity name."""
         link = url.toString()
         if link.startswith("filter:"):
             entity_name = link.split(":", 1)[1]
             self._apply_entity_filter(entity_name)
 
     def _apply_entity_filter(self, entity_name):
-        """Updates the dropdown to filter by this entity."""
         if self.active_entity_filter == entity_name:
             self.filter_combo.setCurrentText("All")
             return
-
         filter_text = f"Entity: {entity_name}"
-        
         idx = self.filter_combo.findText(filter_text)
         if idx == -1:
             self.filter_combo.addItem(filter_text)
             idx = self.filter_combo.count() - 1
-            
         self.filter_combo.setCurrentIndex(idx)
 
     def _on_filter_changed(self, text):
-        """Handle filter dropdown changes."""
         count = self.filter_combo.count()
         for i in range(count - 1, -1, -1):
             item_text = self.filter_combo.itemText(i)
             if item_text.startswith("Entity: ") and item_text != text:
                 self.filter_combo.removeItem(i)
-
         if text.startswith("Entity: "):
             self.active_entity_filter = text.split("Entity: ", 1)[1]
         else:
             self.active_entity_filter = None
-            
         self._refresh_console()
     
     def _append_message(self, category: str, message: str):
-        """Append a message to the console with highlighting."""
         current_combo_text = self.filter_combo.currentText()
-        
         if self.active_entity_filter:
             if self.active_entity_filter not in message:
                 return
@@ -343,31 +320,11 @@ class DebugConsole(QWidget):
         def get_link_html(name):
             return f'<a href="filter:{name}" style="{ENT_STYLE}" title="Click to filter by {name}">{name}</a>'
 
-        message = re.sub(
-            r'(?<!=)\b([a-zA-Z0-9_]+)(?=\.)', 
-            lambda m: get_link_html(m.group(1)),
-            message
-        )
-        message = re.sub(
-            r'\b([a-zA-Z0-9_]+)(?=\s+\(type=)', 
-            lambda m: get_link_html(m.group(1)),
-            message
-        )
-        message = re.sub(
-            r"'([a-zA-Z0-9_]+)'", 
-            lambda m: f"'{get_link_html(m.group(1))}'", 
-            message
-        )
-        message = re.sub(
-            r'\b(fire_output)\b',
-            f'<span style="{FIRE_STYLE}">\\1</span>',
-            message
-        )
-        message = re.sub(
-            r'(no connections|0 connections)',
-            f'<span style="{EMPTY_STYLE}">\\1</span>',
-            message
-        )
+        message = re.sub(r'(?<!=)\b([a-zA-Z0-9_]+)(?=\.)', lambda m: get_link_html(m.group(1)), message)
+        message = re.sub(r'\b([a-zA-Z0-9_]+)(?=\s+\(type=)', lambda m: get_link_html(m.group(1)), message)
+        message = re.sub(r"'([a-zA-Z0-9_]+)'", lambda m: f"'{get_link_html(m.group(1))}'", message)
+        message = re.sub(r'\b(fire_output)\b', f'<span style="{FIRE_STYLE}">\\1</span>', message)
+        message = re.sub(r'(no connections|0 connections)', f'<span style="{EMPTY_STYLE}">\\1</span>', message)
         
         html = f'<span style="color: {color};">{message}</span><br>'
         
@@ -383,27 +340,22 @@ class DebugConsole(QWidget):
         self.count_label.setText(f"{self.message_count} messages")
     
     def _refresh_console(self):
-        """Reload console messages from buffer."""
         self.console.clear()
         self.message_count = 0
-        
         logger = get_debug_logger()
         for category, message in logger.get_buffer():
             self._append_message(category, message)
     
     def _on_auto_scroll_toggled(self, checked: bool):
-        """Handle auto-scroll toggle."""
         self.auto_scroll = checked
     
     def clear(self):
-        """Clear the console and buffer."""
         self.console.clear()
         self.message_count = 0
         self.count_label.setText("0 messages")
         get_debug_logger().clear_buffer()
     
     def toggle(self):
-        """Toggle visibility of the console."""
         if self.isVisible():
             self.hide()
         else:
@@ -412,12 +364,5 @@ class DebugConsole(QWidget):
             self.activateWindow()
     
     def closeEvent(self, event):
-        """Handle close - just hide instead of destroying."""
         self.hide()
         event.ignore()
-
-
-# Optional helper for older code
-def open_debug_console(parent=None):
-    """Convenience function – use this instead of DebugConsole() directly."""
-    return DebugConsole.get_instance(parent)

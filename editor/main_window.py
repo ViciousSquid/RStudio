@@ -30,6 +30,7 @@ from engine.terrain import Terrain
 from editor.debug_console import DebugConsole
 
 
+
 class Toast(QLabel):
     def __init__(self, parent):
         super().__init__(parent)
@@ -243,6 +244,17 @@ class MainWindow(QMainWindow):
             self.unsaved_changes = True
             self.update_title()
 
+    def toggle_debug_console(self):
+        # Get the instance without forcing it to show immediately
+        console = DebugConsole.get_instance(self)
+        
+        if console.isVisible():
+            console.hide()
+        else:
+            console.show()
+            console.raise_()
+            console.activateWindow()
+
     def check_unsaved_changes(self):
         """
         Checks for unsaved changes. Returns True if it's safe to proceed 
@@ -374,14 +386,10 @@ class MainWindow(QMainWindow):
         """Handle window move."""
         super().moveEvent(event)
 
-    def toggle_debug_console(self):
-        console = DebugConsole.get_instance(self)
-        if console.isVisible():
-            console.hide()
-        else:
-            console.show()
-            console.raise_()
-            console.activateWindow()
+    def get_instance(cls, parent=None):
+        if cls._instance is None:
+            cls._instance = cls(parent)
+        return cls._instance
 
 
     def cycle_2d_view(self):
