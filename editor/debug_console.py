@@ -1,4 +1,3 @@
-
 """
 Debug Console for RStudio
 
@@ -96,7 +95,20 @@ class DebugConsole(QWidget):
         'Warning': '#FFEE58',   # Yellow
         'Info': '#FFFFFF',      # White
     }
-    
+
+    FONT_SIZE_MIN = 6
+    FONT_SIZE_MAX = 24
+    FONT_SIZE_DEFAULT = 9
+
+    _instance = None
+
+    @classmethod
+    def get_instance(cls, parent=None):
+        """Return the singleton DebugConsole, creating it on first call."""
+        if cls._instance is None:
+            cls._instance = cls(parent)
+        return cls._instance
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Debug Console")
@@ -117,6 +129,9 @@ class DebugConsole(QWidget):
 
         # Current Entity Filter (None means show all)
         self.active_entity_filter = None
+
+        # Font size
+        self.font_size = self.FONT_SIZE_DEFAULT
         
         self._setup_ui()
         self._connect_logger()
@@ -169,6 +184,55 @@ class DebugConsole(QWidget):
         self.filter_empty_cb.setStyleSheet("color: #aaa;")
         self.filter_empty_cb.toggled.connect(self._refresh_console)
         toolbar.addWidget(self.filter_empty_cb)
+
+        # Separator
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.VLine)
+        sep2.setStyleSheet("color: #444;")
+        toolbar.addWidget(sep2)
+
+        # Font size controls
+        font_label = QLabel("Size:")
+        font_label.setStyleSheet("color: #888;")
+        toolbar.addWidget(font_label)
+
+        font_btn_style = """
+            QPushButton {
+                background-color: #444;
+                color: #ccc;
+                border: 1px solid #555;
+                border-radius: 3px;
+                padding: 3px 6px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #555;
+                border-color: #F08000;
+            }
+            QPushButton:pressed {
+                background-color: #333;
+            }
+        """
+
+        decrease_btn = QPushButton("−")
+        decrease_btn.setFixedWidth(28)
+        decrease_btn.setToolTip("Decrease font size")
+        decrease_btn.clicked.connect(self._decrease_font_size)
+        decrease_btn.setStyleSheet(font_btn_style)
+        toolbar.addWidget(decrease_btn)
+
+        self.font_size_label = QLabel(str(self.font_size))
+        self.font_size_label.setFixedWidth(24)
+        self.font_size_label.setAlignment(Qt.AlignCenter)
+        self.font_size_label.setStyleSheet("color: #aaa;")
+        toolbar.addWidget(self.font_size_label)
+
+        increase_btn = QPushButton("+")
+        increase_btn.setFixedWidth(28)
+        increase_btn.setToolTip("Increase font size")
+        increase_btn.clicked.connect(self._increase_font_size)
+        increase_btn.setStyleSheet(font_btn_style)
+        toolbar.addWidget(increase_btn)
         
         toolbar.addStretch()
         
@@ -200,7 +264,7 @@ class DebugConsole(QWidget):
         # Console text area (Switching to QTextBrowser to support links/clicks)
         self.console = QTextBrowser()
         self.console.setReadOnly(True)
-        self.console.setFont(QFont("Consolas", 9))
+        self.console.setFont(QFont("Consolas", self.font_size))
         self.console.setOpenLinks(False) # Handle links manually via signal
         self.console.anchorClicked.connect(self._on_anchor_clicked)
         self.console.setStyleSheet("""
@@ -237,6 +301,30 @@ class DebugConsole(QWidget):
                 selection-background-color: #F08000;
             }
         """)
+
+    # ------------------------------------------------------------------
+    # Font size controls
+    # ------------------------------------------------------------------
+
+    def _increase_font_size(self):
+        """Increase console font size by 1pt and refresh."""
+        if self.font_size < self.FONT_SIZE_MAX:
+            self.font_size += 1
+            self._apply_font_size()
+
+    def _decrease_font_size(self):
+        """Decrease console font size by 1pt and refresh."""
+        if self.font_size > self.FONT_SIZE_MIN:
+            self.font_size -= 1
+            self._apply_font_size()
+
+    def _apply_font_size(self):
+        """Apply the current font size to the console and reload all HTML."""
+        self.font_size_label.setText(str(self.font_size))
+        self.console.setFont(QFont("Consolas", self.font_size))
+        self._refresh_console()
+
+    # ------------------------------------------------------------------
     
     def _connect_logger(self):
         """Connect to the global debug logger."""
@@ -397,7 +485,7 @@ class DebugConsole(QWidget):
         self.count_label.setText(f"{self.message_count} messages")
     
     def _refresh_console(self):
-        """Reload console messages from buffer (triggered by filters)."""
+        """Reload console messages from buffer (triggered by filters or font size change)."""
         self.console.clear()
         self.message_count = 0
         

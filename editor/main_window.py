@@ -127,7 +127,7 @@ class MainWindow(QMainWindow):
     def __init__(self, root_dir):
         super().__init__()
         self.root_dir = root_dir
-        
+        self.debug_console = None
 
         self.unsaved_changes = False
         self.file_path = None
@@ -170,7 +170,7 @@ class MainWindow(QMainWindow):
         self.terrain = None
         self.terrain_editor_window = None
 
-        self.debug_console = DebugConsole(self)
+        self.debug_console = DebugConsole.get_instance(self)
         
         # Only show debug console if setting is enabled (defaults to False)
         if self.config.getboolean('Display', 'always_show_io_debug', fallback=False):
@@ -375,11 +375,13 @@ class MainWindow(QMainWindow):
         super().moveEvent(event)
 
     def toggle_debug_console(self):
-        """Toggle the debug console visibility."""
-        self.debug_console.toggle()
-        # Sync menu checkbox state
-        if hasattr(self, 'debug_console_action'):
-            self.debug_console_action.setChecked(self.debug_console.isVisible())
+        console = DebugConsole.get_instance(self)
+        if console.isVisible():
+            console.hide()
+        else:
+            console.show()
+            console.raise_()
+            console.activateWindow()
 
 
     def cycle_2d_view(self):
