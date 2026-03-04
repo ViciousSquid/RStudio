@@ -380,9 +380,10 @@ class Renderer:
                                            'waterTint', 'useWaveDisplacement', 'waveStrength'])
             self.water_normal_id = self.load_texture('water_normal.png', 'textures')
             
+            # glass.vert declares normalMatrix - preload it so draw_glass_brushes can upload it.
             self.uniforms['glass'].preload(['projection', 'view', 'model', 'viewPos', 'waterColor', 
                                            'distortionStrength', 'causticStrength', 'glassOpacity', 
-                                           'refractionIndex', 'roughness'])
+                                           'refractionIndex', 'roughness', 'normalMatrix'])
 
             # Terrain shader
             try:
@@ -484,8 +485,9 @@ class Renderer:
             self.uniforms[name] = UniformCache(shader)
         
         self._preload_lit_uniforms('lit')
+        self.uniforms['lit'].preload(['normalMatrix'])
         self._preload_lit_uniforms('textured')
-        self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale'])
+        self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale', 'normalMatrix'])
         self._preload_lit_uniforms('fog')
         self.uniforms['fog'].preload(['viewPos', 'time', 'noiseTexture', 'density', 'fogColor', 
                                       'noiseScale', 'object_color', 'alpha'])
@@ -859,13 +861,10 @@ class Renderer:
         selected = config.get('selected_object')
         model_loc, color_loc, alpha_loc = uniforms['model'], uniforms['object_color'], uniforms['alpha']
         
-        # ARM mode: get normal matrix location (only valid for ARM shaders)
-        # Check both that ARM mode is on AND that the uniform actually exists in the current shader
-        normal_mat_loc = -1
-        if self.arm_mode:
-            loc = uniforms.get('normalMatrix', -1)
-            if loc is not None and loc != -1:
-                normal_mat_loc = loc
+        # normalMatrix: upload unconditionally - all lit/ARM shaders declare it and
+        # computing it on the CPU is always cheaper than inverse() per vertex in the shader.
+        normal_mat_loc = uniforms.get('normalMatrix', -1)
+        if normal_mat_loc is None: normal_mat_loc = -1
         
         fill_mode = (gl.GL_FILL if show_triggers_solid else gl.GL_LINE) if is_transparent_pass else \
                    (gl.GL_FILL if display_mode != "Wireframe" else gl.GL_LINE)
@@ -880,7 +879,7 @@ class Renderer:
             model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
             
-            # ARM mode: upload pre-computed normal matrix (only if uniform exists and is valid)
+            # Upload pre-computed normal matrix (always, for all platforms)
             if normal_mat_loc > 0:
                 normal_mat = self._compute_normal_matrix(model_matrix)
                 gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
@@ -939,12 +938,9 @@ class Renderer:
         if tex_scale_loc == -1:
             tex_scale_loc = gl.glGetUniformLocation(shader, "tex_scale")
         
-        # ARM mode: get normal matrix location (only if it exists in the shader)
-        normal_mat_loc = -1
-        if self.arm_mode:
-            loc = uniforms.get('normalMatrix', -1)
-            if loc is not None and loc != -1:
-                normal_mat_loc = loc
+        # normalMatrix: upload unconditionally for all platforms.
+        normal_mat_loc = uniforms.get('normalMatrix', -1)
+        if normal_mat_loc is None: normal_mat_loc = -1
         
         # OPTIMIZATION: Batch by texture to minimize state changes
         batches = defaultdict(list)
@@ -976,7 +972,7 @@ class Renderer:
                 model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
                 gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
                 
-                # ARM mode: upload normal matrix
+                # Upload normal matrix for all platforms
                 if normal_mat_loc > 0:
                     normal_mat = self._compute_normal_matrix(model_matrix)
                     gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
@@ -1217,6 +1213,9 @@ class Renderer:
         opacity_loc = uniforms['glassOpacity']
         refraction_loc = uniforms['refractionIndex']
         roughness_loc = uniforms['roughness']
+        # glass.vert declares normalMatrix - fetch the location once before the loop.
+        normal_mat_loc = uniforms.get('normalMatrix', -1)
+        if normal_mat_loc is None: normal_mat_loc = -1
         
         gl.glBindVertexArray(self.vaos['cube'])
         gl.glEnable(gl.GL_BLEND)
@@ -1227,6 +1226,11 @@ class Renderer:
         for brush in brushes:
             model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+            
+            # Upload pre-computed normal matrix - was missing entirely before this fix.
+            if normal_mat_loc > 0:
+                normal_mat = self._compute_normal_matrix(model_matrix)
+                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
             
             glass_color = brush.get('glass_color', [0.7, 0.85, 0.95])
             opacity = brush.get('glass_opacity', 0.3)

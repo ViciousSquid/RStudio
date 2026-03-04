@@ -431,23 +431,24 @@ class Terrain:
             return
         
         self.uniforms = {
-            'projection': gl.glGetUniformLocation(self.shader_program, 'projection'),
-            'view': gl.glGetUniformLocation(self.shader_program, 'view'),
-            'active_lights': gl.glGetUniformLocation(self.shader_program, 'active_lights'),
-            'use_textures': gl.glGetUniformLocation(self.shader_program, 'use_textures'),
-            'texGrass': gl.glGetUniformLocation(self.shader_program, 'texGrass'),
-            'texRock': gl.glGetUniformLocation(self.shader_program, 'texRock'),
-            'texSand': gl.glGetUniformLocation(self.shader_program, 'texSand'),
-            'texSnow': gl.glGetUniformLocation(self.shader_program, 'texSnow'),
-            'biomeWeights': gl.glGetUniformLocation(self.shader_program, 'biomeWeights'),
+            'projection':        gl.glGetUniformLocation(self.shader_program, 'projection'),
+            'view':              gl.glGetUniformLocation(self.shader_program, 'view'),
+            'active_lights':     gl.glGetUniformLocation(self.shader_program, 'active_lights'),
+            'use_textures':      gl.glGetUniformLocation(self.shader_program, 'use_textures'),
+            'lod_level':         gl.glGetUniformLocation(self.shader_program, 'lod_level'),
+            'texGrass':          gl.glGetUniformLocation(self.shader_program, 'texGrass'),
+            'texRock':           gl.glGetUniformLocation(self.shader_program, 'texRock'),
+            'texSand':           gl.glGetUniformLocation(self.shader_program, 'texSand'),
+            'texSnow':           gl.glGetUniformLocation(self.shader_program, 'texSnow'),
+            'biomeWeights':      gl.glGetUniformLocation(self.shader_program, 'biomeWeights'),
             'terrainHeightScale': gl.glGetUniformLocation(self.shader_program, 'terrainHeightScale'),
         }
         for i in range(8):
             base = f'lights[{i}]'
-            self.uniforms[f'{base}.position'] = gl.glGetUniformLocation(self.shader_program, f'{base}.position')
-            self.uniforms[f'{base}.color'] = gl.glGetUniformLocation(self.shader_program, f'{base}.color')
+            self.uniforms[f'{base}.position']  = gl.glGetUniformLocation(self.shader_program, f'{base}.position')
+            self.uniforms[f'{base}.color']     = gl.glGetUniformLocation(self.shader_program, f'{base}.color')
             self.uniforms[f'{base}.intensity'] = gl.glGetUniformLocation(self.shader_program, f'{base}.intensity')
-            self.uniforms[f'{base}.radius'] = gl.glGetUniformLocation(self.shader_program, f'{base}.radius')
+            self.uniforms[f'{base}.radius']    = gl.glGetUniformLocation(self.shader_program, f'{base}.radius')
     
     def load_terrain_textures(self, tex_manager):
         self.grass_tex = tex_manager.get('assets/textures/terrain/grass.jpg')
@@ -776,8 +777,12 @@ class Terrain:
         if not self.shader_program:
             self._init_shader()
             if not self.shader_program: return
+
+        # Ensure late-bound uniforms exist (can happen if shader was set externally)
         if 'use_textures' not in self.uniforms:
             self.uniforms['use_textures'] = gl.glGetUniformLocation(self.shader_program, 'use_textures')
+        if 'lod_level' not in self.uniforms:
+            self.uniforms['lod_level'] = gl.glGetUniformLocation(self.shader_program, 'lod_level')
 
         self.visible_chunks = 0
         self.culled_chunks = 0
@@ -791,13 +796,13 @@ class Terrain:
         gl.glUniformMatrix4fv(self.uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
         gl.glUniformMatrix4fv(self.uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
         gl.glActiveTexture(gl.GL_TEXTURE0); gl.glBindTexture(gl.GL_TEXTURE_2D, self.grass_tex); gl.glUniform1i(self.uniforms['texGrass'], 0)
-        gl.glActiveTexture(gl.GL_TEXTURE1); gl.glBindTexture(gl.GL_TEXTURE_2D, self.rock_tex); gl.glUniform1i(self.uniforms['texRock'], 1)
-        gl.glActiveTexture(gl.GL_TEXTURE2); gl.glBindTexture(gl.GL_TEXTURE_2D, self.sand_tex); gl.glUniform1i(self.uniforms['texSand'], 2)
-        gl.glActiveTexture(gl.GL_TEXTURE3); gl.glBindTexture(gl.GL_TEXTURE_2D, self.snow_tex); gl.glUniform1i(self.uniforms['texSnow'], 3)
+        gl.glActiveTexture(gl.GL_TEXTURE1); gl.glBindTexture(gl.GL_TEXTURE_2D, self.rock_tex);  gl.glUniform1i(self.uniforms['texRock'],  1)
+        gl.glActiveTexture(gl.GL_TEXTURE2); gl.glBindTexture(gl.GL_TEXTURE_2D, self.sand_tex);  gl.glUniform1i(self.uniforms['texSand'],  2)
+        gl.glActiveTexture(gl.GL_TEXTURE3); gl.glBindTexture(gl.GL_TEXTURE_2D, self.snow_tex);  gl.glUniform1i(self.uniforms['texSnow'],  3)
         gl.glUniform4f(self.uniforms['biomeWeights'], *self.biome.blend_weights)
         gl.glUniform1f(self.uniforms['terrainHeightScale'], self.biome.terrain_height_scale)
         
-        # --- FIXED: Force textures off if flat_mode is enabled ---
+        # Force textures off if flat_mode is enabled
         use_tex = 0 if self.flat_mode else (1 if getattr(self, 'use_textures', True) else 0)
         gl.glUniform1i(self.uniforms['use_textures'], use_tex)
         
@@ -806,10 +811,12 @@ class Terrain:
             light = lights[i]
             base = f'lights[{i}]'
             gl.glUniform3fv(self.uniforms[f'{base}.position'], 1, light.pos)
-            gl.glUniform3fv(self.uniforms[f'{base}.color'], 1, light.get_color())
-            gl.glUniform1f(self.uniforms[f'{base}.intensity'], light.get_intensity())
-            gl.glUniform1f(self.uniforms[f'{base}.radius'], light.get_radius())
+            gl.glUniform3fv(self.uniforms[f'{base}.color'],    1, light.get_color())
+            gl.glUniform1f(self.uniforms[f'{base}.intensity'],    light.get_intensity())
+            gl.glUniform1f(self.uniforms[f'{base}.radius'],       light.get_radius())
         
+        lod_level_loc = self.uniforms.get('lod_level', -1)
+
         if self.wireframe: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
         chunks_to_update = []
         for key, chunk in self.chunks.items():
@@ -834,6 +841,10 @@ class Terrain:
             if needs_update:
                 chunks_to_update.append((key, target_resolution, dist_sq))
             if chunk.vao and chunk.vertex_count > 0:
+                # Upload the chunk's current LOD level so the fragment shader
+                # can choose the appropriate shading path.
+                if lod_level_loc != -1:
+                    gl.glUniform1i(lod_level_loc, chunk.lod_level)
                 gl.glBindVertexArray(chunk.vao)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, chunk.vertex_count)
                 self.visible_chunks += 1
