@@ -81,80 +81,75 @@ def debug_log(category: str, message: str):
 
 class DebugConsole(QWidget):
     """
-    Floating debug console window for viewing I/O and entity logic messages.
+    Floating debug console window – STRICT SINGLETON.
+    Only one instance ever exists. Use DebugConsole.get_instance() everywhere.
     """
     
     # Category colors
     CATEGORY_COLORS = {
-        'IO': '#4FC3F7',       # Light blue
-        'Speaker': '#81C784',   # Light green
-        'Trigger': '#FFB74D',   # Orange
-        'Door': '#BA68C8',      # Purple
-        'Timer': '#F06292',     # Pink
-        'Error': '#EF5350',     # Red
-        'Warning': '#FFEE58',   # Yellow
-        'Info': '#FFFFFF',      # White
+        'IO': '#4FC3F7',
+        'Speaker': '#81C784',
+        'Trigger': '#FFB74D',
+        'Door': '#BA68C8',
+        'Timer': '#F06292',
+        'Error': '#EF5350',
+        'Warning': '#FFEE58',
+        'Info': '#FFFFFF',
     }
 
     FONT_SIZE_MIN = 6
     FONT_SIZE_MAX = 24
-    FONT_SIZE_DEFAULT = 9
+    FONT_SIZE_DEFAULT = 10
 
     _instance = None
 
     @classmethod
     def get_instance(cls, parent=None):
-        """Return the singleton DebugConsole, creating it on first call."""
+        """THE ONLY correct way to get the console."""
         if cls._instance is None:
             cls._instance = cls(parent)
+        else:
+            cls._instance.show()
+            cls._instance.raise_()
+            cls._instance.activateWindow()
         return cls._instance
 
     def __init__(self, parent=None):
+        if DebugConsole._instance is not None:
+            raise RuntimeError("DebugConsole is a singleton. Use DebugConsole.get_instance()")
+        
         super().__init__(parent)
+        DebugConsole._instance = self
+
         self.setWindowTitle("Debug Console")
         self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_QuitOnClose, False)
         
-        # Default size and position
-        self.resize(1024, 400) 
+        self.resize(1024, 520)
         
-        # Track enabled categories
-        self.enabled_categories = set(self.CATEGORY_COLORS.keys())
-        
-        # Auto-scroll flag
         self.auto_scroll = True
-        
-        # Message count
         self.message_count = 0
-
-        # Current Entity Filter (None means show all)
         self.active_entity_filter = None
-
-        # Font size
         self.font_size = self.FONT_SIZE_DEFAULT
         
         self._setup_ui()
         self._connect_logger()
-        
-        # Load any buffered messages
         self._load_buffer()
-    
+
     def _setup_ui(self):
-        """Set up the console UI."""
+        """Complete UI setup with toolbar defined before use."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
         
-        # Top toolbar
+        # ====================== TOOLBAR ======================
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
         
-        # Filter label
         filter_label = QLabel("Filter:")
         filter_label.setStyleSheet("color: #888; font-weight: bold;")
         toolbar.addWidget(filter_label)
         
-        # Category filter dropdown
         self.filter_combo = QComboBox()
         self.filter_combo.addItem("All")
         for cat in sorted(self.CATEGORY_COLORS.keys()):
@@ -164,168 +159,115 @@ class DebugConsole(QWidget):
         self.filter_combo.setMinimumWidth(200)
         toolbar.addWidget(self.filter_combo)
         
-        # Separator
         sep1 = QFrame()
         sep1.setFrameShape(QFrame.VLine)
         sep1.setStyleSheet("color: #444;")
         toolbar.addWidget(sep1)
         
-        # Auto-scroll checkbox
         self.auto_scroll_cb = QCheckBox("Auto-scroll")
         self.auto_scroll_cb.setChecked(True)
         self.auto_scroll_cb.setStyleSheet("color: #aaa;")
         self.auto_scroll_cb.toggled.connect(self._on_auto_scroll_toggled)
         toolbar.addWidget(self.auto_scroll_cb)
 
-        # Filter Empty Checkbox
         self.filter_empty_cb = QCheckBox("Filter Empty")
         self.filter_empty_cb.setToolTip("Hide messages about 0 connections")
-        self.filter_empty_cb.setChecked(True) 
+        self.filter_empty_cb.setChecked(True)
         self.filter_empty_cb.setStyleSheet("color: #aaa;")
         self.filter_empty_cb.toggled.connect(self._refresh_console)
         toolbar.addWidget(self.filter_empty_cb)
 
-        # Separator
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.VLine)
         sep2.setStyleSheet("color: #444;")
         toolbar.addWidget(sep2)
 
-        # Font size controls
+        # ====================== FONT SIZE ======================
         font_label = QLabel("Size:")
         font_label.setStyleSheet("color: #888;")
         toolbar.addWidget(font_label)
 
         font_btn_style = """
             QPushButton {
-                background-color: #444;
-                color: #ccc;
-                border: 1px solid #555;
-                border-radius: 3px;
-                padding: 3px 6px;
-                font-weight: bold;
+                background-color: #444; color: #ccc; border: 1px solid #555;
+                border-radius: 3px; padding: 4px 8px; font-weight: bold; min-width: 32px;
             }
-            QPushButton:hover {
-                background-color: #555;
-                border-color: #F08000;
-            }
-            QPushButton:pressed {
-                background-color: #333;
-            }
+            QPushButton:hover { background-color: #555; border-color: #F08000; }
         """
 
         decrease_btn = QPushButton("−")
-        decrease_btn.setFixedWidth(28)
-        decrease_btn.setToolTip("Decrease font size")
-        decrease_btn.clicked.connect(self._decrease_font_size)
         decrease_btn.setStyleSheet(font_btn_style)
+        decrease_btn.clicked.connect(self._decrease_font_size)
         toolbar.addWidget(decrease_btn)
 
         self.font_size_label = QLabel(str(self.font_size))
-        self.font_size_label.setFixedWidth(24)
+        self.font_size_label.setFixedWidth(30)
         self.font_size_label.setAlignment(Qt.AlignCenter)
-        self.font_size_label.setStyleSheet("color: #aaa;")
+        self.font_size_label.setStyleSheet("color: #aaa; font-weight: bold;")
         toolbar.addWidget(self.font_size_label)
 
         increase_btn = QPushButton("+")
-        increase_btn.setFixedWidth(28)
-        increase_btn.setToolTip("Increase font size")
-        increase_btn.clicked.connect(self._increase_font_size)
         increase_btn.setStyleSheet(font_btn_style)
+        increase_btn.clicked.connect(self._increase_font_size)
         toolbar.addWidget(increase_btn)
         
         toolbar.addStretch()
         
-        # Message count label
         self.count_label = QLabel("0 messages")
         self.count_label.setStyleSheet("color: #666;")
         toolbar.addWidget(self.count_label)
         
-        # Clear button
         clear_btn = QPushButton("Clear")
         clear_btn.setFixedWidth(60)
         clear_btn.clicked.connect(self.clear)
         clear_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #444;
-                color: #ccc;
-                border: 1px solid #555;
-                border-radius: 3px;
-                padding: 3px 8px;
-            }
-            QPushButton:hover {
-                background-color: #555;
-            }
+            QPushButton { background-color: #444; color: #ccc; border: 1px solid #555;
+                          border-radius: 3px; padding: 3px 8px; }
+            QPushButton:hover { background-color: #555; }
         """)
         toolbar.addWidget(clear_btn)
         
         layout.addLayout(toolbar)
         
-        # Console text area (Switching to QTextBrowser to support links/clicks)
+        # ====================== CONSOLE ======================
         self.console = QTextBrowser()
         self.console.setReadOnly(True)
-        self.console.setFont(QFont("Consolas", self.font_size))
-        self.console.setOpenLinks(False) # Handle links manually via signal
+        self.console.setOpenLinks(False)
         self.console.anchorClicked.connect(self._on_anchor_clicked)
         self.console.setStyleSheet("""
             QTextBrowser {
-                background-color: #1a1a1a;
-                color: #ddd;
+                background-color: #1a1a1a; color: #ddd;
                 border: 1px solid #333;
                 selection-background-color: #F08000;
             }
         """)
         layout.addWidget(self.console)
         
-        # Overall widget styling
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #2b2b2b;
-            }
-            QComboBox {
-                background-color: #3a3a3a;
-                color: #ddd;
-                border: 1px solid #555;
-                padding: 3px;
-                border-radius: 3px;
-            }
-            QComboBox:hover {
-                border-color: #F08000;
-            }
-            QComboBox::drop-down {
-                border: none;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #3a3a3a;
-                color: #ddd;
-                selection-background-color: #F08000;
-            }
-        """)
+        self.setStyleSheet("QWidget { background-color: #2b2b2b; }")
+        
+        # Apply initial font
+        self._apply_font_size()
 
-    # ------------------------------------------------------------------
-    # Font size controls
-    # ------------------------------------------------------------------
-
+    # ====================== FONT SIZE (now works correctly) ======================
     def _increase_font_size(self):
-        """Increase console font size by 1pt and refresh."""
         if self.font_size < self.FONT_SIZE_MAX:
             self.font_size += 1
             self._apply_font_size()
 
     def _decrease_font_size(self):
-        """Decrease console font size by 1pt and refresh."""
         if self.font_size > self.FONT_SIZE_MIN:
             self.font_size -= 1
             self._apply_font_size()
 
     def _apply_font_size(self):
-        """Apply the current font size to the console and reload all HTML."""
+        """Changes ONLY the console text size (no tooltip side-effects)."""
         self.font_size_label.setText(str(self.font_size))
-        self.console.setFont(QFont("Consolas", self.font_size))
+        font = QFont("Consolas", self.font_size)
+        self.console.setFont(font)
+        self.console.document().setDefaultFont(font)
         self._refresh_console()
 
-    # ------------------------------------------------------------------
-    
+    # ====================== REMAINING METHODS (unchanged from your original) ======================
     def _connect_logger(self):
         """Connect to the global debug logger."""
         logger = get_debug_logger()
@@ -350,36 +292,26 @@ class DebugConsole(QWidget):
 
     def _apply_entity_filter(self, entity_name):
         """Updates the dropdown to filter by this entity."""
-        
-        # If we clicked the same entity that is currently filtered, toggle it off (Reset to All)
         if self.active_entity_filter == entity_name:
             self.filter_combo.setCurrentText("All")
             return
 
         filter_text = f"Entity: {entity_name}"
         
-        # Check if this item already exists in combo, if not add it
         idx = self.filter_combo.findText(filter_text)
         if idx == -1:
             self.filter_combo.addItem(filter_text)
             idx = self.filter_combo.count() - 1
             
-        # Select it (this will trigger _on_filter_changed -> _refresh_console)
         self.filter_combo.setCurrentIndex(idx)
 
     def _on_filter_changed(self, text):
         """Handle filter dropdown changes."""
-        
-        # Clean up old entity filters if we switched away from them
         count = self.filter_combo.count()
-        # Iterate backwards to safely remove
         for i in range(count - 1, -1, -1):
             item_text = self.filter_combo.itemText(i)
-            # If it's an entity filter...
-            if item_text.startswith("Entity: "):
-                # And it's NOT the one we just selected...
-                if item_text != text:
-                    self.filter_combo.removeItem(i)
+            if item_text.startswith("Entity: ") and item_text != text:
+                self.filter_combo.removeItem(i)
 
         if text.startswith("Entity: "):
             self.active_entity_filter = text.split("Entity: ", 1)[1]
@@ -390,102 +322,68 @@ class DebugConsole(QWidget):
     
     def _append_message(self, category: str, message: str):
         """Append a message to the console with highlighting."""
-        
-        # 1. Check Category Filter vs Entity Filter
         current_combo_text = self.filter_combo.currentText()
         
-        # If we are in "Entity: X" mode
         if self.active_entity_filter:
-            # We filter OUT messages that don't contain the entity name
-            # Simple substring check is usually sufficient for debug logs
             if self.active_entity_filter not in message:
                 return
-        # If we are in standard Category mode (and not "All")
         elif current_combo_text != "All" and category != current_combo_text:
             return
 
-        # 2. Check "Filter Empty" Logic
         if self.filter_empty_cb.isChecked():
-            if "(0 connections)" in message:
-                return
-            if "(no connections for output" in message:
+            if "(0 connections)" in message or "(no connections for output" in message:
                 return
         
-        # Get color for category
         color = self.CATEGORY_COLORS.get(category, '#FFFFFF')
         
-        # --- HIGHLIGHTING LOGIC ---
-        
-        # Define styles
-        # NOTE: Text-decoration:none prevents underline, but cursor becomes hand due to <a> tag
         ENT_STYLE = 'color: #F08000; font-weight: bold; text-decoration: none;'
         FIRE_STYLE = 'color: #66BB6A; font-weight: bold;'
         EMPTY_STYLE = 'color: #E35335;'
         
-        # Create a replacement pattern that wraps the name in an anchor tag
-        # href="filter:NAME" is captured by _on_anchor_clicked
         def get_link_html(name):
             return f'<a href="filter:{name}" style="{ENT_STYLE}" title="Click to filter by {name}">{name}</a>'
 
-        # Apply Regex substitutions
-        
-        # A. Entity Names: "Name.Input"
-        # We use a lambda to insert the captured name into the HTML format
         message = re.sub(
             r'(?<!=)\b([a-zA-Z0-9_]+)(?=\.)', 
             lambda m: get_link_html(m.group(1)),
             message
         )
-        
-        # B. Entity Names: "Name (type=...)"
         message = re.sub(
             r'\b([a-zA-Z0-9_]+)(?=\s+\(type=)', 
             lambda m: get_link_html(m.group(1)),
             message
         )
-        
-        # C. Entity Names: "'Name'"
         message = re.sub(
             r"'([a-zA-Z0-9_]+)'", 
             lambda m: f"'{get_link_html(m.group(1))}'", 
             message
         )
-
-        # D. "fire_output" -> Green
         message = re.sub(
             r'\b(fire_output)\b',
             f'<span style="{FIRE_STYLE}">\\1</span>',
             message
         )
-
-        # E. "no connections" -> Red/Orange
         message = re.sub(
             r'(no connections|0 connections)',
             f'<span style="{EMPTY_STYLE}">\\1</span>',
             message
         )
-
-        # ---------------------------
         
-        # Format with HTML coloring for the main message body
         html = f'<span style="color: {color};">{message}</span><br>'
         
-        # Append to console
         cursor = self.console.textCursor()
         cursor.movePosition(QTextCursor.End)
         cursor.insertHtml(html)
         
-        # Auto-scroll if enabled
         if self.auto_scroll:
             self.console.setTextCursor(cursor)
             self.console.ensureCursorVisible()
         
-        # Update count
         self.message_count += 1
         self.count_label.setText(f"{self.message_count} messages")
     
     def _refresh_console(self):
-        """Reload console messages from buffer (triggered by filters or font size change)."""
+        """Reload console messages from buffer."""
         self.console.clear()
         self.message_count = 0
         
@@ -517,3 +415,9 @@ class DebugConsole(QWidget):
         """Handle close - just hide instead of destroying."""
         self.hide()
         event.ignore()
+
+
+# Optional helper for older code
+def open_debug_console(parent=None):
+    """Convenience function – use this instead of DebugConsole() directly."""
+    return DebugConsole.get_instance(parent)
