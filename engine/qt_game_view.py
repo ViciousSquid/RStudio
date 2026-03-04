@@ -39,7 +39,7 @@ class QtGameView(QOpenGLWidget):
         self.show_triggers_as_solid = False
         self.camera = Camera()
         self.camera.pos = glm.vec3(0, 150, 400)
-        self.debug_console_window = DebugConsole()
+        self.debug_console_window = DebugConsole.get_instance()
         self.grid_size, self.world_size = 16, 2048
         self.grid_dirty = True
         self.culling_enabled = True 
