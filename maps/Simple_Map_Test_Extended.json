@@ -1,5 +1,6 @@
 {
     "fingerprint": "RStudio",
+    "version": 2,
     "brushes": [
         {
             "pos": [
@@ -470,7 +471,17 @@
                 "down": "trigger.jpg"
             },
             "is_trigger": true,
-            "target": "Light_00"
+            "target": "Light_00",
+            "io_connections": [
+                {
+                    "output": "OnTrigger",
+                    "target": "Light_00",
+                    "input": "Toggle",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false
+                }
+            ]
         },
         {
             "pos": [
@@ -1923,6 +1934,26 @@
                 "state": "on",
                 "show_radius": "False",
                 "casts_shadows": "False"
+            }
+        },
+        {
+            "type": "pickup",
+            "pos": [
+                704.0,
+                112.0,
+                -800.0
+            ],
+            "properties": {
+                "type": "pickup",
+                "name": "Pickup_1",
+                "item_type": "gun1",
+                "value": "25",
+                "activation": "walk_over",
+                "collected": "True",
+                "respawns": "False",
+                "respawn_time": "20.0",
+                "key_name": "blue_key",
+                "custom_sprite": "assets/sprites/gun1.png"
             }
         }
     ]
