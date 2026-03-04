@@ -7,6 +7,7 @@ from PyQt5.QtGui import QPixmap, QSurfaceFormat
 from PyQt5.QtCore import Qt
 from editor.main_window import MainWindow
 
+
 def clean_pycache():
     """
     Depreceted 
