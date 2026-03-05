@@ -6,6 +6,7 @@ Manages all the data for the current level being edited, including:
 - Things (entities)
 - Undo/redo history
 - Serialization/deserialization with I/O connections
+- Lightmap bake state (Stage 1: data structures only)
 """
 
 import json
@@ -19,6 +20,14 @@ try:
 except ImportError:
     IO_AVAILABLE = False
 
+# Import lightmap bake state
+try:
+    from lightmap.bake_state import BakeState
+    LIGHTMAP_AVAILABLE = True
+except ImportError:
+    LIGHTMAP_AVAILABLE = False
+    print("[EditorState] lightmap package not found — baking disabled.")
+
 
 class EditorState:
     """Manages all the data for the current level being edited."""
@@ -30,9 +39,47 @@ class EditorState:
         self.terrain_data = None
         self.undo_stack = []
         self.redo_stack = []
-        
+
+        # Lightmap bake state — always present, even if baking is unavailable
+        self.bake_state = BakeState() if LIGHTMAP_AVAILABLE else None
+
         # Initial empty state for the undo stack
         self.save_state()
+
+    # =========================================================================
+    # LIGHTMAP HELPERS
+    # =========================================================================
+
+    def mark_lighting_dirty(self) -> None:
+        """
+        Call whenever static geometry or static lights change so the next
+        Play automatically triggers a rebake.
+
+        Safe to call even when the lightmap system is unavailable.
+        """
+        if self.bake_state is not None:
+            self.bake_state.mark_dirty()
+
+    def get_static_brushes(self) -> list:
+        """Return the subset of brushes that participate in lightmap baking."""
+        return [b for b in self.brushes if b.get('lightmap_static', False)]
+
+    def mark_brush_static(self, brush: dict, static: bool) -> None:
+        """
+        Set or clear the lightmap_static flag on a single brush and mark the
+        bake dirty so the change is picked up on the next Play.
+        """
+        if brush.get('lightmap_static') == static:
+            return  # no change
+        brush['lightmap_static'] = static
+        self.mark_lighting_dirty()
+
+    def count_static_brushes(self) -> int:
+        return sum(1 for b in self.brushes if b.get('lightmap_static', False))
+
+    # =========================================================================
+    # SCENE MANAGEMENT
+    # =========================================================================
 
     def set_selected_object(self, obj):
         """Sets the currently selected object."""
@@ -45,6 +92,7 @@ class EditorState:
         self.selected_object = None
         self.undo_stack.clear()
         self.redo_stack.clear()
+        self.mark_lighting_dirty()   # new scene always needs a bake
         self.save_state()
 
     def get_level_data(self):
@@ -55,49 +103,53 @@ class EditorState:
             'brushes': self._serialize_brushes(),
             'things': [t.to_dict() for t in self.things]
         }
-        
+
         # Include terrain data if present
         if hasattr(self, 'terrain_data') and self.terrain_data:
             data['terrain_data'] = self.terrain_data
-            
+
+        # Persist the scene hash so we can skip a rebake on reload
+        if self.bake_state is not None and self.bake_state.scene_hash:
+            data['lightmap_scene_hash'] = self.bake_state.scene_hash
+
         return data
-    
+
     def _serialize_brushes(self):
         """Serialize brushes with I/O connections."""
         serialized = []
-        
+
         for brush in self.brushes:
             brush_copy = brush.copy()
-            
+
             # Handle I/O connections
             if IO_AVAILABLE and '_io_connections' in brush:
                 connections = brush['_io_connections']
                 serialized_conns = []
-                
+
                 for conn in connections:
                     if hasattr(conn, 'to_dict'):
                         serialized_conns.append(conn.to_dict())
                     elif isinstance(conn, dict):
                         serialized_conns.append(conn)
-                
+
                 if serialized_conns:
                     brush_copy['io_connections'] = serialized_conns
-                
+
                 # Remove internal _io_connections from serialized data
                 if '_io_connections' in brush_copy:
                     del brush_copy['_io_connections']
-            
+
             serialized.append(brush_copy)
-        
+
         return serialized
-    
+
     def _deserialize_brushes(self, brushes_data):
         """Deserialize brushes with I/O connections."""
         result = []
-        
+
         for brush_data in brushes_data:
             brush = brush_data.copy()
-            
+
             # Restore I/O connections
             if IO_AVAILABLE and 'io_connections' in brush:
                 io_data = brush.pop('io_connections')
@@ -109,36 +161,28 @@ class EditorState:
             else:
                 # Ensure _io_connections exists
                 brush['_io_connections'] = []
-            
+
             result.append(brush)
-        
+
         return result
 
     def load_from_data(self, level_data):
         """Populates the scene from a dictionary after validating the fingerprint."""
         if level_data.get('fingerprint') != 'RStudio':
             raise ValueError("Not a valid save file: Missing 'RStudio' fingerprint.")
-        
+
         # Handle both old and new format
         version = level_data.get('version', 1)
-        
+
         if version >= 2:
             # New format with I/O connections stored separately
             self.brushes = self._deserialize_brushes(level_data.get('brushes', []))
         else:
             # Old format - brushes are plain dicts
             self.brushes = level_data.get('brushes', [])
-            # Initialize _io_connections for old brushes
-            for brush in self.brushes:
-                if '_io_connections' not in brush:
-                    brush['_io_connections'] = []
-                    
-                    # Migrate old 'target' property to I/O connection
-                    if brush.get('target') and IO_AVAILABLE:
-                        self._migrate_legacy_target(brush)
-        
+
         self.terrain_data = level_data.get('terrain_data', None)
-        
+
         # Load things
         things_data = level_data.get('things', [])
         new_things = []
@@ -153,20 +197,32 @@ class EditorState:
                     if thing.properties.get('target') and IO_AVAILABLE:
                         self._migrate_legacy_thing_target(thing)
                     new_things.append(thing)
-        
+
         self.things = new_things
-        
+
         self.selected_object = None
         self.undo_stack.clear()
         self.redo_stack.clear()
+
+        # Restore lightmap bake state
+        if self.bake_state is not None:
+            saved_hash = level_data.get('lightmap_scene_hash', '')
+            if saved_hash:
+                # The scene has a saved hash — treat as dirty until the bake
+                # system verifies the hash at Play time.  (Stage 5 feature.)
+                self.bake_state.scene_hash = saved_hash
+            # Always treat a freshly loaded scene as dirty so the bake runs
+            # at least once before the first Play in this session.
+            self.bake_state.mark_dirty()
+
         self.save_state()
-    
+
     def _migrate_legacy_target(self, brush):
         """Migrate old 'target' property to I/O connection for brushes."""
         target = brush.get('target', '')
         if not target:
             return
-        
+
         # Determine what output to use
         if brush.get('is_trigger'):
             output = 'OnTrigger'
@@ -176,7 +232,7 @@ class EditorState:
             output = 'OnOpen'
         else:
             return
-        
+
         # Create connection
         conn = OutputConnection(
             output_name=output,
@@ -186,25 +242,25 @@ class EditorState:
             delay=0.0,
             fire_once=False
         )
-        
+
         if '_io_connections' not in brush:
             brush['_io_connections'] = []
         brush['_io_connections'].append(conn)
-    
+
     def _migrate_legacy_thing_target(self, thing):
         """Migrate old 'target' property to I/O connection for things."""
         target = thing.properties.get('target', '')
         if not target:
             return
-        
+
         entity_type = thing.properties.get('type', '')
-        
+
         # Determine output based on type
         if entity_type == 'logic_gate':
             output = 'OnTrigger'
         else:
             return
-        
+
         thing.add_output_connection(
             output_name=output,
             target_name=target,
@@ -238,10 +294,10 @@ class EditorState:
     def save_state(self):
         """Saves the current state of brushes and things to the undo stack."""
         selected_type, selected_index = self._get_selected_object_identifier()
-        
+
         # Serialize brushes with I/O connections
         serialized_brushes = self._serialize_brushes_for_undo()
-        
+
         state = {
             'brushes': serialized_brushes,
             'things': [t.to_dict() for t in self.things],
@@ -250,16 +306,16 @@ class EditorState:
         }
         self.undo_stack.append(json.dumps(state))
         self.redo_stack.clear()
-        
+
         if len(self.undo_stack) > 50:
             self.undo_stack.pop(0)
-    
+
     def _serialize_brushes_for_undo(self):
         """Serialize brushes for undo stack (deep copy with I/O)."""
         result = []
         for brush in self.brushes:
             brush_copy = copy.deepcopy(brush)
-            
+
             # Convert OutputConnection objects to dicts for JSON
             if '_io_connections' in brush_copy:
                 connections = brush_copy['_io_connections']
@@ -270,20 +326,20 @@ class EditorState:
                     elif isinstance(conn, dict):
                         serialized.append(conn)
                 brush_copy['_io_connections'] = serialized
-            
+
             result.append(brush_copy)
         return result
 
     def restore_state(self, state_json):
         """Restores the scene from a JSON state string."""
         state = json.loads(state_json)
-        
+
         # Restore brushes with I/O connections
         raw_brushes = state.get('brushes', [])
         self.brushes = []
         for brush_data in raw_brushes:
             brush = brush_data.copy()
-            
+
             # Convert I/O connection dicts back to objects
             if IO_AVAILABLE and '_io_connections' in brush:
                 io_data = brush['_io_connections']
@@ -291,9 +347,9 @@ class EditorState:
                     brush['_io_connections'] = [
                         OutputConnection.from_dict(d) for d in io_data
                     ]
-            
+
             self.brushes.append(brush)
-        
+
         # Restore things
         things_data = state.get('things', [])
         new_things = []
@@ -306,7 +362,7 @@ class EditorState:
                 if thing:
                     new_things.append(thing)
         self.things = new_things
-        
+
         self._restore_selection_from_identifier(
             state.get('selected_type'), state.get('selected_index', -1)
         )
@@ -328,49 +384,49 @@ class EditorState:
             self.restore_state(state_json)
             return True
         return False
-    
+
     # =========================================================================
     # I/O HELPER METHODS
     # =========================================================================
-    
+
     def find_entity_by_name(self, name: str):
         """Find an entity (brush or thing) by name."""
         if not name:
             return None
-        
+
         for brush in self.brushes:
             if brush.get('name') == name:
                 return brush
-        
+
         for thing in self.things:
             if thing.properties.get('name') == name:
                 return thing
-        
+
         return None
-    
+
     def get_all_entity_names(self):
         """Get a list of all entity names in the scene."""
         names = []
-        
+
         for brush in self.brushes:
             name = brush.get('name', '')
             if name:
                 names.append(name)
-        
+
         for thing in self.things:
             name = thing.properties.get('name', '')
             if name:
                 names.append(name)
-        
+
         return names
-    
+
     def find_entities_targeting(self, target_name: str):
         """Find all entities that have I/O connections to the target."""
         sources = []
-        
+
         if not IO_AVAILABLE:
             return sources
-        
+
         for brush in self.brushes:
             for conn in get_connections(brush):
                 if conn.target_name == target_name:
@@ -379,7 +435,7 @@ class EditorState:
                         'connection': conn,
                         'type': 'brush'
                     })
-        
+
         for thing in self.things:
             for conn in get_connections(thing):
                 if conn.target_name == target_name:
@@ -388,5 +444,5 @@ class EditorState:
                         'connection': conn,
                         'type': 'thing'
                     })
-        
+
         return sources

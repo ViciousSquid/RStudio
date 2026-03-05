@@ -496,12 +496,13 @@ class IOEditorWidget(QWidget):
         menu.exec_(self.table.mapToGlobal(pos))
     
     def _open_console(self):
-        """Open the debug console if available on the editor."""
-        if self.editor and hasattr(self.editor, 'debug_console'):
-            # Ensure it is visible
-            self.editor.debug_console.show()
-            self.editor.debug_console.raise_()
-            self.editor.debug_console.activateWindow()
+        """Switch to the Debug Console tab in the properties pane."""
+        if self.editor and hasattr(self.editor, 'properties_tab_widget'):
+            tab = self.editor.properties_tab_widget
+            console_idx = tab.indexOf(self.editor.debug_console)
+            if console_idx >= 0:
+                tab.setCurrentIndex(console_idx)
+                self.editor.properties_dock.setVisible(True)
 
 
 class IOInputsWidget(QWidget):

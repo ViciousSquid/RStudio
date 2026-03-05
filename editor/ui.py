@@ -15,6 +15,7 @@ from editor.property_editor import PropertyEditor
 from editor.scene_hierarchy import SceneHierarchy
 from editor.asset_browser import AssetBrowser
 from editor.SettingsWindow import SettingsWindow
+from editor.debug_console import DebugConsole
 
 class GenerateTilemapDialog(QDialog):
     def __init__(self, parent=None):
@@ -78,10 +79,21 @@ class Ui_MainWindow(object):
         MainWindow.right_dock.setWidget(MainWindow.right_tabs)
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.right_dock)
         
-        # Properties Dock (Right, Bottom)
+        # Properties Dock (Right, Bottom) — tabbed with Debug Console
+        MainWindow.debug_console = DebugConsole.get_instance(MainWindow)
+
+        MainWindow.properties_tab_widget = QTabWidget()
+        MainWindow.properties_tab_widget.addTab(MainWindow.property_editor, "Properties")
+        MainWindow.properties_tab_widget.addTab(MainWindow.debug_console, "Debug Console")
+        MainWindow.properties_tab_widget.setStyleSheet("""
+            QTabBar::tab:selected { background: #F08000; color: white; }
+            QTabBar::tab { background: #2b2b2b; color: #ccc; height: 28px; min-width: 120px; padding: 0px 8px; border: 1px solid #222; }
+            QTabBar::tab:hover { background: #5a7a82; }
+        """)
+
         MainWindow.properties_dock = QDockWidget("Properties", MainWindow)
         MainWindow.properties_dock.setObjectName("PropertiesDock")
-        MainWindow.properties_dock.setWidget(MainWindow.property_editor)
+        MainWindow.properties_dock.setWidget(MainWindow.properties_tab_widget)
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.properties_dock)
 
         # --- 3. Layout Adjustments ---

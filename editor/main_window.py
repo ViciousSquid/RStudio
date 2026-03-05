@@ -30,7 +30,6 @@ from engine.terrain import Terrain
 from editor.debug_console import DebugConsole
 
 
-
 class Toast(QLabel):
     def __init__(self, parent):
         super().__init__(parent)
@@ -86,7 +85,7 @@ class Toast(QLabel):
                 padding: 10px 20px;
                 border-radius: 5px;
                 font-weight: bold;
-                font-size: 22px;
+                font-size: 14px;
             }}
         """)
         
@@ -171,14 +170,15 @@ class MainWindow(QMainWindow):
         self.terrain = None
         self.terrain_editor_window = None
 
+        # debug_console is embedded in the properties tab widget (created in setupUi)
         self.debug_console = DebugConsole.get_instance(self)
-        
-        # Only show debug console if setting is enabled (defaults to False)
+
+        # If configured, switch to the Debug Console tab on startup
         if self.config.getboolean('Display', 'always_show_io_debug', fallback=False):
-            self.debug_console.show()
-        else:
-            self.debug_console.hide()
-            
+            if hasattr(self, 'properties_tab_widget'):
+                idx = self.properties_tab_widget.indexOf(self.debug_console)
+                self.properties_tab_widget.setCurrentIndex(idx)
+
         self.ui.action_asset_browser.triggered.connect(self.toggle_asset_browser)
 
         # Enable sysmon at launch if configured
@@ -243,17 +243,6 @@ class MainWindow(QMainWindow):
         if not self.unsaved_changes:
             self.unsaved_changes = True
             self.update_title()
-
-    def toggle_debug_console(self):
-        # Get the instance without forcing it to show immediately
-        console = DebugConsole.get_instance(self)
-        
-        if console.isVisible():
-            console.hide()
-        else:
-            console.show()
-            console.raise_()
-            console.activateWindow()
 
     def check_unsaved_changes(self):
         """
@@ -386,10 +375,16 @@ class MainWindow(QMainWindow):
         """Handle window move."""
         super().moveEvent(event)
 
-    def get_instance(cls, parent=None):
-        if cls._instance is None:
-            cls._instance = cls(parent)
-        return cls._instance
+    def toggle_debug_console(self):
+        tab = self.properties_tab_widget
+        console_idx = tab.indexOf(self.debug_console)
+        # Ensure the properties dock is visible
+        self.properties_dock.setVisible(True)
+        if tab.currentIndex() == console_idx:
+            # Already on the console tab — switch back to Properties
+            tab.setCurrentIndex(0)
+        else:
+            tab.setCurrentIndex(console_idx)
 
 
     def cycle_2d_view(self):
@@ -901,7 +896,7 @@ class MainWindow(QMainWindow):
             self.config.write(configfile)
 
     def update_global_font(self):
-        font_size = self.config.getint('Display', 'font_size', fallback=10)
+        font_size = self.config.getint('Display', 'font_size', fallback=11)
         font = QApplication.font()
         font.setPointSize(font_size)
         QApplication.setFont(font)
@@ -2029,9 +2024,6 @@ class MainWindow(QMainWindow):
         
         self.save_layout()
 
-        if hasattr(self, 'debug_console'):
-            self.debug_console.close()
-        
         if hasattr(self, 'view_3d') and self.view_3d.logic_thread:
             self.view_3d.logic_thread.stop()
             self.view_3d.logic_thread.join(timeout=1.0)
