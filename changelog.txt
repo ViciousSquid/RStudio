@@ -1,6 +1,8 @@
 v1.0.15.0
 
 * Optimised shaders
+* Experimental Deferred Rendering path
+* High DPI support
 
 v1.0.14.0
 
@@ -32,6 +34,7 @@ v1.0.11.0  |  Delicious-Toast
 
 * First non-beta release
 * Added Toast notification area to UI
+
 
 
 
