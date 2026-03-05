@@ -1,7 +1,7 @@
 v1.0.15.0
 
 * Optimised shaders
-* Experimental Deferred Rendering path
+* Behind the scenes changes to prepare for Deferred Rendering path
 * High DPI support
 
 v1.0.14.0
