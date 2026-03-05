@@ -77,7 +77,6 @@ dark_stylesheet = """
         background-color: #2b2b2b;
         color: #e0e0e0;
         font-family: "Segoe UI", Arial, sans-serif;
-        font-size: 13px;
     }
     QPushButton {
         background-color: #3c3f41;
