@@ -7,7 +7,7 @@
 
 ### [Download 1.0.14.0 for Windows](https://github.com/ViciousSquid/RStudio/releases/tag/v1.0.14.0_prerelease)
 
-* **Editor and game engine** with unified renderer
+* **Editor and game engine** with unified renderer (separate Forward and Deferred paths)
 * **Custom OpenGL/PyGame engine** supports immediate "drop-in and play" (like CryEngine Editor)
 * **Custom basic player physics engine**
 * **Real-time lighting** with optional stencil shadows
