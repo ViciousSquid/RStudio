@@ -1,19 +1,3 @@
-"""
-RStudio Optimized Renderer
-Heavily optimized for ARM devices (Surface Pro 9 SQ3) running x64 emulation.
-
-Key Optimizations:
-1. Removed double culling - trusts pre-culled data from logic thread
-2. Batched draw calls - draws entire brushes, not per-face
-3. Pre-computed normal matrices on CPU to avoid inverse() in shader
-4. Single light uniform upload per frame
-5. Simplified "ARM mode" shaders with lower quality but better performance
-6. Reduced fog ray march steps (16 instead of 32)
-7. Optional shadow system that can be disabled
-8. Texture atlas batching for fewer state changes
-9. Cached model matrices where possible
-"""
-
 import glm
 import numpy as np
 import OpenGL.GL as gl
@@ -32,11 +16,6 @@ try:
     from .obj_loader import OBJ
 except ImportError:
     OBJ = None
-
-
-# =============================================================================
-# ARM-OPTIMIZED SHADERS (Simplified for better performance on emulated x64)
-# =============================================================================
 
 # Pre-compute normal matrix on CPU, pass it to shader
 ARM_LIT_VERT = """#version 330 core
@@ -425,7 +404,219 @@ class Renderer:
         self._proj_ptr = None
         self._view_ptr = None
         self._edge_vao = None
-    
+
+        # Deferred rendering state
+        self.use_deferred = False
+        self._gbuffer_fbo = None
+        self._gbuffer_position_tex = None
+        self._gbuffer_normal_tex = None
+        self._gbuffer_albedo_tex = None
+        self._gbuffer_depth_rb = None
+        self._gbuffer_size = (0, 0)
+        self._fullscreen_quad_vao = None
+        self._fullscreen_quad_vbo = None
+        self._compile_deferred_shaders()
+
+    def _compile_deferred_shaders(self):
+        """Compile deferred rendering geometry + lighting pass shaders."""
+        DEFERRED_GEOM_VERT = """#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+layout (location = 2) in vec2 aTexCoords;
+out vec3 FragPos;
+out vec3 Normal;
+out vec2 TexCoords;
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+uniform mat3 normalMatrix;
+uniform vec2 tex_scale;
+void main() {
+    vec4 worldPos = model * vec4(aPos, 1.0);
+    FragPos = worldPos.xyz;
+    Normal = normalMatrix * aNormal;
+    TexCoords = aTexCoords * tex_scale;
+    gl_Position = projection * view * worldPos;
+}"""
+
+        DEFERRED_GEOM_FRAG = """#version 330 core
+layout (location = 0) out vec3 gPosition;
+layout (location = 1) out vec3 gNormal;
+layout (location = 2) out vec4 gAlbedo;
+in vec3 FragPos;
+in vec3 Normal;
+in vec2 TexCoords;
+uniform vec3 object_color;
+uniform float alpha;
+uniform sampler2D texture_diffuse;
+uniform int use_texture;
+void main() {
+    if (alpha < 0.05) discard;
+    gPosition = FragPos;
+    gNormal = normalize(Normal);
+    if (use_texture == 1) {
+        vec4 tex = texture(texture_diffuse, TexCoords);
+        if (tex.a < 0.1) discard;
+        gAlbedo = tex;
+    } else {
+        gAlbedo = vec4(object_color, alpha);
+    }
+}"""
+
+        DEFERRED_LIGHTING_VERT = """#version 330 core
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec2 aTexCoords;
+out vec2 TexCoords;
+void main() {
+    TexCoords = aTexCoords;
+    gl_Position = vec4(aPos, 0.0, 1.0);
+}"""
+
+        DEFERRED_LIGHTING_FRAG = """#version 330 core
+out vec4 FragColor;
+in vec2 TexCoords;
+uniform sampler2D gPosition;
+uniform sampler2D gNormal;
+uniform sampler2D gAlbedo;
+struct Light { vec3 position; vec3 color; float intensity; float radius; };
+uniform Light lights[16];
+uniform int active_lights;
+uniform vec3 viewPos;
+void main() {
+    vec3 FragPos  = texture(gPosition, TexCoords).rgb;
+    vec3 norm     = normalize(texture(gNormal,   TexCoords).rgb);
+    vec4 albedo4  = texture(gAlbedo,   TexCoords);
+    vec3 albedo   = albedo4.rgb;
+    float alpha   = albedo4.a;
+
+    // Ambient
+    vec3 result = vec3(0.12) * albedo;
+
+    // Point lights - same attenuation model as forward renderer
+    for (int i = 0; i < active_lights && i < 16; i++) {
+        vec3 toLight = lights[i].position - FragPos;
+        float distSq  = dot(toLight, toLight);
+        float radiusSq = lights[i].radius * lights[i].radius;
+        if (distSq < radiusSq) {
+            float dist = sqrt(distSq);
+            vec3 lightDir = toLight / dist;
+            float diff = max(dot(norm, lightDir), 0.0);
+            float att  = 1.0 - (dist / lights[i].radius);
+            att = att * att;
+            result += (diff * lights[i].color * lights[i].intensity * att) * albedo;
+        }
+    }
+    FragColor = vec4(result, alpha);
+}"""
+
+        try:
+            geom_shader = self.shader_loader.compile_from_source(DEFERRED_GEOM_VERT, DEFERRED_GEOM_FRAG)
+            self.shaders['deferred_geom'] = geom_shader
+            self.uniforms['deferred_geom'] = UniformCache(geom_shader)
+            self.uniforms['deferred_geom'].preload([
+                'projection', 'view', 'model', 'normalMatrix', 'tex_scale',
+                'object_color', 'alpha', 'texture_diffuse', 'use_texture'
+            ])
+            for i in range(self.MAX_LIGHTS):
+                self.uniforms['deferred_geom'].preload([
+                    f'lights[{i}].position', f'lights[{i}].color',
+                    f'lights[{i}].intensity', f'lights[{i}].radius'
+                ])
+
+            lighting_shader = self.shader_loader.compile_from_source(DEFERRED_LIGHTING_VERT, DEFERRED_LIGHTING_FRAG)
+            self.shaders['deferred_lighting'] = lighting_shader
+            self.uniforms['deferred_lighting'] = UniformCache(lighting_shader)
+            self.uniforms['deferred_lighting'].preload([
+                'gPosition', 'gNormal', 'gAlbedo', 'active_lights', 'viewPos'
+            ])
+            for i in range(self.MAX_LIGHTS):
+                self.uniforms['deferred_lighting'].preload([
+                    f'lights[{i}].position', f'lights[{i}].color',
+                    f'lights[{i}].intensity', f'lights[{i}].radius'
+                ])
+            print("Deferred rendering shaders compiled successfully")
+        except Exception as e:
+            print(f"Deferred shader compile error: {e}")
+            self.shaders['deferred_geom'] = None
+            self.shaders['deferred_lighting'] = None
+
+    def _init_gbuffer(self, width, height):
+        """Create or resize the G-buffer FBO and its texture attachments."""
+        # Tear down existing G-buffer if any
+        if self._gbuffer_fbo is not None:
+            gl.glDeleteFramebuffers(1, [self._gbuffer_fbo])
+            gl.glDeleteTextures([self._gbuffer_position_tex,
+                                 self._gbuffer_normal_tex,
+                                 self._gbuffer_albedo_tex])
+            gl.glDeleteRenderbuffers(1, [self._gbuffer_depth_rb])
+
+        self._gbuffer_fbo = gl.glGenFramebuffers(1)
+        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._gbuffer_fbo)
+
+        def make_tex(internal_fmt, data_fmt, data_type, attach_point):
+            tid = gl.glGenTextures(1)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, tid)
+            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, internal_fmt, width, height, 0,
+                            data_fmt, data_type, None)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
+            gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, attach_point,
+                                      gl.GL_TEXTURE_2D, tid, 0)
+            return tid
+
+        self._gbuffer_position_tex = make_tex(gl.GL_RGB32F,  gl.GL_RGB,  gl.GL_FLOAT,         gl.GL_COLOR_ATTACHMENT0)
+        self._gbuffer_normal_tex   = make_tex(gl.GL_RGB16F,  gl.GL_RGB,  gl.GL_FLOAT,         gl.GL_COLOR_ATTACHMENT1)
+        self._gbuffer_albedo_tex   = make_tex(gl.GL_RGBA8,   gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, gl.GL_COLOR_ATTACHMENT2)
+
+        gl.glDrawBuffers(3, [gl.GL_COLOR_ATTACHMENT0,
+                             gl.GL_COLOR_ATTACHMENT1,
+                             gl.GL_COLOR_ATTACHMENT2])
+
+        self._gbuffer_depth_rb = gl.glGenRenderbuffers(1)
+        gl.glBindRenderbuffer(gl.GL_RENDERBUFFER, self._gbuffer_depth_rb)
+        gl.glRenderbufferStorage(gl.GL_RENDERBUFFER, gl.GL_DEPTH_COMPONENT24, width, height)
+        gl.glFramebufferRenderbuffer(gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
+                                     gl.GL_RENDERBUFFER, self._gbuffer_depth_rb)
+
+        status = gl.glCheckFramebufferStatus(gl.GL_FRAMEBUFFER)
+        if status != gl.GL_FRAMEBUFFER_COMPLETE:
+            print(f"[Deferred] G-buffer FBO incomplete: {status:#x}")
+
+        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, 0)
+        self._gbuffer_size = (width, height)
+        print(f"[Deferred] G-buffer initialised at {width}x{height}")
+
+    def _ensure_gbuffer(self, width, height):
+        """Lazily create / resize the G-buffer to match the viewport."""
+        if self._gbuffer_fbo is None or self._gbuffer_size != (width, height):
+            self._init_gbuffer(width, height)
+
+    def _ensure_fullscreen_quad(self):
+        """Create the fullscreen quad VAO for the lighting pass (once)."""
+        if self._fullscreen_quad_vao is not None:
+            return
+        import numpy as np
+        quad_verts = np.array([
+            # pos       # uv
+            -1.0,  1.0, 0.0, 1.0,
+            -1.0, -1.0, 0.0, 0.0,
+             1.0, -1.0, 1.0, 0.0,
+            -1.0,  1.0, 0.0, 1.0,
+             1.0, -1.0, 1.0, 0.0,
+             1.0,  1.0, 1.0, 1.0,
+        ], dtype=np.float32)
+
+        self._fullscreen_quad_vao = gl.glGenVertexArrays(1)
+        self._fullscreen_quad_vbo = gl.glGenBuffers(1)
+        gl.glBindVertexArray(self._fullscreen_quad_vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._fullscreen_quad_vbo)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, quad_verts.nbytes, quad_verts, gl.GL_STATIC_DRAW)
+        gl.glEnableVertexAttribArray(0)
+        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 16, None)
+        gl.glEnableVertexAttribArray(1)
+        gl.glVertexAttribPointer(1, 2, gl.GL_FLOAT, gl.GL_FALSE, 16, ctypes.c_void_p(8))
+        gl.glBindVertexArray(0)
+
     def _detect_arm_platform(self):
         """Detect if running on ARM or under x64 emulation."""
         import platform
@@ -696,6 +887,12 @@ class Renderer:
     # =========================================================================
 
     def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config):
+        # Route to deferred pipeline when enabled (only in Lit mode; other modes fall through to forward)
+        current_mode = config.get('render_mode', RENDER_MODE_LIT)
+        if self.use_deferred and current_mode == RENDER_MODE_LIT:
+            self._render_scene_deferred(projection, view, camera_pos, brushes, things, selected_object, config)
+            return
+
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDepthFunc(gl.GL_LESS)
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
@@ -828,6 +1025,238 @@ class Renderer:
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDisable(gl.GL_BLEND)
         gl.glUseProgram(0)
+
+    # =========================================================================
+    # DEFERRED RENDERING PIPELINE
+    # =========================================================================
+
+    def _render_scene_deferred(self, projection, view, camera_pos, brushes, things, selected_object, config):
+        """Full deferred rendering pipeline:
+           1. Geometry pass  → G-buffer (position, normal, albedo)
+           2. Lighting pass  → fullscreen quad with G-buffer sampling
+           3. Forward pass   → transparent objects, water, glass, fog (unchanged)
+        """
+        if ('deferred_geom' not in self.shaders or
+                self.shaders['deferred_geom'] is None or
+                self.shaders['deferred_lighting'] is None):
+            # Shaders didn't compile – fall back to forward silently
+            self.use_deferred = False
+            self.render_scene(projection, view, camera_pos, brushes, things, selected_object, config)
+            return
+
+        # --- Determine viewport size for G-buffer ---
+        vp = gl.glGetIntegerv(gl.GL_VIEWPORT)  # [x, y, w, h]
+        vp_w, vp_h = int(vp[2]), int(vp[3])
+        if vp_w <= 0 or vp_h <= 0:
+            return
+
+        self._ensure_gbuffer(vp_w, vp_h)
+        self._ensure_fullscreen_quad()
+
+        self._proj_ptr = glm.value_ptr(projection)
+        self._view_ptr = glm.value_ptr(view)
+
+        self.render_stats.reset()
+        self.render_stats.total_brushes = len(brushes)
+        self._frame_lights_uploaded = False
+        self._current_shader = None
+
+        # Sort objects (same as forward)
+        opaque_brushes, transparent_brushes, sprite_things, fog_volumes, water_brushes, glass_brushes = \
+            self._sort_objects(brushes, things, config)
+
+        textured_opaque, solid_opaque = [], []
+        for b in opaque_brushes:
+            is_tex = any(t and t not in ['default.png', 'caulk.jpg']
+                         for t in b.get('textures', {}).values())
+            (textured_opaque if is_tex else solid_opaque).append(b)
+
+        models_to_render, final_sprites = [], []
+        for thing in sprite_things:
+            if isinstance(thing, Thing) and thing.properties.get('model_path'):
+                models_to_render.append(thing)
+            else:
+                final_sprites.append(thing)
+
+        lights = [t for t in things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
+        self._frame_lights = lights
+
+        terrain = config.get('terrain', None)
+
+        # ---------------------------------------------------------------
+        # PASS 1 – GEOMETRY: render opaque geometry into G-buffer
+        # ---------------------------------------------------------------
+        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._gbuffer_fbo)
+        gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glDepthFunc(gl.GL_LESS)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glDisable(gl.GL_BLEND)
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+
+        self._deferred_geom_pass(projection, view, solid_opaque, textured_opaque, config)
+
+        # Terrain still uses its own forward shader – render into G-buffer depth at least
+        if terrain and terrain.enabled:
+            self.render_terrain(projection, view, camera_pos, terrain, lights)
+
+        # ---------------------------------------------------------------
+        # PASS 2 – LIGHTING: fullscreen quad, sample G-buffer, compute lighting
+        # ---------------------------------------------------------------
+        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, 0)
+        gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
+        gl.glDisable(gl.GL_DEPTH_TEST)
+        gl.glDisable(gl.GL_BLEND)
+
+        shader = self.shaders['deferred_lighting']
+        u = self.uniforms['deferred_lighting']
+        gl.glUseProgram(shader)
+
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._gbuffer_position_tex)
+        gl.glUniform1i(u['gPosition'], 0)
+
+        gl.glActiveTexture(gl.GL_TEXTURE1)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._gbuffer_normal_tex)
+        gl.glUniform1i(u['gNormal'], 1)
+
+        gl.glActiveTexture(gl.GL_TEXTURE2)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._gbuffer_albedo_tex)
+        gl.glUniform1i(u['gAlbedo'], 2)
+
+        gl.glUniform1i(u['active_lights'], min(len(lights), self.MAX_LIGHTS))
+        gl.glUniform3f(u['viewPos'], camera_pos.x, camera_pos.y, camera_pos.z)
+        for i, light in enumerate(lights[:self.MAX_LIGHTS]):
+            gl.glUniform3fv(u[f'lights[{i}].position'], 1, light.pos)
+            gl.glUniform3fv(u[f'lights[{i}].color'], 1, light.get_color())
+            gl.glUniform1f(u[f'lights[{i}].intensity'], light.get_intensity())
+            gl.glUniform1f(u[f'lights[{i}].radius'], light.get_radius())
+
+        gl.glBindVertexArray(self._fullscreen_quad_vao)
+        gl.glDrawArrays(gl.GL_TRIANGLES, 0, 6)
+        gl.glBindVertexArray(0)
+
+        # Blit depth from G-buffer so forward transparent pass has correct depth
+        gl.glBindFramebuffer(gl.GL_READ_FRAMEBUFFER, self._gbuffer_fbo)
+        gl.glBindFramebuffer(gl.GL_DRAW_FRAMEBUFFER, 0)
+        gl.glBlitFramebuffer(0, 0, vp_w, vp_h, 0, 0, vp_w, vp_h,
+                             gl.GL_DEPTH_BUFFER_BIT, gl.GL_NEAREST)
+        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, 0)
+
+        # ---------------------------------------------------------------
+        # PASS 3 – FORWARD: transparent objects, sprites, water, glass, fog
+        # ---------------------------------------------------------------
+        gl.glEnable(gl.GL_DEPTH_TEST)
+        self.draw_grid(projection, view, self.grid_indices_count,
+                       config.get('play_mode', False), config.get('grid_visible', True))
+
+        if models_to_render:
+            self.draw_models(projection, view, camera_pos, models_to_render, lights, config)
+
+        # Sort transparents
+        for lst in (transparent_brushes, water_brushes, glass_brushes):
+            if lst:
+                lst.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
+        if final_sprites:
+            final_sprites.sort(key=lambda s: -self._distance_sq(s.pos, camera_pos))
+
+        gl.glEnable(gl.GL_BLEND)
+        gl.glDepthMask(gl.GL_FALSE)
+
+        self.draw_sprites(projection, view, final_sprites, self.sprite_textures, self.instance_textures)
+
+        self.draw_lit_brushes_optimized(projection, view, camera_pos,
+                                        transparent_brushes, lights, config, is_transparent_pass=True)
+        self.draw_water_brushes(projection, view, camera_pos, water_brushes, lights, config)
+        self.draw_glass_brushes(projection, view, camera_pos, glass_brushes, lights, config)
+        self.draw_fog_volumes(projection, view, camera_pos, fog_volumes, lights, config)
+
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glDisable(gl.GL_DEPTH_TEST)
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+
+        if selected_object:
+            if isinstance(selected_object, dict):
+                self.draw_selected_brush_outline(projection, view, selected_object)
+                if not selected_object.get('lock', False):
+                    self.render_gizmo(projection, view, selected_object['pos'])
+            elif isinstance(selected_object, Thing):
+                self.render_gizmo(projection, view, selected_object.pos)
+
+        gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glDisable(gl.GL_BLEND)
+        gl.glUseProgram(0)
+
+    def _deferred_geom_pass(self, projection, view, solid_brushes, textured_brushes, config):
+        """Geometry pass: write world-pos, normal, albedo into G-buffer MRT."""
+        shader = self.shaders['deferred_geom']
+        u = self.uniforms['deferred_geom']
+        if shader is None:
+            return
+
+        gl.glUseProgram(shader)
+        gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(u['view'],       1, gl.GL_FALSE, self._view_ptr)
+        gl.glUniform2f(u['tex_scale'], 1.0, 1.0)
+
+        gl.glBindVertexArray(self.vaos['cube'])
+
+        # --- solid (unlit colour) brushes ---
+        gl.glUniform1i(u['use_texture'], 0)
+        for brush in solid_brushes:
+            pos  = brush.get('pos', [0, 0, 0])
+            size = brush.get('size', [64, 64, 64])
+
+            if brush.get('is_trigger'):
+                color, alpha = [0.0, 1.0, 1.0], 0.3
+            elif brush.get('operation') == 'subtract':
+                color, alpha = [1.0, 0.0, 0.0], 1.0
+            else:
+                brush_colour = brush.get('colour')
+                if brush_colour and isinstance(brush_colour, (list, tuple)) and len(brush_colour) >= 3:
+                    color = [c / 255.0 if c > 1.0 else c for c in brush_colour[:3]]
+                else:
+                    color = [0.8, 0.8, 0.8]
+                alpha = float(brush.get('alpha', 1.0))
+
+            model = glm.translate(glm.mat4(1.0), glm.vec3(*pos))
+            model = glm.scale(model, glm.vec3(size[0], size[1], size[2]))
+            nm = self._compute_normal_matrix(model)
+
+            gl.glUniformMatrix4fv(u['model'], 1, gl.GL_FALSE, glm.value_ptr(model))
+            gl.glUniformMatrix3fv(u['normalMatrix'], 1, gl.GL_FALSE, glm.value_ptr(nm))
+            gl.glUniform3f(u['object_color'], color[0], color[1], color[2])
+            gl.glUniform1f(u['alpha'], alpha)
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+            self.render_stats.draw_calls += 1
+
+        # --- textured brushes ---
+        gl.glUniform1i(u['use_texture'], 1)
+        for brush in textured_brushes:
+            pos  = brush.get('pos', [0, 0, 0])
+            size = brush.get('size', [64, 64, 64])
+            alpha = float(brush.get('alpha', 1.0))
+            tex_scale = brush.get('tex_scale', [1.0, 1.0])
+
+            model = glm.translate(glm.mat4(1.0), glm.vec3(*pos))
+            model = glm.scale(model, glm.vec3(size[0], size[1], size[2]))
+            nm = self._compute_normal_matrix(model)
+
+            gl.glUniformMatrix4fv(u['model'], 1, gl.GL_FALSE, glm.value_ptr(model))
+            gl.glUniformMatrix3fv(u['normalMatrix'], 1, gl.GL_FALSE, glm.value_ptr(nm))
+            gl.glUniform1f(u['alpha'], alpha)
+            gl.glUniform2f(u['tex_scale'], tex_scale[0], tex_scale[1])
+
+            tex_name = next(iter(brush.get('textures', {}).values()), None)
+            tex_id = self.texture_manager.get(tex_name, self.texture_manager.get('default.png', 0))
+            gl.glActiveTexture(gl.GL_TEXTURE0)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+            gl.glUniform1i(u['texture_diffuse'], 0)
+
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+            self.render_stats.draw_calls += 1
+
+        gl.glBindVertexArray(0)
 
     # =========================================================================
     # OPTIMIZED DRAWING METHODS - NO DOUBLE CULLING
@@ -1679,3 +2108,6 @@ class Renderer:
             gl.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
         gl.glBindVertexArray(0)
+
+
+
