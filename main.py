@@ -15,7 +15,7 @@ def clean_pycache():
     pass
 
 class ProgressSplashScreen(QWidget):
-    """Custom splash screen with uniform progress bar."""
+    """Splash screen with progress bar."""
     def __init__(self, pixmap_path):
         super().__init__()
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
