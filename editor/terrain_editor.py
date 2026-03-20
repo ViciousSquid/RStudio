@@ -2,8 +2,7 @@
 Terrain Editor Window for RStudio
 
 A floating dialog with comprehensive terrain creation and editing tools.
-Now with separate controls for mountains, valleys, and plateaus.
-Includes new Scale tab for physical mesh scaling and tiling.
+With separate controls for mountains, valleys, and plateaus.
 """
 
 from PyQt5.QtWidgets import (
