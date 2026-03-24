@@ -91,7 +91,7 @@ class Ui_MainWindow(object):
             QTabBar::tab:hover { background: #5a7a82; }
         """)
 
-        MainWindow.properties_dock = QDockWidget("Properties", MainWindow)
+        MainWindow.properties_dock = QDockWidget(" ", MainWindow)
         MainWindow.properties_dock.setObjectName("PropertiesDock")
         MainWindow.properties_dock.setWidget(MainWindow.properties_tab_widget)
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.properties_dock)

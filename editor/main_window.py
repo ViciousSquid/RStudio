@@ -134,7 +134,7 @@ class MainWindow(QMainWindow):
         self.recent_files = []
 
 
-        self.setWindowTitle("RStudio")
+        self.setWindowTitle("Fio")
         self.setGeometry(100, 100, 1600, 900)
         self.setMinimumSize(1280, 800)
 
@@ -236,7 +236,7 @@ class MainWindow(QMainWindow):
         """Updates window title with filename and dirty status."""
         fname = os.path.basename(self.file_path) if self.file_path else "Untitled"
         dirty_marker = "*" if self.unsaved_changes else ""
-        self.setWindowTitle(f"RStudio - {fname} {dirty_marker}")
+        self.setWindowTitle(f"Fio - {fname} {dirty_marker}")
 
     def mark_as_modified(self):
         """Mark the project as having unsaved changes."""
@@ -1286,7 +1286,7 @@ class MainWindow(QMainWindow):
             version = "Version not found"
 
         msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("About RStudio")
+        msg_box.setWindowTitle("About Fio")
         
         container_widget = QWidget()
         layout = QVBoxLayout(container_widget)
@@ -1296,7 +1296,7 @@ class MainWindow(QMainWindow):
         splash_label.setPixmap(pixmap.scaled(512, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         layout.addWidget(splash_label)
 
-        version_label = QLabel(f"{version}<br>https://github.com/ViciousSquid/RStudio")
+        version_label = QLabel(f"{version}<br>https://github.com/ViciousSquid/Fio")
         version_label.setTextFormat(Qt.RichText)
         version_label.setAlignment(Qt.AlignCenter)
         version_label.setOpenExternalLinks(True)

@@ -1,5 +1,5 @@
 """
-Input Handlers for RStudio I/O System
+Input Handlers for Fio I/O System
 
 This module registers all input handlers that define what happens when
 an input is called on an entity.
@@ -487,7 +487,7 @@ def register_all_input_handlers(io_manager: IOManager):
         pass
 
     # Use HTML bold tags for the console title
-    debug_log('Info', f"<b>RStudio {version_str}</b>")
+    debug_log('Info', f"<b>Fio {version_str}</b>")
     debug_log('Info', f"Registered {len(io_manager._input_handlers)} input handlers")
 
 
