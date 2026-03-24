@@ -8,6 +8,7 @@
 ### [Download 1.0.14.0 for Windows](https://github.com/ViciousSquid/RStudio/releases/tag/v1.0.14.0_prerelease)
 
 * **Editor and game engine** with unified renderer
+* Optimsed for ARM CPUs and OpenGL 3.3 (target: Microsoft Surface Pro 9 5G / Snapdragon 8CX)
 * **Custom OpenGL/PyGame engine** supports immediate "drop-in and play" (like CryEngine Editor)
 * **Custom basic player physics engine**
 * **Real-time lighting** with optional stencil shadows
