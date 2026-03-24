@@ -1,8 +1,5 @@
 <img src="https://github.com/user-attachments/assets/65cb6de0-45ba-4e96-b9e7-2e9a92aa910f" width="500">
 
-## _Fio - "to be made/created"_
-
-
 ### _A liminal brush-based CSG editor and game engine with unified renderer_
 
 ### inspired by Radiant and Worldcraft/Hammer (from the old times!)
