@@ -35,3 +35,7 @@
 
 in memory of David Lynch
 
+<p align="left">
+  <img src="https://komarev.com/ghpvc/?username=vicioussquid2&color=lightgrey&style=flat-square" alt="vc" />
+</p>
+
