@@ -184,7 +184,7 @@ if __name__ == "__main__":
         version_file_path = os.path.join(root_directory, 'editor/version.txt')
         with open(version_file_path, 'r') as f:
             version = f.read().strip()
-            print(f"       +++ RStudio {version}")
+            print(f"       +++ Fio {version}")
     except FileNotFoundError:
         print("Version file not found")
 
