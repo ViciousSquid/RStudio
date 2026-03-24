@@ -10,10 +10,9 @@
 * **Custom OpenGL/PyGame engine** supports immediate "drop-in and play" (like CryEngine Editor)
 * **Real-time lighting** with optional stencil shadows
 * **Volumetric fog, glass & water shaders** with configurable surface parms
-* **Entity I/O system** _inspired by Half-Life 2_
+* **Entity I/O system** _inspired by Half-Life 2_ (logic, triggers, lights, speakers)
 * Terrain generation
 * OBJ model support
-* brushes can be **TRIGGERS** that activate objects in the world (lights, speakers)
 * `json` level format with `magic number` fingerprint
 * Fully modular and open source (MIT License)
 
