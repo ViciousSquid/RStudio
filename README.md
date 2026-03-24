@@ -3,7 +3,7 @@
 ## Fio - (Latin) "to be made/created"
 
 
-### A liminal brush-based CSG * **editor and game engine** with unified renderer 
+### _A liminal brush-based CSG editor and game engine with unified renderer_
 
 ### inspired by Radiant and Worldcraft/Hammer (from the old times!)
 ### * Optimised for ARM CPUs and OpenGL 3.3 (target: Microsoft Surface Pro 9 5G / Snapdragon 8CX)
