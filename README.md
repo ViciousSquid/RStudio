@@ -6,7 +6,6 @@
 ### _A liminal brush-based CSG editor and game engine with unified renderer_
 
 ### inspired by Radiant and Worldcraft/Hammer (from the old times!)
-#### * Optimised for ARM CPU, OpenGL 3.3 (target: Microsoft Surface Pro 9 5G / Snapdragon 8CX)
 
 
  <img width="2039" height="1171" alt="image" src="https://github.com/user-attachments/assets/0422c267-5131-4306-a25d-cc2f716e5eae" />
