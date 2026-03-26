@@ -4,6 +4,8 @@
 
 ### inspired by Radiant and Worldcraft/Hammer (from the old times!)
 
+### >>> [Download for Windows x64](https://github.com/ViciousSquid/Fio/releases/tag/v1.0.16.0) <<<
+
 
  <img width="2039" height="1171" alt="image" src="https://github.com/user-attachments/assets/0422c267-5131-4306-a25d-cc2f716e5eae" />
 
