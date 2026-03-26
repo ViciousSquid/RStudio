@@ -221,17 +221,11 @@ class IOManager:
     
     def fire_output(self, source_entity, output_name: str):
         """
-        Fire an output from an entity, triggering all connected inputs.
-        
-        source_entity: The entity firing the output (Thing or brush dict)
-        output_name: Name of the output being fired
+        Fire an output from an entity (thing), triggering all connected inputs.
         """
-        # Get connections from the entity
         connections = self._get_connections(source_entity)
         source_name = self._get_entity_name(source_entity)
-        
-        io_log(f"fire_output: {source_name}.{output_name} ({len(connections)} connections)")
-        
+
         matching_count = 0
         for conn in connections:
             if conn.output_name.lower() != output_name.lower():
@@ -239,19 +233,16 @@ class IOManager:
             
             matching_count += 1
             
-            # Check fire_once
             if conn.fire_once and conn._fired:
-                io_log(f"  -> {conn.target_name}.{conn.input_name} SKIPPED (fire_once)")
+                io_log(f"{source_name}.{output_name} -> {conn.target_name}.{conn.input_name} SKIPPED (fire_once)")
                 continue
             
-            # Mark as fired
             conn._fired = True
             
-            delay_str = f" (delay={conn.delay}s)" if conn.delay > 0 else ""
-            io_log(f"  -> {conn.target_name}.{conn.input_name}{delay_str}")
+            delay_str = f" (delay {conn.delay}s)" if conn.delay > 0 else ""
+            io_log(f"{source_name}.{output_name} -> {conn.target_name}.{conn.input_name}{delay_str}")
             
             if conn.delay > 0:
-                # Queue for delayed execution
                 event = PendingEvent(
                     fire_time=self.current_time + conn.delay,
                     target_name=conn.target_name,
@@ -262,50 +253,40 @@ class IOManager:
                 )
                 self.pending_events.append(event)
             else:
-                # Execute immediately
                 self._execute_input(conn.target_name, conn.input_name, 
-                                   conn.parameter, source_name)
+                                conn.parameter, source_name)
         
         if matching_count == 0:
-            io_log(f"  (no connections for output '{output_name}')")
+            io_log(f"{source_name}.{output_name} (no connections)")
     
     def update(self, delta: float):
-        """
-        Update the I/O manager, processing delayed events.
-        Call this every logic tick.
-        """
         self.current_time += delta
         
-        # Process pending events
         still_pending = []
         for event in self.pending_events:
             if self.current_time >= event.fire_time:
-                io_log(f"Delayed event firing: {event.target_name}.{event.input_name}")
+                io_log(f"[Delayed] {event.target_name}.{event.input_name} (from {event.source_name})")
                 self._execute_input(event.target_name, event.input_name,
-                                   event.parameter, event.source_name)
+                                event.parameter, event.source_name)
             else:
                 still_pending.append(event)
         
         self.pending_events = still_pending
     
     def _execute_input(self, target_name: str, input_name: str, 
-                       parameter: str, source_name: str):
+                   parameter: str, source_name: str):
         """Execute an input on a target entity."""
         if not self._find_entity:
-            io_log("ERROR: No entity finder set!")
+            debug_log("Error", "I/O: No entity finder set!")
             return
         
         target = self._find_entity(target_name)
         if target is None:
-            io_log(f"ERROR: Target '{target_name}' not found!")
+            debug_log("Error", f"I/O: Target '{target_name}' not found!")
             return
         
-        # Get entity type
         entity_type = self._get_entity_type(target)
         
-        io_log(f"execute_input: {target_name} (type={entity_type}).{input_name}")
-        
-        # Look up handler
         handler_key = (entity_type.lower(), input_name.lower())
         handler = self._input_handlers.get(handler_key)
         
@@ -317,8 +298,6 @@ class IOManager:
                 import traceback
                 traceback.print_exc()
         else:
-            io_log(f"  No handler for {handler_key}, trying generic...")
-            # Fallback: try generic handlers
             self._try_generic_input(target, input_name, parameter)
     
     def _try_generic_input(self, entity, input_name: str, parameter: str):

@@ -27,7 +27,8 @@ from editor.view_2d import View2D
 from editor.editor_state import EditorState
 from editor.terrain_editor import TerrainEditorWindow
 from engine.terrain import Terrain
-from editor.debug_console import DebugConsole
+from editor.debug_console import DebugConsole, debug_log
+from editor.console_commands import ConsoleCommandHandler
 
 
 class Toast(QLabel):
@@ -123,6 +124,7 @@ class Toast(QLabel):
         self.anim.setEndValue(0)
         self.anim.start()
         
+
 class MainWindow(QMainWindow):
     def __init__(self, root_dir):
         super().__init__()
@@ -172,6 +174,9 @@ class MainWindow(QMainWindow):
 
         # debug_console is embedded in the properties tab widget (created in setupUi)
         self.debug_console = DebugConsole.get_instance(self)
+        # --- Connect the command_issued signal to the command handler ---
+        self.console_handler = ConsoleCommandHandler(self)
+        self.debug_console.command_issued.connect(self.console_handler.handle_command)
 
         # If configured, switch to the Debug Console tab on startup
         if self.config.getboolean('Display', 'always_show_io_debug', fallback=False):
@@ -310,7 +315,7 @@ class MainWindow(QMainWindow):
     def update_recent_files_menu(self):
         if not hasattr(self, 'recent_menu'):
             return
-            
+        
         self.recent_menu.clear()
         
         if not self.recent_files:
@@ -363,7 +368,7 @@ class MainWindow(QMainWindow):
             
             with open(save_path, 'w') as f:
                 json.dump(self.state.get_level_data(), f, indent=4)
-                
+            
             print(f"[Autosave] Saved to {save_path}")
             # Do NOT clear unsaved_changes flag on autosave
             
@@ -1396,7 +1401,7 @@ class MainWindow(QMainWindow):
             if brush.get('operation') == 'subtract':
                 new_brushes.append(brush)
                 continue
-                
+        
             pos = brush['pos']
             size = brush['size']
             brush_min = [pos[0] - size[0]/2, pos[1] - size[1]/2, pos[2] - size[2]/2]

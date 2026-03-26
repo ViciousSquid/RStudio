@@ -1,7 +1,6 @@
-
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextBrowser, QPushButton, 
-    QLabel, QCheckBox, QComboBox, QFrame
+    QLabel, QCheckBox, QComboBox, QFrame, QLineEdit
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QUrl
 from PyQt5.QtGui import QFont, QTextCursor, QColor, QDesktopServices
@@ -73,11 +72,40 @@ def debug_log(category: str, message: str):
     get_debug_logger().log(category, message)
 
 
+class CommandInput(QLineEdit):
+    """Custom line edit that keeps command history (Quake style)."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.history = []
+        self.history_idx = 0
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Up:
+            if self.history and self.history_idx > 0:
+                self.history_idx -= 1
+                self.setText(self.history[self.history_idx])
+        elif event.key() == Qt.Key_Down:
+            if self.history and self.history_idx < len(self.history) - 1:
+                self.history_idx += 1
+                self.setText(self.history[self.history_idx])
+            elif self.history_idx == len(self.history) - 1:
+                self.history_idx = len(self.history)
+                self.clear()
+        else:
+            super().keyPressEvent(event)
+            
+    def add_history(self, command):
+        if command and (not self.history or self.history[-1] != command):
+            self.history.append(command)
+        self.history_idx = len(self.history)
+
+
 class DebugConsole(QWidget):
     """
     Floating debug console window for viewing I/O and entity logic messages.
     """
-    
+    command_issued = pyqtSignal(str) 
+
     # Category colors
     CATEGORY_COLORS = {
         'IO': '#4FC3F7',       # Light blue
@@ -168,7 +196,6 @@ class DebugConsole(QWidget):
         self.filter_empty_cb = QCheckBox("Filter Empty")
         self.filter_empty_cb.setToolTip("Hide messages about 0 connections")
         self.filter_empty_cb.setChecked(True) 
-        self.filter_empty_cb.setStyleSheet("color: #aaa;")
         self.filter_empty_cb.toggled.connect(self._refresh_console)
         toolbar.addWidget(self.filter_empty_cb)
 
@@ -177,6 +204,32 @@ class DebugConsole(QWidget):
         sep2.setFrameShape(QFrame.VLine)
         sep2.setStyleSheet("color: #444;")
         toolbar.addWidget(sep2)
+
+        # Entity type filters
+        filter_label2 = QLabel("Hide:")
+        filter_label2.setStyleSheet("color: #888; font-weight: bold;")
+        toolbar.addWidget(filter_label2)
+
+        self.hide_movers_cb = QCheckBox("Movers")
+        self.hide_movers_cb.setToolTip("Hide I/O messages from Movers")
+        self.hide_movers_cb.toggled.connect(self._refresh_console)
+        toolbar.addWidget(self.hide_movers_cb)
+
+        self.hide_triggers_cb = QCheckBox("Triggers")
+        self.hide_triggers_cb.setToolTip("Hide I/O messages from Triggers")
+        self.hide_triggers_cb.toggled.connect(self._refresh_console)
+        toolbar.addWidget(self.hide_triggers_cb)
+
+        self.hide_doors_cb = QCheckBox("Doors")
+        self.hide_doors_cb.setToolTip("Hide I/O messages from Doors")
+        self.hide_doors_cb.toggled.connect(self._refresh_console)
+        toolbar.addWidget(self.hide_doors_cb)
+
+        # Separator
+        sep3 = QFrame()
+        sep3.setFrameShape(QFrame.VLine)
+        sep3.setStyleSheet("color: #444;")
+        toolbar.addWidget(sep3)
 
         # Font size controls
         font_label = QLabel("Size:")
@@ -264,6 +317,33 @@ class DebugConsole(QWidget):
         """)
         layout.addWidget(self.console)
         
+        # --- Command input area at the bottom ---
+        input_layout = QHBoxLayout()
+        input_layout.setContentsMargins(0, 0, 0, 0)
+        
+        prompt_label = QLabel("]")
+        prompt_label.setStyleSheet("color: #F08000; font-weight: bold; font-family: Consolas; font-size: 14px;")
+        
+        self.command_input = CommandInput()
+        self.command_input.setPlaceholderText("Enter command...")
+        self.command_input.setFont(QFont("Consolas", self.font_size))
+        self.command_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #1a1a1a;
+                color: #ddd;
+                border: 1px solid #333;
+                padding: 4px;
+            }
+            QLineEdit:focus {
+                border: 1px solid #F08000;
+            }
+        """)
+        self.command_input.returnPressed.connect(self._on_command_entered)
+        
+        input_layout.addWidget(prompt_label)
+        input_layout.addWidget(self.command_input)
+        layout.addLayout(input_layout)
+        
         # Overall widget styling
         self.setStyleSheet("""
             QWidget {
@@ -309,6 +389,7 @@ class DebugConsole(QWidget):
         """Apply the current font size to the console and reload all HTML."""
         self.font_size_label.setText(str(self.font_size))
         self.console.setFont(QFont("Consolas", self.font_size))
+        self.command_input.setFont(QFont("Consolas", self.font_size))
         self._refresh_console()
 
     # ------------------------------------------------------------------
@@ -327,6 +408,29 @@ class DebugConsole(QWidget):
     def _on_message(self, category: str, message: str):
         """Handle a new log message."""
         self._append_message(category, message)
+
+    def _on_command_entered(self):
+        """Handle command submission from the input line."""
+        cmd = self.command_input.text().strip()
+        if not cmd:
+            return
+            
+        # Echo the command to the console exactly like Quake
+        cursor = self.console.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        cursor.insertHtml(f"<br><span style='color: #F08000; font-weight: bold;'>] {cmd}</span><br>")
+        
+        # Add to local history and clear the line
+        self.command_input.add_history(cmd)
+        self.command_input.clear()
+        
+        # Auto-scroll to show the command we just typed
+        if self.auto_scroll:
+            self.console.setTextCursor(cursor)
+            self.console.ensureCursorVisible()
+        
+        # Pass the raw string to whatever is listening
+        self.command_issued.emit(cmd)
 
     def _on_anchor_clicked(self, url: QUrl):
         """Handle clicking on an entity name."""
@@ -391,7 +495,23 @@ class DebugConsole(QWidget):
         elif current_combo_text != "All" and category != current_combo_text:
             return
 
-        # 2. Check "Filter Empty" Logic
+        # 2. Filter specific entity types (Movers, Triggers, Doors)
+        if self.hide_movers_cb.isChecked() or self.hide_triggers_cb.isChecked() or self.hide_doors_cb.isChecked():
+            match = re.match(r'^\[IO\]\s+([a-zA-Z0-9_]+)\.', message)
+            if match:
+                entity_name = match.group(1)
+                if self.hide_movers_cb.isChecked() and entity_name.startswith('Mover'):
+                    return
+                if self.hide_triggers_cb.isChecked() and entity_name.startswith('Trigger'):
+                    return
+                if self.hide_doors_cb.isChecked() and entity_name.startswith('Door'):
+                    return
+            # Also filter lines with no entity name (likely unnamed triggers)
+            if message.startswith('[IO] .'):
+                if self.hide_triggers_cb.isChecked():
+                    return
+
+        # 3. Check "Filter Empty" Logic
         if self.filter_empty_cb.isChecked():
             if "(0 connections)" in message:
                 return
@@ -452,6 +572,12 @@ class DebugConsole(QWidget):
             message
         )
 
+        # F. Style [Delayed] prefix (orange)
+        message = re.sub(r'\[Delayed\]', '<span style="color: #FFB74D;">[Delayed]</span>', message)
+
+        # G. Style arrow -> as green arrow character
+        message = re.sub(r' -> ', ' <span style="color: #66BB6A;">→</span> ', message)
+        
         # ---------------------------
         
         # Format with HTML coloring for the main message body
