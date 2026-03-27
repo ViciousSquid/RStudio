@@ -196,8 +196,6 @@ class MainWindow(QMainWindow):
         # Tooltips
         self.camera_movement_learned = self.config.getboolean('Tooltips', 'camera_movement_learned', fallback=False)
         self.startup_tooltip_shown = False
-        self.camera_movement_learned = self.config.getboolean('Tooltips', 'camera_movement_learned', fallback=False)
-        self.startup_tooltip_shown = False
         self.tooltip_tips = [
             "Right-click + WASD: Move camera",
             "Mouse wheel: Zoom in/out",

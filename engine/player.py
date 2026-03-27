@@ -91,13 +91,11 @@ class Player:
         
         if self._check_overlap(colliders, ignore_brush=self.ground_object):
             # Try Step Up
-            self.pos.x = original_pos.x 
-            self.pos.y += self.step_height 
-            self.pos.x += self.velocity.x * delta 
-            
-            if not self._check_overlap(colliders, ignore_brush=self.ground_object):
-                pass 
-            else:
+            self.pos.x = original_pos.x
+            self.pos.y += self.step_height
+            self.pos.x += self.velocity.x * delta
+
+            if self._check_overlap(colliders, ignore_brush=self.ground_object):
                 self.pos = original_pos
                 self.pos.x += self.velocity.x * delta
                 # IMPORTANT: Pass ground_object to ignore it during X resolution
@@ -109,13 +107,11 @@ class Player:
         
         if self._check_overlap(colliders, ignore_brush=self.ground_object):
             # Try Step Up
-            self.pos.z = original_pos.z 
-            self.pos.y += self.step_height 
-            self.pos.z += self.velocity.z * delta 
-            
-            if not self._check_overlap(colliders, ignore_brush=self.ground_object):
-                pass
-            else:
+            self.pos.z = original_pos.z
+            self.pos.y += self.step_height
+            self.pos.z += self.velocity.z * delta
+
+            if self._check_overlap(colliders, ignore_brush=self.ground_object):
                 self.pos = original_pos
                 self.pos.z += self.velocity.z * delta
                 # IMPORTANT: Pass ground_object to ignore it during Z resolution
