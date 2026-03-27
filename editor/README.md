@@ -1,7 +1,7 @@
 # editor
 
 ### `asset_browser.py`		
-"Texture & model browser with grid view, live thumbnails (OBJ wireframe fallback), preview pane, “FIT / TILE / FACE” actions, drag-and-drop support."
+"Texture & model browser with live thumbnails, “FIT / TILE / FACE” actions, drag-and-drop support
 
 ### `console_commands.py`
 "Debug console command handler (noclip, map, fps, clear)."
