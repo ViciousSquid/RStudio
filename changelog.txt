@@ -1,3 +1,9 @@
+v1.0.16
+
+* **Milestone 1**
+* Added console (~ to toggle)
+* Summarised all files
+
 v1.0.15.0
 
 * Optimised shaders
