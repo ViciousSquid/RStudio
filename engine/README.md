@@ -22,7 +22,7 @@ Player controller, noclip, strafe movement.
 Qt OpenGL widget that hosts the Renderer
 
 ### `renderer.py`
-Core OpenGL renderer: brush drawing, terrain, lights, shadows, shaders
+Core OpenGL renderer with Frustum culling
 
 ### `resource_manager.py`
 Caches textures, models, shaders.
