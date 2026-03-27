@@ -7,7 +7,7 @@ Camera matrices, movement, projection.
 Shared constants (tile size, etc.).
 
 ### `logic_thread.py`
-Game logic runs in separate thread during Play mode.
+Game logic - runs in separate thread
 
 ### `obj_loader.py`
 Runtime OBJ loader.
