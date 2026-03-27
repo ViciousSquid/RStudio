@@ -11,7 +11,7 @@
 
 * **Custom OpenGL/PyGame engine** supports immediate "drop-in and play" (like CryEngine Editor)
 * Compact and lightweight (target: Snapdragon 8CX, OpenGL 3.3)
-* **Real-time lighting** with (in development) stencil shadows - need for pre-baked compilation
+* **Real-time lighting** with (in development) stencil shadows - no need for pre-baked compilation
 * **Volumetric fog, glass & water shaders** with configurable surface parms
 * **Entity I/O system** _inspired by Half-Life 2_ (logic, triggers, lights, speakers)
 * Terrain generation
