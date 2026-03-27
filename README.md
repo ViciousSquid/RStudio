@@ -9,6 +9,8 @@
 
  <img width="2039" height="1171" alt="image" src="https://github.com/user-attachments/assets/0422c267-5131-4306-a25d-cc2f716e5eae" />
 
+ ------------------------
+
 * **Custom OpenGL/PyGame engine** supports immediate "drop-in and play" (like CryEngine Editor)
 * Compact and lightweight (target: Snapdragon 8CX, OpenGL 3.3)
 * **Real-time lighting** with (in development) stencil shadows - no need for pre-baked compilation
@@ -17,8 +19,9 @@
 * Terrain generation
 * OBJ model support
 * `json` level format with `magic number` fingerprint
-* Fully modular and open source (MIT License)
 * `nodraw` isn't drawn - just like Quake3
+
+🗎 Fully modular and open source (MIT License)
 
 
   ------------------------
