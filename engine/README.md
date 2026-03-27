@@ -31,7 +31,7 @@ Caches textures, models, shaders.
 Shader compilation & uniform binding.
 
 ### `terrain.py`
-Chunked terrain mesh generation, texturing, collision.
+Chunked terrain mesh generation (perlin noise), texturing, collision
 
 ### `textures.py`
 Texture loading & binding.
