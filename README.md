@@ -18,6 +18,7 @@
 * OBJ model support
 * `json` level format with `magic number` fingerprint
 * Fully modular and open source (MIT License)
+* `nodraw` isn't drawn - just like Quake3
 
 
   ------------------------
