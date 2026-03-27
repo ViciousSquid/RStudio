@@ -40,7 +40,10 @@ v1.0.11.0  |  Delicious-Toast
 * First non-beta release
 * Added Toast notification area to UI
 
-I remember waiting for hours to run BSP, VIS and RAD on a map, now pre-processing is no longer necessary and even my Snapdragon/Adreno 8CX can do it with just frustum culling
+################
+
+I remember waiting for hours to run BSP, VIS and RAD on a map, 
+the goal was to eliminate pre-processing and have my Snapdragon/Adreno 8CX do it realtime with just frustum culling
 
 
 
