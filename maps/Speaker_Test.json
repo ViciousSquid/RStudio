@@ -1,4 +1,6 @@
 {
+    "fingerprint": "RStudio",
+    "version": 2,
     "brushes": [
         {
             "pos": [
@@ -163,7 +165,8 @@
                 "intensity": "1.0",
                 "radius": "1024.0",
                 "state": "on",
-                "show_radius": "False"
+                "show_radius": "False",
+                "casts_shadows": "False"
             }
         },
         {
@@ -182,7 +185,8 @@
                 "show_radius": "False",
                 "volume": "0.75",
                 "looping": "True",
-                "play_on_start": "True"
+                "play_on_start": "True",
+                "state": "on"
             }
         },
         {
@@ -196,7 +200,17 @@
                 "type": "playerstart",
                 "name": "PlayerStart_1",
                 "angle": "0.0"
-            }
+            },
+            "io_connections": [
+                {
+                    "output": "OnPlayerSpawn",
+                    "target": "Speaker_1",
+                    "input": "PlaySound",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false
+                }
+            ]
         },
         {
             "type": "pickup",
@@ -209,9 +223,14 @@
                 "type": "pickup",
                 "name": "Pickup_1",
                 "item_type": "health",
-                "value": "25"
+                "value": "25",
+                "activation": "walk_over",
+                "collected": "False",
+                "respawns": "False",
+                "respawn_time": "20.0",
+                "key_name": "blue_key",
+                "custom_sprite": ""
             }
         }
-    ],
-    "fingerprint": "RStudio"
+    ]
 }
