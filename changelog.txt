@@ -1,6 +1,7 @@
 v1.0.16 MILESTONE 1
 
 * NEW: console (~ to toggle)
+* Stable but needs proper optimisation
 * Summarised all files in /editor and /engine folders
 
 v1.0.15.0
