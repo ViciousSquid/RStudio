@@ -1,4 +1,4 @@
-# editor
+# `editor/`
 
 ### `asset_browser.py`		
 "Texture & model browser with live thumbnails, “FIT / TILE / FACE” actions, drag-and-drop support
