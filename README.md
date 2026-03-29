@@ -13,13 +13,14 @@ Built because modern tools lost the immediacy of Radiant/Hammer.
 
 * **Custom OpenGL/PyGame engine** Build a level, hit play, and walk around instantly — no compile step.
 * Compact and lightweight (target: Snapdragon 8CX, OpenGL 3.3)
-* **Real-time lighting** with (in development) stencil shadows
+* Real-time lighting (no lightmaps)
+* Classic brush-based workflow
 * **Volumetric fog, glass & water shaders** with configurable surface parms
 * **Entity I/O system** _inspired by Half-Life 2_ (logic, triggers, lights, speakers)
 * Terrain generation
 * OBJ model support
 * `json` level format with `magic number` fingerprint
-* `nodraw` isn't drawn - just like Quake3
+* Supports Quake-style nodraw surfaces
 
 🗎 Fully modular and open source (MIT License)
 
