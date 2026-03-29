@@ -1,6 +1,7 @@
 v1.0.17.0
 
-* Improved debug console with `help` command
+* Extended console_commands.py
+* Improved console with `help` command
 
 
 v1.0.16 MILESTONE 1
