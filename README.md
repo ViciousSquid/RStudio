@@ -1,6 +1,10 @@
 <img src="https://github.com/user-attachments/assets/65cb6de0-45ba-4e96-b9e7-2e9a92aa910f" width="400">
 
+![MIT License](https://img.shields.io/badge/license-MIT-green)
+![Status](https://img.shields.io/badge/status-Active%20Development-orange)
+
 ### _A real-time Quake/Hammer-style level editor with built-in game engine_
+
 
 Built because modern tools lost the immediacy of Radiant/Hammer.
 
