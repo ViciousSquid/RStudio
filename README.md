@@ -19,7 +19,7 @@ Built because modern tools lost the immediacy of Radiant/Hammer.
 * **Entity I/O system** _inspired by Half-Life 2_ (logic, triggers, lights, speakers)
 * Terrain generation
 * OBJ model support
-* `json` level format with `magic number` fingerprint
+* Versioned JSON level format (with integrity checks)
 * Supports Quake-style nodraw surfaces
 
 🗎 Fully modular and open source (MIT License)
