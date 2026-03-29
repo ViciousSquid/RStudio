@@ -1,8 +1,6 @@
 <img src="https://github.com/user-attachments/assets/65cb6de0-45ba-4e96-b9e7-2e9a92aa910f" width="400">
 
-### _A liminal brush-based CSG editor and game engine with unified renderer_
-
-### inspired by Radiant and Worldcraft/Hammer (from the old times!)
+### _A real-time Quake/Hammer-style level editor with built-in game engine_
 
 Built because modern tools lost the immediacy of Radiant/Hammer.
 
@@ -13,9 +11,9 @@ Built because modern tools lost the immediacy of Radiant/Hammer.
 
  ------------------------
 
-* **Custom OpenGL/PyGame engine** supports immediate "drop-in and play" (like CryEngine Editor)
+* **Custom OpenGL/PyGame engine** Build a level, hit play, and walk around instantly — no compile step.
 * Compact and lightweight (target: Snapdragon 8CX, OpenGL 3.3)
-* **Real-time lighting** with (in development) stencil shadows - no need for pre-baked compilation
+* **Real-time lighting** with (in development) stencil shadows
 * **Volumetric fog, glass & water shaders** with configurable surface parms
 * **Entity I/O system** _inspired by Half-Life 2_ (logic, triggers, lights, speakers)
 * Terrain generation
