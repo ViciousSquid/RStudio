@@ -4,6 +4,8 @@
 
 ### inspired by Radiant and Worldcraft/Hammer (from the old times!)
 
+Built because modern tools lost the immediacy of Radiant/Hammer.
+
 ### >>> [DOWNLOAD FOR WINDOWS x64](https://github.com/ViciousSquid/Fio/releases) <<<
 
 
