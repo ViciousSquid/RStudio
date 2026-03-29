@@ -1,4 +1,6 @@
 """
+Terrain Editor Window for RStudio
+
 A floating dialog with comprehensive terrain creation and editing tools.
 With separate controls for mountains, valleys, and plateaus.
 """

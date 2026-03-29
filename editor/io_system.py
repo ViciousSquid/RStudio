@@ -1,4 +1,6 @@
 """
+HL2-Style Input/Output System
+
 This module implements an event-driven entity communication system inspired by
 Half-Life 2's Hammer Editor. Entities ("things") communicate through:
 

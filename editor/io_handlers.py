@@ -489,6 +489,7 @@ def register_all_input_handlers(io_manager: IOManager):
     # Use HTML bold tags for the console title
     debug_log('Info', f"<b>Fio {version_str}</b>")
     debug_log('Info', f"Registered {len(io_manager._input_handlers)} input handlers")
+    debug_log('Info', f"Type 'help' to see all available commands")
 
 
 # =============================================================================
