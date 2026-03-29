@@ -1,5 +1,6 @@
 v1.0.17.0
 
+* Implemented explicit mixed-precision shader qualifiers, utilizing highp for vertex positions and mediump for lighting and colour calculations.
 * Extended console_commands.py
 * Improved console with `help` command
 
