@@ -12,7 +12,10 @@ import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
 from engine.camera import Camera
-from editor.things import Thing, Light, PlayerStart, Monster, Pickup, Speaker, LogicGate
+from editor.things import (
+    Thing, Light, PlayerStart, Monster, Pickup, Speaker,
+    LogicGate, LogicRelay, LogicTimer, LevelChanger
+)
 from engine.player import Player
 from PIL import Image
 from .renderer import Renderer
@@ -796,7 +799,14 @@ class QtGameView(QOpenGLWidget):
         return self.renderer.load_texture(texture_name, subfolder) if self.renderer else 0
 
     def load_all_sprite_textures(self):
-        things = {'PlayerStart': 'player.png', 'Light': 'light.png', 'Monster': 'monster.png', 'Pickup': 'pickup.png', 'Speaker': 'speaker.png'}
+        things = {
+            'PlayerStart': 'player.png',
+            'Light': 'light.png',
+            'Monster': 'monster.png',
+            'Pickup': 'pickup.png',
+            'Speaker': 'speaker.png',
+            'LevelChanger': 'levelchanger.png'
+        }
         for cls, fname in things.items():
             tid = self.load_texture(fname, 'sprites')
             if tid: self.sprite_textures[cls] = tid
@@ -808,18 +818,26 @@ class QtGameView(QOpenGLWidget):
             self.renderer.set_sprite_textures(self.sprite_textures)
     
     def update_instance_textures(self, things):
-        if not self.renderer: return
+        """Update per-instance textures for special entities (LogicGate, Pickup, LevelChanger, etc.)"""
+        if not self.renderer:
+            return
+
         instance_textures = {}
+
         for thing in things:
+            # === LOGIC GATE ===
             if isinstance(thing, LogicGate):
                 l_type = thing.properties.get('logic_type', 'and').lower()
                 filename = f"logic_{l_type}.png"
                 tex_key = f"logic_{l_type}"
                 if tex_key not in self.sprite_textures:
                     tid = self.load_texture(filename, 'sprites')
-                    if tid: self.sprite_textures[tex_key] = tid
+                    if tid:
+                        self.sprite_textures[tex_key] = tid
                 if tex_key in self.sprite_textures:
                     instance_textures[id(thing)] = self.sprite_textures[tex_key]
+
+            # === PICKUP (keys, custom sprites, guns) ===
             elif isinstance(thing, Pickup):
                 if thing.is_key():
                     key_name = thing.get_key_name()
@@ -830,7 +848,19 @@ class QtGameView(QOpenGLWidget):
                     sprite_path = thing.properties.get('custom_sprite')
                     filename = os.path.basename(sprite_path.replace('\\', '/'))
                     tex_id = self.load_texture(filename, 'sprites')
-                    if tex_id: instance_textures[id(thing)] = tex_id
+                    if tex_id:
+                        instance_textures[id(thing)] = tex_id
+
+            # === LEVEL CHANGER ===
+            elif isinstance(thing, LevelChanger):
+                tex_key = 'LevelChanger'
+                if tex_key in self.sprite_textures:
+                    instance_textures[id(thing)] = self.sprite_textures[tex_key]
+                else:
+                    fallback_key = 'logic_relay'
+                    if fallback_key in self.sprite_textures:
+                        instance_textures[id(thing)] = self.sprite_textures[fallback_key]
+
         self.renderer.set_instance_textures(instance_textures)
 
     def toggle_play_mode(self, player_start_pos, player_start_angle, physics_enabled=True):
@@ -847,10 +877,20 @@ class QtGameView(QOpenGLWidget):
                 self.logic_thread.set_player(self.player)
                 self.logic_thread.set_play_mode(True)
         else:
-            QApplication.restoreOverrideCursor()
+            # FULL cursor restore (fixes stacking issue)
+            while QApplication.overrideCursor() is not None:
+                QApplication.restoreOverrideCursor()
+
+            self.setCursor(Qt.ArrowCursor)
+
             if self.logic_thread:
                 self.logic_thread.set_play_mode(False)
                 self.logic_thread.set_player(None)
+
+            self.player = None
+            self.update()
+            self.logic_thread.set_play_mode(False)
+            self.logic_thread.set_player(None)
             self.player = None
             self.update()
 

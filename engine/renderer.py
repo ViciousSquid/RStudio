@@ -2050,6 +2050,37 @@ void main() {
         gl.glBindVertexArray(0)
         return vao
 
+    def reload_shaders(self):
+        """Hot-reload all shaders. Called from console command r_reloadshaders."""
+        try:
+            print("Hot-reloading shaders...")
+
+            # Recompile ARM or standard shaders
+            if self.arm_mode:
+                self._compile_arm_shaders()
+            else:
+                self._compile_standard_shaders()
+
+            # Recompile common shaders
+            for name, files in [('simple', ('simple.vert', 'simple.frag')),
+                                ('sprite', ('sprite.vert', 'sprite.frag')),
+                                ('shadow_volume', ('shadow_volume.vert', 'shadow_volume.frag')),
+                                ('water', ('water.vert', 'water.frag')),
+                                ('glass', ('glass.vert', 'glass.frag'))]:
+                shader = self.shader_loader.compile_shader_program(*files)
+                self.shaders[name] = shader
+                self.uniforms[name] = UniformCache(shader)
+
+            # Recompile deferred shaders if enabled
+            if self.use_deferred:
+                self._compile_deferred_shaders()
+
+            print("All shaders reloaded successfully.")
+            return True
+        except Exception as e:
+            print(f"Shader reload failed: {e}")
+            return False
+
     def _create_gizmo_buffers(self):
         axis_verts = np.array([0,0,0, 1,0,0, 0,0,0, 0,1,0, 0,0,0, 0,0,1], dtype=np.float32)
         self.vao_gizmo_lines = gl.glGenVertexArrays(1)
