@@ -10,7 +10,7 @@ from editor.main_window import MainWindow
 
 def clean_pycache():
     """
-    Deprecated
+    Depreceted 
     """
     pass
 
