@@ -10,6 +10,7 @@ SHADER_DIR = os.path.join(os.path.dirname(__file__), 'shaders')
 # ==============================================================================
 DEFAULT_SHADERS = {
     'simple.vert': """#version 330 core
+precision highp float;
 layout (location = 0) in vec3 aPos;
 uniform mat4 model;
 uniform mat4 view;
@@ -18,6 +19,7 @@ void main() {
     gl_Position = projection * view * model * vec4(aPos, 1.0);
 }""",
     'simple.frag': """#version 330 core
+precision mediump float;
 out vec4 FragColor;
 uniform vec3 color;
 uniform float alpha;
@@ -25,12 +27,12 @@ void main() {
     FragColor = vec4(color, alpha);
 }""",
 
-    # OPT: normalMatrix uniform replaces per-vertex mat3(transpose(inverse(model)))
     'lit.vert': """#version 330 core
+precision highp float;
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
-out vec3 FragPos;
-out vec3 Normal;
+out vec3 FragPos;         // implicitly highp
+out mediump vec3 Normal;  // explicit mediump to match frag default
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
@@ -41,19 +43,20 @@ void main() {
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }""",
     'lit.frag': """#version 330 core
+precision mediump float;
 out vec4 FragColor;
-in vec3 FragPos;
-in vec3 Normal;
+in highp vec3 FragPos;    // explicit highp to maintain world-space accuracy
+in vec3 Normal;           // implicitly mediump
 uniform vec3 object_color;
 uniform float alpha;
-struct Light { vec3 position; vec3 color; float intensity; float radius; };
+struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; };
 uniform Light lights[8];
 uniform int active_lights;
 void main() {
     vec3 norm = normalize(Normal);
     vec3 result = vec3(0.1) * object_color; // Ambient
     for(int i = 0; i < active_lights; i++) {
-        float distance = length(lights[i].position - FragPos);
+        highp float distance = length(lights[i].position - FragPos);
         if(distance < lights[i].radius) {
             vec3 lightDir = normalize(lights[i].position - FragPos);
             float diff = max(dot(norm, lightDir), 0.0);
@@ -64,14 +67,14 @@ void main() {
     FragColor = vec4(result, alpha);
 }""",
 
-    # OPT: normalMatrix uniform replaces per-vertex mat3(transpose(inverse(model)))
     'textured.vert': """#version 330 core
+precision highp float;
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
 layout (location = 2) in vec2 aTexCoords;
 
 out vec3 FragPos;
-out vec3 Normal;
+out mediump vec3 Normal;
 out vec2 TexCoords;
 
 uniform mat4 model;
@@ -87,14 +90,15 @@ void main() {
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }""",
     'textured.frag': """#version 330 core
+precision mediump float;
 out vec4 FragColor;
 
-in vec3 FragPos;
+in highp vec3 FragPos;
 in vec3 Normal;
-in vec2 TexCoords;
+in highp vec2 TexCoords;
 
 uniform sampler2D texture_diffuse;
-struct Light { vec3 position; vec3 color; float intensity; float radius; };
+struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; };
 uniform Light lights[8];
 uniform int active_lights;
 
@@ -106,7 +110,7 @@ void main() {
     vec3 result = vec3(0.1) * texColor.rgb; // Ambient
     
     for(int i = 0; i < active_lights; i++) {
-        float distance = length(lights[i].position - FragPos);
+        highp float distance = length(lights[i].position - FragPos);
         if(distance < lights[i].radius) {
             vec3 lightDir = normalize(lights[i].position - FragPos);
             float diff = max(dot(norm, lightDir), 0.0);
@@ -118,6 +122,7 @@ void main() {
 }""",
 
     'sprite.vert': """#version 330 core
+precision highp float;
 layout (location = 0) in vec2 aPos;
 out vec2 TexCoords;
 uniform mat4 projection;
@@ -134,8 +139,9 @@ void main() {
     gl_Position = projection * view * vec4(worldPos, 1.0);
 }""",
     'sprite.frag': """#version 330 core
+precision mediump float;
 out vec4 FragColor;
-in vec2 TexCoords;
+in highp vec2 TexCoords;
 uniform sampler2D sprite_texture;
 void main() {
     vec4 texColor = texture(sprite_texture, TexCoords);
@@ -144,6 +150,7 @@ void main() {
 }""",
 
     'fog.vert': """#version 330 core
+precision highp float;
 layout (location = 0) in vec3 a_pos;
 
 uniform mat4 model;
@@ -153,82 +160,77 @@ uniform mat4 projection;
 out vec3 localPos;
 
 void main() {
-    // Pass the local position of the vertex
     localPos = a_pos;
     gl_Position = projection * view * model * vec4(a_pos, 1.0);
 }""",
 
-    # OPT: inverseModel is now a uniform (precomputed on CPU once per fog volume)
-    #      instead of calling inverse(model) per fragment.
-    #      Ray-march steps reduced 32 -> 16: same visual quality at editor distances.
     'fog.frag': """#version 330 core
+precision mediump float;
 out vec4 FragColor;
 
-in vec3 localPos;
+in highp vec3 localPos;
 
-uniform mat4 model;
-uniform mat4 inverseModel;
-uniform vec3 viewPos;
+uniform highp mat4 model;
+uniform highp mat4 inverseModel;
+uniform highp vec3 viewPos;
 
 uniform float density;
 uniform vec3 fogColor;
 uniform sampler3D noiseTexture;
 uniform float noiseScale;
-uniform float time;
+uniform highp float time;
 
-// AABB is a unit cube from -0.5 to 0.5
-vec2 intersectBox(vec3 rayOrigin, vec3 rayDir) {
-    vec3 tMin = (-0.5 - rayOrigin) / rayDir;
-    vec3 tMax = ( 0.5 - rayOrigin) / rayDir;
-    vec3 t1 = min(tMin, tMax);
-    vec3 t2 = max(tMin, tMax);
+highp vec2 intersectBox(highp vec3 rayOrigin, highp vec3 rayDir) {
+    highp vec3 tMin = (-0.5 - rayOrigin) / rayDir;
+    highp vec3 tMax = ( 0.5 - rayOrigin) / rayDir;
+    highp vec3 t1 = min(tMin, tMax);
+    highp vec3 t2 = max(tMin, tMax);
     return vec2(max(max(t1.x, t1.y), t1.z),
                 min(min(t2.x, t2.y), t2.z));
 }
 
 void main() {
-    vec3 fragWorldPos = vec3(model * vec4(localPos, 1.0));
-    vec3 rayDirWorld  = normalize(fragWorldPos - viewPos);
+    highp vec3 fragWorldPos = vec3(model * vec4(localPos, 1.0));
+    highp vec3 rayDirWorld  = normalize(fragWorldPos - viewPos);
 
-    // Use precomputed inverseModel instead of per-fragment inverse()
-    vec3 rayOriginLocal = (inverseModel * vec4(viewPos,       1.0)).xyz;
-    vec3 rayDirLocal    = normalize((inverseModel * vec4(rayDirWorld, 0.0)).xyz);
+    highp vec3 rayOriginLocal = (inverseModel * vec4(viewPos,       1.0)).xyz;
+    highp vec3 rayDirLocal    = normalize((inverseModel * vec4(rayDirWorld, 0.0)).xyz);
 
-    vec2 t = intersectBox(rayOriginLocal, rayDirLocal);
+    highp vec2 t = intersectBox(rayOriginLocal, rayDirLocal);
     if (t.x >= t.y) discard;
 
-    float tNear    = max(0.0, t.x);
-    float stepSize = (t.y - tNear) / 16.0;
+    highp float tNear    = max(0.0, t.x);
+    highp float stepSize = (t.y - tNear) / 16.0;
 
     vec4  acc        = vec4(0.0);
-    float timeOffset = time * 0.1;
+    highp float timeOffset = time * 0.1;
 
     for (int i = 0; i < 16; ++i) {
-        vec3  sp   = rayOriginLocal + rayDirLocal * (tNear + float(i) * stepSize);
-        float n    = texture(noiseTexture, sp * noiseScale + vec3(0.0, 0.0, timeOffset)).r;
-        float tr   = exp(-density * n * stepSize);
-        acc.rgb   += fogColor * (1.0 - tr) * (1.0 - acc.a);
-        acc.a     += (1.0 - tr);
+        highp vec3 sp = rayOriginLocal + rayDirLocal * (tNear + float(i) * stepSize);
+        float n       = texture(noiseTexture, sp * noiseScale + vec3(0.0, 0.0, timeOffset)).r;
+        float tr      = exp(-density * n * stepSize);
+        acc.rgb      += fogColor * (1.0 - tr) * (1.0 - acc.a);
+        acc.a        += (1.0 - tr);
         if (acc.a > 0.99) break;
     }
 
     FragColor = vec4(acc.rgb, clamp(acc.a, 0.0, 1.0));
 }""",
 
-    # OPT: normalMatrix uniform replaces per-vertex mat3(transpose(inverse(model)))
     'water.vert': """#version 330 core
+precision highp float;
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
 layout (location = 2) in vec2 aTexCoords;
 
 out vec3 FragPos;
 out vec2 TexCoords;
-out vec3 Normal;
+out mediump vec3 Normal;
 
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
-uniform float time;
+uniform highp float time;
 uniform mat3 normalMatrix;
 
 uniform int useWaveDisplacement;
@@ -237,8 +239,6 @@ uniform float waveStrength;
 void main()
 {
     vec3 pos = aPos;
-    
-    // Sum of Sines Displacement
     if (useWaveDisplacement == 1) {
         float speed = time * 1.5;
         float y = sin(pos.x * 0.5 + speed) * cos(pos.z * 0.5 + speed) * waveStrength;
@@ -255,25 +255,26 @@ void main()
 }""",
 
     'water.frag': """#version 330 core
+precision mediump float;
 out vec4 FragColor;
 
-in vec3 FragPos;
-in vec2 TexCoords;
+in highp vec3 FragPos;
+in highp vec2 TexCoords;
 in vec3 Normal;
 
 struct Light {
-    vec3 position;
+    highp vec3 position;
     vec3 color;
     float intensity;
-    float radius;
+    highp float radius;
 };
 
 #define MAX_LIGHTS 8
 uniform Light lights[MAX_LIGHTS];
 uniform int active_lights;
-uniform vec3 viewPos;
+uniform highp vec3 viewPos;
 uniform sampler2D normalMap; 
-uniform float time;
+uniform highp float time;
 
 uniform float waterOpacity;
 uniform float waterReflectivity;
@@ -281,31 +282,26 @@ uniform vec3 waterTint;
 
 void main()
 {
-    // 1. Animated Normal Mapping (Counter-scrolling layers)
     vec2 speed = vec2(0.04, 0.02);
-    
-    vec2 coord1 = TexCoords + time * speed;
+    highp vec2 coord1 = TexCoords + time * speed;
     vec3 n1 = texture(normalMap, coord1).rgb;
     
-    vec2 coord2 = (TexCoords * 0.7) - (time * vec2(speed.y, speed.x));
+    highp vec2 coord2 = (TexCoords * 0.7) - (time * vec2(speed.y, speed.x));
     vec3 n2 = texture(normalMap, coord2).rgb;
     
     vec3 norm = normalize((n1 + n2) - 1.0);
-
-    // 2. Base Color & Environment
     vec3 viewDir = normalize(viewPos - FragPos);
     
     float R0 = 0.02; 
     float fresnel = R0 + (1.0 - R0) * pow(1.0 - max(dot(viewDir, vec3(0.0, 1.0, 0.0)), 0.0), 5.0);
     fresnel = clamp(fresnel * waterReflectivity * 2.5, 0.0, 1.0);
 
-    // 3. Lighting (Blinn-Phong)
     vec3 lightAccumulation = vec3(0.0);
     vec3 specularAccum = vec3(0.0);
     float shininess = 128.0; 
 
     for(int i = 0; i < active_lights; i++) {
-        float distance = length(lights[i].position - FragPos);
+        highp float distance = length(lights[i].position - FragPos);
         if(distance < lights[i].radius) {
             vec3 lightDir = normalize(lights[i].position - FragPos);
             float att = 1.0 - smoothstep(0.0, lights[i].radius, distance);
@@ -325,18 +321,17 @@ void main()
     finalColor += specularAccum * (waterReflectivity * 2.0);
 
     float alpha = clamp(waterOpacity + (fresnel * 0.6), 0.0, 1.0);
-
     FragColor = vec4(finalColor, alpha);
 }""",
 
-    # OPT: normalMatrix uniform replaces per-vertex mat3(transpose(inverse(model)))
     'glass.vert': """#version 330 core
+precision highp float;
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
 layout (location = 2) in vec2 aTexCoords;
 
 out vec3 FragPos;
-out vec3 Normal;
+out mediump vec3 Normal;
 out vec2 TexCoords;
 
 uniform mat4 model;
@@ -351,16 +346,15 @@ void main() {
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }""",
 
-    # OPT: 3 octaves instead of 5, double-nested fbm instead of triple-nested.
-    #      Reduces noise samples per fragment from ~125 to ~9 (~14x fewer fetches).
     'glass.frag': """#version 330 core
+precision mediump float;
 out vec4 FragColor;
 
-in vec3 FragPos;
+in highp vec3 FragPos;
 in vec3 Normal;
-in vec2 TexCoords;
+in highp vec2 TexCoords;
 
-uniform vec3 viewPos;
+uniform highp vec3 viewPos;
 uniform vec3 waterColor;
 uniform float distortionStrength;
 uniform float causticStrength;
@@ -368,27 +362,26 @@ uniform float glassOpacity;
 uniform float refractionIndex;
 uniform float roughness;
 
-float random(in vec2 st) {
+highp float random(in highp vec2 st) {
     return fract(sin(dot(st, vec2(12.9898, 78.233))) * 43758.5453123);
 }
 
-float noise(in vec2 st) {
-    vec2 i = floor(st);
-    vec2 f = fract(st);
+highp float noise(in highp vec2 st) {
+    highp vec2 i = floor(st);
+    highp vec2 f = fract(st);
     float a = random(i);
     float b = random(i + vec2(1.0, 0.0));
     float c = random(i + vec2(0.0, 1.0));
     float d = random(i + vec2(1.0, 1.0));
-    vec2 u = f * f * (3.0 - 2.0 * f);
+    highp vec2 u = f * f * (3.0 - 2.0 * f);
     return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
 }
 
-// OPT: 3 octaves (was 5)
 #define NUM_OCTAVES 3
-float fbm(in vec2 st) {
+highp float fbm(in highp vec2 st) {
     float v = 0.0;
     float a = 0.5;
-    vec2 shift = vec2(100.0);
+    highp vec2 shift = vec2(100.0);
     mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
     for (int i = 0; i < NUM_OCTAVES; ++i) {
         v  += a * noise(st);
@@ -398,9 +391,8 @@ float fbm(in vec2 st) {
     return v;
 }
 
-// OPT: double-nested fbm(p + fbm(p)) instead of triple-nested fbm(p + fbm(p + fbm(p)))
-float pattern(in vec2 p) {
-    return fbm(p + fbm(p));
+highp float pattern(in highp vec2 p) {
+    return fbm(p + vec2(fbm(p)));
 }
 
 void main() {
@@ -408,11 +400,11 @@ void main() {
     vec3 baseNormal = normalize(Normal);
     vec3 lightDir   = normalize(vec3(0.5, 1.0, 0.3));
 
-    vec2 surfaceUV = FragPos.xz * 0.5 + FragPos.xy * 0.3;
+    highp vec2 surfaceUV = FragPos.xz * 0.5 + FragPos.xy * 0.3;
     
     float iorRatio  = 1.0 / max(refractionIndex, 1.0);
     vec3 refractDir = refract(-viewDir, baseNormal, iorRatio);
-    vec2 refractUV  = surfaceUV + refractDir.xy * distortionStrength * 0.2;
+    highp vec2 refractUV  = surfaceUV + refractDir.xy * distortionStrength * 0.2;
 
     float bumpScale     = 1.5 + roughness * 8.0;
     float surfaceHeight = pattern(refractUV * bumpScale);
@@ -463,6 +455,7 @@ void main() {
 }""",
     
     'shadow_volume.vert': """#version 330 core
+precision highp float;
 layout (location = 0) in vec3 aPos;
 uniform mat4 model;
 uniform mat4 view;
@@ -471,12 +464,14 @@ void main() {
     gl_Position = projection * view * model * vec4(aPos, 1.0);
 }""",
     'shadow_volume.frag': """#version 330 core
+precision mediump float;
 out vec4 FragColor;
 void main() {
     FragColor = vec4(0.0, 0.0, 0.0, 0.5);
 }""",
 
     'terrain.vert': """#version 330 core
+precision highp float;
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
 layout (location = 2) in vec3 aColor;
@@ -484,10 +479,10 @@ layout (location = 3) in vec2 aTexCoord;
 layout (location = 4) in vec3 aSmoothNormal;
 
 out vec3 FragPos;
-out vec3 Normal;
-out vec3 VertexColor;
+out mediump vec3 Normal;
+out mediump vec3 VertexColor;
 out vec2 TexCoords;
-out vec3 SmoothNormal;
+out mediump vec3 SmoothNormal;
 
 uniform mat4 projection;
 uniform mat4 view;
@@ -502,12 +497,13 @@ void main() {
 }""",
 
     'terrain.frag': """#version 330 core
+precision mediump float;
 out vec4 FragColor;
 
-in vec3 FragPos;
+in highp vec3 FragPos;
 in vec3 Normal;
 in vec3 VertexColor;
-in vec2 TexCoords;
+in highp vec2 TexCoords;
 in vec3 SmoothNormal;
 
 uniform sampler2D texGrass;
@@ -519,30 +515,30 @@ uniform float terrainHeightScale;
 uniform int use_textures;
 
 struct Light {
-    vec3 position;
+    highp vec3 position;
     vec3 color;
     float intensity;
-    float radius;
+    highp float radius;
 };
 
 uniform Light lights[8];
 uniform int active_lights;
 
-float hash(vec2 p) {
+highp float hash(highp vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
-float noise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
+highp float noise(highp vec2 p) {
+    highp vec2 i = floor(p);
+    highp vec2 f = fract(p);
     float a = hash(i);
     float b = hash(i + vec2(1.0, 0.0));
     float c = hash(i + vec2(0.0, 1.0));
     float d = hash(i + vec2(1.0, 1.0));
-    vec2 u = f * f * (3.0 - 2.0 * f);
+    highp vec2 u = f * f * (3.0 - 2.0 * f);
     return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
 }
 
-vec4 get_splat_weights(vec3 worldPos, vec3 smoothNorm) {
+vec4 get_splat_weights(highp vec3 worldPos, vec3 smoothNorm) {
     float height = clamp(worldPos.y * terrainHeightScale, 0.0, 1.0);
     float slope  = 1.0 - max(smoothNorm.y, 0.0);  
     float n      = noise(worldPos.xz * 0.02 + height * 5.0) * 0.5 + 0.5;
@@ -597,7 +593,7 @@ void main() {
     result += fillDiff * skyColor * texColor;
     
     for (int i = 0; i < active_lights; i++) {
-        float distance = length(lights[i].position - FragPos);
+        highp float distance = length(lights[i].position - FragPos);
         if (distance < lights[i].radius) {
             vec3  lightDir    = normalize(lights[i].position - FragPos);
             float diff        = max(dot(norm, lightDir), 0.0);
@@ -616,7 +612,7 @@ void main() {
 
 # Central Registry: (Shader Name) -> (Vertex Filename, Fragment Filename)
 SHADER_MAP = {
-    'simple':        ('simple.vert',        'simple.frag'),
+    'simple':        ('simple.vert',         'simple.frag'),
     'lit':           ('lit.vert',            'lit.frag'),
     'textured':      ('textured.vert',       'textured.frag'),
     'sprite':        ('sprite.vert',         'sprite.frag'),
