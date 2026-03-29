@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
 from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, 
-                          LogicGate, LogicRelay, LogicTimer)
+                          LogicGate, LogicRelay, LogicTimer, LevelChanger)
 from editor.scene_hierarchy import SceneHierarchy
 # I/O System imports for drawing connections
 try:
@@ -1693,11 +1693,11 @@ class View2D(QWidget):
         
         # Standard Things
         add_light_action = menu.addAction("Light")
-        add_player_start_action = menu.addAction("Player Start")
+        add_player_start_action = menu.addAction("PlayerStart")
         add_pickup_action = menu.addAction("Pickup")
         add_speaker_action = menu.addAction("Speaker")
+        add_levelchanger_action = menu.addAction("LevelChanger")
         
-        # --- The Gap (One separator is now enough due to CSS) ---
         menu.addSeparator()
         
         # Advanced / Import
@@ -1733,10 +1733,17 @@ class View2D(QWidget):
         new_thing = None
         
         # Handle Object Creation
-        if action == add_light_action: new_thing = Light(pos=pos_3d)
-        elif action == add_player_start_action: new_thing = PlayerStart(pos=pos_3d)
-        elif action == add_pickup_action: new_thing = Pickup(pos=pos_3d)
-        elif action == add_speaker_action: new_thing = Speaker(pos=pos_3d)
+        if action == add_light_action: 
+            new_thing = Light(pos=pos_3d)
+        elif action == add_player_start_action: 
+            new_thing = PlayerStart(pos=pos_3d)
+        elif action == add_pickup_action: 
+            new_thing = Pickup(pos=pos_3d)
+        elif action == add_speaker_action: 
+            new_thing = Speaker(pos=pos_3d)
+        elif action == add_levelchanger_action:
+            new_thing = LevelChanger(pos=pos_3d)
+            new_thing.properties['target_map'] = ""
         
         # Logic Entities
         elif action == add_logic_relay_action: new_thing = LogicRelay(pos=pos_3d)

@@ -1,6 +1,4 @@
 """
-RStudio Things Module - Entity Definitions
-
 This module defines all placeable entities (Things) in the level editor.
 Each Thing type has associated I/O definitions (inputs/outputs) for
 the event-driven entity communication system.
@@ -41,7 +39,6 @@ class Thing:
             self.properties['name'] = f"{class_name}_{Thing._counters[class_name]}"
         
         # I/O Connections - stored as list of OutputConnection objects
-        # Serialized separately in to_dict/from_dict
         if '_io_connections' not in self.properties:
             self.properties['_io_connections'] = []
 
@@ -99,10 +96,8 @@ class Thing:
 
     def to_dict(self):
         """Serialize to dictionary for saving."""
-        # Separate I/O connections from regular properties
         io_connections = self.properties.get('_io_connections', [])
         
-        # Serialize connections
         serialized_connections = []
         for conn in io_connections:
             if hasattr(conn, 'to_dict'):
@@ -110,7 +105,6 @@ class Thing:
             elif isinstance(conn, dict):
                 serialized_connections.append(conn)
         
-        # Copy properties without _io_connections for cleaner serialization
         props_copy = {k: v for k, v in self.properties.items() if k != '_io_connections'}
         serializable_props = {k: str(v) for k, v in props_copy.items()}
         
@@ -120,7 +114,6 @@ class Thing:
             'properties': serializable_props
         }
         
-        # Only include connections if there are any
         if serialized_connections:
             result['io_connections'] = serialized_connections
         
@@ -141,14 +134,12 @@ class Thing:
                 except (ValueError, SyntaxError):
                     pass
 
-        # Find matching subclass
         thing = None
         for cls in find_subclasses(Thing):
             if cls.__name__.lower() == thing_type:
                 thing = cls(pos=data.get('pos'), properties=properties)
                 break
         
-        # Fallback for base Thing
         if thing is None:
             if thing_type == 'thing':
                 thing = Thing(pos=data.get('pos'), properties=properties)
@@ -156,7 +147,6 @@ class Thing:
                 print(f"Warning: Unknown thing type '{thing_type}' found in map file.")
                 return None
         
-        # Restore I/O connections
         io_data = data.get('io_connections', [])
         if io_data:
             try:
@@ -164,7 +154,6 @@ class Thing:
                 connections = [OutputConnection.from_dict(d) for d in io_data]
                 thing.properties['_io_connections'] = connections
             except ImportError:
-                # io_system not available, store raw data
                 thing.properties['_io_connections'] = io_data
         
         return thing
@@ -185,7 +174,6 @@ class Thing:
             add_connection(self, conn)
             return conn
         except ImportError:
-            # Fallback to dict storage
             if '_io_connections' not in self.properties:
                 self.properties['_io_connections'] = []
             self.properties['_io_connections'].append({
@@ -447,7 +435,6 @@ class LogicRelay(Thing):
         pix = super().get_instance_pixmap()
         if pix:
             return pix
-        # Fallback to logic_gate sprite
         return LogicGate.get_pixmap()
 
 
@@ -508,6 +495,100 @@ class LogicTimer(Thing):
         return LogicGate.get_pixmap()
 
 
+class LevelChanger(Thing):
+    """Entity that loads a new level when triggered."""
+    pixmap_path = "assets/sprites/levelchanger.png"
+
+    def __init__(self, pos=None, **kwargs):
+        super().__init__(pos=pos or [0, 0, 0], **kwargs)
+        self.properties.update({
+            'type': 'levelchanger',
+            'name': 'LevelChanger_1',
+            'target_map': 'Simple_Map_Test.json',
+            'delay': '0.0',
+            'fade_time': '0.5',
+            'show_radius': 'False',
+            'radius': '128.0'
+        })
+        
+        # Store direct reference to MainWindow for reliable level changing
+        self._main_window = None
+        try:
+            from PyQt5.QtWidgets import QApplication
+            for widget in QApplication.topLevelWidgets():
+                if widget.__class__.__name__ == 'MainWindow':
+                    self._main_window = widget
+                    break
+        except:
+            pass
+
+    def on_input(self, input_name: str, parameter: str = ""):
+        """Called by I/O system and by ent_fire. Now literally simulates the working console command."""
+        entity_name = self.properties.get('name', 'LevelChanger_2')
+        map_name = (parameter or self.properties.get('target_map', '')).strip()
+
+        print(f"[LevelChanger DEBUG] 🔥 on_input('{input_name}') called!")
+        print(f"          entity  = {entity_name}")
+        print(f"          parameter = '{parameter}'")
+        print(f"          target_map property = '{self.properties.get('target_map', 'MISSING')}'")
+        print(f"          final map name = '{map_name}'")
+
+        if input_name == "ChangeLevel":
+            return self.change_level(map_name)
+
+        print(f"[LevelChanger] Unknown input '{input_name}'")
+        return False
+
+    def change_level(self, parameter: str = ""):
+        """Load a new map when triggered."""
+
+        target_map = parameter.strip() if parameter else self.properties.get('target_map', '').strip()
+
+        if not target_map:
+            print("ERROR: LevelChanger has no target_map and no parameter was provided!")
+            return False
+
+        if not target_map.lower().endswith('.json'):
+            target_map += '.json'
+
+        print(f"[LevelChanger] Target resolved → '{target_map}' "
+            f"(I/O parameter='{parameter}', entity property='{self.properties.get('target_map')}')")
+
+        # Get MainWindow reference
+        main_window = getattr(self, '_main_window', None)
+
+        if not main_window:
+            try:
+                from PyQt5.QtWidgets import QApplication
+                for w in QApplication.topLevelWidgets():
+                    if w.__class__.__name__ == 'MainWindow':
+                        main_window = w
+                        self._main_window = w
+                        break
+            except Exception as e:
+                print(f"[LevelChanger] QApplication lookup failed: {e}")
+
+        if not main_window:
+            print("ERROR: Could not find MainWindow!")
+            return False
+
+        # ✅ CRITICAL FIX: use signal instead of direct call
+        if hasattr(main_window, 'load_level_signal'):
+            try:
+                print(f"[LevelChanger] Emitting load_level_signal('{target_map}')")
+                main_window.load_level_signal.emit(target_map)
+                print(f"[LevelChanger] SUCCESS: signal emitted")
+                return True
+            except Exception as e:
+                print(f"ERROR emitting signal: {e}")
+                import traceback
+                traceback.print_exc()
+                return False
+        else:
+            print("ERROR: MainWindow has no load_level_signal! Did you add it?")
+            return False
+
+
 # =============================================================================
 # ENTITY REGISTRY
 # =============================================================================
@@ -520,15 +601,15 @@ ENTITY_TYPES = {
     'Monster': Monster,
     'Pickup': Pickup,
     'Model': Model,
-    # Logic entities
     'LogicRelay': LogicRelay,
     'LogicGate': LogicGate,
     'LogicTimer': LogicTimer,
+    'LevelChanger': LevelChanger,
 }
 
 # Categories for editor UI
 ENTITY_CATEGORIES = {
-    'Gameplay': ['PlayerStart', 'Monster', 'Pickup'],
+    'Gameplay': ['PlayerStart', 'Monster', 'Pickup', 'LevelChanger'],
     'Environment': ['Light', 'Speaker', 'Model'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer'],
 }

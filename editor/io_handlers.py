@@ -492,6 +492,18 @@ def register_all_input_handlers(io_manager: IOManager):
     debug_log('Info', f"Type 'help' to see all available commands")
 
 
+    # ==========================================================================
+    # LEVEL CHANGER INPUTS
+    # ==========================================================================
+    
+    def levelchanger_changelevel(entity, param, logic):
+        # We route to change_level() because it is more robust
+        if hasattr(entity, 'change_level'):
+            entity.change_level(param)
+            
+    io_manager.register_input_handler('levelchanger', 'changelevel', levelchanger_changelevel)
+    io_manager.register_input_handler('levelchanger', 'trigger', levelchanger_changelevel)
+
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================

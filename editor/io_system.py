@@ -405,7 +405,7 @@ def register_default_io():
         ]
     )
     
-    # === MOVER (func_movelinear equivalent) ===
+    # === MOVER ===
     register_io('mover',
         inputs=[
             IODef('Open', 'Move to end position'),
@@ -467,7 +467,7 @@ def register_default_io():
         ]
     )
     
-    # === LOGIC_RELAY (replaces basic LogicGate) ===
+    # === LOGIC_RELAY ===
     register_io('logic_relay',
         inputs=[
             IODef('Trigger', 'Fire the OnTrigger output'),
@@ -532,7 +532,7 @@ def register_default_io():
         outputs=[]
     )
     
-    # === LOGIC_GATE (legacy, now more like multi-input relay) ===
+    # === LOGIC_GATE ===
     register_io('logic_gate',
         inputs=[
             IODef('Trigger', 'Send input signal'),
@@ -552,6 +552,15 @@ def register_default_io():
             IODef('Disable', 'Hide model'),
             IODef('SetSkin', 'Set model skin', 'int'),
             IODef('SetAnimation', 'Play animation', 'string'),
+        ],
+        outputs=[]
+    )
+
+        # === LEVEL CHANGER ===
+    register_io('levelchanger',
+        inputs=[
+            IODef('Trigger', 'Trigger level change'),
+            IODef('ChangeLevel', 'Change to the target map (optional parameter overrides map name)'),
         ],
         outputs=[]
     )

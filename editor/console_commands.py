@@ -22,7 +22,7 @@ from editor.things import Pickup, Light, PlayerStart
 
 class ConsoleCommandHandler:
     """
-    FULL console control with clear mode-specific messages.
+    FULL console control with clear mode-specific messages + extensive render commands.
     """
     def __init__(self, main_window):
         self.main_window = main_window
@@ -38,8 +38,8 @@ class ConsoleCommandHandler:
             'ent': self.cmd_info,
             'info': self.cmd_info,
 
-            'fire': self.cmd_fire_output,
-            'ent_fire': self.cmd_fire_output,
+            'fire': self.cmd_fire,
+            'ent_fire': self.cmd_fire,
             'trigger': self.cmd_trigger,
             'send': self.cmd_send_input,
             'toggle': self.cmd_toggle,
@@ -71,6 +71,31 @@ class ConsoleCommandHandler:
             'clear': self.cmd_clear,
             'fps': self.cmd_fps,
             'map': self.cmd_map,
+
+            # ==================== NEW RENDER COMMANDS ====================
+            'r_list': self.cmd_render_list,
+            'r_wireframe': self.cmd_render_wireframe,
+            'r_shadows': self.cmd_render_shadows,
+            'r_fog': self.cmd_render_fog,
+            'r_water': self.cmd_render_water,
+            'r_glass': self.cmd_render_glass,
+            'r_lighting': self.cmd_render_lighting,
+            'r_deferred': self.cmd_render_deferred,
+            'r_vsync': self.cmd_render_vsync,
+            'r_clearcolor': self.cmd_render_clearcolor,
+            'r_reloadshaders': self.cmd_reload_shaders,
+            'r_info': self.cmd_render_info,
+
+            # Short aliases
+            'wireframe': self.cmd_render_wireframe,
+            'shadows': self.cmd_render_shadows,
+            'fog': self.cmd_render_fog,
+            'water': self.cmd_render_water,
+            'glass': self.cmd_render_glass,
+            'lighting': self.cmd_render_lighting,
+            'deferred': self.cmd_render_deferred,
+            'vsync': self.cmd_render_vsync,
+            'reloadshaders': self.cmd_reload_shaders,
         }
 
     def handle_command(self, cmd_string):
@@ -90,41 +115,192 @@ class ConsoleCommandHandler:
     # HELP
     # ===================================================================
     def cmd_help(self, args):
-        help_text = """
-<i>Here is a full list of available commands:</i><br><br>
-<b style="color:orange;">clear</b> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -  Clears the console<br>
-<b style="color:orange;">connect</b> ... &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -  Create I/O link<br>
-<b style="color:orange;">delete</b> <span style="color:yellow;">&lt;name&gt;</span> / <b style="color:orange;">kill</b> <span style="color:yellow;">&lt;name&gt;</span> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -  Delete entity<br>
-<b style="color:orange;">ent</b> <span style="color:yellow;">&lt;name&gt;</span> / <b style="color:orange;">info</b> <span style="color:yellow;">&lt;name&gt;</span> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-  Detailed info + I/O connections<br>
-<b style="color:orange;">fire</b> <span style="color:yellow;">&lt;entity&gt;</span> <span style="color:yellow;">&lt;output&gt;</span> <span style="color:yellow;">[param]</span> &nbsp; &nbsp; &nbsp; -  Fire any output<br>
-<b style="color:orange;">fps</b> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-  Toggle FPS display<br>
-<b style="color:orange;">getprop</b> <span style="color:yellow;">&lt;entity&gt;</span> <span style="color:yellow;">&lt;key&gt;</span> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-  Read a property <i>(use with setprop)</i><br>
-<b style="color:orange;">inputs</b> <span style="color:yellow;">&lt;entity&gt;</span> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-  List available inputs<br>
-<b style="color:orange;">list</b> / <b style="color:orange;">entities</b> / <b style="color:orange;">ents</b> / <b style="color:orange;">ls</b> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-  List every named brush & thing<br>
-<b style="color:orange;">list_connections</b> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -  Show all I/O connections<br>
-<b style="color:orange;">map</b> <span style="color:yellow;">&lt;name&gt;</span> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-  Load a map<br>
-<b style="color:orange;">noclip</b> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -  Disable clipping<br>
-<b style="color:orange;">outputs</b> <span style="color:yellow;">&lt;entity&gt;</span> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -  List available outputs<br>
-<b style="color:orange;">physics</b> <span style="color:yellow;">on/off/toggle</span><br>
-<b style="color:orange;">send</b> <span style="color:yellow;">&lt;entity&gt;</span> <span style="color:yellow;">&lt;input&gt;</span> <span style="color:yellow;">[param]</span> &nbsp; &nbsp; &nbsp; &nbsp; -  Send any input<br>
-<b style="color:orange;">setpos</b> <span style="color:yellow;">x y z</span> / <b style="color:orange;">teleport</b> <span style="color:yellow;">x y z</span> &nbsp; &nbsp; &nbsp; &nbsp; -  Teleport player<br>
-<b style="color:orange;">spawn</b> light &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -  Spawn light<br>
-<b style="color:orange;">spawn</b> pickup TYPE , VALUE <br>
-<b style="color:orange;">setprop</b> <span style="color:yellow;">&lt;key&gt;</span> <span style="color:yellow;">&lt;value&gt;</span> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -  Change any property <i>(use with getprop)</i><br>
-<b style="color:orange;">trigger</b> <span style="color:yellow;">&lt;entity&gt;</span> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -  SMART toggle for doors/movers<br>
+        
+        sep = '<span style="color:white;"> / </span>'
+        
+        help_text = f"""
+<i>Here is a full list of all available commands:</i><br><br>
+
+<b style="color:orange;">clear</b> — Clear console<br>
+<b style="color:orange;">help</b> — Show this help<br>
+<b style="color:orange;">fps</b> — Toggle FPS display<br>
+<b style="color:orange;">map &lt;name&gt;</b> — Load a different map<br>
+<b style="color:cyan;">=== Entity / I/O Commands ===</b><br>
+<b style="color:orange;">list</b>{sep}<b style="color:orange;">ents</b>{sep}<b style="color:orange;">ls</b>{sep}<b style="color:orange;">entities</b> — List all entities<br>
+<b style="color:orange;">ent</b>{sep}<b style="color:orange;">info</b> &lt;name&gt; — Show entity details<br>
+<b style="color:orange;">spawn</b> &lt;type&gt; — Spawn a new entity (thing)<br>
+<b style="color:orange;">delete</b>{sep}<b style="color:orange;">kill</b> &lt;name&gt; — Remove an entity from the scene<br>
+<b style="color:orange;">set</b>{sep}<b style="color:orange;">setprop</b> &lt;ent&gt; &lt;prop&gt; &lt;val&gt; — Modify a property<br>
+<b style="color:orange;">get</b>{sep}<b style="color:orange;">getprop</b> &lt;ent&gt; &lt;prop&gt; — Read a property value<br>
+<b style="color:orange;">fire</b>{sep}<b style="color:orange;">ent_fire</b> &lt;ent&gt; &lt;output&gt; [param]<br>
+<b style="color:orange;">send</b> &lt;ent&gt; &lt;input&gt; [param]<br>
+<b style="color:orange;">trigger</b> — Smart toggle for doors/triggers<br>
+<b style="color:orange;">toggle</b> — Flip an entity's state<br>
+<b style="color:cyan;">=== Connection Management ===</b><br>
+<b style="color:orange;">outputs</b> &lt;ent&gt; — List available outputs for type<br>
+<b style="color:orange;">inputs</b> &lt;ent&gt; — List available inputs for type<br>
+<b style="color:orange;">connections</b>{sep}<b style="color:orange;">list_connections</b> &lt;ent&gt; — Show active I/O links<br>
+<b style="color:orange;">connect</b> &lt;src&gt; &lt;out&gt; &lt;tgt&gt; &lt;in&gt; [delay]<br>
+<b style="color:orange;">disconnect</b> &lt;src&gt; &lt;out&gt; &lt;tgt&gt; &lt;in&gt;<br>
+<b style="color:cyan;">=== Rendering ===</b><br>
+<b style="color:orange;">r_list</b> — Show all current render settings<br>
+<b style="color:orange;">r_wireframe</b>{sep}<b style="color:orange;">wireframe</b> — Toggle wireframe mode<br>
+<b style="color:orange;">r_shadows</b>{sep}<b style="color:orange;">shadows</b> — Toggle shadows<br>
+<b style="color:orange;">r_fog</b>{sep}<b style="color:orange;">fog</b> — Toggle volumetric fog<br>
+<b style="color:orange;">r_lighting</b>{sep}<b style="color:orange;">lighting</b> — Toggle real-time lighting<br>
+<b style="color:orange;">r_reloadshaders</b> — Hot-reload all shaders<br>
+<b style="color:orange;">r_clearcolor</b> r g b — Set background colour<br>
+<b style="color:cyan;">=== Movement & Physics ===</b><br>
+<b style="color:orange;">noclip</b> — Toggle noclip<br>
+<b style="color:orange;">physics</b> on/off/toggle<br>
+<b style="color:orange;">setpos</b>{sep}<b style="color:orange;">teleport</b> x y z<br>
 """
         debug_log("Info", help_text)
 
     # ===================================================================
-    # MODE CHECK HELPER
+    # HELPER: Get renderer safely
     # ===================================================================
+    def _get_renderer(self):
+        """Safely retrieve the active renderer from the 3D view."""
+        try:
+            if hasattr(self.main_window, 'view_3d') and hasattr(self.main_window.view_3d, 'renderer'):
+                return self.main_window.view_3d.renderer
+        except:
+            pass
+        debug_log("Error", "Renderer not accessible (not in 3D view).")
+        return None
+
+    # ===================================================================
+    # RENDER COMMANDS
+    # ===================================================================
+
+    def cmd_render_list(self, args):
+        """Show all current render settings in a clean table."""
+        renderer = self._get_renderer()
+        if not renderer:
+            return
+
+        lines = ["<b>=== Current Render Settings ===</b><br>"]
+
+        def add_line(name, value):
+            lines.append(f"<b>{name}:</b> {value}")
+
+        add_line("Wireframe", "ON" if getattr(renderer, 'wireframe', False) else "OFF")
+        add_line("Shadows", "ON" if getattr(renderer, 'shadows_enabled', False) else "OFF")
+        add_line("Volumetric Fog", "ON" if getattr(renderer, 'fog_enabled', True) else "OFF")
+        add_line("Water Shader", "ON" if getattr(renderer, 'water_enabled', True) else "OFF")
+        add_line("Glass Shader", "ON" if getattr(renderer, 'glass_enabled', True) else "OFF")
+        add_line("Real-time Lighting", "ON" if getattr(renderer, 'lighting_enabled', True) else "OFF")
+        add_line("Deferred Rendering", "ON" if getattr(renderer, 'use_deferred', False) else "OFF")
+        add_line("ARM Mode", "ON" if getattr(renderer, 'arm_mode', True) else "OFF")
+
+        # Clear color
+        cc = getattr(renderer, 'clear_color', [0.02, 0.02, 0.05])
+        add_line("Clear Color", f"[{cc[0]:.2f}, {cc[1]:.2f}, {cc[2]:.2f}]")
+
+        debug_log("Info", "<br>".join(lines))
+
+    def cmd_render_info(self, args):
+        """Detailed renderer status"""
+        self.cmd_render_list(args)
+
+    def cmd_render_wireframe(self, args):
+        renderer = self._get_renderer()
+        if not renderer:
+            return
+        renderer.wireframe = not getattr(renderer, 'wireframe', False)
+        state = "ON" if renderer.wireframe else "OFF"
+        debug_log("Info", f"Wireframe: {state}")
+        if hasattr(self.main_window.view_3d, 'update'):
+            self.main_window.view_3d.update()
+
+    def cmd_render_shadows(self, args):
+        renderer = self._get_renderer()
+        if not renderer: return
+        renderer.shadows_enabled = not getattr(renderer, 'shadows_enabled', False)
+        debug_log("Info", f"Shadows: {'ON' if renderer.shadows_enabled else 'OFF'}")
+
+    def cmd_render_fog(self, args):
+        renderer = self._get_renderer()
+        if not renderer: return
+        renderer.fog_enabled = not getattr(renderer, 'fog_enabled', True)
+        debug_log("Info", f"Volumetric Fog: {'ON' if renderer.fog_enabled else 'OFF'}")
+
+    def cmd_render_water(self, args):
+        renderer = self._get_renderer()
+        if not renderer: return
+        renderer.water_enabled = not getattr(renderer, 'water_enabled', True)
+        debug_log("Info", f"Water shader: {'ON' if renderer.water_enabled else 'OFF'}")
+
+    def cmd_render_glass(self, args):
+        renderer = self._get_renderer()
+        if not renderer: return
+        renderer.glass_enabled = not getattr(renderer, 'glass_enabled', True)
+        debug_log("Info", f"Glass shader: {'ON' if renderer.glass_enabled else 'OFF'}")
+
+    def cmd_render_lighting(self, args):
+        renderer = self._get_renderer()
+        if not renderer: return
+        renderer.lighting_enabled = not getattr(renderer, 'lighting_enabled', True)
+        debug_log("Info", f"Real-time lighting: {'ON' if renderer.lighting_enabled else 'OFF'}")
+
+    def cmd_render_deferred(self, args):
+        renderer = self._get_renderer()
+        if not renderer: return
+        renderer.use_deferred = not getattr(renderer, 'use_deferred', False)
+        debug_log("Info", f"Deferred rendering: {'ON' if renderer.use_deferred else 'OFF'}")
+
+    def cmd_render_vsync(self, args):
+        config = self.main_window.config
+        current = config.getboolean('Display', 'vsync', fallback=True)
+        new_state = not current
+        if not config.has_section('Display'):
+            config.add_section('Display')
+        config.set('Display', 'vsync', str(new_state))
+        self.main_window.save_config()
+
+        debug_log("Info", f"VSync: {'ON' if new_state else 'OFF'}")
+
+    def cmd_render_clearcolor(self, args):
+        renderer = self._get_renderer()
+        if not renderer:
+            return
+        try:
+            parts = [float(x) for x in args.split()]
+            if len(parts) == 3:
+                renderer.clear_color = [max(0.0, min(1.0, c)) for c in parts]
+                debug_log("Info", f"Clear color set to {renderer.clear_color}")
+            else:
+                debug_log("Error", "Usage: r_clearcolor r g b   (values 0.0 to 1.0)")
+        except:
+            debug_log("Error", "Usage: r_clearcolor r g b")
+
+    def cmd_reload_shaders(self, args):
+        renderer = self._get_renderer()
+        if not renderer:
+            return
+        try:
+            if hasattr(renderer, 'reload_shaders') and callable(renderer.reload_shaders):
+                success = renderer.reload_shaders()
+                if success:
+                    debug_log("Info", "✅ Shaders reloaded successfully")
+                else:
+                    debug_log("Warning", "Some shaders failed to reload")
+            else:
+                debug_log("Error", "Renderer does not support hot-reloading shaders")
+        except Exception as e:
+            debug_log("Error", f"Failed to reload shaders: {e}")
+
+    # ===================================================================
+    # EXISTING COMMANDS (unchanged)
+    # ===================================================================
+
     def _require_play_mode(self, command_name):
         """Returns True if in Play Mode, else logs error and returns False."""
         if not self.main_window.view_3d.play_mode:
             debug_log("Error", f"Command '{command_name}' can only be used in Play Mode.")
             return False
         return True
-
 
     def cmd_list_entities(self, args):
         debug_log("Info", f"--- BRUSHES ({len(self.editor_state.brushes)}) ---")
@@ -164,25 +340,48 @@ class ConsoleCommandHandler:
             for k, v in entity.properties.items():
                 debug_log("Info", f"  {k}: {v}")
 
-    def cmd_fire_output(self, args):
-        if not IO_AVAILABLE:
-            debug_log("Error", "I/O system not available")
+    def cmd_fire(self, args):
+        """ent_fire <entity_name> <input_name> [parameter]
+        Works in both Editor mode and Play Mode."""
+        if not args:
+            debug_log("Error", "Usage: ent_fire <entity_name> <input_name> [parameter]")
             return
-        parts = args.split()
+
+        parts = args.split(maxsplit=2)
         if len(parts) < 2:
-            debug_log("Error", "Usage: fire <entity> <output> [parameter]")
+            debug_log("Error", "Usage: ent_fire <entity_name> <input_name> [parameter]")
             return
+
         entity_name = parts[0]
-        output_name = parts[1]
-        param = " ".join(parts[2:]) if len(parts) > 2 else ""
+        input_name = parts[1]
+        parameter = " ".join(parts[2:]) if len(parts) > 2 else ""
 
         entity = self.editor_state.find_entity_by_name(entity_name)
         if not entity:
-            debug_log("Error", f"Entity '{entity_name}' not found")
+            debug_log("Error", f"Entity '{entity_name}' not found.")
             return
 
-        debug_log("Info", f"🔥 Firing {output_name} on {entity_name} (param='{param}')")
-        fire_output(entity, output_name, param)
+        debug_log("Info", f"[Editor Fire] {entity_name}.{input_name}({parameter})")
+
+        # === Handle entities that implement on_input() (LevelChanger, etc.) ===
+        if hasattr(entity, 'on_input') and callable(entity.on_input):
+            try:
+                success = entity.on_input(input_name, parameter)
+                if success:
+                    debug_log("Info", f"✓ Input '{input_name}' handled successfully")
+                else:
+                    debug_log("Warning", f"Input '{input_name}' was not handled")
+            except Exception as e:
+                debug_log("Error", f"Exception in {entity.__class__.__name__}.on_input(): {e}")
+        else:
+            debug_log("Warning", f"Entity '{entity_name}' does not support inputs (no on_input method)")
+
+        # Optional: forward to IOManager in Play Mode
+        if hasattr(self.main_window, 'iomanager') and self.main_window.iomanager is not None:
+            try:
+                self.main_window.iomanager.fire_output(entity, input_name, parameter)
+            except:
+                pass
 
     def cmd_trigger(self, args):
         if not args:
@@ -343,6 +542,15 @@ class ConsoleCommandHandler:
             self.editor_state.save_state()
             self.main_window.update_all_ui()
 
+        elif spawn_type == "levelchanger":
+            new_changer = LevelChanger(pos=[0, 40, 0])
+            new_changer.properties['name'] = "LevelChanger_new"
+            new_changer.properties['target_map'] = "Simple_Map_Test.json"  # default
+            self.editor_state.things.append(new_changer)
+            debug_log("Info", "Spawned LevelChanger at [0, 40, 0]")
+            self.editor_state.save_state()
+            self.main_window.update_all_ui()
+
         else:
             debug_log("Error", f"Unknown spawn type '{spawn_type}'. Try: pickup or light")
 
@@ -385,7 +593,6 @@ class ConsoleCommandHandler:
                 count += 1
 
         debug_log("Info", f"Total connections: {count}")
-
 
     def cmd_noclip(self, args):
         if not self._require_play_mode("noclip"):
@@ -433,7 +640,6 @@ class ConsoleCommandHandler:
         except:
             debug_log("Error", "Usage: setpos x y z   (example: setpos 0 50 100)")
 
-
     def cmd_clear(self, args):
         self.main_window.debug_console.clear()
 
@@ -453,7 +659,7 @@ class ConsoleCommandHandler:
         if not args:
             debug_log("Warning", "Usage: map <mapname>")
             return
-        map_name = args[0]
+        map_name = args if isinstance(args, str) else args[0]
         if not map_name.endswith('.json'):
             map_name += '.json'
         map_path = os.path.join(self.main_window.root_dir, 'maps', map_name)
@@ -462,3 +668,4 @@ class ConsoleCommandHandler:
             debug_log("Info", f"Loaded map {map_name}")
         else:
             debug_log("Error", f"Map not found: {map_name}")
+

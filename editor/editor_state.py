@@ -1,5 +1,5 @@
 """
-RStudio Editor State Manager
+State Manager
 
 Manages all the data for the current level being edited, including:
 - Brushes (solid geometry)
@@ -26,7 +26,7 @@ try:
     LIGHTMAP_AVAILABLE = True
 except ImportError:
     LIGHTMAP_AVAILABLE = False
-    print("[EditorState] lightmap package not found — baking disabled.")
+    print("[LIGHTMAP_AVAILABLE] False")
 
 
 class EditorState:

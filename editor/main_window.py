@@ -9,12 +9,13 @@ import math
 import copy
 import time
 
+
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QMessageBox, QFileDialog, QWidget, QLabel, QVBoxLayout,
     QGraphicsOpacityEffect, QInputDialog, QColorDialog, QProgressDialog, QAction
 )
 from PyQt5.QtWidgets import QShortcut
-from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, QRect, QPoint
+from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, QRect, QPoint, pyqtSignal
 from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor
 
 from editor.things import Light, PlayerStart, Thing, Pickup, Monster, Model
@@ -126,6 +127,7 @@ class Toast(QLabel):
         
 
 class MainWindow(QMainWindow):
+    load_level_signal = pyqtSignal(str)
     def __init__(self, root_dir):
         super().__init__()
         self.root_dir = root_dir
@@ -134,7 +136,7 @@ class MainWindow(QMainWindow):
         self.unsaved_changes = False
         self.file_path = None
         self.recent_files = []
-
+        self.load_level_signal.connect(self.load_level_file)
 
         self.setWindowTitle("Fio")
         self.setGeometry(100, 100, 1600, 900)
@@ -1887,43 +1889,36 @@ class MainWindow(QMainWindow):
             self.load_level_file(filePath)
 
     def load_level_file(self, filePath):
-        """Loads the level data from the given path. Used by 'Open' and 'Recent Files'."""
+        """Loads a level. Used for both normal loading and LevelChanger."""
         try:
+            print(f"[MainWindow] Loading level: {filePath}")
+
+            # ✅ Capture play state BEFORE doing anything
+            was_playing = hasattr(self.view_3d, 'play_mode') and self.view_3d.play_mode
+
             with open(filePath, 'r') as f:
                 level_data = json.load(f)
-            
-            # This triggers the fingerprint validation in EditorState
+
+            # Clear current scene completely
+            self.state.clear_scene()
+
+            # Load new data
             self.state.load_from_data(level_data)
 
-            # Restore Terrain ---
+            # Re-initialize terrain if present
             if hasattr(self.state, 'terrain_data') and self.state.terrain_data:
-                # Initialize terrain system if it doesn't exist yet
                 if self.terrain is None:
                     from engine.terrain import Terrain
                     self.terrain = Terrain()
-                    
-                    # Link to renderer
-                    if hasattr(self.view_3d, 'renderer') and self.view_3d.renderer:
-                        self.view_3d.renderer.setup_terrain_shader(self.terrain)
-                    
-                    # Link to logic thread (for collision)
-                    if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
-                        self.view_3d.logic_thread.set_terrain(self.terrain)
-
-                # Apply the loaded data to the terrain engine
                 self.terrain.from_dict(self.state.terrain_data)
-                self.terrain.mark_all_dirty()
-                
-                # Update the terrain editor window if it is currently open
-                if self.terrain_editor_window and self.terrain_editor_window.isVisible():
-                    self.terrain_editor_window.load_from_terrain()
-            
-            elif self.terrain:
-                # If the loaded map has NO terrain, disable the existing terrain engine
-                self.terrain.enabled = False
-                self.terrain.mark_all_dirty()
 
-            # Initialize camera view based on PlayerStart
+                if hasattr(self.view_3d, 'renderer') and self.view_3d.renderer:
+                    self.view_3d.renderer.setup_terrain_shader(self.terrain)
+
+                if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
+                    self.view_3d.logic_thread.set_terrain(self.terrain)
+
+            # Reset camera to PlayerStart
             player_start_pos = None
             for t in self.state.things:
                 if isinstance(t, PlayerStart):
@@ -1931,26 +1926,48 @@ class MainWindow(QMainWindow):
                     break
 
             if player_start_pos:
-                self.view_3d.camera.pos = [player_start_pos[0], player_start_pos[1] + 50, player_start_pos[2] + 200]
-                self.view_3d.camera.pitch = -15
+                self.view_3d.camera.pos = [
+                    player_start_pos[0],
+                    player_start_pos[1] + 80,
+                    player_start_pos[2] + 200
+                ]
+                self.view_3d.camera.pitch = -20
                 self.view_3d.camera.yaw = -90
 
-            # --- Update Application State ---
+            # Update file path and UI state
             self.file_path = filePath
-            self.set_selected_object(None)
-            
-            # Update Recent Files List and Title Bar
-            self.add_recent_file(filePath) 
             self.unsaved_changes = False
             self.update_title()
-            
-            filename = os.path.basename(filePath)
-            self.show_toast(f"Loaded {filename}")
+            self.add_recent_file(filePath)
 
-        except ValueError as ve:
-            self.show_toast(f"Rejected: {ve}", is_error=True)
+            # Force full UI and view refresh
+            self.set_selected_object(None)
+            self.update_all_ui()
+
+            # ✅ Proper, synchronous play mode restart
+            if was_playing:
+                print("[MainWindow] Restarting Play Mode with new level...")
+
+                # Clean exit (avoid toggle)
+                if hasattr(self, 'exit_play_mode'):
+                    self.exit_play_mode()
+                else:
+                    self.view_3d.play_mode = False
+
+                # Immediate re-entry (no QTimer!)
+                self.enter_play_mode()
+
+            print(f"[MainWindow] Successfully loaded {os.path.basename(filePath)}")
+            self.show_toast(f"Loaded {os.path.basename(filePath)}")
+
+            return True
+
         except Exception as e:
-            self.show_toast(f"Error: {e}", is_error=True)
+            print(f"ERROR loading level {filePath}: {e}")
+            import traceback
+            traceback.print_exc()
+            self.show_toast(f"Failed to load level: {e}", is_error=True)
+            return False
 
     def quicksave_and_launch(self):
         maps_dir = "maps"
