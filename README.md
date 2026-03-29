@@ -11,7 +11,7 @@ Built because modern tools lost the immediacy of Radiant/Hammer.
 
  ------------------------
 
-* **Build a level, hit play, and walk around instantly** — no compile step.
+* **Build a level, hit play, and walk around instantly** — no compile or lightmap baking
 * Compact and lightweight (target: Snapdragon 8CX, OpenGL 3.3)
 * Real-time lighting (no lightmaps)
 * Classic brush-based workflow
