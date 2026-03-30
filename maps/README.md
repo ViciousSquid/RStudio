@@ -13,6 +13,6 @@ Hub map with doors, one of them leads to `map_test_Extended` - _demonstrates the
 
 Simple box map with player start and a light
 
-### `Simple_Map_Test_Exended.json`
+### `Simple_Map_Test_Extended.json`
 
 A playable level with multiple rooms, textures, pickups and a moving platform
