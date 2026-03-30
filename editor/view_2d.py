@@ -1657,6 +1657,9 @@ class View2D(QWidget):
         self.update()
 
     def contextMenuEvent(self, event):
+        # Capture the exact position
+        click_pos = event.pos()
+        
         menu = QMenu(self)
         
         # --- Styling ---
@@ -1683,8 +1686,8 @@ class View2D(QWidget):
             }
         """)
 
-        # Check if we clicked on a brush for brush-specific options
-        clicked_brush = self.get_brush_at(event.pos())
+        # Check if we clicked on a brush for brush-specific options using click_pos
+        clicked_brush = self.get_brush_at(click_pos)
         select_inside_action = None
         
         if clicked_brush:
@@ -1710,7 +1713,8 @@ class View2D(QWidget):
         add_logic_timer_action = logic_menu.addAction("LogicTimer")
         add_logic_gate_action = logic_menu.addAction("LogicGate")
 
-        action = menu.exec_(self.mapToGlobal(event.pos()))
+        # Open the menu using the captured position
+        action = menu.exec_(self.mapToGlobal(click_pos))
         
         if action is None:
             return
@@ -1720,8 +1724,8 @@ class View2D(QWidget):
             self.select_brushes_inside(clicked_brush)
             return
         
-        # Calculate World Position for new object
-        world_pos = self.snap_to_grid(self.screen_to_world(event.pos()))
+        # Calculate World Position for new object using the captured position
+        world_pos = self.snap_to_grid(self.screen_to_world(click_pos))
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
         pos_3d = [0, 40, 0]
