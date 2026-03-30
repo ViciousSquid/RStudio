@@ -3,11 +3,11 @@
 
 ### `Key_Test.json`
 
-The player must pick up the blue key to open the blue door - demonstrates the pickup entity
+The player must pick up the blue key to open the blue door - _demonstrates the pickup entity_
 
 ### `Office_Corridor.json`
 
-Hub map with doors, one of them leads to `map_test_Extended` - demonstrates the levelchanger entity
+Hub map with doors, one of them leads to `map_test_Extended` - _demonstrates the levelchanger entity_
 
 ### `Simple_Map_Test.json`
 
