@@ -42,7 +42,7 @@
 
 ### v1.0.12.5
 
-* Increased teerrain gen limits by 16x
+* Increased terrain gen limits by 16x
 * Improvements to texturing/tinting brushes
 * Geometry and terrain looks good even with no textures (lo-fi feel)
 
