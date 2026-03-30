@@ -1,6 +1,7 @@
 ### v1.1.0.0 MILESTONE RELEASE
 
 * New `levelchange` entity
+* Improved error handling
 * Added renderer-related console commands
 * Refactored level loading system - utilizes signals for safer state transitions
 * FIXED?: Logic gates ([3](https://github.com/ViciousSquid/Fio/issues/3))
