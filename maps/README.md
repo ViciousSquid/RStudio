@@ -11,7 +11,7 @@ Hub map with doors, one of them leads to `map_test_Extended` - _demonstrates the
 
 ### `Simple_Map_Test.json`
 
-Simple box map with basic entities: player start and a light
+Simple box map with the minimal entities required to play: player start and a light
 
 ### `Simple_Map_Test_Extended.json`
 
