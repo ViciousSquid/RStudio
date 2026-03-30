@@ -1,3 +1,10 @@
+### v1.1.0.0 MILESTONE RELEASE
+
+* New `levelchange` entity
+* Added renderer-related console commands
+* FIXED?: Logic gates ([3](https://github.com/ViciousSquid/Fio/issues/3))
+
+
 ### v1.0.17.0
 
 * Implemented explicit mixed-precision shader qualifiers: `highp` for vertex positions and `mediump` for lighting/colour calculations.
@@ -5,7 +12,7 @@
 * Improved console with `help` command
 
 
-### v1.0.16 MILESTONE 1
+### v1.0.16
 
 * NEW: console (~ to toggle)
 * Stable but needs proper optimisation
