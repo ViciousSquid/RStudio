@@ -721,7 +721,7 @@
             "properties": {
                 "type": "levelchanger",
                 "name": "LevelChanger_1",
-                "target_map": "maps/Simple_Map_Test_extended.json",
+                "target_map": "maps/Simple_Map_Test_Extended.json",
                 "delay": "0.0",
                 "fade_time": "0.5",
                 "show_radius": "False",
