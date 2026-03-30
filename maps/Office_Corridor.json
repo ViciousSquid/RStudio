@@ -1,4 +1,6 @@
 {
+    "fingerprint": "RStudio",
+    "version": 2,
     "brushes": [
         {
             "pos": [
@@ -534,6 +536,39 @@
                 "top": "door012.png",
                 "down": "door012.png"
             }
+        },
+        {
+            "pos": [
+                64.0,
+                144.0,
+                448.0
+            ],
+            "size": [
+                288.0,
+                160.0,
+                80.0
+            ],
+            "textures": {
+                "north": "trigger.jpg",
+                "south": "trigger.jpg",
+                "east": "trigger.jpg",
+                "west": "trigger.jpg",
+                "top": "trigger.jpg",
+                "down": "default.png",
+                "bottom": "trigger.jpg"
+            },
+            "is_trigger": true,
+            "trigger_type": "Once",
+            "io_connections": [
+                {
+                    "output": "OnStartTouch",
+                    "target": "LevelChanger_1",
+                    "input": "Trigger",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false
+                }
+            ]
         }
     ],
     "things": [
@@ -548,7 +583,7 @@
                 "type": "light",
                 "name": "Light_1",
                 "colour": "[255, 255, 255]",
-                "intensity": "1.0",
+                "intensity": "1.5",
                 "radius": "1024.0",
                 "state": "on",
                 "show_radius": "False",
@@ -630,9 +665,9 @@
         {
             "type": "playerstart",
             "pos": [
-                16.0,
-                40,
-                112.0
+                0.0,
+                304.0,
+                -992.0
             ],
             "properties": {
                 "type": "playerstart",
@@ -675,7 +710,23 @@
                 "show_radius": "False",
                 "casts_shadows": "False"
             }
+        },
+        {
+            "type": "levelchanger",
+            "pos": [
+                -32.0,
+                288.0,
+                448.0
+            ],
+            "properties": {
+                "type": "levelchanger",
+                "name": "LevelChanger_1",
+                "target_map": "maps/Simple_Map_Test_extended.json",
+                "delay": "0.0",
+                "fade_time": "0.5",
+                "show_radius": "False",
+                "radius": "128.0"
+            }
         }
-    ],
-    "fingerprint": "RStudio"
+    ]
 }
