@@ -15,4 +15,4 @@ Simple box map with player start and a light
 
 ### `Simple_Map_Test_Extended.json`
 
-A playable level with multiple rooms, textures, pickups and a moving platform
+A playable level with multiple rooms, pickups, a moving platform and a light that can be triggered
