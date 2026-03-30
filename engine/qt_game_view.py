@@ -51,6 +51,8 @@ class QtGameView(QOpenGLWidget):
         self.visibility_system = None
         self.show_visibility_debug = False
         self.grid_visible = True
+        self.dragging_sysmon = False
+        self.sysmon_drag_offset = QPoint(0, 0)
         
         # Audio setup: Initialize Sound Pool
         self.sound_pool = {} # Map of filename -> list of QSoundEffect
@@ -1028,10 +1030,21 @@ class QtGameView(QOpenGLWidget):
     def mousePressEvent(self, event):
         if self.debug_mode_active and event.button() == Qt.LeftButton:
             if self.debug_window_rect.contains(event.pos()):
+                # Close button (top-right X)
                 if event.x() > self.debug_window_rect.right() - 25 and event.y() < self.debug_window_rect.y() + 25:
                     self.debug_mode_active = False
-                    if self.play_mode: QApplication.setOverrideCursor(Qt.BlankCursor)
-                return
+                    if self.play_mode:
+                        QApplication.setOverrideCursor(Qt.BlankCursor)
+                    return
+                
+                # Title bar drag (top 25 px)
+                title_bar_rect = QRect(self.debug_window_rect.x(), self.debug_window_rect.y(),
+                                       self.debug_window_rect.width(), 25)
+                if title_bar_rect.contains(event.pos()):
+                    self.dragging_sysmon = True
+                    self.sysmon_drag_offset = event.pos() - QPoint(self.debug_window_rect.x(), self.debug_window_rect.y())
+                    self.setCursor(Qt.ClosedHandCursor)
+                    return
         
         # Face Mode Click - Apply Texture (Left Click Only)
         if self.face_mode_active and event.button() == Qt.LeftButton:
@@ -1087,6 +1100,15 @@ class QtGameView(QOpenGLWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        # SysMon title-bar dragging
+        if self.dragging_sysmon:
+            new_pos = event.pos() - self.sysmon_drag_offset
+            # Keep it inside the window with a small margin
+            new_x = max(5, min(new_pos.x(), self.width() - self.debug_window_rect.width() - 5))
+            new_y = max(5, min(new_pos.y(), self.height() - 120))
+            self.debug_window_rect.moveTo(new_x, new_y)
+            self.update()
+            return
         # 1. Handle Mouselook (Priority over Face Hover)
         # This ensures we can look around while holding RMB even in face mode
         if self.mouselook_active:
@@ -1130,8 +1152,18 @@ class QtGameView(QOpenGLWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if self.is_dragging_gizmo: self.is_dragging_gizmo = False; self.setCursor(Qt.ArrowCursor); self.editor.save_state()
-        if self.mouselook_active and event.button() == Qt.RightButton: self.mouselook_active = False; self.setCursor(Qt.ArrowCursor)
+        if self.dragging_sysmon and event.button() == Qt.LeftButton:
+            self.dragging_sysmon = False
+            self.setCursor(Qt.ArrowCursor)
+            return
+
+        if self.is_dragging_gizmo: 
+            self.is_dragging_gizmo = False
+            self.setCursor(Qt.ArrowCursor)
+            self.editor.save_state()
+        if self.mouselook_active and event.button() == Qt.RightButton:
+            self.mouselook_active = False
+            self.setCursor(Qt.ArrowCursor)
         super().mouseReleaseEvent(event)
     
     def wheelEvent(self, event):
