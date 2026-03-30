@@ -387,17 +387,23 @@ class ConsoleCommandHandler:
         if not args:
             debug_log("Error", "Usage: trigger <entity>")
             return
+
         entity_name = args.strip()
         entity = self.editor_state.find_entity_by_name(entity_name)
         if not entity:
             debug_log("Error", f"Entity '{entity_name}' not found")
             return
 
+        # Brush-based toggle
         if isinstance(entity, dict) and (entity.get('is_door') or entity.get('is_mover')):
             debug_log("Info", f"🔄 Toggling {entity_name}")
-            send_input(entity, "Toggle", "")
-        else:
-            self.cmd_fire_output(f"{entity_name} OnTrigger")
+            if IO_AVAILABLE:
+                send_input(entity, "Toggle", "")
+            return
+
+        # Generic entity fallback
+        debug_log("Info", f"Triggering {entity_name}")
+        self.cmd_fire(f"{entity_name} Trigger")
 
     def cmd_send_input(self, args):
         if not IO_AVAILABLE or len(args.split()) < 2:
@@ -482,31 +488,71 @@ class ConsoleCommandHandler:
 
     def cmd_connect_io(self, args):
         parts = args.split()
+
         if len(parts) < 4:
             debug_log("Error", "Usage: connect <source> <output> <target> <input> [delay] [param]")
             return
-        src = parts[0]
-        outp = parts[1]
-        tgt = parts[2]
-        inp = parts[3]
-        delay = float(parts[4]) if len(parts) > 4 else 0.0
+
+        src, outp, tgt, inp = parts[:4]
+
+        # --- Safe delay parsing ---
+        delay = 0.0
+        if len(parts) > 4:
+            try:
+                delay = float(parts[4])
+            except ValueError:
+                debug_log("Error", f"Invalid delay '{parts[4]}' (must be a number)")
+                return
+
+        # --- Parameter ---
         param = " ".join(parts[5:]) if len(parts) > 5 else ""
 
+        # --- Resolve source ---
         source_ent = self.editor_state.find_entity_by_name(src)
         if not source_ent:
             debug_log("Error", f"Source '{src}' not found")
             return
 
-        conn = OutputConnection(outp, tgt, inp, param, delay, fire_once=False)
-        if hasattr(source_ent, 'add_output_connection'):
-            source_ent.add_output_connection(conn)
-        else:
-            if '_io_connections' not in source_ent:
-                source_ent['_io_connections'] = []
-            source_ent['_io_connections'].append(conn)
+        # --- Resolve target (prevents silent broken connections) ---
+        target_ent = self.editor_state.find_entity_by_name(tgt)
+        if not target_ent:
+            debug_log("Warning", f"Target '{tgt}' not found (connection will still be created)")
 
-        debug_log("Info", f"Connected {src}.{outp} → {tgt}.{inp}")
-        self.editor_state.save_state()
+        # --- Create connection ---
+        try:
+            conn = OutputConnection(outp, tgt, inp, param, delay, fire_once=False)
+        except Exception as e:
+            debug_log("Error", f"Failed to create connection: {e}")
+            return
+
+        # --- Attach connection safely ---
+        try:
+            if hasattr(source_ent, 'add_output_connection'):
+                source_ent.add_output_connection(conn)
+            else:
+                if not isinstance(source_ent, dict):
+                    debug_log("Error", f"Source '{src}' cannot store IO connections")
+                    return
+
+                source_ent.setdefault('_io_connections', []).append(conn)
+
+        except Exception as e:
+            debug_log("Error", f"Failed to attach connection: {e}")
+            return
+
+        # --- Persist state ---
+        try:
+            self.editor_state.save_state()
+        except Exception as e:
+            debug_log("Warning", f"Connection created but failed to save state: {e}")
+
+        # --- Final log ---
+        debug_log(
+            "Info",
+            f"Connected {src}.{outp} → {tgt}.{inp}"
+            + (f" (delay={delay})" if delay else "")
+            + (f" param='{param}'" if param else "")
+        )
 
     def cmd_disconnect_io(self, args):
         debug_log("Warning", "disconnect command not fully implemented yet (use property editor for now)")
