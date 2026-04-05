@@ -1,3 +1,8 @@
+### v1.2.0.0
+
+* NEW: Monster entity
+* 
+
 ### v1.1.0.0 MILESTONE RELEASE
 
 * New `levelchange` entity
