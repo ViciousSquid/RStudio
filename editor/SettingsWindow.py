@@ -398,7 +398,7 @@ class SettingsWindow(QDialog):
                 right_form.addRow(label_text, shortcut_label)
 
         # 3. Switch 2D Views (Last item)
-        switch_2d_views_label = QLabel("Shift+Tab")
+        switch_2d_views_label = QLabel("Ctrlt+Tab")
         right_form.addRow("Switch 2D Views:", switch_2d_views_label)
 
         # Add columns to main layout
