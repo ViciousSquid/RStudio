@@ -5,7 +5,7 @@ import os
 from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
-from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, 
+from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Monster, 
                           LogicGate, LogicRelay, LogicTimer, LevelChanger)
 from editor.scene_hierarchy import SceneHierarchy
 # I/O System imports for drawing connections
@@ -867,24 +867,23 @@ class View2D(QWidget):
                     painter.drawEllipse(s_pos, radius, radius)
 
                 # 2. Draw Sprite
-                if hasattr(thing, 'get_instance_pixmap'):
-                    pixmap = thing.get_instance_pixmap()
+                if hasattr(thing, 'get_icon_pixmap'):
+                    pixmap = thing.get_icon_pixmap()
                 else:
-                    pixmap = thing.get_pixmap()
-                
+                    pixmap = thing.get_instance_pixmap()
+
                 if pixmap:
                     pixmap_size = pixmap.size()
-                    draw_rect = QRectF(s_pos.x() - pixmap_size.width() / 2, 
-                                       s_pos.y() - pixmap_size.height() / 2,
-                                       pixmap_size.width(), 
-                                       pixmap_size.height())
-                    
+                    draw_rect = QRectF(s_pos.x() - pixmap_size.width() / 2,
+                                    s_pos.y() - pixmap_size.height() / 2,
+                                    pixmap_size.width(),
+                                    pixmap_size.height())
                     painter.save()
                     painter.translate(s_pos)
-                    target_rect = QRectF(-pixmap_size.width() / 2, 
-                                         -pixmap_size.height() / 2, 
-                                         pixmap_size.width(), 
-                                         pixmap_size.height())
+                    target_rect = QRectF(-pixmap_size.width() / 2,
+                                        -pixmap_size.height() / 2,
+                                        pixmap_size.width(),
+                                        pixmap_size.height())
                     painter.drawPixmap(target_rect.toRect(), pixmap)
                     painter.restore()
 
@@ -1698,6 +1697,7 @@ class View2D(QWidget):
         add_light_action = menu.addAction("Light")
         add_player_start_action = menu.addAction("PlayerStart")
         add_pickup_action = menu.addAction("Pickup")
+        add_monster_action = menu.addAction("Monster")
         add_speaker_action = menu.addAction("Speaker")
         add_levelchanger_action = menu.addAction("LevelChanger")
         
@@ -1752,6 +1752,8 @@ class View2D(QWidget):
         # Logic Entities
         elif action == add_logic_relay_action: new_thing = LogicRelay(pos=pos_3d)
         elif action == add_logic_timer_action: new_thing = LogicTimer(pos=pos_3d)
+        elif action == add_monster_action:
+            new_thing = Monster(pos=pos_3d)
         elif action == add_logic_gate_action:
             new_thing = LogicGate(pos=pos_3d)
             new_thing.properties['logic_type'] = 'AND' 

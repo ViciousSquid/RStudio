@@ -1437,7 +1437,14 @@ class PropertyEditor(QWidget):
 
             label_text = key.replace('_', ' ').title() + ":"
             
-            if isinstance(thing, Light) and key == 'state':
+            # Special handling for Monster type selection
+            if isinstance(thing, Monster) and key == 'monster_type':
+                widget = QComboBox()
+                widget.addItems(['human', 'flying'])
+                widget.setCurrentText(value)
+                widget.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
+                layout.addRow(label_text, widget)
+            elif isinstance(thing, Light) and key == 'state':
                 widget = QComboBox()
                 widget.addItems(['on', 'off'])
                 widget.setCurrentText(value)

@@ -132,6 +132,13 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.root_dir = root_dir
         self.debug_console = None
+        self.key_bindings = {}
+
+        self.config = configparser.ConfigParser()
+        self.config_path = 'settings.ini'
+        self.load_config()
+
+        self.load_key_bindings()
 
         self.unsaved_changes = False
         self.file_path = None
@@ -141,10 +148,6 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Fio")
         self.setGeometry(100, 100, 1600, 900)
         self.setMinimumSize(1280, 800)
-
-        self.config = configparser.ConfigParser()
-        self.config_path = 'settings.ini'
-        self.load_config()
         self.state = EditorState()
         self.load_recent_files()
         
@@ -218,12 +221,12 @@ class MainWindow(QMainWindow):
             "T: Toggle Asset Browser",
         ]
         self.last_tooltip_time = 0
-        self.tooltip_interval = 120  # Seconds between occasional tooltips
+        self.tooltip_interval = 30  # Seconds between occasional tooltips
         
         # Timer for occasional tooltips
         self.tooltip_timer = QTimer(self)
         self.tooltip_timer.timeout.connect(self._check_occasional_tooltip)
-        self.tooltip_timer.start(30000)  # Check every 30 seconds
+        self.tooltip_timer.start(10000)  # Check every 30 seconds
         
         # Track right-click state for camera movement detection
         self.right_mouse_held = False
@@ -242,6 +245,41 @@ class MainWindow(QMainWindow):
         fname = os.path.basename(self.file_path) if self.file_path else "Untitled"
         dirty_marker = "*" if self.unsaved_changes else ""
         self.setWindowTitle(f"Fio - {fname} {dirty_marker}")
+
+    def load_key_bindings(self):
+        if self.config.has_section('KeyBindings'):
+            for key, command in self.config.items('KeyBindings'):
+                self.key_bindings[key] = command
+
+    def save_key_bindings(self):
+        if not self.config.has_section('KeyBindings'):
+            self.config.add_section('KeyBindings')
+        else:
+            self.config.remove_section('KeyBindings')
+            self.config.add_section('KeyBindings')
+        for key, command in self.key_bindings.items():
+            self.config.set('KeyBindings', key, command)
+        self.save_config()
+
+    def set_key_binding(self, key_str, command):
+        """Bind a key to a console command. Warn if key already bound and ask to overwrite."""
+        from PyQt5.QtWidgets import QMessageBox
+
+        if key_str in self.key_bindings:
+            old_cmd = self.key_bindings[key_str]
+            reply = QMessageBox.question(
+                self,
+                "Key Binding Conflict",
+                f"Key '{key_str}' is already bound to:\n\n  {old_cmd}\n\nOverwrite?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return False
+
+        self.key_bindings[key_str] = command
+        self.save_key_bindings()
+        return True
 
     def mark_as_modified(self):
         """Mark the project as having unsaved changes."""
@@ -1702,18 +1740,16 @@ class MainWindow(QMainWindow):
         self.view_3d.update()
 
     def keyPressEvent(self, event):
+        # ------------------------------------------------------------------
+        # PLAY MODE HANDLING (hardcoded shortcuts first)
+        # ------------------------------------------------------------------
         if self.view_3d.play_mode:
             if event.key() == Qt.Key_Escape:
                 self.view_3d.toggle_play_mode(None, None)
-                
-                # FIX: Clear notification label directly
                 self.ui.notification_label.setText("")
-                
-                # Re-show startup tooltip if not yet learned
                 if not self.camera_movement_learned:
                     QTimer.singleShot(500, lambda: self.show_tooltip(
                         "Hold right mouse to move camera with WASD", duration=0, toast_id="camera_tip"))
-                
                 if hasattr(self, 'mode_label'):
                     self.mode_label.setText("EDITOR MODE")
                     self.mode_label.setStyleSheet("""
@@ -1727,35 +1763,54 @@ class MainWindow(QMainWindow):
                             border: 1px solid #444;
                         }
                     """)
-                
-                self.setFocus() 
-                # Update play button color when exiting play mode
+                self.setFocus()
                 self.update_play_button_color()
-                
+                return
+
             elif event.key() == Qt.Key_F3:
                 self.view_3d.show_sprites_in_play_mode = not self.view_3d.show_sprites_in_play_mode
                 self.view_3d.update()
+                return
+
             elif event.key() == Qt.Key_F1:
-                # Toggle connection lines visibility in play mode (no toast in play mode)
                 self.view_3d.show_connections_in_play_mode = not getattr(self.view_3d, 'show_connections_in_play_mode', False)
                 self.update_all_ui()
+                return
+
             elif event.key() == Qt.Key_E:
-                # Use key - single shot, send to game state
                 if hasattr(self.view_3d, 'game_state') and self.view_3d.game_state:
                     self.view_3d.game_state.set_use_key_pressed()
                 self.keys_pressed.add(event.key())
-            elif event.key() == Qt.Key_QuoteLeft:  # Tilde/backtick key (~)
-                self.toggle_debug_console()
-            else:
-                self.keys_pressed.add(event.key())
-            return
+                return
 
-        # Tilde key toggles debug console (works in both modes)
+            elif event.key() == Qt.Key_QuoteLeft:  # Tilde/backtick
+                self.toggle_debug_console()
+                return
+
+            else:
+                # Check for user‑defined key bindings (only if console input does NOT have focus)
+                console_input = self.debug_console.command_input
+                if not console_input.hasFocus():
+                    key_seq = QKeySequence(event.key() | int(event.modifiers()))
+                    key_str = key_seq.toString()
+                    if key_str in self.key_bindings:
+                        command = self.key_bindings[key_str]
+                        self.console_handler.handle_command(command)
+                        return
+                # If no binding, just record the key for later use (e.g., movement)
+                self.keys_pressed.add(event.key())
+                return
+
+        # ------------------------------------------------------------------
+        # EDITOR MODE HANDLING (including bindings)
+        # ------------------------------------------------------------------
+
+        # Tilde always toggles console (works in both modes)
         if event.key() == Qt.Key_QuoteLeft:
             self.toggle_debug_console()
             return
 
-        # NEW: Handle ESC to exit Face Mode
+        # ESC: exit face mode or deselect
         if event.key() == Qt.Key_Escape:
             if getattr(self.view_3d, 'face_mode_active', False):
                 self.toggle_face_mode(False)
@@ -1764,48 +1819,58 @@ class MainWindow(QMainWindow):
                 self.set_selected_object(None)
                 return
 
-        # Editor mode key presses below
-        if self.state.selected_object:
-            if event.key() == Qt.Key_Delete:
-                self.save_state()
-                # Handle multi-selection delete
-                for obj in list(self.state.selected_objects):
-                    if isinstance(obj, dict):
-                        if obj in self.state.brushes:
-                            self.state.brushes.remove(obj)
-                    else:
-                        if obj in self.state.things:
-                            self.state.things.remove(obj)
-                self.set_selected_objects([])
-                return
+        # Delete key
+        if self.state.selected_object and event.key() == Qt.Key_Delete:
+            self.save_state()
+            for obj in list(self.state.selected_objects):
+                if isinstance(obj, dict):
+                    if obj in self.state.brushes:
+                        self.state.brushes.remove(obj)
+                else:
+                    if obj in self.state.things:
+                        self.state.things.remove(obj)
+            self.set_selected_objects([])
+            return
 
-            if event.key() == Qt.Key_H:
-                if event.modifiers() == Qt.ShiftModifier:
-                    self.unhide_all_brushes()
-                elif isinstance(self.state.selected_object, dict):
-                    self.hide_selected_brush()
-                return
+        # H / Shift+H
+        if self.state.selected_object and event.key() == Qt.Key_H:
+            if event.modifiers() == Qt.ShiftModifier:
+                self.unhide_all_brushes()
+            elif isinstance(self.state.selected_object, dict):
+                self.hide_selected_brush()
+            return
 
-            if event.key() == Qt.Key_Space:
-                self.clone_selected_object()
-                return
+        # Space: clone
+        if self.state.selected_object and event.key() == Qt.Key_Space:
+            self.clone_selected_object()
+            return
 
-        # G key toggles grid visibility (editor mode only)
+        # G: toggle grid
         if event.key() == Qt.Key_G:
             new_state = not self.grid_visible
             self.toggle_grid(new_state)
-            # Update the toolbar button state
             if hasattr(self, 'grid_btn'):
                 self.grid_btn.blockSignals(True)
                 self.grid_btn.setChecked(new_state)
                 self.grid_btn.blockSignals(False)
             return
 
-        # Check for camera movement lesson: WASD while right-click held (editor mode only)
+        # Camera movement lesson (WASD with right mouse held)
         if not self.camera_movement_learned and self.right_mouse_held:
             if event.key() in (Qt.Key_W, Qt.Key_A, Qt.Key_S, Qt.Key_D):
                 self.on_camera_moved_with_wasd()
 
+        # Check for user‑defined key bindings (only if console input does NOT have focus)
+        console_input = self.debug_console.command_input
+        if not console_input.hasFocus():
+            key_seq = QKeySequence(event.key() | int(event.modifiers()))
+            key_str = key_seq.toString()
+            if key_str in self.key_bindings:
+                command = self.key_bindings[key_str]
+                self.console_handler.handle_command(command)
+                return
+
+        # If we reach here, no binding consumed the key – record it for normal editor use
         self.keys_pressed.add(event.key())
         super().keyPressEvent(event)
 

@@ -5,7 +5,8 @@ the event-driven entity communication system.
 """
 
 import os
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtGui import QPixmap, QColor
+from PyQt5.QtCore import Qt   # Needed for scaling flags in get_icon_pixmap
 import json
 import ast
 
@@ -194,6 +195,13 @@ class Thing:
         """Clear all I/O connections."""
         self.properties['_io_connections'] = []
 
+    def get_icon_pixmap(self):
+        """Return a small pixmap (≈60×60) for 2D views."""
+        pix = self.get_instance_pixmap()
+        if pix is not None and not pix.isNull():
+            return pix.scaled(60, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        return None
+
 
 # =============================================================================
 # STANDARD THING SUBCLASSES
@@ -258,13 +266,97 @@ class Speaker(Thing):
 
 
 class Monster(Thing):
-    """Enemy entity."""
-    pixmap_path = "assets/sprites/monster.png"
-    
+    """Enemy entity with subtypes (human, flying)."""
+    pixmap_path = "assets/sprites/monsters/human/idle.png"   # fallback
+    _subtype_sprites = {}  # cache keyed by full sprite path (includes dead/alive state)
+
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'monster')
+        self.properties.setdefault('monster_type', 'human')   # 'human' or 'flying'
         self.properties.setdefault('id', 0)
+        self.properties.setdefault('health', 100)
+        self.properties.setdefault('damage', 10)
+
+    def get_sprite_path(self):
+        """
+        Return the sprite path for the current monster type and state.
+        Priority: dead > shooting > idle.
+        Falls back to idle.png if the specific sprite doesn't exist on disk.
+        """
+        mtype = self.properties.get('monster_type', 'human')
+        is_dead = self.properties.get('dead', False)
+        is_shooting = self.properties.get('is_shooting', False)
+
+        if is_dead:
+            dead_path = f"assets/sprites/monsters/{mtype}/dead.png"
+            if not os.path.exists(dead_path):
+                return f"assets/sprites/monsters/{mtype}/idle.png"
+            return dead_path
+        elif is_shooting:
+            shoot_path = f"assets/sprites/monsters/{mtype}/shoot.png"
+            if not os.path.exists(shoot_path):
+                return f"assets/sprites/monsters/{mtype}/idle.png"
+            return shoot_path
+        else:
+            return f"assets/sprites/monsters/{mtype}/idle.png"
+
+    def get_instance_pixmap(self):
+        """
+        Return the correct pixmap for the current alive/dead state.
+
+        The cache is keyed by the full sprite path returned by get_sprite_path(),
+        which already encodes both monster type AND state (idle vs dead).
+        This means alive and dead sprites are cached independently, so setting
+        'dead' = True on a monster that was previously rendered alive will
+        correctly switch to dead.png on the next frame without a stale cache hit.
+        """
+        sprite_path = self.get_sprite_path()
+
+        # Return from cache if available
+        if sprite_path in Monster._subtype_sprites:
+            return Monster._subtype_sprites[sprite_path]
+
+        # Load from disk
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+            abs_path = os.path.join(project_root, sprite_path)
+            if os.path.exists(abs_path):
+                pixmap = QPixmap(abs_path)
+                if not pixmap.isNull():
+                    Monster._subtype_sprites[sprite_path] = pixmap
+                    return pixmap
+        except Exception:
+            pass
+
+        # Fallback: dark red square so death is still visually obvious
+        if self.properties.get('dead', False):
+            fallback = QPixmap(128, 128)
+            fallback.fill(QColor(128, 0, 0))
+            return fallback
+
+        return super().get_instance_pixmap()
+
+    def get_icon_pixmap(self):
+        """Return a generic small monster icon for 2D views."""
+        icon_path = "assets/sprites/monster.png"   # 60×60 icon
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+            abs_path = os.path.join(project_root, icon_path)
+            if os.path.exists(abs_path):
+                pix = QPixmap(abs_path)
+                if not pix.isNull():
+                    return pix
+        except Exception:
+            pass
+        # Fallback: scale the full sprite down
+        return super().get_icon_pixmap()
+
+    @classmethod
+    def clear_sprite_cache(cls):
+        cls._subtype_sprites.clear()
 
 
 class Pickup(Thing):
@@ -572,7 +664,7 @@ class LevelChanger(Thing):
             print("ERROR: Could not find MainWindow!")
             return False
 
-        # ✅ CRITICAL FIX: use signal instead of direct call
+        # Use signal instead of direct call
         if hasattr(main_window, 'load_level_signal'):
             try:
                 print(f"[LevelChanger] Emitting load_level_signal('{target_map}')")
