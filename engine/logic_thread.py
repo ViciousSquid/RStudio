@@ -1,5 +1,5 @@
 """
-RStudio Logic Thread - Game Logic Processing
+Game Logic Processing
 
 This thread runs game logic at a fixed timestep (60 Hz), handling:
 - Player movement and physics
@@ -7,7 +7,8 @@ This thread runs game logic at a fixed timestep (60 Hz), handling:
 - I/O event dispatching
 - Mover and door animations
 - Pickup collection
-- Monster AI (sight detection, shooting)
+- Monster AI (sight detection, movement, wake logic, shooting)
+- Player death detection
 """
 
 import threading
@@ -54,6 +55,8 @@ from .monster_constants import (
     MONSTER_SIGHT_RANGE,
     MONSTER_SHOOT_INTERVAL,
     MONSTER_SHOOT_ANIM_TIME,
+    MONSTER_MOVE_SPEED,
+    MONSTER_STOP_DISTANCE,
 )
 
 # Qt key constants (matching PyQt5.QtCore.Qt)
@@ -107,6 +110,7 @@ class LogicThread(threading.Thread):
         # Player stats
         self.player_health = 100
         self.player_max_health = 100
+        self.player_dead = False
         
         # I/O System
         self.io_manager = None
@@ -218,6 +222,7 @@ class LogicThread(threading.Thread):
             # Reset player stats
             self.player_health = 100
             self.player_max_health = 100
+            self.player_dead = False
             
             # Reset pickup state
             self.collected_pickups.clear()
@@ -244,12 +249,21 @@ class LogicThread(threading.Thread):
             # Reset visual fx
             self.bullet_marks = []
 
-            # Reset monster AI state and clear any leftover shoot flags
+            # Reset monster AI state and clear any leftover shoot flags.
+            # Also reset wake state so triggered/sight monsters sleep again.
             self.monster_states = {}
             if MonsterThing:
                 for thing in self.things:
                     if isinstance(thing, MonsterThing):
                         thing.properties.pop('is_shooting', None)
+                        # Restore dormant state so triggered monsters sleep on replay
+                        triggered   = thing.properties.get('triggered', False)
+                        wake_sight  = thing.properties.get('wake_on_sight', True)
+                        if triggered or wake_sight:
+                            thing.properties['awake'] = False
+                        else:
+                            # Neither triggered nor sight-gated — always on
+                            thing.properties['awake'] = True
             
             # Reset I/O system
             if self.io_manager:
@@ -284,6 +298,7 @@ class LogicThread(threading.Thread):
             self.timer_states = {}
             self.active_weapon = None
             self.bullet_marks = []
+            self.player_dead = False
 
             # Reset monster AI state and clear shoot flags from entities
             self.monster_states = {}
@@ -291,6 +306,12 @@ class LogicThread(threading.Thread):
                 for thing in self.things:
                     if isinstance(thing, MonsterThing):
                         thing.properties.pop('is_shooting', None)
+                        triggered  = thing.properties.get('triggered', False)
+                        wake_sight = thing.properties.get('wake_on_sight', True)
+                        if triggered or wake_sight:
+                            thing.properties['awake'] = False
+                        else:
+                            thing.properties['awake'] = True
     
     def _fire_player_spawn_outputs(self):
         """Fire OnPlayerSpawn from the active player start."""
@@ -488,6 +509,16 @@ class LogicThread(threading.Thread):
         
         # Update logic timers
         self._update_logic_timers(delta)
+
+        # ---- Player dead: freeze all gameplay input ----
+        if self.player_dead:
+            # Drain queued inputs to prevent buildup
+            self.game_state.consume_mouse_delta()
+            self.game_state.consume_use_key()
+            self.game_state.consume_shot()
+            # Monsters still tick so their anim state is correct
+            self._update_monsters(delta)
+            return
         
         # Player input
         keys = self.game_state.get_keys()
@@ -858,6 +889,8 @@ class LogicThread(threading.Thread):
             if state['forward']:
                 state['progress'] += progress_delta
                 if state['progress'] >= 1.0:
+                    # This timer.stop() here is fine as it applies to initial manual steps,
+                    # but in auto-run mode, we ensure the timer is started after these.
                     state['progress'] = 1.0
                     state['forward'] = False
                     if not was_at_end and self.io_manager:
@@ -1080,18 +1113,30 @@ class LogicThread(threading.Thread):
         """
         Monster AI update — runs every play-mode tick.
 
-        Behaviour:
-          - If the player is within MONSTER_SIGHT_RANGE the monster attacks on a
-            MONSTER_SHOOT_INTERVAL cooldown, dealing damage equal to its 'damage'
-            property and queuing a shoot.wav sound request.
-          - While the shot animation timer (MONSTER_SHOOT_ANIM_TIME) is counting
-            down the entity's 'is_shooting' flag is True; the renderer uses this
-            to display shoot.png instead of idle.png.
-          - When the player moves out of range the shoot flag is cleared and
-            timers are frozen so re-engagement feels instant.
-          - Dead or hidden monsters are skipped and their shoot flag is cleared.
+        Wake logic:
+          - triggered=True  → monster starts dormant; wakes only via I/O 'Wake' input.
+          - triggered=False → uses wake_on_sight:
+              - wake_on_sight=True  (default) → wakes when player enters MONSTER_SIGHT_RANGE.
+              - wake_on_sight=False → awake from the start (no trigger, no sight check).
+
+        Once awake:
+          - Ground-type monsters slide toward the player horizontally at MONSTER_MOVE_SPEED,
+            stopping at MONSTER_STOP_DISTANCE.
+          - Flying monsters move in full 3D toward the player.
+          - Attacks fire on MONSTER_SHOOT_INTERVAL cooldown while in MONSTER_SIGHT_RANGE.
+          - Out-of-range monsters go idle but stay awake (they chase when you return).
+
+        Player death:
+          - When player_health reaches 0, player_dead is set to True.
+          - All further monster AI is frozen until play mode resets.
+
+        Dead / hidden / disabled monsters are always skipped.
         """
         if not self.player or not MonsterThing:
+            return
+
+        # Monsters freeze when the player is already dead
+        if self.player_dead:
             return
 
         player_pos = self.player.pos
@@ -1114,24 +1159,57 @@ class LogicThread(threading.Thread):
                     'anim_timer':  0.0,
                 }
 
-            state = self.monster_states[mid]
+            state     = self.monster_states[mid]
             thing_pos = glm.vec3(thing.pos)
-            distance = glm.distance(player_pos, thing_pos)
+            distance  = glm.distance(player_pos, thing_pos)
+
+            # ---- Wake logic ------------------------------------------------
+            triggered  = thing.properties.get('triggered', False)
+            wake_sight = thing.properties.get('wake_on_sight', True)
+            awake      = thing.properties.get('awake', False)
+
+            if not awake:
+                if triggered:
+                    # Dormant until I/O Wake input — skip entirely
+                    continue
+                elif not wake_sight:
+                    # Always-on: no trigger, no sight gate
+                    thing.properties['awake'] = True
+                    awake = True
+                elif distance <= MONSTER_SIGHT_RANGE:
+                    # First sight of the player
+                    thing.properties['awake'] = True
+                    awake = True
+                else:
+                    # Not in range yet, stay dormant
+                    continue
+            # ----------------------------------------------------------------
 
             if distance <= MONSTER_SIGHT_RANGE:
-                # Tick shoot cooldown
+                # --- Movement toward player ---
+                if distance > MONSTER_STOP_DISTANCE:
+                    direction = player_pos - thing_pos
+                    dir_len = glm.length(direction)
+                    if dir_len > 0.001:
+                        direction = direction / dir_len
+                        mtype = thing.properties.get('monster_type', 'human')
+                        if mtype != 'flying':
+                            # Keep movement horizontal for ground types
+                            direction = glm.normalize(glm.vec3(direction.x, 0.0, direction.z))
+                        step = direction * MONSTER_MOVE_SPEED * delta
+                        new_pos = thing_pos + step
+                        thing.pos = [new_pos.x, new_pos.y, new_pos.z]
+
+                # --- Shoot cooldown ---
                 state['shoot_timer'] -= delta
 
                 if state['shoot_timer'] <= 0.0:
-                    # === FIRE ===
                     state['shoot_timer'] = MONSTER_SHOOT_INTERVAL
                     state['anim_timer']  = MONSTER_SHOOT_ANIM_TIME
 
-                    # Damage the player
                     damage = int(thing.properties.get('damage', 10))
                     self.player_health = max(0, self.player_health - damage)
 
-                    # Queue shoot sound
                     if hasattr(self.game_state, 'sound_queue'):
                         self.game_state.sound_queue.append({
                             'file': 'shoot.wav',
@@ -1139,11 +1217,10 @@ class LogicThread(threading.Thread):
                             'entity_id': mid,
                         })
 
-                    # Fire I/O OnAttack output
                     if self.io_manager:
                         self.io_manager.fire_output(thing, 'OnAttack')
 
-                # Manage shoot-sprite visibility
+                # Shoot animation sprite
                 if state['anim_timer'] > 0.0:
                     state['anim_timer'] -= delta
                     thing.properties['is_shooting'] = True
@@ -1151,9 +1228,24 @@ class LogicThread(threading.Thread):
                     thing.properties['is_shooting'] = False
 
             else:
-                # Out of sight — go idle, freeze timers
+                # Out of sight range — idle, freeze shoot animation
                 thing.properties['is_shooting'] = False
                 state['anim_timer'] = 0.0
+
+        # ---- Player death check ----------------------------------------
+        if self.player_health <= 0 and not self.player_dead:
+            self.player_dead = True
+            # Fire I/O OnPlayerDeath from the PlayerStart entity if one exists
+            if self.io_manager:
+                try:
+                    from editor.things import PlayerStart
+                    for thing in self.things:
+                        if isinstance(thing, PlayerStart):
+                            self.io_manager.fire_output(thing, 'OnPlayerDeath')
+                            break
+                except ImportError:
+                    pass
+            print("[Logic] Player has died.")
 
     # =========================================================================
     # FRUSTUM CULLING
@@ -1215,6 +1307,7 @@ class LogicThread(threading.Thread):
         
         write_state.player_health = self.player_health
         write_state.player_max_health = self.player_max_health
+        write_state.player_dead = self.player_dead
         
         write_state.collected_keys = set(self.collected_keys)
         write_state.hud_message = self.current_hud_message

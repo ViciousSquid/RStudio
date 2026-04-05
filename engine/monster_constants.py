@@ -21,6 +21,16 @@ MONSTER_SHOOT_INTERVAL = 1.5
 MONSTER_SHOOT_ANIM_TIME = 0.35
 
 # ---------------------------------------------------------------------------
+# Movement
+# ---------------------------------------------------------------------------
+
+# World-units per second that a monster moves toward the player
+MONSTER_MOVE_SPEED = 80.0
+
+# Monster stops moving when it gets this close (to avoid clipping into player)
+MONSTER_STOP_DISTANCE = 60.0
+
+# ---------------------------------------------------------------------------
 # Sprite frame filenames (relative to assets/sprites/monsters/<type>/)
 # ---------------------------------------------------------------------------
 

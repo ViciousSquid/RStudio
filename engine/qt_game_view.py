@@ -114,6 +114,10 @@ class QtGameView(QOpenGLWidget):
         
         self.play_mode = False
         self.player = None
+
+        # Stored spawn point so death-screen Escape can cleanly exit play mode
+        self._last_player_start_pos = [0, 0, 0]
+        self._last_player_start_angle = 0
         
         self.fps = 0
         self.frame_count = 0
@@ -432,6 +436,11 @@ class QtGameView(QOpenGLWidget):
             self._draw_render_menu(painter)
         if self.play_mode and self.editor.config.getboolean('Display', 'show_hud', fallback=True):
             self._draw_hud(painter, render_state)
+
+        # ---- Death screen overlay ----
+        if self.play_mode and render_state and getattr(render_state, 'player_dead', False):
+            self._draw_death_screen(painter)
+
         if self.debug_mode_active:
             self._draw_window_manager(painter)
             
@@ -545,6 +554,17 @@ class QtGameView(QOpenGLWidget):
                 else: center_pos = self.mapToGlobal(self.rect().center()); QCursor.setPos(center_pos); self.last_mouse_pos = self.mapFromGlobal(center_pos); QApplication.setOverrideCursor(Qt.BlankCursor)
             self.update()
             return
+
+        # ---- Death screen: any key press exits play mode ----
+        if self.play_mode:
+            render_state = self.game_state.get_render_state()
+            if getattr(render_state, 'player_dead', False):
+                if event.key() == Qt.Key_Escape:
+                    self._exit_play_mode()
+                    return
+                # Any other key during death screen is swallowed (no phantom inputs)
+                return
+
         if not self.play_mode:
             if event.key() == Qt.Key_BracketLeft:
                 if hasattr(self.editor, 'set_grid_size'):
@@ -660,7 +680,46 @@ class QtGameView(QOpenGLWidget):
                         painter.drawPixmap(icon_x, key_y, scaled_pixmap)
                     else: self._draw_key_fallback(painter, key_name, icon_x, key_y, key_size)
                 except: self._draw_key_fallback(painter, key_name, icon_x, key_y, key_size)
-    
+
+    def _draw_death_screen(self, painter):
+        """Full-screen death overlay — drawn on top of HUD after player_dead is set."""
+        w, h = self.width(), self.height()
+
+        # Dark red vignette overlay
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(QColor(120, 0, 0, 160)))
+        painter.drawRect(0, 0, w, h)
+
+        # "YOU DIED" title
+        title_font = QFont("Arial", 64, QFont.Bold)
+        painter.setFont(title_font)
+        fm = painter.fontMetrics()
+        title_text = "YOU DIED"
+        title_w = fm.horizontalAdvance(title_text)
+        title_x = (w - title_w) // 2
+        title_y = h // 2 - 20
+
+        # Shadow
+        painter.setPen(QColor(60, 0, 0, 220))
+        painter.drawText(title_x + 3, title_y + 3, title_text)
+        # Main text
+        painter.setPen(QColor(255, 60, 60))
+        painter.drawText(title_x, title_y, title_text)
+
+        # Sub-prompt
+        sub_font = QFont("Arial", 18)
+        painter.setFont(sub_font)
+        fm2 = painter.fontMetrics()
+        sub_text = "Press Escape to return to the editor"
+        sub_w = fm2.horizontalAdvance(sub_text)
+        sub_x = (w - sub_w) // 2
+        sub_y = title_y + 60
+
+        painter.setPen(QColor(0, 0, 0, 180))
+        painter.drawText(sub_x + 2, sub_y + 2, sub_text)
+        painter.setPen(QColor(220, 180, 180))
+        painter.drawText(sub_x, sub_y, sub_text)
+
     def _draw_key_fallback(self, painter, key_name, x, y, size):
         key_colors = {'blue_key': QColor(50, 100, 200), 'red_key': QColor(200, 50, 50), 'yellow_key': QColor(200, 200, 50), 'green_key': QColor(50, 200, 50)}
         color = key_colors.get(key_name, QColor(150, 150, 150))
@@ -886,6 +945,10 @@ class QtGameView(QOpenGLWidget):
         self.play_mode = not self.play_mode
         self.debug_mode_active = False
         if self.play_mode:
+            # Store spawn info so _exit_play_mode can use it without parameters
+            self._last_player_start_pos = player_start_pos
+            self._last_player_start_angle = player_start_angle
+
             center_pos = self.mapToGlobal(self.rect().center())
             QCursor.setPos(center_pos)
             self.last_mouse_pos = self.mapFromGlobal(center_pos)
@@ -912,6 +975,18 @@ class QtGameView(QOpenGLWidget):
             self.logic_thread.set_player(None)
             self.player = None
             self.update()
+
+    def _exit_play_mode(self):
+        """
+        Exit play mode cleanly from within the view (e.g. death screen Escape).
+        Calls toggle_play_mode with the stored spawn info so the editor's state
+        stays consistent.  Falls back to direct teardown if nothing is stored.
+        """
+        if not self.play_mode:
+            return
+        pos   = getattr(self, '_last_player_start_pos',   [0, 0, 0])
+        angle = getattr(self, '_last_player_start_angle', 0)
+        self.toggle_play_mode(pos, angle)
 
     def set_culling(self, enabled):
         self.culling_enabled = enabled
@@ -1070,7 +1145,10 @@ class QtGameView(QOpenGLWidget):
             if face: self.editor.selected_face = face; self.update(); return
 
         if self.play_mode and event.button() == Qt.LeftButton:
+            # Block shooting when dead
             render_state = self.game_state.get_render_state()
+            if getattr(render_state, 'player_dead', False):
+                return
             active_weapon = getattr(render_state, 'active_weapon', None)
             if active_weapon:
                 self.game_state.queue_shot()
@@ -1136,6 +1214,7 @@ class QtGameView(QOpenGLWidget):
             cp = event.pos()
             dx, dy = cp.x() - self.last_mouse_pos.x(), cp.y() - self.last_mouse_pos.y()
             if dx == 0 and dy == 0: return
+            # Still set mouse delta even when dead — the logic thread drains it without applying
             self.game_state.set_mouse_delta(float(dx), float(dy))
             center = self.mapToGlobal(self.rect().center())
             QCursor.setPos(center)
