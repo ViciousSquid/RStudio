@@ -37,6 +37,8 @@ class ConsoleCommandHandler:
             'ls': self.cmd_list_entities,
             'monster_kill': self.cmd_monster_kill,
             'kill_monster': self.cmd_monster_kill,
+            'monster_revive':     self.cmd_monster_revive,
+            'monster_revive_all': self.cmd_monster_revive_all,
 
             'ent': self.cmd_info,
             'info': self.cmd_info,
@@ -160,6 +162,10 @@ class ConsoleCommandHandler:
             self.main_window.set_key_binding(key_str, command)
             debug_log("Info", f"Bound '{key_str}' to '{command}'")
 
+    # ===================================================================
+    # MONSTER COMMANDS
+    # ===================================================================
+
     def cmd_monster_kill(self, args):
         """
         Usage: monster_kill <monster_name>
@@ -200,6 +206,99 @@ class ConsoleCommandHandler:
         debug_log("Info", f"Monster '{name}' killed (health set to 0, hidden=True)")
         self.main_window.update_all_ui()
 
+    def cmd_monster_revive(self, args):
+        """
+        Usage: monster_revive <monster_name>
+        Restores a single named monster to full health and clears its dead/hidden state.
+        Works in both editor and play mode.
+        """
+        if not args:
+            debug_log("Error", "Usage: monster_revive <monster_name>")
+            return
+
+        name = args.strip()
+        entity = self.editor_state.find_entity_by_name(name)
+        if not entity:
+            debug_log("Error", f"Entity '{name}' not found")
+            return
+
+        from editor.things import Monster
+        if not isinstance(entity, Monster):
+            debug_log("Error", f"Entity '{name}' is not a Monster (type: {type(entity).__name__})")
+            return
+
+        self._revive_monster(entity)
+
+        # If in play mode, clear this monster's stale AI state so it doesn't
+        # inherit a near-zero shoot timer from before it died.
+        try:
+            if hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.logic_thread:
+                lt = self.main_window.view_3d.logic_thread
+                lt.monster_states.pop(id(entity), None)
+        except Exception as e:
+            debug_log("Warning", f"Could not reset monster AI state: {e}")
+
+        debug_log("Info", f"Monster '{name}' revived")
+        self.main_window.update_all_ui()
+
+    def cmd_monster_revive_all(self, args):
+        """
+        Usage: monster_revive_all
+        Restores every monster in the level to full health and clears dead/hidden/awake state.
+        Safe to run in editor or play mode.
+        """
+        from editor.things import Monster
+
+        monsters = [t for t in self.editor_state.things if isinstance(t, Monster)]
+        if not monsters:
+            debug_log("Info", "No monsters found in the level")
+            return
+
+        for monster in monsters:
+            self._revive_monster(monster)
+
+        # If we're in play mode, clear the entire monster AI state dict so no
+        # monster inherits a stale shoot timer or animation state from before death.
+        try:
+            if hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.logic_thread:
+                lt = self.main_window.view_3d.logic_thread
+                lt.monster_states = {}
+        except Exception as e:
+            debug_log("Warning", f"Could not reset monster AI states: {e}")
+
+        debug_log("Info", f"Revived {len(monsters)} monster(s)")
+        self.main_window.update_all_ui()
+
+    def _revive_monster(self, entity):
+        """
+        Shared helper — reset a Monster entity back to its full alive state.
+        Respects the entity's configured health value if positive; falls back to 100.
+        """
+        # Restore health: use the entity's current health value if it's still positive
+        # (meaning the designer set a custom value), otherwise default to 100.
+        current_health = entity.properties.get('health', 0)
+        try:
+            current_health = int(current_health)
+        except (ValueError, TypeError):
+            current_health = 0
+
+        restored_health = current_health if current_health > 0 else 100
+        entity.properties['health']      = restored_health
+        entity.properties['dead']        = False
+        entity.properties['hidden']      = False
+        # Reset awake so triggered/sight-gated monsters go dormant again —
+        # wake logic will re-apply correctly on next play mode start.
+        entity.properties['awake']       = False
+        entity.properties.pop('is_shooting', None)
+
+        # Clear the sprite cache so the editor 2D views and 3D billboard
+        # switch back to idle.png immediately rather than staying on dead.png.
+        try:
+            from editor.things import Monster
+            Monster.clear_sprite_cache()
+        except Exception:
+            pass
+
     # ===================================================================
     # HELP
     # ===================================================================
@@ -231,6 +330,10 @@ class ConsoleCommandHandler:
 <b style="color:orange;">connections</b>{sep}<b style="color:orange;">list_connections</b> &lt;ent&gt; — Show active I/O links<br>
 <b style="color:orange;">connect</b> &lt;src&gt; &lt;out&gt; &lt;tgt&gt; &lt;in&gt; [delay]<br>
 <b style="color:orange;">disconnect</b> &lt;src&gt; &lt;out&gt; &lt;tgt&gt; &lt;in&gt;<br>
+<b style="color:cyan;">=== Monsters ===</b><br>
+<b style="color:orange;">monster_kill</b> &lt;name&gt; — Instantly kill a named monster<br>
+<b style="color:orange;">monster_revive</b> &lt;name&gt; — Restore a named monster to full health<br>
+<b style="color:orange;">monster_revive_all</b> — Restore every monster in the level<br>
 <b style="color:cyan;">=== Rendering ===</b><br>
 <b style="color:orange;">r_list</b> — Show all current render settings<br>
 <b style="color:orange;">r_wireframe</b>{sep}<b style="color:orange;">wireframe</b> — Toggle wireframe mode<br>
@@ -406,7 +509,7 @@ class ConsoleCommandHandler:
 
     def cmd_info(self, args):
         if not args:
-            debug_log("Error", "Usage: ent <name>")
+            debug_log("Error", "Usage: ent <n>")
             return
         entity = self.editor_state.find_entity_by_name(args)
         if not entity:
@@ -579,7 +682,7 @@ class ConsoleCommandHandler:
         parts = args.split()
 
         if len(parts) < 4:
-            debug_log("Error", "Usage: connect <source> <output> <target> <input> [delay] [param]")
+            debug_log("Error", "Usage: connect <source> <o> <target> <input> [delay] [param]")
             return
 
         src, outp, tgt, inp = parts[:4]
@@ -803,4 +906,3 @@ class ConsoleCommandHandler:
             debug_log("Info", f"Loaded map {map_name}")
         else:
             debug_log("Error", f"Map not found: {map_name}")
-

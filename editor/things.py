@@ -379,15 +379,21 @@ class Pickup(Thing):
     
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
-        self.properties.setdefault('type', 'pickup')
-        self.properties.setdefault('item_type', 'health')
-        self.properties.setdefault('value', 25)
-        self.properties.setdefault('activation', 'walk_over')
-        self.properties.setdefault('collected', False)
-        self.properties.setdefault('respawns', False)
-        self.properties.setdefault('respawn_time', 20.0)
-        self.properties.setdefault('key_name', 'blue_key')
-        self.properties.setdefault('custom_sprite', '')
+        self.properties.setdefault('type', 'monster')
+        self.properties.setdefault('monster_type', 'human')   # 'human' or 'flying'
+        self.properties.setdefault('id', 0)
+        self.properties.setdefault('health', 100)
+        self.properties.setdefault('damage', 10)
+
+        # --- Wake / AI behaviour ---
+        # triggered=True  → monster starts dormant; must receive Wake input via I/O
+        # triggered=False → uses wake_on_sight logic (default)
+        self.properties.setdefault('triggered', False)
+        # wake_on_sight=True  → wakes when player enters MONSTER_SIGHT_RANGE (default)
+        # wake_on_sight=False → only wakes via I/O trigger (ignored when triggered=True)
+        self.properties.setdefault('wake_on_sight', True)
+        # Runtime flag – set to True when the monster has been woken up
+        self.properties.setdefault('awake', False)
 
     def is_gun(self):
         return self.properties.get('item_type') in ['gun1', 'gun2']

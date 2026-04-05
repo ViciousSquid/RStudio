@@ -1427,11 +1427,17 @@ class PropertyEditor(QWidget):
         self._pickup_key_widgets = []
         self._pickup_sprite_widgets = []
         
+        # Keys that only make sense on Monster entities
+        _MONSTER_ONLY_KEYS = {'awake', 'damage', 'health', 'monster_type', 'triggered', 'wake_on_sight'}
+
         for key, value in sorted(thing.properties.items()):
             if key == 'name': continue
             if key == '_io_connections': continue  # Skip I/O connections - handled in I/O tab
-            if isinstance(thing, Light) and key in ['colour', 'type']: continue
-            if isinstance(thing, Model) and key in ['model_path', 'scale', 'rotation', 'type']: continue
+            if key == 'type': continue  # Internal entity-type tag, never user-editable
+            if isinstance(thing, Light) and key in ['colour']: continue
+            if isinstance(thing, Model) and key in ['model_path', 'scale', 'rotation']: continue
+            # Skip Monster-only properties on non-Monster Things (e.g. Pickup)
+            if not isinstance(thing, Monster) and key in _MONSTER_ONLY_KEYS: continue
             # Skip these - we handle them specially for Pickup
             if is_pickup and key in ['key_name', 'custom_sprite', 'respawns', 'respawn_time']: continue
 
