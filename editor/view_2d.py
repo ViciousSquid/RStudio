@@ -866,6 +866,24 @@ class View2D(QWidget):
                     radius = thing.get_radius() * self.zoom_factor
                     painter.drawEllipse(s_pos, radius, radius)
 
+                # 1b. Draw Monster Sight Radius
+                if isinstance(thing, Monster) and getattr(self.editor, '_sight_preview_thing', None) is thing:
+                    sight = thing.properties.get('sight', 300)
+                    sight_px = sight * self.zoom_factor
+                    # Translucent fill
+                    painter.setBrush(QBrush(QColor(255, 80, 40, 25)))
+                    # Dashed orange-red border
+                    painter.setPen(QPen(QColor(255, 100, 40, 200), 1, Qt.DashLine))
+                    painter.drawEllipse(s_pos, sight_px, sight_px)
+                    # Distance label at right-hand edge of the circle
+                    painter.save()
+                    painter.setPen(QPen(QColor(255, 140, 80)))
+                    font = QFont()
+                    font.setPointSize(8)
+                    painter.setFont(font)
+                    painter.drawText(QPointF(s_pos.x() + sight_px + 4, s_pos.y() + 4), f"{sight} u")
+                    painter.restore()
+
                 # 2. Draw Sprite
                 if hasattr(thing, 'get_icon_pixmap'):
                     pixmap = thing.get_icon_pixmap()

@@ -474,7 +474,7 @@ class PropertyEditor(QWidget):
         damage_spin = QSpinBox()
         damage_spin.setRange(1, 1000)
         damage_spin.setValue(brush.get('hurt_amount', 10))
-        damage_spin.valueChanged.connect(lambda v: self.update_object_prop('hurt_amount', v))
+        damage_spin.editingFinished.connect(lambda w=damage_spin: self.update_object_prop('hurt_amount', w.value()))
         damage_amount_layout.addWidget(damage_spin)
         damage_amount_layout.addStretch()
         damage_layout.addLayout(damage_amount_layout)
@@ -1428,7 +1428,8 @@ class PropertyEditor(QWidget):
         self._pickup_sprite_widgets = []
         
         # Keys that only make sense on Monster entities
-        _MONSTER_ONLY_KEYS = {'awake', 'damage', 'health', 'monster_type', 'triggered', 'wake_on_sight'}
+        _MONSTER_ONLY_KEYS = {'awake', 'damage', 'health', 'monster_type',
+                               'trigger', 'wake_when_see_player', 'dead', 'non_hostile', 'sight'}
 
         for key, value in sorted(thing.properties.items()):
             if key == 'name': continue
@@ -1438,6 +1439,8 @@ class PropertyEditor(QWidget):
             if isinstance(thing, Model) and key in ['model_path', 'scale', 'rotation']: continue
             # Skip Monster-only properties on non-Monster Things (e.g. Pickup)
             if not isinstance(thing, Monster) and key in _MONSTER_ONLY_KEYS: continue
+            # Monster behaviour flags are rendered in the dedicated Behaviour Flags group below
+            if isinstance(thing, Monster) and key in ('trigger', 'wake_when_see_player', 'dead', 'non_hostile'): continue
             # Skip these - we handle them specially for Pickup
             if is_pickup and key in ['key_name', 'custom_sprite', 'respawns', 'respawn_time']: continue
 
@@ -1514,7 +1517,7 @@ class PropertyEditor(QWidget):
                 widget = QSpinBox()
                 widget.setRange(-99999, 99999)
                 widget.setValue(value)
-                widget.valueChanged.connect(lambda v, k=key: self.update_object_prop(k, v))
+                widget.editingFinished.connect(lambda w=widget, k=key: self.update_object_prop(k, w.value()))
                 layout.addRow(label, widget)
                 self._pickup_value_widgets.append((label, widget))
                 # Hide if currently a key
@@ -1531,7 +1534,7 @@ class PropertyEditor(QWidget):
                 widget = QSpinBox()
                 widget.setRange(-99999, 99999)
                 widget.setValue(value)
-                widget.valueChanged.connect(lambda v, k=key: self.update_object_prop(k, v))
+                widget.editingFinished.connect(lambda w=widget, k=key: self.update_object_prop(k, w.value()))
                 layout.addRow(label_text, widget)
             elif isinstance(value, float):
                 widget = QLineEdit(str(value))
@@ -1597,7 +1600,7 @@ class PropertyEditor(QWidget):
             self.respawn_time_spin.setRange(0.1, 9999.0)
             self.respawn_time_spin.setValue(respawn_time)
             self.respawn_time_spin.setSuffix(" sec")
-            self.respawn_time_spin.valueChanged.connect(lambda v: self.update_object_prop('respawn_time', v))
+            self.respawn_time_spin.editingFinished.connect(lambda: self.update_object_prop('respawn_time', self.respawn_time_spin.value()))
             
             # Show/hide respawn time based on checkbox
             self.respawn_time_label.setVisible(respawns)
@@ -1612,6 +1615,122 @@ class PropertyEditor(QWidget):
         
         content_layout.addLayout(layout)
         
+        # === MONSTER BEHAVIOUR FLAGS ===
+        if isinstance(thing, Monster):
+            # Ensure all flag properties exist with sensible defaults
+            thing.properties.setdefault('sight', 300)
+            thing.properties.setdefault('trigger', False)
+            thing.properties.setdefault('wake_when_see_player', True)
+            thing.properties.setdefault('dead', False)
+            thing.properties.setdefault('non_hostile', False)
+
+            _group_style = """
+                QGroupBox {
+                    font-weight: bold;
+                    color: #F08000;
+                    border: 1px solid #F08000;
+                    border-radius: 4px;
+                    margin-top: 12px;
+                    padding-top: 8px;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    subcontrol-position: top left;
+                    left: 8px;
+                    padding: 0 4px;
+                    background-color: #2b3d3b;
+                }
+            """
+
+            # --- AI group (sight distance + visualise toggle) ---
+            ai_group = QGroupBox("AI")
+            ai_group.setStyleSheet(_group_style)
+            ai_form = QFormLayout(ai_group)
+            ai_form.setSpacing(6)
+            ai_form.setContentsMargins(8, 8, 8, 8)
+
+            sight_row = QWidget()
+            sight_row_layout = QHBoxLayout(sight_row)
+            sight_row_layout.setContentsMargins(0, 0, 0, 0)
+            sight_row_layout.setSpacing(6)
+
+            sight_spin = QSpinBox()
+            sight_spin.setRange(0, 9999)
+            sight_spin.setValue(thing.properties.get('sight', 300))
+            sight_spin.setSuffix(" u")
+            sight_spin.setToolTip("Distance (in world units) at which this monster detects the player")
+            self._widgets['monster_sight_spin'] = sight_spin
+
+            sight_preview_btn = QToolButton()
+            sight_preview_btn.setText("👁")
+            sight_preview_btn.setCheckable(True)
+            sight_preview_btn.setChecked(
+                getattr(self.editor, '_sight_preview_thing', None) is thing)
+            sight_preview_btn.setToolTip("Visualise sight radius in viewport")
+            sight_preview_btn.setStyleSheet("""
+                QToolButton {
+                    background-color: #425f5d;
+                    color: white;
+                    border-radius: 4px;
+                    padding: 3px 8px;
+                    font-size: 14px;
+                    border: 1px solid #555;
+                }
+                QToolButton:checked { background-color: #F08000; border-color: #F08000; }
+                QToolButton:hover   { background-color: #5a7a82; }
+            """)
+            self._widgets['monster_sight_preview_btn'] = sight_preview_btn
+
+            def _on_sight_changed(v, _thing=thing):
+                # Write directly — no panel rebuild, no focus steal
+                _thing.properties['sight'] = v
+                if hasattr(self.editor, 'mark_dirty'):
+                    self.editor.mark_dirty()
+                if getattr(self.editor, '_sight_preview_thing', None) is _thing:
+                    self._repaint_viewport()
+
+            def _on_sight_preview_toggled(checked, _thing=thing):
+                self.editor._sight_preview_thing = _thing if checked else None
+                self._repaint_viewport()
+
+            sight_spin.valueChanged.connect(_on_sight_changed)
+            sight_preview_btn.toggled.connect(_on_sight_preview_toggled)
+
+            sight_row_layout.addWidget(sight_spin)
+            sight_row_layout.addWidget(sight_preview_btn)
+            sight_row_layout.addStretch()
+            ai_form.addRow("Sight:", sight_row)
+
+            content_layout.addWidget(ai_group)
+
+            # --- Behaviour Flags group ---
+            flags_group = QGroupBox("Behaviour Flags")
+            flags_group.setStyleSheet(_group_style)
+            flags_layout = QVBoxLayout(flags_group)
+            flags_layout.setSpacing(6)
+
+            _flag_defs = [
+                ('trigger',              'Trigger',
+                 'Monster starts dormant — must be woken via an I/O input'),
+                ('wake_when_see_player', 'Wake when sees player',
+                 'Monster wakes automatically when the player enters its sight range'),
+                ('dead',                 'Dead',
+                 'Monster is placed in a dead/inactive state at level start'),
+                ('non_hostile',          'Non-hostile',
+                 'Monster will not attack the player (passive / civilian)'),
+            ]
+
+            for prop_key, label_text, tooltip in _flag_defs:
+                cb = QCheckBox(label_text)
+                cb.setStyleSheet(self._checkbox_style())
+                cb.setChecked(thing.properties.get(prop_key, False))
+                cb.setToolTip(tooltip)
+                cb.toggled.connect(lambda checked, k=prop_key: self.update_object_prop(k, checked))
+                flags_layout.addWidget(cb)
+                self._widgets[f'monster_flag_{prop_key}'] = cb
+
+            content_layout.addWidget(flags_group)
+
         # === TAB WIDGET FOR I/O (if available) ===
         if IO_AVAILABLE:
             entity_type = get_entity_type_for_io(thing)
@@ -1633,6 +1752,20 @@ class PropertyEditor(QWidget):
         content_layout.addStretch()
         scroll.setWidget(content_widget)
         self.main_layout.addWidget(scroll)
+
+    def _repaint_viewport(self):
+        """Request a repaint of all viewports without rebuilding the property panel."""
+        # 3D viewport
+        for attr in ('gl_widget', 'viewport', 'canvas', 'render_widget', 'opengl_widget', 'view_3d'):
+            widget = getattr(self.editor, attr, None)
+            if widget is not None:
+                widget.update()
+                break
+        # 2D views
+        for attr in ('view_top', 'view_front', 'view_side', 'view_2d'):
+            widget = getattr(self.editor, attr, None)
+            if widget is not None:
+                widget.update()
 
     def on_respawn_toggled(self, state):
         """Handle respawn checkbox toggle."""
