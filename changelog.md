@@ -1,7 +1,6 @@
 ### v1.2.0.0
 
-* NEW: Monster entity
-* 
+* NEW: Monster entity (work in progress)
 
 ### v1.1.0.0 MILESTONE RELEASE
 
