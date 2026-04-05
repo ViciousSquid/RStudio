@@ -82,7 +82,7 @@ class QtGameView(QOpenGLWidget):
         
         self.logic_thread: Optional[LogicThread] = None
         self.use_threading = True 
-        self._thread_started = False  # <--- THIS WAS MISSING causing the error
+        self._thread_started = False
 
         # Face Mode Initialization
         self.face_mode_active = False
@@ -168,7 +168,6 @@ class QtGameView(QOpenGLWidget):
         for f in os.listdir(sound_dir):
             if f.lower().endswith(('.wav', '.mp3')):
                 full_path = os.path.join(sound_dir, f)
-                # Create pool for this file
                 self._preload_sound_file(f, full_path)
                 count += 1
         print(f"Preloaded {count} sound files.")
@@ -188,10 +187,8 @@ class QtGameView(QOpenGLWidget):
 
     def _get_sound_instance(self, name):
         """Retrieve an available sound instance from the pool."""
-        # Handle full paths by stripping directory
         clean_name = os.path.basename(name)
         
-        # Lazy load if not found (e.g. added during runtime or missed)
         if clean_name not in self.sound_pool:
             path = os.path.join(os.getcwd(), 'assets', 'sounds', clean_name)
             if os.path.exists(path):
@@ -201,13 +198,12 @@ class QtGameView(QOpenGLWidget):
         
         pool = self.sound_pool[clean_name]
         
-        # 1. Find an instance that isn't playing
+        # Find an instance that isn't playing
         for effect in pool:
             if not effect.isPlaying():
                 return effect
         
-        # 2. If all are playing, create a new one using the same source (efficient)
-        #    and add it to the pool for future use.
+        # All are playing — grow the pool
         if pool:
             source_url = pool[0].source()
             new_effect = QSoundEffect(self)
@@ -223,7 +219,6 @@ class QtGameView(QOpenGLWidget):
             pass
         except: pass
 
-        # Pass config to renderer for ARM mode and shadow settings
         config = getattr(self.editor, 'config', None)
         self.renderer = Renderer(self.load_texture, self.grid_size, self.world_size, config)
         self.set_cull_distance(self.cull_distance)
@@ -236,7 +231,6 @@ class QtGameView(QOpenGLWidget):
         self._start_logic_thread()
         self._init_debug_resources()
 
-        # Show the debug console immediately after loading finishes.
         if hasattr(self, 'debug_console_window'):
             QTimer.singleShot(1000, self.debug_console_window.show)
 
@@ -338,7 +332,6 @@ class QtGameView(QOpenGLWidget):
             return
 
         while self.game_state.sound_queue:
-            # Pop the next sound request
             request = self.game_state.sound_queue.pop(0)
             sound_file = request.get('file')
             volume = request.get('volume', 1.0)
@@ -346,15 +339,11 @@ class QtGameView(QOpenGLWidget):
             if not sound_file:
                 continue
 
-            # Retrieve preloaded instance from pool
             effect = self._get_sound_instance(sound_file)
             
             if effect:
                 effect.setVolume(volume)
                 effect.play()
-            else:
-                # Debug only: warn if sound missing
-                pass
 
 
     def paintGL(self):
@@ -391,7 +380,6 @@ class QtGameView(QOpenGLWidget):
         
         self.projection_matrix = perspective_projection(self.camera.fov, self._cached_aspect_ratio, 0.1, 10000.0)
 
-        # Update matrix pointers for raw OpenGL calls
         self._proj_ptr = glm.value_ptr(self.projection_matrix)
         self._view_ptr = glm.value_ptr(self.view_matrix)
 
@@ -454,26 +442,22 @@ class QtGameView(QOpenGLWidget):
             
         # Draw Face Mode UI Text
         if self.face_mode_active:
-            # Fonts
             font_top = QFont("Arial", 14, QFont.Bold) 
             font_bot = QFont("Arial", 10, QFont.Bold)
             
             msg_top = "Select a FACE for texturing"
             msg_bot = "Press ESC to cancel"
             
-            # Metrics for Top Line
             painter.setFont(font_top)
             mt = painter.fontMetrics()
             wt = mt.horizontalAdvance(msg_top)
             ht = mt.height()
             
-            # Metrics for Bottom Line
             painter.setFont(font_bot)
             mb = painter.fontMetrics()
             wb = mb.horizontalAdvance(msg_bot)
             hb = mb.height()
             
-            # Layout
             cx = self.width() // 2
             margin_bottom = 30
             spacing = 5
@@ -487,21 +471,16 @@ class QtGameView(QOpenGLWidget):
             rect_x = cx - box_w // 2
             rect_y = self.height() - box_h - margin_bottom
             
-            # Background
             painter.setPen(Qt.NoPen)
             painter.setBrush(QColor(0, 0, 0, 180))
             painter.drawRoundedRect(rect_x, rect_y, box_w, box_h, 8, 8)
             
-            # Draw Text
             painter.setPen(QColor(255, 255, 255))
             
-            # Draw Top Line
             painter.setFont(font_top)
-            # Center horizontally relative to box, vertical offset includes padding + ascent
             painter.drawText(rect_x + (box_w - wt)//2, rect_y + padding_y + mt.ascent(), msg_top)
             
-            # Draw Bottom Line
-            painter.setPen(QColor(200, 200, 200)) # Slightly dimmer
+            painter.setPen(QColor(200, 200, 200))
             painter.setFont(font_bot)
             painter.drawText(rect_x + (box_w - wb)//2, rect_y + padding_y + ht + spacing + mb.ascent(), msg_bot)
 
@@ -514,33 +493,25 @@ class QtGameView(QOpenGLWidget):
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         
-        # Use Simple shader (Uniform Color)
         shader = self.renderer.shaders['simple']
         uniforms = self.renderer.uniforms['simple']
         gl.glUseProgram(shader)
         
-        # Set Matrices
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
         
-        # We will draw small cubes or points. 
-        # Using a small scale on the cube VAO is easiest as we already have it.
         gl.glBindVertexArray(self.renderer.vaos['cube'])
         
         for mark in marks:
             pos = mark['pos']
             alpha = mark['alpha']
             
-            # Simple Black Dot
             gl.glUniform3f(uniforms['color'], 0.0, 0.0, 0.0) 
             
-            # Calculate transform: Translate to hit point, Scale down to a dot
             mat = glm.translate(glm.mat4(1.0), glm.vec3(pos[0], pos[1], pos[2]))
-            mat = glm.scale(mat, glm.vec3(2.0, 2.0, 2.0)) # 2 unit size dot
+            mat = glm.scale(mat, glm.vec3(2.0, 2.0, 2.0))
             
             gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
-            
-            # Draw
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
             
         gl.glBindVertexArray(0)
@@ -819,14 +790,60 @@ class QtGameView(QOpenGLWidget):
         if self.renderer:
             self.renderer.set_sprite_textures(self.sprite_textures)
     
+    def _pixmap_to_texture(self, pixmap):
+        """Convert QPixmap to OpenGL texture ID."""
+        from PyQt5.QtGui import QImage
+        image = pixmap.toImage().convertToFormat(QImage.Format_RGBA8888)
+        width, height = image.width(), image.height()
+        data = image.bits().asstring(image.byteCount())
+        tex_id = gl.glGenTextures(1)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+        gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, width, height, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, data)
+        return tex_id
+
     def update_instance_textures(self, things):
-        """Update per-instance textures for special entities (LogicGate, Pickup, LevelChanger, etc.)"""
+        """Update per-instance textures for special entities (Monster, LogicGate, Pickup, LevelChanger)."""
         if not self.renderer:
             return
 
         instance_textures = {}
 
         for thing in things:
+            # === MONSTER ===
+            # Three possible states: alive (idle), shooting, dead.
+            # The tex_key encodes all three so each sprite is cached independently.
+            if isinstance(thing, Monster):
+                mtype       = thing.properties.get('monster_type', 'human')
+                is_dead     = thing.properties.get('dead',        False)
+                is_shooting = thing.properties.get('is_shooting', False)
+
+                if is_dead:
+                    state_key = 'dead'
+                elif is_shooting:
+                    state_key = 'shooting'
+                else:
+                    state_key = 'alive'
+
+                tex_key = f"monster_{mtype}_{state_key}"
+
+                if tex_key not in self.sprite_textures:
+                    # Ask the entity for its current sprite path, then load it
+                    sprite_path = thing.get_sprite_path()
+                    rel_path = sprite_path.replace('assets/', '')
+                    dirname  = os.path.dirname(rel_path)   # e.g. "sprites/monsters/human"
+                    filename = os.path.basename(rel_path)  # e.g. "shoot.png"
+                    tid = self.load_texture(filename, dirname)
+                    if tid:
+                        self.sprite_textures[tex_key] = tid
+
+                if tex_key in self.sprite_textures:
+                    instance_textures[id(thing)] = self.sprite_textures[tex_key]
+                continue
+
             # === LOGIC GATE ===
             if isinstance(thing, LogicGate):
                 l_type = thing.properties.get('logic_type', 'and').lower()
@@ -919,112 +936,106 @@ class QtGameView(QOpenGLWidget):
         if isinstance(self.editor.state.selected_object, dict):
             self.editor.state.selected_object['pos'] = snapped
         else:
-            obj = self.editor.state.selected_object
-            if hasattr(obj, 'pos'): obj.pos = snapped
-        if self.logic_thread and self.logic_thread.is_alive() and type(self.editor.state.selected_object).__name__ == 'Light':
-            self.game_state.request_swap()
-        self.editor.update_all_ui()
+            self.editor.state.selected_object.pos = snapped
+        self.update()
 
-    def get_ray_from_mouse(self, x, y):
-        win_x, win_y = float(x), float(self.height() - y)
-        vp = glm.vec4(0, 0, self.width(), self.height())
-        near = glm.unProject(glm.vec3(win_x, win_y, 0.0), self.view_matrix, self.projection_matrix, vp)
-        far = glm.unProject(glm.vec3(win_x, win_y, 1.0), self.view_matrix, self.projection_matrix, vp)
-        return near, glm.normalize(far - near)
+    def get_ray_from_mouse(self, mx, my):
+        w, h = self.width(), self.height()
+        if w == 0 or h == 0: return glm.vec3(0), glm.vec3(0, 0, 1)
+        ndc_x = (2.0 * mx / w) - 1.0
+        ndc_y = 1.0 - (2.0 * my / h)
+        clip = glm.vec4(ndc_x, ndc_y, -1.0, 1.0)
+        inv_proj = glm.inverse(self.projection_matrix)
+        eye = inv_proj * clip
+        eye = glm.vec4(eye.x, eye.y, -1.0, 0.0)
+        inv_view = glm.inverse(self.view_matrix)
+        world = inv_view * eye
+        ray_dir = glm.normalize(glm.vec3(world))
+        if self.use_threading and self.logic_thread:
+            ec = self.logic_thread.get_editor_camera()
+            ray_origin = ec.pos
+        else:
+            ray_origin = self.camera.pos
+        return ray_origin, ray_dir
 
-    def intersect_ray_with_axis(self, ray_origin, ray_dir, axis_origin, axis_dir):
-        cross = glm.cross(axis_dir, ray_dir)
-        denom = glm.dot(cross, cross)
-        if abs(denom) < 1e-6: return None, float('inf')
-        t = glm.dot(glm.cross(ray_origin - axis_origin, ray_dir), cross) / denom
-        pt = axis_origin + t * axis_dir
-        t_ray = glm.dot(pt - ray_origin, ray_dir)
-        pt_ray = ray_origin + t_ray * ray_dir
-        return pt, glm.distance(pt, pt_ray)
-
-    def intersect_ray_aabb(self, ray_origin, ray_dir, box_min, box_max):
-        t_min, t_max = 0.0, float('inf')
-        for i in range(3):
-            if abs(ray_dir[i]) < 1e-8:
-                if ray_origin[i] < box_min[i] or ray_origin[i] > box_max[i]: return False, float('inf')
-            else:
-                t1 = (box_min[i] - ray_origin[i]) / ray_dir[i]
-                t2 = (box_max[i] - ray_origin[i]) / ray_dir[i]
-                if t1 > t2: t1, t2 = t2, t1
-                t_min = max(t_min, t1)
-                t_max = min(t_max, t2)
-                if t_min > t_max: return False, float('inf')
-        return True, t_min
-    
-    def intersect_ray_sphere(self, ray_origin, ray_dir, center, radius):
-        oc = ray_origin - center
-        a = glm.dot(ray_dir, ray_dir)
-        b = 2.0 * glm.dot(oc, ray_dir)
-        c = glm.dot(oc, oc) - radius * radius
-        disc = b * b - 4 * a * c
-        if disc < 0: return False, float('inf')
-        t = (-b - np.sqrt(disc)) / (2.0 * a)
-        if t < 0: t = (-b + np.sqrt(disc)) / (2.0 * a)
-        return (True, t) if t >= 0 else (False, float('inf'))
-
-    def get_object_at_3d(self, mouse_x, mouse_y):
-        ray_origin, ray_dir = self.get_ray_from_mouse(mouse_x, mouse_y)
-        closest_thing, closest_thing_t = None, float('inf')
-        closest_brush, closest_brush_t = None, float('inf')
-        for thing in self.editor.state.things:
-            if thing.properties.get('hidden', False): continue
-            hit, t = self.intersect_ray_sphere(ray_origin, ray_dir, glm.vec3(*thing.pos), 24.0)
-            if hit and t < closest_thing_t:
-                closest_thing_t = t
-                closest_thing = thing
+    def get_object_at_3d(self, mx, my):
+        ray_o, ray_d = self.get_ray_from_mouse(mx, my)
+        best_obj, best_t = None, float('inf')
         for brush in self.editor.state.brushes:
-            if brush.get('hidden', False): continue
-            pos, size = brush['pos'], brush['size']
-            h = [s/2 for s in size]
-            bmin = glm.vec3(pos[0]-h[0], pos[1]-h[1], pos[2]-h[2])
-            bmax = glm.vec3(pos[0]+h[0], pos[1]+h[1], pos[2]+h[2])
-            hit, t = self.intersect_ray_aabb(ray_origin, ray_dir, bmin, bmax)
-            if hit and t < closest_brush_t:
-                closest_brush_t = t
-                closest_brush = brush
-        return closest_thing if closest_thing else closest_brush
-
-    def get_brush_face_at_coords(self, x, y):
-        """Raycasts to find the closest brush face under the mouse coordinates."""
-        ray_o, ray_d = self.get_ray_from_mouse(x, y)
-        best_t = float('inf')
-        best_hit = None # (brush, face_name)
-        
-        for brush in self.editor.state.brushes:
-            if brush.get('hidden', False): continue
-            
-            # 1. AABB intersection
-            pos, size = glm.vec3(brush['pos']), glm.vec3(brush['size'])
-            bmin, bmax = pos - size/2.0, pos + size/2.0
-            hit_box, t_box = self.intersect_ray_aabb(ray_o, ray_d, bmin, bmax)
-            
-            if hit_box and t_box < best_t:
-                # 2. Determine which face was hit
-                hit_pt = ray_o + ray_d * t_box
-                local = hit_pt - pos
-                half = size * 0.5
-                
-                # Normalize 0..1 relative to half-extents
-                # Add small epsilon to avoid div/0
-                rel = abs(local) / (half + 0.0001) 
-                
-                # The component closest to 1.0 indicates the axis of the face
-                face = 'north'
-                if rel.x > rel.y and rel.x > rel.z:
-                    face = 'east' if local.x > 0 else 'west'
-                elif rel.y > rel.x and rel.y > rel.z:
-                    face = 'top' if local.y > 0 else 'down'
+            pos = glm.vec3(brush['pos'])
+            size = glm.vec3(brush['size'])
+            bmin, bmax = pos - size/2, pos + size/2
+            tmin, tmax = 0.0, float('inf')
+            hit = True
+            for i in range(3):
+                if abs(ray_d[i]) < 1e-6:
+                    if ray_o[i] < bmin[i] or ray_o[i] > bmax[i]: hit = False; break
                 else:
-                    face = 'north' if local.z > 0 else 'south'
-                
-                best_t = t_box
-                best_hit = (brush, face)
-                
+                    t1 = (bmin[i] - ray_o[i]) / ray_d[i]
+                    t2 = (bmax[i] - ray_o[i]) / ray_d[i]
+                    if t1 > t2: t1, t2 = t2, t1
+                    tmin = max(tmin, t1)
+                    tmax = min(tmax, t2)
+                    if tmin > tmax: hit = False; break
+            if hit and tmin < best_t: best_t = tmin; best_obj = brush
+        for thing in self.editor.state.things:
+            tp = glm.vec3(thing.pos)
+            radius = 32.0
+            oc = ray_o - tp
+            a = glm.dot(ray_d, ray_d)
+            b = 2.0 * glm.dot(oc, ray_d)
+            c = glm.dot(oc, oc) - radius * radius
+            disc = b * b - 4 * a * c
+            if disc >= 0:
+                t = (-b - disc**0.5) / (2.0 * a)
+                if 0 < t < best_t: best_t = t; best_obj = thing
+        return best_obj
+
+    def intersect_ray_with_axis(self, ray_o, ray_d, obj_pos, axis_vec):
+        perp = glm.cross(ray_d, axis_vec)
+        denom = glm.dot(perp, perp)
+        if denom < 1e-6: return None, float('inf')
+        diff = obj_pos - ray_o
+        t = glm.dot(glm.cross(diff, axis_vec), perp) / denom
+        closest = ray_o + ray_d * t
+        dist = glm.distance(closest, obj_pos + axis_vec * glm.dot(closest - obj_pos, axis_vec))
+        return closest, dist
+
+    def get_brush_face_at_coords(self, mx, my):
+        ray_o, ray_d = self.get_ray_from_mouse(mx, my)
+        best_t = float('inf')
+        best_hit = None
+        for brush in self.editor.state.brushes:
+            if brush.get('hidden', False): continue
+            pos = glm.vec3(brush['pos'])
+            size = glm.vec3(brush['size'])
+            bmin, bmax = pos - size/2, pos + size/2
+            tmin_b, tmax_b = 0.0, float('inf')
+            hit = True
+            for i in range(3):
+                if abs(ray_d[i]) < 1e-6:
+                    if ray_o[i] < bmin[i] or ray_o[i] > bmax[i]: hit = False; break
+                else:
+                    t1 = (bmin[i] - ray_o[i]) / ray_d[i]
+                    t2 = (bmax[i] - ray_o[i]) / ray_d[i]
+                    if t1 > t2: t1, t2 = t2, t1
+                    tmin_b = max(tmin_b, t1)
+                    tmax_b = min(tmax_b, t2)
+                    if tmin_b > tmax_b: hit = False; break
+            if not hit or tmin_b >= best_t: continue
+            t_box = tmin_b
+            hit_pt = ray_o + ray_d * t_box
+            local = hit_pt - pos
+            rel = glm.abs(local) / size
+            face = 'north'
+            if rel.x > rel.y and rel.x > rel.z:
+                face = 'east' if local.x > 0 else 'west'
+            elif rel.y > rel.x and rel.y > rel.z:
+                face = 'top' if local.y > 0 else 'down'
+            else:
+                face = 'north' if local.z > 0 else 'south'
+            best_t = t_box
+            best_hit = (brush, face)
         return best_hit
 
     def mousePressEvent(self, event):
@@ -1053,7 +1064,7 @@ class QtGameView(QOpenGLWidget):
                 self.editor.apply_texture_to_specific_face(brush, face)
             return
 
-        # Legacy Face Selection (Ctrl+Click) - Keep compatibility
+        # Legacy Face Selection (Ctrl+Click)
         if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ControlModifier and not self.play_mode:
             face = self.get_face_at(event.pos())
             if face: self.editor.selected_face = face; self.update(); return
@@ -1091,7 +1102,6 @@ class QtGameView(QOpenGLWidget):
                     self.setCursor(Qt.ClosedHandCursor)
                     return
         
-        # Right click enables mouselook (works in Face Mode because face logic only traps LeftButton)
         if not self.play_mode and event.button() == Qt.RightButton:
             self.mouselook_active = True
             self.last_mouse_pos = event.pos()
@@ -1103,14 +1113,13 @@ class QtGameView(QOpenGLWidget):
         # SysMon title-bar dragging
         if self.dragging_sysmon:
             new_pos = event.pos() - self.sysmon_drag_offset
-            # Keep it inside the window with a small margin
             new_x = max(5, min(new_pos.x(), self.width() - self.debug_window_rect.width() - 5))
             new_y = max(5, min(new_pos.y(), self.height() - 120))
             self.debug_window_rect.moveTo(new_x, new_y)
             self.update()
             return
-        # 1. Handle Mouselook (Priority over Face Hover)
-        # This ensures we can look around while holding RMB even in face mode
+
+        # Mouselook (priority over face hover)
         if self.mouselook_active:
             dx, dy = event.x() - self.last_mouse_pos.x(), event.y() - self.last_mouse_pos.y()
             if self.use_threading and self.logic_thread: self.game_state.set_mouse_delta(float(dx), float(dy))
@@ -1121,7 +1130,7 @@ class QtGameView(QOpenGLWidget):
             self.editor.update_views()
             return
 
-        # 2. Handle Play Mode Mouse
+        # Play Mode Mouse
         if self.play_mode:
             if self.debug_mode_active: return
             cp = event.pos()
@@ -1133,7 +1142,7 @@ class QtGameView(QOpenGLWidget):
             self.last_mouse_pos = self.mapFromGlobal(center)
             return
 
-        # 3. Handle Gizmo Drag
+        # Gizmo Drag
         if self.is_dragging_gizmo:
             ray_o, ray_d = self.get_ray_from_mouse(event.x(), event.y())
             axis_vec = {'x': glm.vec3(1,0,0), 'y': glm.vec3(0,1,0), 'z': glm.vec3(0,0,1)}[self.gizmo_drag_axis]
@@ -1143,10 +1152,10 @@ class QtGameView(QOpenGLWidget):
                 self.set_selected_object_pos(self.gizmo_object_start_pos + diff)
             return
 
-        # 4. Handle Face Mode Hover (Lowest priority for movement)
+        # Face Mode Hover
         if self.face_mode_active:
             self.hovered_face_info = self.get_brush_face_at_coords(event.x(), event.y())
-            self.update() # Force redraw to show highlight
+            self.update()
             return
         
         super().mouseMoveEvent(event)

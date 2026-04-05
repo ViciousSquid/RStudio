@@ -1559,7 +1559,7 @@ void main() {
             if brush.get('hidden'): 
                 continue
             if brush.get('is_water', False) or brush.get('shader') == 'Water' or \
-               any('water' in (t or '').lower() for t in brush.get('textures', {}).values()): 
+            any('water' in (t or '').lower() for t in brush.get('textures', {}).values()): 
                 water.append(brush)
             elif brush.get('is_fog') or brush.get('shader') == 'Fog': 
                 fog.append(brush)
@@ -1574,13 +1574,15 @@ void main() {
         if not is_play:
             sprites = [t for t in things if isinstance(t, Thing)]
         else:
-            from editor.things import Pickup
+            from editor.things import Pickup, Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger
             for t in things:
                 if isinstance(t, Thing):
                     if isinstance(t, Pickup):
                         sprites.append(t)
+                    elif isinstance(t, (Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger)):
+                        sprites.append(t)      # Always visible in play mode
                     elif show_sprites:
-                        sprites.append(t)
+                        sprites.append(t)      # Optional sprites (lights, speakers, etc.)
         
         return opaque, transparent, sprites, fog, water, glass
 
@@ -1743,7 +1745,7 @@ void main() {
         gl.glBindVertexArray(0)
 
     def draw_sprites(self, projection, view, things_to_draw, sprite_textures, instance_textures=None):
-        if not things_to_draw or 'sprite' not in self.shaders: 
+        if not things_to_draw or 'sprite' not in self.shaders:
             return
         shader, uniforms = self.shaders['sprite'], self.uniforms['sprite']
         gl.glUseProgram(shader)
@@ -1754,6 +1756,9 @@ void main() {
         pos_loc, size_loc = uniforms['sprite_pos_world'], uniforms['sprite_size']
         gl.glBindVertexArray(self.vaos['sprite'])
         current_tex = None
+
+        from editor.things import Monster  # import at top if needed
+
         for thing in things_to_draw:
             tex_id = None
             if instance_textures:
@@ -1761,13 +1766,21 @@ void main() {
             if tex_id is None:
                 tex_id = sprite_textures.get(thing.__class__.__name__)
             if tex_id:
-                if tex_id != current_tex: 
+                if tex_id != current_tex:
                     gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                     current_tex = tex_id
                 gl.glUniform3fv(pos_loc, 1, thing.pos)
-                gl.glUniform2f(size_loc, 16.0 if isinstance(thing, Light) else 32.0, 
-                              16.0 if isinstance(thing, Light) else 32.0)
+
+                # Set sprite size based on thing type
+                if isinstance(thing, Monster):
+                    gl.glUniform2f(size_loc, 128.0, 128.0)   # large billboard
+                elif isinstance(thing, Light):
+                    gl.glUniform2f(size_loc, 16.0, 16.0)
+                else:
+                    gl.glUniform2f(size_loc, 32.0, 32.0)
+
                 gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
+
         gl.glBindVertexArray(0)
 
     # =========================================================================

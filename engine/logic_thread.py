@@ -7,6 +7,7 @@ This thread runs game logic at a fixed timestep (60 Hz), handling:
 - I/O event dispatching
 - Mover and door animations
 - Pickup collection
+- Monster AI (sight detection, shooting)
 """
 
 import threading
@@ -22,11 +23,12 @@ from .camera import Camera
 
 # Import Thing subclasses for type checking
 try:
-    from editor.things import Speaker, Pickup, Light
+    from editor.things import Speaker, Pickup, Light, Monster as MonsterThing
 except ImportError:
     Speaker = None
     Pickup = None
     Light = None
+    MonsterThing = None
 
 # Import I/O system
 try:
@@ -42,12 +44,17 @@ except ImportError as e:
     print(f"CRITICAL ERROR: I/O SYSTEM FAILED TO LOAD")
     print(f"Error details: {e}")
     print(f"################################################")
-    # Optional: Print full traceback to see exactly where it failed
     import traceback
     traceback.print_exc()
-    
     IO_AVAILABLE = False
     IOManager = None
+
+# Monster AI tuning values
+from .monster_constants import (
+    MONSTER_SIGHT_RANGE,
+    MONSTER_SHOOT_INTERVAL,
+    MONSTER_SHOOT_ANIM_TIME,
+)
 
 # Qt key constants (matching PyQt5.QtCore.Qt)
 Key_W = 0x57
@@ -153,6 +160,9 @@ class LogicThread(threading.Thread):
         
         # Active weapon
         self.active_weapon = None
+
+        # Monster AI state  { id(thing): {'shoot_timer': float, 'anim_timer': float} }
+        self.monster_states: Dict[int, Dict[str, float]] = {}
         
         # Performance Monitoring
         self.actual_tps = 0.0
@@ -178,12 +188,10 @@ class LogicThread(threading.Thread):
         if not name:
             return None
         
-        # Check brushes
         for brush in self.brushes:
             if brush.get('name') == name:
                 return brush
         
-        # Check things
         for thing in self.things:
             thing_name = thing.properties.get('name', '')
             if thing_name == name:
@@ -235,6 +243,13 @@ class LogicThread(threading.Thread):
             
             # Reset visual fx
             self.bullet_marks = []
+
+            # Reset monster AI state and clear any leftover shoot flags
+            self.monster_states = {}
+            if MonsterThing:
+                for thing in self.things:
+                    if isinstance(thing, MonsterThing):
+                        thing.properties.pop('is_shooting', None)
             
             # Reset I/O system
             if self.io_manager:
@@ -269,6 +284,13 @@ class LogicThread(threading.Thread):
             self.timer_states = {}
             self.active_weapon = None
             self.bullet_marks = []
+
+            # Reset monster AI state and clear shoot flags from entities
+            self.monster_states = {}
+            if MonsterThing:
+                for thing in self.things:
+                    if isinstance(thing, MonsterThing):
+                        thing.properties.pop('is_shooting', None)
     
     def _fire_player_spawn_outputs(self):
         """Fire OnPlayerSpawn from the active player start."""
@@ -497,11 +519,14 @@ class LogicThread(threading.Thread):
         self._check_pickups()
         self._handle_triggers(use_key)
         
-        # Shooting
+        # Player shooting
         if self.game_state.consume_shot():
             self._handle_shooting()
             
         self._update_bullet_marks()
+
+        # Monster AI
+        self._update_monsters(delta)
 
     # =========================================================================
     # LOGIC TIMER UPDATE
@@ -534,11 +559,8 @@ class LogicThread(threading.Thread):
             state['remaining'] -= delta
             
             if state['remaining'] <= 0:
-                # Fire output
                 if self.io_manager:
                     self.io_manager.fire_output(thing, 'OnTimer')
-                
-                # Reset timer
                 state['remaining'] = state['interval']
 
     # =========================================================================
@@ -557,7 +579,6 @@ class LogicThread(threading.Thread):
             if not brush.get('is_trigger'):
                 continue
             
-            # Skip disabled triggers
             if brush.get('disabled', False):
                 continue
                 
@@ -574,15 +595,12 @@ class LogicThread(threading.Thread):
             if inside:
                 currently_in.add(i)
                 
-                # Player just entered
                 if i not in self.player_in_triggers:
                     self._on_trigger_enter(brush, i)
                 else:
-                    # Still inside - handle continuous triggers
                     if brush.get('trigger_action') == 'hurt':
                         self._process_hurt_trigger(brush, i)
         
-        # Check for exits
         for i in self.player_in_triggers:
             if i not in currently_in:
                 brush = self.brushes[i] if i < len(self.brushes) else None
@@ -595,7 +613,6 @@ class LogicThread(threading.Thread):
         """Called when player enters a trigger."""
         trigger_type = brush.get('trigger_type', 'multiple')
         
-        # Check once triggers
         if trigger_type == 'once' and trigger_id in self.fired_once_triggers:
             return
         
@@ -607,11 +624,9 @@ class LogicThread(threading.Thread):
             self.hurt_trigger_timers[trigger_id] = self.HURT_INTERVAL
             
         elif action == 'target':
-            # Fire I/O outputs (ONLY PATH - no legacy fallback)
             if self.io_manager:
                 self.io_manager.fire_output(brush, 'OnStartTouch')
                 self.io_manager.fire_output(brush, 'OnTrigger')
-            # Legacy fallback code removed
         
         if trigger_type == 'once':
             self.fired_once_triggers.add(trigger_id)
@@ -639,7 +654,6 @@ class LogicThread(threading.Thread):
         """Check for interactive objects in front of the player."""
         self.current_hud_message = ""
         
-        # Door interaction
         found_door_idx = -1
         found_door_brush = None
         reach_distance = 80.0
@@ -694,7 +708,6 @@ class LogicThread(threading.Thread):
                     self._trigger_door_open(found_door_idx, found_door_brush)
             return
 
-        # Pickup interaction
         if Pickup:
             p_pos = glm.vec3(px, py, pz)
             p_forward = glm.vec3(math.sin(self.player.angle), 0, math.cos(self.player.angle))
@@ -727,8 +740,6 @@ class LogicThread(threading.Thread):
             state = self.door_states[door_idx]
             if state['state'] == 'closed':
                 state['state'] = 'opening'
-                
-                # Fire I/O output
                 if self.io_manager and door_brush:
                     self.io_manager.fire_output(door_brush, 'OnOpen')
 
@@ -782,11 +793,9 @@ class LogicThread(threading.Thread):
         pickup.properties['collected'] = True
         self.collected_pickups.add(pickup_id)
         
-        # Fire I/O output
         if self.io_manager:
             self.io_manager.fire_output(pickup, 'OnPickedUp')
         
-        # Handle respawn
         if pickup.properties.get('respawns', False):
             respawn_time = pickup.properties.get('respawn_time', 20.0)
             self.respawn_timers[pickup_id] = respawn_time
@@ -809,8 +818,6 @@ class LogicThread(threading.Thread):
                 if isinstance(thing, Pickup):
                     thing.properties['collected'] = False
                     self.collected_pickups.discard(pickup_id)
-                    
-                    # Fire OnRespawn output
                     if self.io_manager:
                         self.io_manager.fire_output(thing, 'OnRespawn')
     
@@ -853,7 +860,6 @@ class LogicThread(threading.Thread):
                 if state['progress'] >= 1.0:
                     state['progress'] = 1.0
                     state['forward'] = False
-                    # Fire OnFullyOpen
                     if not was_at_end and self.io_manager:
                         self.io_manager.fire_output(brush, 'OnFullyOpen')
             else:
@@ -861,7 +867,6 @@ class LogicThread(threading.Thread):
                 if state['progress'] <= 0.0:
                     state['progress'] = 0.0
                     state['forward'] = True
-                    # Fire OnFullyClosed
                     if not was_at_start and self.io_manager:
                         self.io_manager.fire_output(brush, 'OnFullyClosed')
             
@@ -872,7 +877,6 @@ class LogicThread(threading.Thread):
             offset = direction * distance * eased
             new_pos = original + offset
             
-            # Velocity inheritance for player carrying
             current_pos = np.array(brush['pos'])
             move_delta = new_pos - current_pos
             
@@ -907,7 +911,6 @@ class LogicThread(threading.Thread):
                     state['progress'] = 1.0
                     state['state'] = 'open'
                     state['open_timer'] = open_time
-                    # Fire OnFullyOpen
                     if self.io_manager:
                         self.io_manager.fire_output(brush, 'OnFullyOpen')
                     
@@ -915,7 +918,6 @@ class LogicThread(threading.Thread):
                 state['open_timer'] -= delta
                 if state['open_timer'] <= 0:
                     state['state'] = 'closing'
-                    # Fire OnClose
                     if self.io_manager:
                         self.io_manager.fire_output(brush, 'OnClose')
                     
@@ -924,7 +926,6 @@ class LogicThread(threading.Thread):
                 if state['progress'] <= 0.0:
                     state['progress'] = 0.0
                     state['state'] = 'closed'
-                    # Fire OnFullyClosed
                     if self.io_manager:
                         self.io_manager.fire_output(brush, 'OnFullyClosed')
             
@@ -941,53 +942,106 @@ class LogicThread(threading.Thread):
                 self.player.pos += glm.vec3(move_delta[0], move_delta[1], move_delta[2])
 
     # =========================================================================
-    # SHOOTING
+    # PLAYER SHOOTING
     # =========================================================================
 
     def _handle_shooting(self):
-        """Raycast from player camera."""
         if not self.player or not self.active_weapon:
             return
 
         yaw_rad = self.player.angle
         pitch_rad = self.player.pitch
-        
+
         dir_x = math.sin(yaw_rad) * math.cos(pitch_rad)
         dir_y = math.sin(pitch_rad)
         dir_z = math.cos(yaw_rad) * math.cos(pitch_rad)
-        
-        ray_origin = glm.vec3(self.player.pos.x, 
-                              self.player.pos.y + self.player.camera_height, 
-                              self.player.pos.z)
+
+        ray_origin = glm.vec3(self.player.pos.x,
+                            self.player.pos.y + self.player.camera_height,
+                            self.player.pos.z)
         ray_dir = glm.normalize(glm.vec3(dir_x, dir_y, dir_z))
 
-        closest_hit = None
-        closest_dist = float('inf')
-
+        # --- Brush hit detection ---
+        closest_brush_hit = None
+        closest_brush_dist = float('inf')
         for brush in self.brushes:
-            if (brush.get('is_trigger') or brush.get('hidden') or 
+            if (brush.get('is_trigger') or brush.get('hidden') or
                 brush.get('is_water') or brush.get('is_fog')):
                 continue
-
             pos = glm.vec3(brush['pos'])
             size = glm.vec3(brush['size'])
             min_b = pos - size * 0.5
             max_b = pos + size * 0.5
-
             hit, dist = self._intersect_ray_aabb(ray_origin, ray_dir, min_b, max_b)
-            
-            if hit and dist < closest_dist:
-                closest_dist = dist
-                closest_hit = ray_origin + ray_dir * dist
+            if hit and dist < closest_brush_dist:
+                closest_brush_dist = dist
+                closest_brush_hit = ray_origin + ray_dir * dist
 
-        if closest_hit:
+        # --- Monster hit detection ---
+        closest_monster = None
+        closest_monster_dist = float('inf')
+        from editor.things import Monster
+
+        for thing in self.things:
+            if not isinstance(thing, Monster):
+                continue
+            if thing.properties.get('dead', False) or thing.properties.get('hidden', False):
+                continue
+
+            radius = 64.0
+            center = glm.vec3(thing.pos[0], thing.pos[1] + 64.0, thing.pos[2])
+            oc = ray_origin - center
+            a = glm.dot(ray_dir, ray_dir)
+            b = 2.0 * glm.dot(oc, ray_dir)
+            c = glm.dot(oc, oc) - radius * radius
+            disc = b * b - 4 * a * c
+            if disc >= 0:
+                t = (-b - math.sqrt(disc)) / (2.0 * a)
+                if t >= 0 and t < closest_monster_dist:
+                    if t < closest_brush_dist:
+                        closest_monster_dist = t
+                        closest_monster = thing
+
+        if closest_monster is not None:
+            WEAPON_DAMAGE = 25
+            health_raw = closest_monster.properties.get('health', 100)
+            try:
+                health = int(health_raw)
+            except (ValueError, TypeError):
+                health = 100
+            new_health = health - WEAPON_DAMAGE
+            closest_monster.properties['health'] = new_health
+
+            print(f"[DEBUG] Monster {closest_monster.properties.get('name')} health: {health} -> {new_health}")
+
+            if hasattr(self.game_state, 'sound_queue'):
+                self.game_state.sound_queue.append({
+                    'file': 'hit.wav',
+                    'volume': 1.0,
+                    'entity_id': id(closest_monster)
+                })
+
+            if new_health <= 0:
+                closest_monster.properties['dead'] = True
+                closest_monster.properties.pop('is_shooting', None)
+                if self.io_manager:
+                    self.io_manager.fire_output(closest_monster, 'OnDeath')
+
+            hit_point = ray_origin + ray_dir * closest_monster_dist
             self.bullet_marks.append({
-                'pos': closest_hit,
+                'pos': hit_point,
+                'time': time.perf_counter()
+            })
+            return
+
+        if closest_brush_hit is not None:
+            self.bullet_marks.append({
+                'pos': closest_brush_hit,
                 'time': time.perf_counter()
             })
 
     def _intersect_ray_aabb(self, origin, direction, box_min, box_max):
-        """Ray-AABB intersection."""
+        """Ray-AABB intersection. Returns (hit: bool, distance: float)."""
         t_min = 0.0
         t_max = 10000.0
 
@@ -1017,6 +1071,89 @@ class LogicThread(threading.Thread):
             m for m in self.bullet_marks 
             if (current_time - m['time']) < self.BULLET_FADE_TIME
         ]
+
+    # =========================================================================
+    # MONSTER AI
+    # =========================================================================
+
+    def _update_monsters(self, delta: float):
+        """
+        Monster AI update — runs every play-mode tick.
+
+        Behaviour:
+          - If the player is within MONSTER_SIGHT_RANGE the monster attacks on a
+            MONSTER_SHOOT_INTERVAL cooldown, dealing damage equal to its 'damage'
+            property and queuing a shoot.wav sound request.
+          - While the shot animation timer (MONSTER_SHOOT_ANIM_TIME) is counting
+            down the entity's 'is_shooting' flag is True; the renderer uses this
+            to display shoot.png instead of idle.png.
+          - When the player moves out of range the shoot flag is cleared and
+            timers are frozen so re-engagement feels instant.
+          - Dead or hidden monsters are skipped and their shoot flag is cleared.
+        """
+        if not self.player or not MonsterThing:
+            return
+
+        player_pos = self.player.pos
+
+        for thing in self.things:
+            if not isinstance(thing, MonsterThing):
+                continue
+
+            # Skip dead / hidden / disabled monsters
+            if thing.properties.get('dead', False) or thing.properties.get('hidden', False):
+                thing.properties.pop('is_shooting', None)
+                continue
+            if thing.properties.get('disabled', False):
+                continue
+
+            mid = id(thing)
+            if mid not in self.monster_states:
+                self.monster_states[mid] = {
+                    'shoot_timer': MONSTER_SHOOT_INTERVAL,
+                    'anim_timer':  0.0,
+                }
+
+            state = self.monster_states[mid]
+            thing_pos = glm.vec3(thing.pos)
+            distance = glm.distance(player_pos, thing_pos)
+
+            if distance <= MONSTER_SIGHT_RANGE:
+                # Tick shoot cooldown
+                state['shoot_timer'] -= delta
+
+                if state['shoot_timer'] <= 0.0:
+                    # === FIRE ===
+                    state['shoot_timer'] = MONSTER_SHOOT_INTERVAL
+                    state['anim_timer']  = MONSTER_SHOOT_ANIM_TIME
+
+                    # Damage the player
+                    damage = int(thing.properties.get('damage', 10))
+                    self.player_health = max(0, self.player_health - damage)
+
+                    # Queue shoot sound
+                    if hasattr(self.game_state, 'sound_queue'):
+                        self.game_state.sound_queue.append({
+                            'file': 'shoot.wav',
+                            'volume': 0.6,
+                            'entity_id': mid,
+                        })
+
+                    # Fire I/O OnAttack output
+                    if self.io_manager:
+                        self.io_manager.fire_output(thing, 'OnAttack')
+
+                # Manage shoot-sprite visibility
+                if state['anim_timer'] > 0.0:
+                    state['anim_timer'] -= delta
+                    thing.properties['is_shooting'] = True
+                else:
+                    thing.properties['is_shooting'] = False
+
+            else:
+                # Out of sight — go idle, freeze timers
+                thing.properties['is_shooting'] = False
+                state['anim_timer'] = 0.0
 
     # =========================================================================
     # FRUSTUM CULLING
