@@ -101,27 +101,50 @@ class PropertyEditor(QWidget):
         self.tab_widget = None
 
     def set_object(self, obj):
-        # Preserve tab index when refreshing the same object
+        # Preserve tab index and scroll position when refreshing the same object
         saved_tab_index = None
-        if self.tab_widget is not None and self.current_object is obj:
-            saved_tab_index = self.tab_widget.currentIndex()
+        saved_scroll_pos = 0
+        
+        if self.current_object is obj:
+            # Save tab index
+            if self.tab_widget is not None:
+                saved_tab_index = self.tab_widget.currentIndex()
+                
+            # Save current scroll position before clearing
+            for i in range(self.main_layout.count()):
+                widget = self.main_layout.itemAt(i).widget()
+                if isinstance(widget, QScrollArea):
+                    saved_scroll_pos = widget.verticalScrollBar().value()
+                    break
         
         self._populating = True  # Set flag to prevent recursion
         self.current_object = obj
         self.clear_layout()
+        
         if obj is None:
             self.main_layout.addWidget(QLabel("Nothing selected."))
             self._populating = False
             return
+            
         if isinstance(obj, dict): 
             self.populate_for_brush(obj)
         elif isinstance(obj, Thing): 
             self.populate_for_thing(obj)
         
-        # Restore tab index if we saved one
+        # Restore tab index
         if saved_tab_index is not None and self.tab_widget is not None:
             if saved_tab_index < self.tab_widget.count():
                 self.tab_widget.setCurrentIndex(saved_tab_index)
+                
+        # Restore scroll position
+        if saved_scroll_pos > 0:
+            for i in range(self.main_layout.count()):
+                widget = self.main_layout.itemAt(i).widget()
+                if isinstance(widget, QScrollArea):
+                    # A QTimer is required here because the layout needs a frame to 
+                    # recalculate its new height before the scrollbar can be moved.
+                    QTimer.singleShot(0, lambda w=widget, pos=saved_scroll_pos: w.verticalScrollBar().setValue(pos))
+                    break
         
         self._populating = False  # Reset flag after population complete
 
