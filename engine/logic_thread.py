@@ -1126,17 +1126,16 @@ class LogicThread(threading.Thread):
           - Attacks fire on MONSTER_SHOOT_INTERVAL cooldown while in MONSTER_SIGHT_RANGE.
           - Out-of-range monsters go idle but stay awake (they chase when you return).
 
-        I/O events fired:
-          - OnSeePlayer  — once when player enters sight range
-          - OnLostPlayer — once when player leaves sight range
-          - OnAttack     — each time the monster shoots
-          - OnDeath      — when Kill input is received
+        Player death:
+          - When player_health reaches 0, player_dead is set to True.
+          - All further monster AI is frozen until play mode resets.
 
         Dead / hidden / disabled monsters are always skipped.
         """
         if not self.player or not MonsterThing:
             return
 
+        # Monsters freeze when the player is already dead
         if self.player_dead:
             return
 
@@ -1146,6 +1145,7 @@ class LogicThread(threading.Thread):
             if not isinstance(thing, MonsterThing):
                 continue
 
+            # Skip dead / hidden / disabled monsters
             if thing.properties.get('dead', False) or thing.properties.get('hidden', False):
                 thing.properties.pop('is_shooting', None)
                 continue
@@ -1157,46 +1157,36 @@ class LogicThread(threading.Thread):
                 self.monster_states[mid] = {
                     'shoot_timer': MONSTER_SHOOT_INTERVAL,
                     'anim_timer':  0.0,
-                    'in_sight':    False,   # ← NEW: tracks sight-range transitions
                 }
-
-            # ---- Process deferred Kill input --------------------------------
-            if thing.properties.pop('_kill', False):
-                thing.properties['dead'] = True
-                thing.properties.pop('is_shooting', None)
-                continue
-            # -----------------------------------------------------------------
 
             state     = self.monster_states[mid]
             thing_pos = glm.vec3(thing.pos)
             distance  = glm.distance(player_pos, thing_pos)
 
-            # ---- Wake logic -------------------------------------------------
+            # ---- Wake logic ------------------------------------------------
             triggered  = thing.properties.get('triggered', False)
             wake_sight = thing.properties.get('wake_on_sight', True)
             awake      = thing.properties.get('awake', False)
 
             if not awake:
                 if triggered:
+                    # Dormant until I/O Wake input — skip entirely
                     continue
                 elif not wake_sight:
+                    # Always-on: no trigger, no sight gate
                     thing.properties['awake'] = True
                     awake = True
                 elif distance <= MONSTER_SIGHT_RANGE:
+                    # First sight of the player
                     thing.properties['awake'] = True
                     awake = True
                 else:
+                    # Not in range yet, stay dormant
                     continue
-            # -----------------------------------------------------------------
+            # ----------------------------------------------------------------
 
             if distance <= MONSTER_SIGHT_RANGE:
-                # ---- Fire OnSeePlayer on sight transition -------------------
-                if not state['in_sight']:
-                    state['in_sight'] = True
-                    if self.io_manager:
-                        self.io_manager.fire_output(thing, 'OnSeePlayer')
-                # -------------------------------------------------------------
-
+                # --- Movement toward player ---
                 if distance > MONSTER_STOP_DISTANCE:
                     direction = player_pos - thing_pos
                     dir_len = glm.length(direction)
@@ -1204,11 +1194,13 @@ class LogicThread(threading.Thread):
                         direction = direction / dir_len
                         mtype = thing.properties.get('monster_type', 'human')
                         if mtype != 'flying':
+                            # Keep movement horizontal for ground types
                             direction = glm.normalize(glm.vec3(direction.x, 0.0, direction.z))
                         step = direction * MONSTER_MOVE_SPEED * delta
                         new_pos = thing_pos + step
                         thing.pos = [new_pos.x, new_pos.y, new_pos.z]
 
+                # --- Shoot cooldown ---
                 state['shoot_timer'] -= delta
 
                 if state['shoot_timer'] <= 0.0:
@@ -1228,6 +1220,7 @@ class LogicThread(threading.Thread):
                     if self.io_manager:
                         self.io_manager.fire_output(thing, 'OnAttack')
 
+                # Shoot animation sprite
                 if state['anim_timer'] > 0.0:
                     state['anim_timer'] -= delta
                     thing.properties['is_shooting'] = True
@@ -1235,19 +1228,14 @@ class LogicThread(threading.Thread):
                     thing.properties['is_shooting'] = False
 
             else:
-                # ---- Fire OnLostPlayer on sight loss transition -------------
-                if state['in_sight']:
-                    state['in_sight'] = False
-                    if self.io_manager:
-                        self.io_manager.fire_output(thing, 'OnLostPlayer')
-                # -------------------------------------------------------------
-
+                # Out of sight range — idle, freeze shoot animation
                 thing.properties['is_shooting'] = False
                 state['anim_timer'] = 0.0
 
-        # ---- Player death check ---------------------------------------------
+        # ---- Player death check ----------------------------------------
         if self.player_health <= 0 and not self.player_dead:
             self.player_dead = True
+            # Fire I/O OnPlayerDeath from the PlayerStart entity if one exists
             if self.io_manager:
                 try:
                     from editor.things import PlayerStart

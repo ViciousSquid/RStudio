@@ -887,12 +887,11 @@ class QtGameView(QOpenGLWidget):
                 else:
                     state_key = 'alive'
 
-                # Key by the actual sprite path so per-instance custom sprites
-                # are cached independently from same-type default sprites.
-                sprite_path = thing.get_sprite_path()
-                tex_key = f"msprite__{sprite_path.replace('/', '__').replace('.', '_')}"
+                tex_key = f"monster_{mtype}_{state_key}"
 
                 if tex_key not in self.sprite_textures:
+                    # Ask the entity for its current sprite path, then load it
+                    sprite_path = thing.get_sprite_path()
                     rel_path = sprite_path.replace('assets/', '')
                     dirname  = os.path.dirname(rel_path)   # e.g. "sprites/monsters/human"
                     filename = os.path.basename(rel_path)  # e.g. "shoot.png"
@@ -1294,6 +1293,3 @@ class QtGameView(QOpenGLWidget):
             self.gun_hud_pixmaps[gun_type] = pixmap
             return pixmap
         return None
-
-
-
