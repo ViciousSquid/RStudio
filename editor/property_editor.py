@@ -1,7 +1,7 @@
 import os
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFormLayout, QCheckBox, QComboBox, QPushButton,
-                             QHBoxLayout, QColorDialog, QFileDialog, QGridLayout,
+                             QHBoxLayout, QColorDialog, QFileDialog, QGridLayout, 
                              QToolButton, QSlider, QTabWidget, QGroupBox, QScrollArea,
                              QFrame, QDoubleSpinBox, QSizePolicy)
 from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
@@ -207,22 +207,6 @@ class PropertyEditor(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.verticalScrollBar().setStyleSheet("""
-            QScrollBar:vertical {
-                width: 18px;
-                background: #2b2b2b;
-                border: none;
-                margin: 0px;
-            }
-            QScrollBar::handle:vertical {
-                background: #4b4d4d;
-                min-height: 20px;
-                border-radius: 4px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-        """)
         
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
@@ -1412,37 +1396,21 @@ class PropertyEditor(QWidget):
                     self.editor.stop_mover_preview()
 
     def populate_for_thing(self, thing):
-        """Populate property editor for a Thing with tabbed interface."""
-
+        """Populate property editor for a Thing."""
+        
+        # Create scrollable content
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.verticalScrollBar().setStyleSheet("""
-            QScrollBar:vertical {
-                width: 18px;
-                background: #2b2b2b;
-                border: none;
-                margin: 0px;
-            }
-            QScrollBar::handle:vertical {
-                background: #4b4d4d;
-                min-height: 20px;
-                border-radius: 4px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-        """)
-
+        
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(4)
-
-        # === NAME FIELD (always visible above tabs, matching brush layout) ===
-        name_layout = QFormLayout()
-        name_layout.setSpacing(4)
-
+        
+        # Basic properties layout
+        layout = QFormLayout()
+        
         name_lbl = QLabel("Name:")
         name_lbl.setStyleSheet("QLabel { background-color: #6C3BAA; color: white; font-weight: bold; padding: 6px 8px; border-radius: 3px; }")
         cur_name = thing.properties.get('name', '')
@@ -1450,8 +1418,8 @@ class PropertyEditor(QWidget):
         name_inp.setStyleSheet("QLineEdit { background-color: #6C3BAA; color: white; font-weight: bold; padding: 6px; border: 2px solid #8B5AC2; border-radius: 3px; } QLineEdit:focus { border: 2px solid #A875D6; background-color: #7B4AB9; }")
         name_inp.setPlaceholderText("Enter name...")
         name_inp.editingFinished.connect(lambda: self.update_object_prop('name', name_inp.text()))
-        name_layout.addRow(name_lbl, name_inp)
-
+        layout.addRow(name_lbl, name_inp)
+        
         thing_name = getattr(thing, 'name', '') or thing.properties.get('name', '')
         targeting_sources = self._find_targeting_sources(thing_name) if thing_name else []
         if targeting_sources:
@@ -1459,48 +1427,13 @@ class PropertyEditor(QWidget):
             targeted_label = QLabel(", ".join(source_texts))
             targeted_label.setStyleSheet("QLabel { color: #00FF00; font-weight: bold; padding: 2px; background-color: #1a3d1a; border: 1px solid #00AA00; border-radius: 3px; }")
             targeted_label.setWordWrap(True)
-            name_layout.addRow("Targeted by:", targeted_label)
-
-        content_layout.addLayout(name_layout)
-
-        # === TAB WIDGET ===
-        self.tab_widget = QTabWidget()
-        self.tab_widget.setStyleSheet("""
-            QTabBar::tab:selected { background: #F08000; color: white; }
-            QTabBar::tab { background: #425f5d; color: #ccc; padding: 8px 16px; border: 1px solid #333; }
-            QTabBar::tab:hover { background: #5a7a82; }
-        """)
-
-        # Properties tab
-        props_tab = self._create_thing_properties_tab(thing)
-        self.tab_widget.addTab(props_tab, "Properties")
-
-        # I/O tab (conditional)
-        if IO_AVAILABLE:
-            entity_type = get_entity_type_for_io(thing)
-            if entity_type and entity_type in IO_REGISTRY:
-                io_tab = self._create_io_tab_for_thing(thing)
-                self.tab_widget.addTab(io_tab, "⚡ I/O")
-
-        content_layout.addWidget(self.tab_widget)
-        content_layout.addStretch()
-
-        scroll.setWidget(content_widget)
-        self.main_layout.addWidget(scroll)
-
-    def _create_thing_properties_tab(self, thing):
-        """Create the Properties tab content for a Thing."""
-        widget = QWidget()
-        tab_layout = QVBoxLayout(widget)
-        tab_layout.setContentsMargins(8, 8, 8, 8)
-        tab_layout.setSpacing(4)
-
-        layout = QFormLayout()
-
+            layout.addRow("Targeted by:", targeted_label)
+        
         if isinstance(thing, Model):
             self.add_model_path_widget(layout, thing)
             self.add_vector3_widget(layout, thing, 'scale')
             self.add_vector3_widget(layout, thing, 'rotation')
+            
             if IO_AVAILABLE:
                 io_note = QLabel("💡 Use the I/O tab for advanced targeting")
                 io_note.setStyleSheet("QLabel { color: #88AAFF; font-style: italic; padding: 4px; }")
@@ -1511,181 +1444,204 @@ class PropertyEditor(QWidget):
 
         is_pickup = isinstance(thing, Pickup)
         current_item_type = thing.properties.get('item_type', 'health') if is_pickup else None
-
+        
+        # Track widgets to hide/show for pickup type changes
         self._pickup_value_widgets = []
         self._pickup_key_widgets = []
         self._pickup_sprite_widgets = []
-
+        
+        # Keys that only make sense on Monster entities
         _MONSTER_ONLY_KEYS = {'awake', 'damage', 'health', 'monster_type',
                                'trigger', 'wake_when_see_player', 'dead', 'non_hostile', 'sight'}
 
         for key, value in sorted(thing.properties.items()):
             if key == 'name': continue
-            if key == '_io_connections': continue
-            if key == 'type': continue
+            if key == '_io_connections': continue  # Skip I/O connections - handled in I/O tab
+            if key == 'type': continue  # Internal entity-type tag, never user-editable
             if isinstance(thing, Light) and key in ['colour']: continue
             if isinstance(thing, Model) and key in ['model_path', 'scale', 'rotation']: continue
+            # Skip Monster-only properties on non-Monster Things (e.g. Pickup)
             if not isinstance(thing, Monster) and key in _MONSTER_ONLY_KEYS: continue
-            if isinstance(thing, Monster) and key in ('trigger', 'wake_when_see_player', 'dead', 'non_hostile', 'sight'): continue
+            # Monster behaviour flags are rendered in the dedicated Behaviour Flags group below
+            if isinstance(thing, Monster) and key in ('trigger', 'wake_when_see_player', 'dead', 'non_hostile'): continue
+            # Skip these - we handle them specially for Pickup
             if is_pickup and key in ['key_name', 'custom_sprite', 'respawns', 'respawn_time']: continue
 
             label_text = key.replace('_', ' ').title() + ":"
-
+            
+            # Special handling for Monster type selection
             if isinstance(thing, Monster) and key == 'monster_type':
-                widget_w = QComboBox()
-                widget_w.addItems(['human', 'flying'])
-                widget_w.setCurrentText(value)
-                widget_w.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
-                layout.addRow(label_text, widget_w)
+                widget = QComboBox()
+                widget.addItems(['human', 'flying'])
+                widget.setCurrentText(value)
+                widget.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
+                layout.addRow(label_text, widget)
             elif isinstance(thing, Light) and key == 'state':
-                widget_w = QComboBox()
-                widget_w.addItems(['on', 'off'])
-                widget_w.setCurrentText(value)
-                widget_w.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
-                layout.addRow(label_text, widget_w)
+                widget = QComboBox()
+                widget.addItems(['on', 'off'])
+                widget.setCurrentText(value)
+                widget.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
+                layout.addRow(label_text, widget)
             elif isinstance(thing, Speaker) and key == 'sound_file':
                 self.add_sound_file_widget(layout, thing, key, value)
+            # === NEW: Specific handling for Logic Gate Type ===
             elif isinstance(thing, LogicGate) and key == 'logic_type':
-                widget_w = QComboBox()
-                widget_w.addItems(['AND', 'OR', 'XOR', 'NAND', 'NOR'])
-                widget_w.setCurrentText(value)
-                widget_w.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
-                layout.addRow("Logic Type:", widget_w)
+                widget = QComboBox()
+                widget.addItems(['AND', 'OR', 'XOR', 'NAND', 'NOR'])
+                widget.setCurrentText(value)
+                widget.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
+                layout.addRow("Logic Type:", widget)
             elif isinstance(thing, Pickup) and key == 'item_type':
-                widget_w = QComboBox()
-                item_types = ['health', 'key', 'gun1']  # add 'gun2' in future update
-                widget_w.addItems(item_types)
-                widget_w.setCurrentText(value)
-                widget_w.currentTextChanged.connect(self.on_pickup_item_type_changed)
-                layout.addRow(label_text, widget_w)
-
+                widget = QComboBox()
+                item_types = ['health', 'key', 'gun1']  #add 'gun2' in future update
+                widget.addItems(item_types)
+                widget.setCurrentText(value)
+                widget.currentTextChanged.connect(self.on_pickup_item_type_changed)
+                layout.addRow(label_text, widget)
+                
+                # Key Name dropdown (only visible for key type)
                 self.pickup_key_name_label = QLabel("Key Name:")
                 self.pickup_key_name_combo = QComboBox()
                 key_names = ['blue_key', 'red_key', 'yellow_key', 'green_key']
                 self.pickup_key_name_combo.addItems(key_names)
+                # Allow custom key names too
                 self.pickup_key_name_combo.setEditable(True)
                 current_key = thing.properties.get('key_name', 'blue_key')
-                self.pickup_key_name_combo.setCurrentText(current_key)
+                if current_key in key_names:
+                    self.pickup_key_name_combo.setCurrentText(current_key)
+                else:
+                    self.pickup_key_name_combo.setCurrentText(current_key)
                 self.pickup_key_name_combo.currentTextChanged.connect(self.on_pickup_key_name_changed)
                 layout.addRow(self.pickup_key_name_label, self.pickup_key_name_combo)
+                
                 self._pickup_key_widgets.append((self.pickup_key_name_label, self.pickup_key_name_combo))
+                
                 is_key_type = (value == 'key')
                 self.pickup_key_name_label.setVisible(is_key_type)
                 self.pickup_key_name_combo.setVisible(is_key_type)
-
+                
             elif isinstance(thing, Pickup) and key == 'activation':
-                widget_w = QComboBox()
-                widget_w.addItems(['walk_over', 'use'])
-                widget_w.setCurrentText(value)
-                widget_w.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
-                layout.addRow(label_text, widget_w)
-                self._pickup_activation_widget = widget_w
+                widget = QComboBox()
+                activation_types = ['walk_over', 'use']
+                widget.addItems(activation_types)
+                widget.setCurrentText(value)
+                widget.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
+                layout.addRow(label_text, widget)
+                # Store reference to restrict activation for health pickups
+                self._pickup_activation_widget = widget
+                # If health pickup, force walk_over and disable
                 if current_item_type == 'health':
-                    widget_w.setCurrentText('walk_over')
-                    widget_w.setEnabled(False)
+                    widget.setCurrentText('walk_over')
+                    widget.setEnabled(False)
                     self.update_object_prop('activation', 'walk_over')
             elif isinstance(thing, Pickup) and key == 'value':
+                # Store reference to hide when item_type is 'key'
                 label = QLabel(label_text)
-                widget_w = QSpinBox()
-                widget_w.setRange(-99999, 99999)
-                widget_w.setValue(value)
-                widget_w.editingFinished.connect(lambda w=widget_w, k=key: self.update_object_prop(k, w.value()))
-                layout.addRow(label, widget_w)
-                self._pickup_value_widgets.append((label, widget_w))
+                widget = QSpinBox()
+                widget.setRange(-99999, 99999)
+                widget.setValue(value)
+                widget.editingFinished.connect(lambda w=widget, k=key: self.update_object_prop(k, w.value()))
+                layout.addRow(label, widget)
+                self._pickup_value_widgets.append((label, widget))
+                # Hide if currently a key
                 if current_item_type == 'key':
                     label.setVisible(False)
-                    widget_w.setVisible(False)
+                    widget.setVisible(False)
             elif isinstance(value, bool):
-                widget_w = QCheckBox()
-                widget_w.setStyleSheet(self._checkbox_style())
-                widget_w.setChecked(value)
-                widget_w.stateChanged.connect(lambda state, k=key: self.update_object_prop(k, state == Qt.Checked))
-                layout.addRow(label_text, widget_w)
+                widget = QCheckBox()
+                widget.setStyleSheet(self._checkbox_style())
+                widget.setChecked(value)
+                widget.stateChanged.connect(lambda state, k=key: self.update_object_prop(k, state == Qt.Checked))
+                layout.addRow(label_text, widget)
             elif isinstance(value, int):
-                widget_w = QSpinBox()
-                widget_w.setRange(-99999, 99999)
-                widget_w.setValue(value)
-                widget_w.editingFinished.connect(lambda w=widget_w, k=key: self.update_object_prop(k, w.value()))
-                layout.addRow(label_text, widget_w)
+                widget = QSpinBox()
+                widget.setRange(-99999, 99999)
+                widget.setValue(value)
+                widget.editingFinished.connect(lambda w=widget, k=key: self.update_object_prop(k, w.value()))
+                layout.addRow(label_text, widget)
             elif isinstance(value, float):
-                widget_w = QLineEdit(str(value))
-                widget_w.editingFinished.connect(lambda le=widget_w, k=key: self.update_object_prop(k, float(le.text()) if le.text() and le.text().replace('.', '', 1).replace('-', '', 1).isdigit() else 0.0))
-                layout.addRow(label_text, widget_w)
+                widget = QLineEdit(str(value))
+                widget.editingFinished.connect(lambda le=widget, k=key: self.update_object_prop(k, float(le.text()) if le.text() and le.text().replace('.', '', 1).replace('-', '', 1).isdigit() else 0.0))
+                layout.addRow(label_text, widget)
             else:
-                widget_w = QLineEdit(str(value))
-                widget_w.editingFinished.connect(lambda le=widget_w, k=key: self.update_object_prop(k, le.text()))
-                layout.addRow(label_text, widget_w)
-
-        # Pickup sprite controls
+                widget = QLineEdit(str(value))
+                widget.editingFinished.connect(lambda le=widget, k=key: self.update_object_prop(k, le.text()))
+                layout.addRow(label_text, widget)
+        
+        # Add Pickup-specific controls
         if is_pickup:
+            # Sprite selection button (only for non-key types)
             self.pickup_sprite_label = QLabel("Sprite:")
             sprite_widget = QWidget()
             sprite_layout = QHBoxLayout(sprite_widget)
             sprite_layout.setContentsMargins(0, 0, 0, 0)
-
+            
             custom_sprite = thing.properties.get('custom_sprite', '')
             self.pickup_sprite_path = QLineEdit(custom_sprite)
             self.pickup_sprite_path.setReadOnly(True)
             self.pickup_sprite_path.setPlaceholderText("Default sprite")
-
+            
             sprite_btn = QPushButton("Sprite...")
-            sprite_btn.setFixedWidth(80)
+            sprite_btn.setFixedWidth(120)
             sprite_btn.clicked.connect(self.on_pickup_sprite_select)
-
-            clear_btn = QPushButton("Clear")
-            clear_btn.setFixedWidth(60)
+            
+            clear_btn = QPushButton("clear")
+            clear_btn.setFixedWidth(120)
             clear_btn.setToolTip("Clear custom sprite")
             clear_btn.clicked.connect(self.on_pickup_sprite_clear)
-
+            
             sprite_layout.addWidget(self.pickup_sprite_path)
             sprite_layout.addWidget(sprite_btn)
             sprite_layout.addWidget(clear_btn)
-
+            
             layout.addRow(self.pickup_sprite_label, sprite_widget)
             self._pickup_sprite_widgets.append((self.pickup_sprite_label, sprite_widget))
-
+            
+            # Hide sprite controls for keys (keys have fixed sprites)
             if current_item_type == 'key':
                 self.pickup_sprite_label.setVisible(False)
                 sprite_widget.setVisible(False)
-
-        # Respawn controls (Pickup only)
-        if is_pickup:
+        
+        # Add respawn controls ONLY for Pickups (PlayerStart, Speaker, etc. do not respawn)
+        if isinstance(thing, Pickup):
             layout.addRow(self._create_section_header("Respawn"))
-
+            
             respawns = thing.properties.get('respawns', False)
             respawn_time = thing.properties.get('respawn_time', 20.0)
-
+            
             respawn_widget = QWidget()
             respawn_layout = QHBoxLayout(respawn_widget)
             respawn_layout.setContentsMargins(0, 0, 0, 0)
-
+            
             self.respawn_checkbox = QCheckBox("Respawns")
             self.respawn_checkbox.setStyleSheet(self._checkbox_style())
             self.respawn_checkbox.setChecked(respawns)
             self.respawn_checkbox.stateChanged.connect(self.on_respawn_toggled)
-
+            
             self.respawn_time_label = QLabel("after")
             self.respawn_time_spin = QDoubleSpinBox()
             self.respawn_time_spin.setRange(0.1, 9999.0)
             self.respawn_time_spin.setValue(respawn_time)
             self.respawn_time_spin.setSuffix(" sec")
             self.respawn_time_spin.editingFinished.connect(lambda: self.update_object_prop('respawn_time', self.respawn_time_spin.value()))
-
+            
+            # Show/hide respawn time based on checkbox
             self.respawn_time_label.setVisible(respawns)
             self.respawn_time_spin.setVisible(respawns)
-
+            
             respawn_layout.addWidget(self.respawn_checkbox)
             respawn_layout.addWidget(self.respawn_time_label)
             respawn_layout.addWidget(self.respawn_time_spin)
             respawn_layout.addStretch()
-
+            
             layout.addRow("", respawn_widget)
-
-        tab_layout.addLayout(layout)
-
-        # === MONSTER AI + FLAGS ===
+        
+        content_layout.addLayout(layout)
+        
+        # === MONSTER BEHAVIOUR FLAGS ===
         if isinstance(thing, Monster):
-            thing.properties.setdefault('sight', 512)
+            # Ensure all flag properties exist with sensible defaults
+            thing.properties.setdefault('sight', 300)
             thing.properties.setdefault('trigger', False)
             thing.properties.setdefault('wake_when_see_player', True)
             thing.properties.setdefault('dead', False)
@@ -1709,6 +1665,7 @@ class PropertyEditor(QWidget):
                 }
             """
 
+            # --- AI group (sight distance + visualise toggle) ---
             ai_group = QGroupBox("AI")
             ai_group.setStyleSheet(_group_style)
             ai_form = QFormLayout(ai_group)
@@ -1722,7 +1679,7 @@ class PropertyEditor(QWidget):
 
             sight_spin = QSpinBox()
             sight_spin.setRange(0, 9999)
-            sight_spin.setValue(thing.properties.get('sight', 512))
+            sight_spin.setValue(thing.properties.get('sight', 300))
             sight_spin.setSuffix(" u")
             sight_spin.setToolTip("Distance (in world units) at which this monster detects the player")
             self._widgets['monster_sight_spin'] = sight_spin
@@ -1730,7 +1687,8 @@ class PropertyEditor(QWidget):
             sight_preview_btn = QToolButton()
             sight_preview_btn.setText("👁")
             sight_preview_btn.setCheckable(True)
-            sight_preview_btn.setChecked(getattr(self.editor, '_sight_preview_thing', None) is thing)
+            sight_preview_btn.setChecked(
+                getattr(self.editor, '_sight_preview_thing', None) is thing)
             sight_preview_btn.setToolTip("Visualise sight radius in viewport")
             sight_preview_btn.setStyleSheet("""
                 QToolButton {
@@ -1747,6 +1705,7 @@ class PropertyEditor(QWidget):
             self._widgets['monster_sight_preview_btn'] = sight_preview_btn
 
             def _on_sight_changed(v, _thing=thing):
+                # Write directly — no panel rebuild, no focus steal
                 _thing.properties['sight'] = v
                 if hasattr(self.editor, 'mark_dirty'):
                     self.editor.mark_dirty()
@@ -1765,8 +1724,9 @@ class PropertyEditor(QWidget):
             sight_row_layout.addStretch()
             ai_form.addRow("Sight:", sight_row)
 
-            tab_layout.addWidget(ai_group)
+            content_layout.addWidget(ai_group)
 
+            # --- Behaviour Flags group ---
             flags_group = QGroupBox("Behaviour Flags")
             flags_group.setStyleSheet(_group_style)
             flags_layout = QVBoxLayout(flags_group)
@@ -1792,45 +1752,29 @@ class PropertyEditor(QWidget):
                 flags_layout.addWidget(cb)
                 self._widgets[f'monster_flag_{prop_key}'] = cb
 
-            tab_layout.addWidget(flags_group)
+            content_layout.addWidget(flags_group)
 
-            customise_btn = QPushButton("🎨  Customise Sprites…")
-            customise_btn.setFixedWidth(350)
-            customise_btn.setToolTip(
-                "Assign custom idle / shoot / dead PNGs and billboard size "
-                "for this monster instance"
-            )
-            customise_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #3c3f41;
-                    border: 1px solid #F08000;
-                    color: #F08000;
-                    padding: 6px;
-                    font-weight: bold;
-                    margin-top: 4px;
-                }
-                QPushButton:hover  { background-color: #4b4d4d; }
-                QPushButton:pressed { background-color: #2b2b2b; }
-            """)
-
-            def _open_customise(_checked=False, _thing=thing):
-                from editor.monster_customise_dialog import MonsterCustomiseDialog
-                dlg = MonsterCustomiseDialog(_thing, self)
-                if dlg.exec_() == MonsterCustomiseDialog.Accepted:
-                    self.set_object(_thing)
-                    try:
-                        self.editor.view_3d.update()
-                    except Exception:
-                        pass
-
-            customise_btn.clicked.connect(_open_customise)
-            customise_btn_row = QHBoxLayout()
-            customise_btn_row.addWidget(customise_btn)
-            customise_btn_row.addStretch()
-            tab_layout.addLayout(customise_btn_row)
-
-        tab_layout.addStretch()
-        return widget
+        # === TAB WIDGET FOR I/O (if available) ===
+        if IO_AVAILABLE:
+            entity_type = get_entity_type_for_io(thing)
+            if entity_type and entity_type in IO_REGISTRY:
+                # Create tab widget for I/O
+                self.tab_widget = QTabWidget()
+                self.tab_widget.setStyleSheet("""
+                    QTabBar::tab:selected { background: #F08000; color: white; }
+                    QTabBar::tab { background: #425f5d; color: #ccc; padding: 8px 16px; border: 1px solid #333; }
+                    QTabBar::tab:hover { background: #5a7a82; }
+                """)
+                
+                # Add I/O tab
+                io_tab = self._create_io_tab_for_thing(thing)
+                self.tab_widget.addTab(io_tab, "⚡ I/O")
+                
+                content_layout.addWidget(self.tab_widget)
+        
+        content_layout.addStretch()
+        scroll.setWidget(content_widget)
+        self.main_layout.addWidget(scroll)
 
     def _repaint_viewport(self):
         """Request a repaint of all viewports without rebuilding the property panel."""

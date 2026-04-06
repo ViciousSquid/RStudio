@@ -278,57 +278,28 @@ class Monster(Thing):
         self.properties.setdefault('health', 100)
         self.properties.setdefault('damage', 10)
 
-    @staticmethod
-    def _resolve_sprite(custom_path: str, default_path: str, project_root: str) -> str:
-        """
-        Return *custom_path* when the file exists on disk, otherwise return
-        *default_path*.  Falls back silently — the caller guarantees the
-        default path is the safest possible choice.
-        """
-        if custom_path:
-            if os.path.isfile(os.path.join(project_root, custom_path)):
-                return custom_path
-            print(f"[Monster] Custom sprite not found, using default: {custom_path}")
-        return default_path
-
-    def get_sprite_path(self) -> str:
+    def get_sprite_path(self):
         """
         Return the sprite path for the current monster type and state.
         Priority: dead > shooting > idle.
-
-        Custom sprites set via the Customise dialog are tried first.
-        Any missing custom file is logged once and falls back to the
-        appropriate default sprite for this monster_type automatically.
+        Falls back to idle.png if the specific sprite doesn't exist on disk.
         """
-        mtype       = self.properties.get('monster_type', 'human')
-        is_dead     = self.properties.get('dead', False)
+        mtype = self.properties.get('monster_type', 'human')
+        is_dead = self.properties.get('dead', False)
         is_shooting = self.properties.get('is_shooting', False)
 
-        try:
-            script_dir   = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
-        except Exception:
-            project_root = os.getcwd()
-
-        default_idle  = f"assets/sprites/monsters/{mtype}/idle.png"
-        default_dead  = f"assets/sprites/monsters/{mtype}/dead.png"
-        default_shoot = f"assets/sprites/monsters/{mtype}/shoot.png"
-
-        # Verify default dead/shoot files exist; fall back to idle if not
-        if not os.path.isfile(os.path.join(project_root, default_dead)):
-            default_dead = default_idle
-        if not os.path.isfile(os.path.join(project_root, default_shoot)):
-            default_shoot = default_idle
-
         if is_dead:
-            return self._resolve_sprite(
-                self.properties.get('custom_dead', ''), default_dead, project_root)
+            dead_path = f"assets/sprites/monsters/{mtype}/dead.png"
+            if not os.path.exists(dead_path):
+                return f"assets/sprites/monsters/{mtype}/idle.png"
+            return dead_path
         elif is_shooting:
-            return self._resolve_sprite(
-                self.properties.get('custom_shoot', ''), default_shoot, project_root)
+            shoot_path = f"assets/sprites/monsters/{mtype}/shoot.png"
+            if not os.path.exists(shoot_path):
+                return f"assets/sprites/monsters/{mtype}/idle.png"
+            return shoot_path
         else:
-            return self._resolve_sprite(
-                self.properties.get('custom_idle', ''), default_idle, project_root)
+            return f"assets/sprites/monsters/{mtype}/idle.png"
 
     def get_instance_pixmap(self):
         """
@@ -740,6 +711,3 @@ ENTITY_CATEGORIES = {
     'Environment': ['Light', 'Speaker', 'Model'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer'],
 }
-
-
-
