@@ -3,7 +3,7 @@
 * NEW: Monster entity and AI (work in progress)
 * Updated property editor layout
 
-### v1.1.0.0 MILESTONE RELEASE
+### v1.1.0.0
 
 * New `levelchange` entity
 * Improved error handling
