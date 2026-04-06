@@ -24,6 +24,7 @@ Built because modern tools lost the immediacy of Radiant/Hammer.
 * **Entity I/O system** _inspired by Half-Life 2_ (logic, triggers, lights, speakers)
 * Terrain generation
 * OBJ model support
+* Monster NPCs
 * Versioned JSON level format (with integrity checks)
 * Supports Quake-style nodraw surfaces
 
