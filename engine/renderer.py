@@ -4,7 +4,8 @@ import OpenGL.GL as gl
 import ctypes 
 from editor.things import Thing, Light, Model
 from OpenGL.GL.shaders import compileProgram, compileShader 
-from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX 
+from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
+from engine.monster_constants import MONSTER_SPRITE_SIZES, MONSTER_SPRITE_SIZE_DEFAULT 
 from engine.shaders import DEFAULT_SHADERS
 from PIL import Image 
 import os
@@ -1773,7 +1774,14 @@ void main() {
 
                 # Set sprite size based on thing type
                 if isinstance(thing, Monster):
-                    gl.glUniform2f(size_loc, 128.0, 128.0)   # large billboard
+                    # Per-instance override (set via Customise Sprites dialog) takes
+                    # priority; otherwise use the subtype default from monster_constants.
+                    mtype = thing.properties.get('monster_type', 'human')
+                    default_w, default_h = MONSTER_SPRITE_SIZES.get(
+                        mtype, MONSTER_SPRITE_SIZE_DEFAULT)
+                    _w = float(thing.properties.get('sprite_width',  default_w))
+                    _h = float(thing.properties.get('sprite_height', default_h))
+                    gl.glUniform2f(size_loc, _w, _h)
                 elif isinstance(thing, Light):
                     gl.glUniform2f(size_loc, 16.0, 16.0)
                 else:
@@ -2152,6 +2160,9 @@ void main() {
             gl.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
         gl.glBindVertexArray(0)
+
+
+
 
 
 
