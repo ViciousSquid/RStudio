@@ -1,7 +1,7 @@
 ### v1.2.0.0
 
 * NEW: Monster entity (No AI yet - work in progress)
-* NEW: Logic menu and Visual Scripting (CTRL-L)
+* NEW: Logic menu and Visual Scripting tool (CTRL-L)
 * Updated property editor layout
 
 ### v1.1.0.0
