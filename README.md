@@ -25,7 +25,8 @@ Built because modern tools lost the immediacy of Radiant/Hammer.
 * Terrain generation
 * OBJ model support
 * Monsters/NPCs
-* Versioned JSON level format (with integrity checks)
+* JSON level format
+*  Visual scripting (no coding!)
 * Supports Quake-style nodraw surfaces
 
 🗎 Fully modular and open source (MIT License)
@@ -33,7 +34,8 @@ Built because modern tools lost the immediacy of Radiant/Hammer.
 
   ------------------------
 
-<img width="2879" height="1836" alt="image" src="https://github.com/user-attachments/assets/6adc50ee-4c0d-4e4f-93fc-2294a466ee6b" />
+<img width="1879" height="1306" alt="image" src="https://github.com/user-attachments/assets/15a9615e-8729-40f4-b7e1-e847c190ae1f" />
+
 
 
   ------------------------------
