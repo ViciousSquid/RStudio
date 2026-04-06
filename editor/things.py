@@ -223,7 +223,7 @@ class PlayerStart(Thing):
 class Light(Thing):
     """Dynamic light source."""
     pixmap_path = "assets/sprites/light.png"
-    
+
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'light')
@@ -273,33 +273,72 @@ class Monster(Thing):
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'monster')
-        self.properties.setdefault('monster_type', 'human')   # 'human' or 'flying'
+        self.properties.setdefault('monster_type', 'human')  # 'human' or 'flying'
         self.properties.setdefault('id', 0)
         self.properties.setdefault('health', 100)
         self.properties.setdefault('damage', 10)
 
-    def get_sprite_path(self):
+        # --- Wake / AI behaviour ---
+        # triggered=True  → monster starts dormant; must receive Wake input via I/O
+        # triggered=False → uses wake_on_sight logic (default)
+        self.properties.setdefault('triggered', False)
+        # wake_on_sight=True  → wakes when player enters MONSTER_SIGHT_RANGE (default)
+        # wake_on_sight=False → only wakes via I/O trigger (ignored when triggered=True)
+        self.properties.setdefault('wake_on_sight', True)
+        # Runtime flag – set to True when the monster has been woken up
+        self.properties.setdefault('awake', False)
+
+    @staticmethod
+    def _resolve_sprite(custom_path: str, default_path: str, project_root: str) -> str:
+        """
+        Return *custom_path* when the file exists on disk, otherwise return
+        *default_path*.  Falls back silently — the caller guarantees the
+        default path is the safest possible choice.
+        """
+        if custom_path:
+            if os.path.isfile(os.path.join(project_root, custom_path)):
+                return custom_path
+            print(f"[Monster] Custom sprite not found, using default: {custom_path}")
+        return default_path
+
+    def get_sprite_path(self) -> str:
         """
         Return the sprite path for the current monster type and state.
         Priority: dead > shooting > idle.
-        Falls back to idle.png if the specific sprite doesn't exist on disk.
+
+        Custom sprites set via the Customise dialog are tried first.
+        Any missing custom file is logged once and falls back to the
+        appropriate default sprite for this monster_type automatically.
         """
-        mtype = self.properties.get('monster_type', 'human')
-        is_dead = self.properties.get('dead', False)
+        mtype       = self.properties.get('monster_type', 'human')
+        is_dead     = self.properties.get('dead', False)
         is_shooting = self.properties.get('is_shooting', False)
 
+        try:
+            script_dir   = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+        except Exception:
+            project_root = os.getcwd()
+
+        default_idle  = f"assets/sprites/monsters/{mtype}/idle.png"
+        default_dead  = f"assets/sprites/monsters/{mtype}/dead.png"
+        default_shoot = f"assets/sprites/monsters/{mtype}/shoot.png"
+
+        # Verify default dead/shoot files exist; fall back to idle if not
+        if not os.path.isfile(os.path.join(project_root, default_dead)):
+            default_dead = default_idle
+        if not os.path.isfile(os.path.join(project_root, default_shoot)):
+            default_shoot = default_idle
+
         if is_dead:
-            dead_path = f"assets/sprites/monsters/{mtype}/dead.png"
-            if not os.path.exists(dead_path):
-                return f"assets/sprites/monsters/{mtype}/idle.png"
-            return dead_path
+            return self._resolve_sprite(
+                self.properties.get('custom_dead', ''), default_dead, project_root)
         elif is_shooting:
-            shoot_path = f"assets/sprites/monsters/{mtype}/shoot.png"
-            if not os.path.exists(shoot_path):
-                return f"assets/sprites/monsters/{mtype}/idle.png"
-            return shoot_path
+            return self._resolve_sprite(
+                self.properties.get('custom_shoot', ''), default_shoot, project_root)
         else:
-            return f"assets/sprites/monsters/{mtype}/idle.png"
+            return self._resolve_sprite(
+                self.properties.get('custom_idle', ''), default_idle, project_root)
 
     def get_instance_pixmap(self):
         """
@@ -379,21 +418,15 @@ class Pickup(Thing):
     
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
-        self.properties.setdefault('type', 'monster')
-        self.properties.setdefault('monster_type', 'human')   # 'human' or 'flying'
-        self.properties.setdefault('id', 0)
-        self.properties.setdefault('health', 100)
-        self.properties.setdefault('damage', 10)
-
-        # --- Wake / AI behaviour ---
-        # triggered=True  → monster starts dormant; must receive Wake input via I/O
-        # triggered=False → uses wake_on_sight logic (default)
-        self.properties.setdefault('triggered', False)
-        # wake_on_sight=True  → wakes when player enters MONSTER_SIGHT_RANGE (default)
-        # wake_on_sight=False → only wakes via I/O trigger (ignored when triggered=True)
-        self.properties.setdefault('wake_on_sight', True)
-        # Runtime flag – set to True when the monster has been woken up
-        self.properties.setdefault('awake', False)
+        self.properties.setdefault('type', 'pickup')
+        self.properties.setdefault('item_type', 'health')
+        self.properties.setdefault('value', 25)
+        self.properties.setdefault('activation', 'walk_over')
+        self.properties.setdefault('collected', False)
+        self.properties.setdefault('respawns', False)
+        self.properties.setdefault('respawn_time', 20.0)
+        self.properties.setdefault('key_name', 'blue_key')
+        self.properties.setdefault('custom_sprite', '')
 
     def is_gun(self):
         return self.properties.get('item_type') in ['gun1', 'gun2']

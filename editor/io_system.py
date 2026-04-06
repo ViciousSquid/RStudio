@@ -1,6 +1,4 @@
 """
-HL2-Style Input/Output System
-
 This module implements an event-driven entity communication system inspired by
 Half-Life 2's Hammer Editor. Entities ("things") communicate through:
 
@@ -507,17 +505,18 @@ def register_default_io():
     # === MONSTER ===
     register_io('monster',
         inputs=[
-            IODef('Enable', 'Enable AI'),
-            IODef('Disable', 'Disable AI'),
-            IODef('Kill', 'Kill this monster'),
-            IODef('SetTarget', 'Set pursuit target', 'string'),
-            IODef('Wake', 'Wake from idle'),
+            IODef('Enable',    'Enable AI'),
+            IODef('Disable',   'Disable AI'),
+            IODef('Kill',      'Kill this monster'),
+            IODef('SetTarget', 'Set pursuit target (entity name, blank = player)', 'string'),
+            IODef('Wake',      'Wake from dormant state'),
         ],
         outputs=[
-            IODef('OnDeath', 'Fired when killed'),
-            IODef('OnDamaged', 'Fired when taking damage'),
-            IODef('OnSeePlayer', 'Fired when player spotted'),
-            IODef('OnLostPlayer', 'Fired when player lost'),
+            IODef('OnDeath',      'Fired when killed'),
+            IODef('OnDamaged',    'Fired when taking damage'),
+            IODef('OnSeePlayer',  'Fired on first sight of the player'),
+            IODef('OnLostPlayer', 'Fired when player leaves sight range'),
+            IODef('OnAttack',     'Fired each time the monster attacks'),
         ]
     )
     
