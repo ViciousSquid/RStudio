@@ -486,10 +486,22 @@ def register_all_input_handlers(io_manager: IOManager):
     except (OSError, IOError):
         pass
 
-    # Use HTML bold tags for the console title
     debug_log('Info', f"<b>Fio {version_str}</b>")
     debug_log('Info', f"Registered {len(io_manager._input_handlers)} input handlers")
     debug_log('Info', f"Type 'help' to see all available commands")
+
+
+    def monster_wake(entity, param, logic):
+        """Wake a dormant (triggered=True) monster via I/O."""
+        entity.properties['awake'] = True
+        entity.properties['triggered'] = False   # clear dormant flag
+
+    def monster_set_target(entity, param, logic):
+        """Override pursuit target by entity name (empty string = back to player)."""
+        entity.properties['target_name'] = param.strip() if param else ''
+
+    io_manager.register_input_handler('monster', 'wake', monster_wake)
+    io_manager.register_input_handler('monster', 'settarget', monster_set_target)
 
 
     # ==========================================================================

@@ -1362,6 +1362,9 @@ class MainWindow(QMainWindow):
         self.update_title()
         self.update_all_ui()
 
+        # Keep the Logic Graph in sync with the cleared scene
+        self._refresh_logic_graph()
+
     def show_random_map_dialog(self):
         dialog = RandomMapGeneratorDialog(self)
         if dialog.exec_():
@@ -2023,6 +2026,9 @@ class MainWindow(QMainWindow):
             print(f"[MainWindow] Successfully loaded {os.path.basename(filePath)}")
             self.show_toast(f"Loaded {os.path.basename(filePath)}")
 
+            # Keep the Logic Graph in sync with the newly loaded map
+            self._refresh_logic_graph()
+
             return True
 
         except Exception as e:
@@ -2094,6 +2100,112 @@ class MainWindow(QMainWindow):
         self.resizeDocks([self.view_3d_dock, self.asset_browser_dock], [600, 250], Qt.Vertical)
 
         self.statusBar().showMessage("Layout reset to default.", 2000)
+
+    # =========================================================================
+    # LOGIC GRAPH / WIZARD
+    # =========================================================================
+
+    def _refresh_logic_graph(self):
+        """
+        Rebuild the Logic Graph scene to match the current map.
+        Called automatically after every map load and New Map.
+        If the window is open it reloads immediately; if it is closed the
+        stale window is discarded so the next open starts fresh.
+        """
+        win = getattr(self, '_logic_graph_win', None)
+        if win is None:
+            return
+        if win.isVisible():
+            win._reload()
+        else:
+            # Quietly discard the stale window — a new one will be built on
+            # next open(), using the current editor_state automatically.
+            win.close()
+            self._logic_graph_win = None
+
+    def open_logic_graph(self):
+        """Open (or raise) the Logic Graph Editor window."""
+        from editor.logic_graph_widget import LogicGraphWindow
+        if not hasattr(self, '_logic_graph_win') or self._logic_graph_win is None:
+            self._logic_graph_win = LogicGraphWindow(self.state, parent=self)
+            self._logic_graph_win.applied.connect(self._on_logic_graph_applied)
+        self._logic_graph_win.show()
+        self._logic_graph_win.raise_()
+        self._logic_graph_win.activateWindow()
+
+    def _on_logic_graph_applied(self):
+        """Called when the Logic Graph writes connections back to entities."""
+        self.mark_as_modified()
+        debug_log("IO", "Logic Graph applied connections to scene")
+
+    def open_logic_wizard(self):
+        """Open the Logic Wizard (guided I/O scenario setup)."""
+        from editor.logic_graph_widget import LogicGraphWindow, LogicGraphScene
+        from editor.logic_wizard import LogicWizard
+        # Reuse the existing graph window's scene if it is already open,
+        # so that wizard-added connections appear there immediately.
+        if hasattr(self, '_logic_graph_win') and self._logic_graph_win is not None:
+            scene  = self._logic_graph_win.get_scene()
+            parent = self._logic_graph_win
+        else:
+            # Build a temporary scene — the wizard will still call apply_to_entities
+            scene  = LogicGraphScene(self.state)
+            parent = self
+        wiz = LogicWizard(self.state, scene, parent=parent)
+        if wiz.exec_():
+            # If the graph window is not yet open, open it so the user can review
+            # and press Apply to persist the connections.
+            self.open_logic_graph()
+
+    def validate_io_connections(self):
+        """Check all entities for connections that point to missing targets."""
+        all_names = set()
+        for t in self.state.things:
+            n = t.properties.get('name', '')
+            if n:
+                all_names.add(n)
+        for b in self.state.brushes:
+            n = b.get('name', '')
+            if n:
+                all_names.add(n)
+
+        broken = []
+        all_entities = list(self.state.things) + list(self.state.brushes)
+        for entity in all_entities:
+            if hasattr(entity, 'properties'):
+                conns    = entity.properties.get('_io_connections', [])
+                src_name = entity.properties.get('name', '?')
+            else:
+                conns    = entity.get('_io_connections', [])
+                src_name = entity.get('name', '?')
+
+            for c in conns:
+                if isinstance(c, dict):
+                    tgt     = c.get('target', '')
+                    out_pin = c.get('output', '?')
+                else:
+                    tgt     = getattr(c, 'target_name', '')
+                    out_pin = getattr(c, 'output_name', '?')
+                if tgt and tgt not in all_names:
+                    broken.append(f"  {src_name}.{out_pin}  →  \"{tgt}\"  (NOT FOUND)")
+
+        if broken:
+            QMessageBox.warning(
+                self, "Validate Connections",
+                "Broken connections found — target entity does not exist:\n\n"
+                + "\n".join(broken)
+            )
+        else:
+            total = sum(
+                len(e.properties.get('_io_connections', [])
+                    if hasattr(e, 'properties')
+                    else e.get('_io_connections', []))
+                for e in all_entities
+            )
+            QMessageBox.information(
+                self, "Validate Connections",
+                f"All {total} connection(s) are valid. ✔"
+            )
 
     def closeEvent(self, event):
         # NEW: Check for unsaved changes
