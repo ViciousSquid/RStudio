@@ -1,6 +1,6 @@
 ### v1.2.0.0
 
-* NEW: Monster entity and AI (work in progress)
+* NEW: Monster entity (No AI yet - work in progress)
 * Updated property editor layout
 
 ### v1.1.0.0
