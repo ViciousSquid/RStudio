@@ -118,6 +118,7 @@ class LogicThread(threading.Thread):
             self.io_manager = IOManager()
             self.io_manager.set_logic_thread(self)
             self.io_manager.set_entity_finder(self._find_entity_by_name)
+            self.io_manager.set_entity_finder_by_id(self._find_entity_by_id)
             self.io_manager.set_game_state(self.game_state)
             register_all_input_handlers(self.io_manager)
         
@@ -201,6 +202,21 @@ class LogicThread(threading.Thread):
             if thing_name == name:
                 return thing
         
+        return None
+
+    def _find_entity_by_id(self, entity_id: str):
+        """Find an entity (brush or thing) by stable UUID."""
+        if not entity_id:
+            return None
+
+        for brush in self.brushes:
+            if brush.get('id') == entity_id:
+                return brush
+
+        for thing in self.things:
+            if thing.properties.get('id') == entity_id:
+                return thing
+
         return None
 
     # =========================================================================
