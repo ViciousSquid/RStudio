@@ -1,6 +1,6 @@
 ### v1.2.0.0   |    MILESTONE 1
 
-* NEW: Monster entity (No proper AI yet - work in progress)
+* NEW: Monster entity (Very basic - work in progress)
 * NEW: Logic menu and Logic-Graph Visual Scripting tool (CTRL-L)
 * Updated property editor layout
 * Entities now have stable UUIDs — I/O connections survive renames
