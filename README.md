@@ -26,7 +26,7 @@ Built because modern tools lost the immediacy of Radiant/Hammer.
 * OBJ model support
 * Monsters/NPCs
 * JSON level format
-*  Visual scripting (no coding!)
+* Visual scripting
 * Supports Quake-style nodraw surfaces
 
 🗎 Fully modular and open source (MIT License)
