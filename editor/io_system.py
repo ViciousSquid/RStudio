@@ -103,18 +103,22 @@ class OutputConnection:
     
     When the source entity fires 'output_name', it calls 'input_name' on 
     the entity named 'target_name' after 'delay' seconds, passing 'parameter'.
+    
+    target_id is the stable UUID of the target entity. The runtime prefers
+    target_id for lookup and falls back to target_name for legacy maps.
     """
     output_name: str          # Which output triggers this connection
-    target_name: str          # Name of target entity
+    target_name: str          # Name of target entity (display / legacy fallback)
     input_name: str           # Which input to call on target
     parameter: str = ""       # Optional parameter to pass
     delay: float = 0.0        # Delay in seconds before firing
     fire_once: bool = False   # If True, connection is removed after firing
+    target_id: str = ""       # Stable UUID of target entity
     _fired: bool = field(default=False, repr=False)  # Internal tracking
     
     def to_dict(self) -> dict:
         """Serialize to dictionary for saving."""
-        return {
+        d = {
             'output': self.output_name,
             'target': self.target_name,
             'input': self.input_name,
@@ -122,6 +126,9 @@ class OutputConnection:
             'delay': self.delay,
             'fire_once': self.fire_once
         }
+        if self.target_id:
+            d['target_id'] = self.target_id
+        return d
     
     @staticmethod
     def from_dict(data: dict) -> 'OutputConnection':
@@ -132,7 +139,8 @@ class OutputConnection:
             input_name=data.get('input', ''),
             parameter=data.get('parameter', ''),
             delay=float(data.get('delay', 0.0)),
-            fire_once=bool(data.get('fire_once', False))
+            fire_once=bool(data.get('fire_once', False)),
+            target_id=data.get('target_id', '')
         )
     
     def reset(self):
@@ -153,6 +161,7 @@ class PendingEvent:
     parameter: str            # Parameter to pass
     source_name: str          # Who fired this (for debugging)
     connection: OutputConnection = None  # Original connection (for fire_once tracking)
+    target_id: str = ""       # Stable UUID of target entity
 
 
 # =============================================================================
@@ -179,6 +188,7 @@ class IOManager:
         
         # Entity lookup function - set by logic_thread
         self._find_entity: Optional[Callable] = None
+        self._find_entity_by_id: Optional[Callable] = None
         
         self._logic_thread = None
         self._game_state = None
@@ -201,6 +211,13 @@ class IOManager:
         finder(name: str) -> entity or None
         """
         self._find_entity = finder
+
+    def set_entity_finder_by_id(self, finder: Callable):
+        """
+        Set the function used to find entities by stable ID.
+        finder(entity_id: str) -> entity or None
+        """
+        self._find_entity_by_id = finder
     
     def register_input_handler(self, entity_type: str, input_name: str, 
                                 handler: Callable):
@@ -247,12 +264,14 @@ class IOManager:
                     input_name=conn.input_name,
                     parameter=conn.parameter,
                     source_name=source_name,
-                    connection=conn
+                    connection=conn,
+                    target_id=conn.target_id
                 )
                 self.pending_events.append(event)
             else:
                 self._execute_input(conn.target_name, conn.input_name, 
-                                conn.parameter, source_name)
+                                conn.parameter, source_name,
+                                target_id=conn.target_id)
         
         if matching_count == 0:
             io_log(f"{source_name}.{output_name} (no connections)")
@@ -265,22 +284,29 @@ class IOManager:
             if self.current_time >= event.fire_time:
                 io_log(f"[Delayed] {event.target_name}.{event.input_name} (from {event.source_name})")
                 self._execute_input(event.target_name, event.input_name,
-                                event.parameter, event.source_name)
+                                event.parameter, event.source_name,
+                                target_id=event.target_id)
             else:
                 still_pending.append(event)
         
         self.pending_events = still_pending
     
     def _execute_input(self, target_name: str, input_name: str, 
-                   parameter: str, source_name: str):
-        """Execute an input on a target entity."""
+                   parameter: str, source_name: str, target_id: str = ""):
+        """Execute an input on a target entity.  Prefers ID lookup, falls back to name."""
         if not self._find_entity:
             debug_log("Error", "I/O: No entity finder set!")
             return
         
-        target = self._find_entity(target_name)
+        target = None
+        # Prefer stable-ID lookup when available
+        if target_id and self._find_entity_by_id:
+            target = self._find_entity_by_id(target_id)
+        # Fallback to name lookup (legacy maps or missing ID)
         if target is None:
-            debug_log("Error", f"I/O: Target '{target_name}' not found!")
+            target = self._find_entity(target_name)
+        if target is None:
+            debug_log("Error", f"I/O: Target '{target_name}' (id={target_id}) not found!")
             return
         
         entity_type = self._get_entity_type(target)
@@ -645,3 +671,5 @@ def reset_all_connections(entities):
 
 # Initialize default I/O definitions when module is imported
 register_default_io()
+
+

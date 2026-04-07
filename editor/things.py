@@ -5,6 +5,7 @@ the event-driven entity communication system.
 """
 
 import os
+import uuid
 from PyQt5.QtGui import QPixmap, QColor
 from PyQt5.QtCore import Qt   # Needed for scaling flags in get_icon_pixmap
 import json
@@ -39,6 +40,10 @@ class Thing:
                 Thing._counters[class_name] += 1
             self.properties['name'] = f"{class_name}_{Thing._counters[class_name]}"
         
+        # Stable unique ID (persists across save/load)
+        if 'id' not in self.properties:
+            self.properties['id'] = str(uuid.uuid4())
+
         # I/O Connections - stored as list of OutputConnection objects
         if '_io_connections' not in self.properties:
             self.properties['_io_connections'] = []
@@ -107,7 +112,13 @@ class Thing:
                 serialized_connections.append(conn)
         
         props_copy = {k: v for k, v in self.properties.items() if k != '_io_connections'}
-        serializable_props = {k: str(v) for k, v in props_copy.items()}
+        serializable_props = {}
+        for k, v in props_copy.items():
+            if isinstance(v, (str, int, float, bool, list, dict, type(None))):
+                serializable_props[k] = v
+            else:
+                # Fallback for non-JSON-native types (e.g. QColor)
+                serializable_props[k] = str(v)
         
         result = {
             'type': self.properties.get('type'),
@@ -160,7 +171,8 @@ class Thing:
         return thing
     
     def add_output_connection(self, output_name, target_name, input_name, 
-                               parameter="", delay=0.0, fire_once=False):
+                               parameter="", delay=0.0, fire_once=False,
+                               target_id=""):
         """Helper method to add an output connection."""
         try:
             from .io_system import OutputConnection, add_connection
@@ -170,7 +182,8 @@ class Thing:
                 input_name=input_name,
                 parameter=parameter,
                 delay=delay,
-                fire_once=fire_once
+                fire_once=fire_once,
+                target_id=target_id
             )
             add_connection(self, conn)
             return conn
@@ -180,6 +193,7 @@ class Thing:
             self.properties['_io_connections'].append({
                 'output': output_name,
                 'target': target_name,
+                'target_id': target_id,
                 'input': input_name,
                 'parameter': parameter,
                 'delay': delay,
@@ -744,3 +758,5 @@ ENTITY_CATEGORIES = {
     'Environment': ['Light', 'Speaker', 'Model'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer'],
 }
+
+

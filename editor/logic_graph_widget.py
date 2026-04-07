@@ -339,7 +339,7 @@ class LogicGraphScene(QGraphicsScene):
         self.editor_state = editor_state
         self.setBackgroundBrush(QBrush(QColor(28, 28, 32)))
 
-        self._nodes:       Dict[int, EntityNodeItem] = {}
+        self._nodes:       Dict[str, EntityNodeItem] = {}
         self._connections: List[ConnectionItem]      = []
         self._drag_line:   Optional[DragLine]        = None
         self._drag_src:    Optional[PinItem]         = None
@@ -363,6 +363,12 @@ class LogicGraphScene(QGraphicsScene):
             return entity.properties.get('_io_connections', [])
         return entity.get('_io_connections', [])
 
+    def _entity_id(self, entity) -> str:
+        """Return the stable UUID of an entity."""
+        if hasattr(entity, 'properties'):
+            return entity.properties.get('id', '')
+        return entity.get('id', '')
+
     def _build_nodes(self):
         col, row, per_row = 0, 0, 4
         m         = _node_metrics()
@@ -382,20 +388,35 @@ class LogicGraphScene(QGraphicsScene):
         for entity in all_entities:
             etype = self._entity_type(entity)
             ename = self._entity_name(entity)
+            eid   = self._entity_id(entity)
             node  = EntityNodeItem(entity, etype, ename)
-            node.setPos(col * spacing_x, row * spacing_y)
-            self.addItem(node)
-            self._nodes[id(entity)] = node
 
-            col += 1
-            if col >= per_row:
-                col = 0
-                row += 1
+            # Restore saved position from map file, or fall back to grid layout
+            saved_positions = getattr(self.editor_state, '_logic_graph_positions', {})
+            if eid and eid in saved_positions:
+                pos = saved_positions[eid]
+                node.setPos(pos['x'], pos['y'])
+            else:
+                node.setPos(col * spacing_x, row * spacing_y)
+                col += 1
+                if col >= per_row:
+                    col = 0
+                    row += 1
+
+            self.addItem(node)
+            # Key by stable entity ID; fall back to Python id for entities without one
+            self._nodes[eid if eid else str(id(entity))] = node
 
     def _build_connections(self):
         name_to_node: Dict[str, EntityNodeItem] = {
             n.entity_name: n for n in self._nodes.values()
         }
+        # Also build an ID-based lookup for connections that carry target_id
+        id_to_node: Dict[str, EntityNodeItem] = {}
+        for eid, node in self._nodes.items():
+            if eid:
+                id_to_node[eid] = node
+
         all_entities = list(self.editor_state.things) + list(self.editor_state.brushes)
         for entity in all_entities:
             src_name = self._entity_name(entity)
@@ -405,7 +426,13 @@ class LogicGraphScene(QGraphicsScene):
             for conn in self._entity_connections(entity):
                 if not hasattr(conn, 'output_name'):
                     continue
-                dst_node = name_to_node.get(conn.target_name)
+                # Prefer ID lookup, fall back to name
+                dst_node = None
+                target_id = getattr(conn, 'target_id', '')
+                if target_id:
+                    dst_node = id_to_node.get(target_id)
+                if dst_node is None:
+                    dst_node = name_to_node.get(conn.target_name)
                 if not dst_node:
                     continue
                 src_pin = src_node.out_pins.get(conn.output_name)
@@ -478,6 +505,7 @@ class LogicGraphScene(QGraphicsScene):
             parameter   = param,
             delay       = delay,
             fire_once   = fire_once,
+            target_id   = self._entity_id(dst.node.entity),
         )
         ci = ConnectionItem(src, dst, conn)
         self.addItem(ci)
@@ -848,3 +876,5 @@ class LogicGraphWindow(QWidget):
 
     def get_scene(self) -> LogicGraphScene:
         return self.graph_scene
+
+

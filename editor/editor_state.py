@@ -11,6 +11,7 @@ Manages all the data for the current level being edited, including:
 
 import json
 import copy
+import uuid
 from .things import Thing, Model
 
 # Import I/O system for serialization
@@ -37,6 +38,7 @@ class EditorState:
         self.things = []
         self.selected_object = None
         self.terrain_data = None
+        self._logic_graph_positions = {}  # Persisted node positions for the logic graph
         self.undo_stack = []
         self.redo_stack = []
 
@@ -98,7 +100,7 @@ class EditorState:
     def get_level_data(self):
         """Serializes the current scene state into a dictionary."""
         data = {
-            'version': 2,  # Version 2 includes I/O system
+            'version': 3,  # Version 3 adds stable entity IDs and logic graph layout
             'brushes': self._serialize_brushes(),
             'things': [t.to_dict() for t in self.things]
         }
@@ -111,13 +113,37 @@ class EditorState:
         if self.bake_state is not None and self.bake_state.scene_hash:
             data['lightmap_scene_hash'] = self.bake_state.scene_hash
 
+        # Persist logic graph node positions (if the window has been opened)
+        graph_positions = self._collect_logic_graph_positions()
+        if graph_positions:
+            data['logic_graph'] = {'node_positions': graph_positions}
+
         return data
+
+    def _collect_logic_graph_positions(self):
+        """Collect node positions from the logic graph window, if open."""
+        win = getattr(self, '_logic_graph_win', None)
+        if win is None:
+            # Fall back to previously-loaded positions so they survive
+            # a save even when the graph window hasn't been opened.
+            return getattr(self, '_logic_graph_positions', {})
+        try:
+            scene = win.get_scene()
+            positions = {}
+            for entity_id, node in scene._nodes.items():
+                positions[entity_id] = {'x': node.x(), 'y': node.y()}
+            return positions
+        except Exception:
+            return getattr(self, '_logic_graph_positions', {})
 
     def _serialize_brushes(self):
         """Serialize brushes with I/O connections."""
         serialized = []
 
         for brush in self.brushes:
+            # Ensure every brush has a stable ID
+            brush.setdefault('id', str(uuid.uuid4()))
+
             brush_copy = brush.copy()
 
             # Handle I/O connections
@@ -149,6 +175,9 @@ class EditorState:
         for brush_data in brushes_data:
             brush = brush_data.copy()
 
+            # Backfill stable ID for legacy maps
+            brush.setdefault('id', str(uuid.uuid4()))
+
             # Restore I/O connections
             if IO_AVAILABLE and 'io_connections' in brush:
                 io_data = brush.pop('io_connections')
@@ -177,8 +206,17 @@ class EditorState:
         else:
             # Old format - brushes are plain dicts
             self.brushes = level_data.get('brushes', [])
+            # Backfill stable IDs for v1 brushes
+            for brush in self.brushes:
+                brush.setdefault('id', str(uuid.uuid4()))
 
         self.terrain_data = level_data.get('terrain_data', None)
+
+        # Store logic graph positions for later use by the graph window
+        self._logic_graph_positions = {}
+        lg = level_data.get('logic_graph', {})
+        if lg:
+            self._logic_graph_positions = lg.get('node_positions', {})
 
         # Load things
         things_data = level_data.get('things', [])
@@ -401,6 +439,29 @@ class EditorState:
 
         return None
 
+    def find_entity_by_id(self, entity_id: str):
+        """Find an entity (brush or thing) by stable UUID."""
+        if not entity_id:
+            return None
+
+        for brush in self.brushes:
+            if brush.get('id') == entity_id:
+                return brush
+
+        for thing in self.things:
+            if thing.properties.get('id') == entity_id:
+                return thing
+
+        return None
+
+    def get_entity_id(self, entity):
+        """Return the stable ID of an entity (brush dict or Thing)."""
+        if isinstance(entity, dict):
+            return entity.get('id', '')
+        if hasattr(entity, 'properties'):
+            return entity.properties.get('id', '')
+        return ''
+
     def get_all_entity_names(self):
         """Get a list of all entity names in the scene."""
         names = []
@@ -443,5 +504,8 @@ class EditorState:
                     })
 
         return sources
+
+
+
 
 
