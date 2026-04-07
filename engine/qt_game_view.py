@@ -4,8 +4,8 @@ import numpy as np
 import ctypes
 from collections import deque
 from typing import Optional
-from PyQt5.QtWidgets import QOpenGLWidget, QApplication
-from PyQt5.QtCore import Qt, QTimer, QPoint, QUrl, QRect
+from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
+from PyQt5.QtCore import Qt, QTimer, QPoint, QUrl, QRect, QEvent
 from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QFontDatabase, QPen, QBrush, QPolygon, QKeySequence, QPixmap
 from PyQt5.QtMultimedia import QSoundEffect
 import OpenGL.GL as gl
@@ -36,7 +36,7 @@ class QtGameView(QOpenGLWidget):
     def __init__(self, editor):
         super().__init__(editor)
         self.editor = editor
-        
+
         # Rendering and view state
         self.brush_display_mode = "Solid Lit"
         self.show_triggers_as_solid = False
@@ -45,7 +45,7 @@ class QtGameView(QOpenGLWidget):
         self.debug_console_window = DebugConsole.get_instance()
         self.grid_size, self.world_size = 16, 2048
         self.grid_dirty = True
-        self.culling_enabled = True 
+        self.culling_enabled = True
         self.selected_object = None
         self.show_sprites_in_play_mode = False
         self.visibility_system = None
@@ -53,9 +53,9 @@ class QtGameView(QOpenGLWidget):
         self.grid_visible = True
         self.dragging_sysmon = False
         self.sysmon_drag_offset = QPoint(0, 0)
-        
+
         # Audio setup: Initialize Sound Pool
-        self.sound_pool = {} # Map of filename -> list of QSoundEffect
+        self.sound_pool = {}  # Map of filename -> list of QSoundEffect
         self._init_sound_system()
 
         # Initialize render mode names mapping for notifications
@@ -78,10 +78,10 @@ class QtGameView(QOpenGLWidget):
 
         # Threading Initialization
         self.game_state = ThreadedGameState()
-        self.game_state.sound_queue = [] 
-        
+        self.game_state.sound_queue = []
+
         self.logic_thread: Optional[LogicThread] = None
-        self.use_threading = True 
+        self.use_threading = True
         self._thread_started = False
 
         # Face Mode Initialization
@@ -91,14 +91,14 @@ class QtGameView(QOpenGLWidget):
         # Input state
         self.mouselook_active = False
         self.last_mouse_pos = QPoint()
-        
+
         # Debug Window Manager State
         self.debug_mode_active = False
         self.debug_window_rect = QRect(20, 20, 400, 200)
         self.frame_times = deque(maxlen=100)
         self.console_font = QFont("Arial", 9)
         self.console_font.setStyleHint(QFont.Monospace)
-        
+
         self.texture_manager = {}
         self.sprite_textures = {}
         self.gun_hud_pixmaps = {}
@@ -111,20 +111,20 @@ class QtGameView(QOpenGLWidget):
 
         self.show_render_menu = False
         self.current_render_mode = RENDER_MODE_LIT
-        
+
         self.play_mode = False
         self.player = None
 
         # Stored spawn point so death-screen Escape can cleanly exit play mode
         self._last_player_start_pos = [0, 0, 0]
         self._last_player_start_angle = 0
-        
+
         self.fps = 0
         self.frame_count = 0
         self.last_time = time.perf_counter()
         self.last_fps_time = time.perf_counter()
         self.start_time = time.perf_counter()
-        
+
         # Pre-allocated render config
         self._render_config = {
             "culling_enabled": True,
@@ -147,16 +147,41 @@ class QtGameView(QOpenGLWidget):
         self.view_matrix = glm.mat4(1.0)
         self._cached_aspect_ratio = 1.0
         self.cull_distance = 4096
-        
+
         # Matrix pointers for raw OpenGL calls
         self._proj_ptr = None
         self._view_ptr = None
+
+        # ---- In-game console overlay ----------------------------------------
+        # A floating QLineEdit that appears at the bottom of the viewport when
+        # the player presses the console key (default: backtick).  While it is
+        # visible, camera rotation and game input are frozen so the player can
+        # type freely.
+        self.console_overlay_active = False
+        self._console_input = QLineEdit(self)
+        self._console_input.setPlaceholderText("Enter command…   Esc to close")
+        self._console_input.setFont(QFont("Consolas", 11))
+        self._console_input.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(10, 10, 10, 220);
+                color: #F08000;
+                border: none;
+                border-top: 2px solid #F08000;
+                padding: 6px 10px;
+                font-family: Consolas, monospace;
+                font-size: 11pt;
+            }
+        """)
+        self._console_input.returnPressed.connect(self._submit_console_command)
+        self._console_input.installEventFilter(self)
+        self._console_input.hide()
+        # ---------------------------------------------------------------------
 
         timer = QTimer(self)
         timer.setInterval(16)
         timer.timeout.connect(self.update_loop)
         timer.start()
-        
+
         self.setFocusPolicy(Qt.ClickFocus)
         self.setMouseTracking(True)
 
@@ -183,7 +208,7 @@ class QtGameView(QOpenGLWidget):
 
         self.sound_pool[name] = []
         url = QUrl.fromLocalFile(path)
-        
+
         for _ in range(pool_size):
             effect = QSoundEffect(self)
             effect.setSource(url)
@@ -192,21 +217,21 @@ class QtGameView(QOpenGLWidget):
     def _get_sound_instance(self, name):
         """Retrieve an available sound instance from the pool."""
         clean_name = os.path.basename(name)
-        
+
         if clean_name not in self.sound_pool:
             path = os.path.join(os.getcwd(), 'assets', 'sounds', clean_name)
             if os.path.exists(path):
                 self._preload_sound_file(clean_name, path)
             else:
                 return None
-        
+
         pool = self.sound_pool[clean_name]
-        
+
         # Find an instance that isn't playing
         for effect in pool:
             if not effect.isPlaying():
                 return effect
-        
+
         # All are playing — grow the pool
         if pool:
             source_url = pool[0].source()
@@ -214,7 +239,7 @@ class QtGameView(QOpenGLWidget):
             new_effect.setSource(source_url)
             pool.append(new_effect)
             return new_effect
-            
+
         return None
 
     def initializeGL(self):
@@ -226,12 +251,12 @@ class QtGameView(QOpenGLWidget):
         config = getattr(self.editor, 'config', None)
         self.renderer = Renderer(self.load_texture, self.grid_size, self.world_size, config)
         self.set_cull_distance(self.cull_distance)
-        
+
         self._preload_assets()
         self.load_all_sprite_textures()
         if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'brushes'):
             self.preload_level_textures()
-        
+
         self._start_logic_thread()
         self._init_debug_resources()
 
@@ -254,7 +279,7 @@ class QtGameView(QOpenGLWidget):
             void main() { FragColor = vec4(color, 1.0); }
             """
             self.debug_shader = compileProgram(
-                compileShader(vs_src, gl.GL_VERTEX_SHADER), 
+                compileShader(vs_src, gl.GL_VERTEX_SHADER),
                 compileShader(fs_src, gl.GL_FRAGMENT_SHADER)
             )
             self.debug_vao = gl.glGenVertexArrays(1)
@@ -312,6 +337,9 @@ class QtGameView(QOpenGLWidget):
         if height > 0: self._cached_aspect_ratio = width / height
         else: self._cached_aspect_ratio = 1.0
         if self.logic_thread: self.logic_thread.set_frustum_aspect(self._cached_aspect_ratio)
+        # Keep console overlay pinned to the bottom edge when the window resizes
+        if self.console_overlay_active:
+            self._console_input.setGeometry(0, height - 36, width, 36)
 
     def update_loop(self):
         current_time = time.perf_counter()
@@ -326,7 +354,10 @@ class QtGameView(QOpenGLWidget):
         self.frame_times.append(delta * 1000.0)
         self._process_sound_queue()
         if self.use_threading and self.logic_thread:
-            self.game_state.set_keys(self.editor.keys_pressed)
+            # While the console overlay is capturing keyboard input, pass an
+            # empty key-set so movement and other game actions are frozen.
+            keys = set() if self.console_overlay_active else self.editor.keys_pressed
+            self.game_state.set_keys(keys)
             if self.game_state.try_swap(): self.update()
         else: self.update()
 
@@ -339,16 +370,15 @@ class QtGameView(QOpenGLWidget):
             request = self.game_state.sound_queue.pop(0)
             sound_file = request.get('file')
             volume = request.get('volume', 1.0)
-            
+
             if not sound_file:
                 continue
 
             effect = self._get_sound_instance(sound_file)
-            
+
             if effect:
                 effect.setVolume(volume)
                 effect.play()
-
 
     def paintGL(self):
         if not self.renderer: return
@@ -367,10 +397,10 @@ class QtGameView(QOpenGLWidget):
                 camera_pos = render_state.player_pos
             else:
                 camera_pos = render_state.editor_camera_pos
-            
+
             brushes_to_render = render_state.visible_brushes
             things_to_render = render_state.visible_things
-            
+
             if not self.play_mode:
                 self.camera.pos = glm.vec3(render_state.editor_camera_pos)
                 self.camera.yaw = render_state.editor_camera_yaw
@@ -381,7 +411,7 @@ class QtGameView(QOpenGLWidget):
             camera_pos = self.camera.pos
             brushes_to_render = self.editor.state.brushes
             things_to_render = self.editor.state.things
-        
+
         self.projection_matrix = perspective_projection(self.camera.fov, self._cached_aspect_ratio, 0.1, 10000.0)
 
         self._proj_ptr = glm.value_ptr(self.projection_matrix)
@@ -397,7 +427,7 @@ class QtGameView(QOpenGLWidget):
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
         self._render_config["grid_visible"] = getattr(self, 'grid_visible', True) and not self.play_mode
         self._render_config["terrain"] = getattr(self.editor, 'terrain', None)
-        
+
         if render_state and hasattr(render_state, 'all_brushes'):
             self._render_config["all_brushes"] = render_state.all_brushes
         else:
@@ -413,7 +443,11 @@ class QtGameView(QOpenGLWidget):
 
         # Render Bullet Marks
         if render_state and hasattr(render_state, 'bullet_marks'):
-             self._render_bullet_marks(render_state.bullet_marks)
+            self._render_bullet_marks(render_state.bullet_marks)
+
+        # Render flying-monster projectiles
+        if render_state and hasattr(render_state, 'projectiles') and render_state.projectiles:
+            self._render_projectiles(render_state.projectiles)
 
         # Face Mode Highlight
         if self.face_mode_active and self.hovered_face_info:
@@ -443,95 +477,135 @@ class QtGameView(QOpenGLWidget):
 
         if self.debug_mode_active:
             self._draw_window_manager(painter)
-            
+
         if getattr(self.editor, 'show_logic_links', False):
             painter.setPen(QColor(255, 255, 0))
             painter.setFont(QFont("Arial", 10, QFont.Bold))
             painter.drawText(10, self.height() - 40, "LINKS VISIBLE [F1]")
-            
+
         # Draw Face Mode UI Text
         if self.face_mode_active:
-            font_top = QFont("Arial", 14, QFont.Bold) 
+            font_top = QFont("Arial", 14, QFont.Bold)
             font_bot = QFont("Arial", 10, QFont.Bold)
-            
+
             msg_top = "Select a FACE for texturing"
             msg_bot = "Press ESC to cancel"
-            
+
             painter.setFont(font_top)
             mt = painter.fontMetrics()
             wt = mt.horizontalAdvance(msg_top)
             ht = mt.height()
-            
+
             painter.setFont(font_bot)
             mb = painter.fontMetrics()
             wb = mb.horizontalAdvance(msg_bot)
             hb = mb.height()
-            
+
             cx = self.width() // 2
             margin_bottom = 30
             spacing = 5
             padding_x = 20
             padding_y = 10
-            
+
             total_text_h = ht + hb + spacing
             box_w = max(wt, wb) + (padding_x * 2)
             box_h = total_text_h + (padding_y * 2)
-            
-            rect_x = cx - box_w // 2
-            rect_y = self.height() - box_h - margin_bottom
-            
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(0, 0, 0, 180))
-            painter.drawRoundedRect(rect_x, rect_y, box_w, box_h, 8, 8)
-            
-            painter.setPen(QColor(255, 255, 255))
-            
-            painter.setFont(font_top)
-            painter.drawText(rect_x + (box_w - wt)//2, rect_y + padding_y + mt.ascent(), msg_top)
-            
-            painter.setPen(QColor(200, 200, 200))
-            painter.setFont(font_bot)
-            painter.drawText(rect_x + (box_w - wb)//2, rect_y + padding_y + ht + spacing + mb.ascent(), msg_bot)
 
         painter.end()
 
     def _render_bullet_marks(self, marks):
         """Draw simple black dots at hit locations."""
         if not marks or 'simple' not in self.renderer.shaders: return
-        
+
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        
+
         shader = self.renderer.shaders['simple']
         uniforms = self.renderer.uniforms['simple']
         gl.glUseProgram(shader)
-        
+
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
-        
+
         gl.glBindVertexArray(self.renderer.vaos['cube'])
-        
+
         for mark in marks:
             pos = mark['pos']
             alpha = mark['alpha']
-            
-            gl.glUniform3f(uniforms['color'], 0.0, 0.0, 0.0) 
-            
+
+            gl.glUniform3f(uniforms['color'], 0.0, 0.0, 0.0)
+
             mat = glm.translate(glm.mat4(1.0), glm.vec3(pos[0], pos[1], pos[2]))
             mat = glm.scale(mat, glm.vec3(2.0, 2.0, 2.0))
-            
+
             gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
-            
+
         gl.glBindVertexArray(0)
         gl.glDisable(gl.GL_BLEND)
 
+    def _render_projectiles(self, projectiles):
+        """Render flying-monster projectiles as camera-facing billboards."""
+        if not projectiles or 'sprite' not in self.renderer.shaders:
+            return
+
+        # Use dedicated projectile texture, falling back to the generic monster sprite
+        tex_id = (self.sprite_textures.get('projectile') or
+                  self.sprite_textures.get('Monster'))
+        if not tex_id:
+            return
+
+        from engine.monster_constants import MONSTER_PROJECTILE_SPRITE_SIZE
+        pw, ph = MONSTER_PROJECTILE_SPRITE_SIZE
+
+        shader   = self.renderer.shaders['sprite']
+        uniforms = self.renderer.uniforms['sprite']
+
+        gl.glUseProgram(shader)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'],       1, gl.GL_FALSE, self._view_ptr)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(uniforms['sprite_texture'], 0)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+        gl.glBindVertexArray(self.renderer.vaos['sprite'])
+
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+
+        pos_loc  = uniforms['sprite_pos_world']
+        size_loc = uniforms['sprite_size']
+        for proj in projectiles:
+            pos = proj['pos']
+            gl.glUniform3f(pos_loc,  pos[0], pos[1], pos[2])
+            gl.glUniform2f(size_loc, pw, ph)
+            gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
+
+        gl.glBindVertexArray(0)
+        gl.glDisable(gl.GL_BLEND)
 
     def keyPressEvent(self, event):
         def check_key(cfg_key, default):
             key_str = self.editor.config.get('Shortcuts', cfg_key, fallback=default)
             seq = QKeySequence(key_str)
             return QKeySequence(event.key() | int(event.modifiers())) == seq
+
+        # ---- In-game console overlay ----------------------------------------
+        # Toggle on the configured key (default backtick).  Works only in play
+        # mode; in editor mode the standalone DebugConsole window is used instead.
+        if self.play_mode and check_key('key_console', '`'):
+            if self.console_overlay_active:
+                self._close_console_overlay()
+            else:
+                self._open_console_overlay()
+            return
+
+        # While the overlay is open every keypress is swallowed here so that
+        # typing does not accidentally trigger game actions.  Escape is handled
+        # by the eventFilter installed on _console_input.
+        if self.console_overlay_active:
+            return
+        # ---------------------------------------------------------------------
+
         if check_key('key_show_connections', 'F1'):
             current_state = getattr(self.editor, 'show_logic_links', False)
             self.editor.show_logic_links = not current_state
@@ -541,12 +615,12 @@ class QtGameView(QOpenGLWidget):
                 self.editor.show_toast(f"Logic Links: {status}")
             return
         if check_key('key_toggle_wireframe', 'F2'):
-             if self.current_render_mode == RENDER_MODE_WIREFRAME: self.current_render_mode = RENDER_MODE_LIT
-             else: self.current_render_mode = RENDER_MODE_WIREFRAME
-             mode_name = self.render_mode_names.get(self.current_render_mode, "Unknown")
-             if hasattr(self.editor, 'show_toast'): self.editor.show_toast(f"Render Mode: {mode_name}")
-             self.update()
-             return
+            if self.current_render_mode == RENDER_MODE_WIREFRAME: self.current_render_mode = RENDER_MODE_LIT
+            else: self.current_render_mode = RENDER_MODE_WIREFRAME
+            mode_name = self.render_mode_names.get(self.current_render_mode, "Unknown")
+            if hasattr(self.editor, 'show_toast'): self.editor.show_toast(f"Render Mode: {mode_name}")
+            self.update()
+            return
         if check_key('key_sysmon', 'F3'):
             self.debug_mode_active = not self.debug_mode_active
             if self.play_mode:
@@ -585,7 +659,7 @@ class QtGameView(QOpenGLWidget):
                 elif event.key() == Qt.Key_3: self.current_render_mode = RENDER_MODE_WIREFRAME; self.update()
                 elif event.key() == Qt.Key_4: self.current_render_mode = RENDER_MODE_VERTEX; self.update()
                 elif event.key() == Qt.Key_Escape: self.show_render_menu = False; self.update()
-                return 
+                return
         super().keyPressEvent(event)
 
     def _draw_sprites_text(self, painter):
@@ -648,9 +722,9 @@ class QtGameView(QOpenGLWidget):
             msg_font.setBold(True)
             painter.setFont(msg_font)
             fm = painter.fontMetrics()
-            text_width = fm.horizontalAdvance(msg) 
+            text_width = fm.horizontalAdvance(msg)
             cx = self.width() // 2
-            cy = self.height() // 2 + 50 
+            cy = self.height() // 2 + 50
             painter.setPen(QColor(0, 0, 0))
             painter.drawText(cx - text_width//2 + 2, cy + 2, msg)
             painter.setPen(QColor(200, 200, 200))
@@ -658,7 +732,7 @@ class QtGameView(QOpenGLWidget):
         if active_weapon:
             hud_pixmap = self._load_gun_hud_pixmap(active_weapon)
             if hud_pixmap and not hud_pixmap.isNull():
-                scale_factor = self.height() / 600.0  
+                scale_factor = self.height() / 600.0
                 target_h = int(200 * scale_factor)
                 if hud_pixmap.height() > 0: target_w = int(hud_pixmap.width() * (target_h / hud_pixmap.height()))
                 else: target_w = target_h
@@ -733,16 +807,16 @@ class QtGameView(QOpenGLWidget):
         painter.drawLine(x + size - 14, y + size//2, x + size - 14, y + size//2 + 4)
 
     def _draw_window_manager(self, painter):
-        bg_color = QColor(20, 20, 25, 235)      
-        border_color = QColor(80, 80, 90)       
-        header_color = QColor(66, 95, 93)       
-        text_color = QColor(220, 220, 220)      
-        graph_bg_color = QColor(10, 10, 15, 200) 
+        bg_color = QColor(20, 20, 25, 235)
+        border_color = QColor(80, 80, 90)
+        header_color = QColor(66, 95, 93)
+        text_color = QColor(220, 220, 220)
+        graph_bg_color = QColor(10, 10, 15, 200)
         target_height = 240 if self.sysmon_expanded else 30
         rect = QRect(self.debug_window_rect.x(), self.debug_window_rect.y(), self.debug_window_rect.width(), target_height)
         painter.setPen(QPen(border_color, 1))
         painter.setBrush(QBrush(bg_color))
-        painter.drawRect(rect) 
+        painter.drawRect(rect)
         header_rect = QRect(rect.x(), rect.y(), rect.width(), 25)
         painter.fillRect(header_rect, header_color)
         painter.setPen(QPen(border_color, 1))
@@ -768,7 +842,7 @@ class QtGameView(QOpenGLWidget):
             painter.drawPolygon(poly)
             painter.setPen(QPen(QColor(100, 255, 100), 1))
             painter.drawPolyline(QPolygon(points))
-        brush_tris = len(self.editor.state.brushes) * 12 
+        brush_tris = len(self.editor.state.brushes) * 12
         terrain_total_tris = 0
         terrain_visible_tris = 0
         if hasattr(self.editor, 'terrain') and self.editor.terrain is not None:
@@ -846,9 +920,13 @@ class QtGameView(QOpenGLWidget):
         for key_name, fname in key_textures.items():
             tid = self.load_texture(fname, 'sprites')
             if tid: self.sprite_textures[f'key_{key_name}'] = tid
+        # Try to load dedicated projectile sprite (optional)
+        proj_tid = self.load_texture('projectile.png', 'sprites')
+        if proj_tid:
+            self.sprite_textures['projectile'] = proj_tid
         if self.renderer:
             self.renderer.set_sprite_textures(self.sprite_textures)
-    
+
     def _pixmap_to_texture(self, pixmap):
         """Convert QPixmap to OpenGL texture ID."""
         from PyQt5.QtGui import QImage
@@ -960,6 +1038,11 @@ class QtGameView(QOpenGLWidget):
                 self.logic_thread.set_player(self.player)
                 self.logic_thread.set_play_mode(True)
         else:
+            # Close the console overlay if it happened to be open when exiting
+            if self.console_overlay_active:
+                self._console_input.hide()
+                self.console_overlay_active = False
+
             # FULL cursor restore (fixes stacking issue)
             while QApplication.overrideCursor() is not None:
                 QApplication.restoreOverrideCursor()
@@ -1123,7 +1206,7 @@ class QtGameView(QOpenGLWidget):
                     if self.play_mode:
                         QApplication.setOverrideCursor(Qt.BlankCursor)
                     return
-                
+
                 # Title bar drag (top 25 px)
                 title_bar_rect = QRect(self.debug_window_rect.x(), self.debug_window_rect.y(),
                                        self.debug_window_rect.width(), 25)
@@ -1132,7 +1215,7 @@ class QtGameView(QOpenGLWidget):
                     self.sysmon_drag_offset = event.pos() - QPoint(self.debug_window_rect.x(), self.debug_window_rect.y())
                     self.setCursor(Qt.ClosedHandCursor)
                     return
-        
+
         # Face Mode Click - Apply Texture (Left Click Only)
         if self.face_mode_active and event.button() == Qt.LeftButton:
             if self.hovered_face_info:
@@ -1146,6 +1229,9 @@ class QtGameView(QOpenGLWidget):
             if face: self.editor.selected_face = face; self.update(); return
 
         if self.play_mode and event.button() == Qt.LeftButton:
+            # Block all clicks while the console overlay is open
+            if self.console_overlay_active:
+                return
             # Block shooting when dead
             render_state = self.game_state.get_render_state()
             if getattr(render_state, 'player_dead', False):
@@ -1155,12 +1241,12 @@ class QtGameView(QOpenGLWidget):
                 self.game_state.queue_shot()
                 effect = self._get_sound_instance('shoot.wav')
                 if effect: effect.play()
-                return 
+                return
 
         if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ShiftModifier and not self.play_mode:
             obj = self.get_object_at_3d(event.x(), event.y())
             if obj: self.editor.save_state(); self.editor.set_selected_object(obj); self.update(); return
-            
+
         if event.button() == Qt.LeftButton and self.editor.state.selected_object and not self.play_mode:
             obj_pos = self.get_selected_object_pos()
             if obj_pos:
@@ -1180,12 +1266,12 @@ class QtGameView(QOpenGLWidget):
                     self.drag_start_on_axis = start_pt
                     self.setCursor(Qt.ClosedHandCursor)
                     return
-        
+
         if not self.play_mode and event.button() == Qt.RightButton:
             self.mouselook_active = True
             self.last_mouse_pos = event.pos()
             self.setCursor(Qt.BlankCursor)
-            
+
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -1209,9 +1295,10 @@ class QtGameView(QOpenGLWidget):
             self.editor.update_views()
             return
 
-        # Play Mode Mouse
+        # Play Mode Mouse — skip entirely while the console overlay is capturing input
         if self.play_mode:
-            if self.debug_mode_active: return
+            if self.debug_mode_active or self.console_overlay_active:
+                return
             cp = event.pos()
             dx, dy = cp.x() - self.last_mouse_pos.x(), cp.y() - self.last_mouse_pos.y()
             if dx == 0 and dy == 0: return
@@ -1237,7 +1324,7 @@ class QtGameView(QOpenGLWidget):
             self.hovered_face_info = self.get_brush_face_at_coords(event.x(), event.y())
             self.update()
             return
-        
+
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -1246,7 +1333,7 @@ class QtGameView(QOpenGLWidget):
             self.setCursor(Qt.ArrowCursor)
             return
 
-        if self.is_dragging_gizmo: 
+        if self.is_dragging_gizmo:
             self.is_dragging_gizmo = False
             self.setCursor(Qt.ArrowCursor)
             self.editor.save_state()
@@ -1254,7 +1341,7 @@ class QtGameView(QOpenGLWidget):
             self.mouselook_active = False
             self.setCursor(Qt.ArrowCursor)
         super().mouseReleaseEvent(event)
-    
+
     def wheelEvent(self, event):
         if not self.play_mode:
             self.camera.fov = np.clip(self.camera.fov - event.angleDelta().y() * 0.05, 30, 120)
@@ -1295,5 +1382,59 @@ class QtGameView(QOpenGLWidget):
             return pixmap
         return None
 
+    # =========================================================================
+    # IN-GAME CONSOLE OVERLAY
+    # =========================================================================
 
+    def eventFilter(self, obj, event):
+        """Catch Escape inside the console QLineEdit to close the overlay."""
+        if obj is self._console_input and event.type() == QEvent.KeyPress:
+            if event.key() == Qt.Key_Escape:
+                self._close_console_overlay()
+                return True   # consumed — do not propagate
+        return super().eventFilter(obj, event)
 
+    def _open_console_overlay(self):
+        """
+        Show the floating command bar at the bottom of the viewport.
+        Restores a visible cursor and freezes game input until dismissed.
+        """
+        self.console_overlay_active = True
+        # Restore a visible cursor so the player can see they are typing
+        QApplication.setOverrideCursor(Qt.ArrowCursor)
+        w, h = self.width(), self.height()
+        self._console_input.setGeometry(0, h - 36, w, 36)
+        self._console_input.show()
+        self._console_input.raise_()
+        self._console_input.setFocus()
+        self._console_input.clear()
+
+    def _close_console_overlay(self):
+        """
+        Hide the command bar and restore play-mode mouselook.
+        """
+        self.console_overlay_active = False
+        self._console_input.hide()
+        self._console_input.clearFocus()
+        self.setFocus()
+        if self.play_mode:
+            # Restore blank cursor and re-centre the mouse for mouselook
+            while QApplication.overrideCursor() is not None:
+                QApplication.restoreOverrideCursor()
+            QApplication.setOverrideCursor(Qt.BlankCursor)
+            center = self.mapToGlobal(self.rect().center())
+            QCursor.setPos(center)
+            self.last_mouse_pos = self.mapFromGlobal(center)
+
+    def _submit_console_command(self):
+        """
+        Forward whatever is in the overlay input to the DebugConsole and close.
+        Routing through DebugConsole._on_command_entered means the command is
+        echoed in orange, added to history, and dispatched to the handler — the
+        same behaviour as typing in the standalone console window.
+        """
+        cmd = self._console_input.text().strip()
+        if cmd and self.debug_console_window:
+            self.debug_console_window.command_input.setText(cmd)
+            self.debug_console_window._on_command_entered()
+        self._close_console_overlay()

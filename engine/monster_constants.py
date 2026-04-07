@@ -42,3 +42,9 @@ MONSTER_SPRITE_SIZES = {
 # Fallback used when monster_type is not listed above
 MONSTER_SPRITE_SIZE_DEFAULT = (128, 128)
 
+# ---------------------------------------------------------------------------
+# Projectile constants  (flying monster ranged attack)
+# ---------------------------------------------------------------------------
+MONSTER_PROJECTILE_SPEED    = 160.0   # world-units / second
+MONSTER_PROJECTILE_MAX_DIST = 1024.0  # despawn after travelling this far
+MONSTER_PROJECTILE_SPRITE_SIZE = (40.0, 40.0)   # billboard size in world units

@@ -38,6 +38,7 @@ class RenderState:
         
         # Visual FX
         self.bullet_marks = [] # List of {'pos': [x,y,z], 'alpha': float}
+        self.projectiles = []  # list of {'pos': [x, y, z]}
         
         # Debug / Stats
         self.total_brushes = 0
