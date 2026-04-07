@@ -1,8 +1,11 @@
-### v1.2.0.0
+### v1.2.0.0   |    MILESTONE 1
 
 * NEW: Monster entity (No AI yet - work in progress)
-* NEW: Logic menu and Visual Scripting tool (CTRL-L)
+* NEW: Logic menu and Logic-Graph Visual Scripting tool (CTRL-L)
 * Updated property editor layout
+* Entities now have stable UUIDs — I/O connections survive renames
+* Property types preserved in save files (no more stringifying numbers/bools)
+* Map format bumped to v3 (fully backwards compatible with v2/v1)
 
 ### v1.1.0.0
 
