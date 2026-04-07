@@ -1,6 +1,5 @@
 {
-    "fingerprint": "RStudio",
-    "version": 2,
+    "version": 3,
     "brushes": [
         {
             "pos": [
@@ -21,7 +20,8 @@
                 "west": "concrete02.png",
                 "top": "concrete02.png",
                 "down": "concrete02.png"
-            }
+            },
+            "id": "86335b59-a664-4bec-9609-b021385ba645"
         },
         {
             "pos": [
@@ -42,7 +42,8 @@
                 "west": "concrete02.png",
                 "top": "concrete02.png",
                 "down": "concrete02.png"
-            }
+            },
+            "id": "8050e00a-ffa9-4c3a-a6b3-b0c2d3d0cbb3"
         },
         {
             "pos": [
@@ -63,7 +64,8 @@
                 "west": "tiles.jpg",
                 "top": "tiles.jpg",
                 "down": "tiles.jpg"
-            }
+            },
+            "id": "323afe8f-90a0-40b7-8e11-4bdac278e40e"
         },
         {
             "pos": [
@@ -85,7 +87,8 @@
                 "top": "concrete02.png",
                 "down": "concrete02.png"
             },
-            "hidden": false
+            "hidden": false,
+            "id": "bf4e22c0-7098-40ca-a4ac-1929b9236044"
         },
         {
             "pos": [
@@ -106,7 +109,8 @@
                 "west": "concrete02.png",
                 "top": "concrete02.png",
                 "down": "concrete02.png"
-            }
+            },
+            "id": "95c26d65-708b-46b9-b45c-585c4e50ca9b"
         },
         {
             "pos": [
@@ -127,7 +131,8 @@
                 "west": "concrete02.png",
                 "top": "concrete02.png",
                 "down": "concrete02.png"
-            }
+            },
+            "id": "efa3a4d9-7de7-4b10-bc77-ca3f77eba5a6"
         },
         {
             "pos": [
@@ -147,7 +152,8 @@
                 "west": "WoodenCrate_512.jpg",
                 "top": "WoodenCrate_512.jpg",
                 "down": "WoodenCrate_512.jpg"
-            }
+            },
+            "id": "23e404b2-7606-4473-8041-2a04a402bc1c"
         }
     ],
     "things": [
@@ -161,13 +167,19 @@
             "properties": {
                 "type": "light",
                 "name": "Light_1",
-                "colour": "[255, 255, 255]",
-                "intensity": "1.0",
-                "radius": "1024.0",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 1024.0,
                 "state": "on",
-                "show_radius": "False",
-                "casts_shadows": "False"
-            }
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "86e01c9a-66c9-442c-b5be-cd22e4c07d2c"
+            },
+            "io_connections": []
         },
         {
             "type": "speaker",
@@ -180,14 +192,16 @@
                 "type": "speaker",
                 "name": "Speaker_1",
                 "sound_file": "sounds/engine-room.wav",
-                "radius": "512.0",
-                "global": "True",
-                "show_radius": "False",
-                "volume": "0.75",
-                "looping": "True",
-                "play_on_start": "True",
-                "state": "on"
-            }
+                "radius": 512.0,
+                "global": true,
+                "show_radius": false,
+                "volume": 0.75,
+                "looping": true,
+                "play_on_start": true,
+                "state": "on",
+                "id": "cbc513bd-7671-4904-812e-920970299521"
+            },
+            "io_connections": []
         },
         {
             "type": "playerstart",
@@ -199,7 +213,8 @@
             "properties": {
                 "type": "playerstart",
                 "name": "PlayerStart_1",
-                "angle": "0.0"
+                "angle": 0.0,
+                "id": "df6fecb2-ae81-49b9-9d1d-130544a40d2c"
             },
             "io_connections": [
                 {
@@ -211,26 +226,6 @@
                     "fire_once": false
                 }
             ]
-        },
-        {
-            "type": "pickup",
-            "pos": [
-                224.0,
-                40,
-                16.0
-            ],
-            "properties": {
-                "type": "pickup",
-                "name": "Pickup_1",
-                "item_type": "health",
-                "value": "25",
-                "activation": "walk_over",
-                "collected": "False",
-                "respawns": "False",
-                "respawn_time": "20.0",
-                "key_name": "blue_key",
-                "custom_sprite": ""
-            }
         }
     ]
 }

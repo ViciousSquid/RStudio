@@ -1,4 +1,5 @@
 {
+    "version": 3,
     "brushes": [
         {
             "pos": [
@@ -19,7 +20,8 @@
                 "west": "default.png",
                 "top": "default.png",
                 "down": "default.png"
-            }
+            },
+            "id": "a8699259-69df-4a29-9ab2-dac3703377dd"
         },
         {
             "pos": [
@@ -40,7 +42,8 @@
                 "west": "default.png",
                 "top": "default.png",
                 "down": "default.png"
-            }
+            },
+            "id": "e2f0576f-30f0-4ca8-b6a5-cdfa3fd3e6b3"
         },
         {
             "pos": [
@@ -61,7 +64,8 @@
                 "west": "default.png",
                 "top": "default.png",
                 "down": "default.png"
-            }
+            },
+            "id": "94890733-8fe3-4b5d-9325-64fb9174bfa3"
         },
         {
             "pos": [
@@ -82,7 +86,8 @@
                 "west": "default.png",
                 "top": "default.png",
                 "down": "default.png"
-            }
+            },
+            "id": "d2f95717-b20b-4abc-8a22-77df2146d150"
         },
         {
             "pos": [
@@ -103,7 +108,8 @@
                 "west": "default.png",
                 "top": "default.png",
                 "down": "default.png"
-            }
+            },
+            "id": "f3109ac7-1b3c-481f-9b26-0827316d869e"
         },
         {
             "pos": [
@@ -124,7 +130,8 @@
                 "west": "default.png",
                 "top": "default.png",
                 "down": "default.png"
-            }
+            },
+            "id": "dbfeed9f-5405-4e3d-ad12-38c8d52bbac4"
         },
         {
             "pos": [
@@ -144,7 +151,8 @@
                 "west": "default.png",
                 "top": "default.png",
                 "down": "default.png"
-            }
+            },
+            "id": "a6d27140-f111-41c2-9f96-f51f17e330bd"
         },
         {
             "pos": [
@@ -164,7 +172,8 @@
                 "west": "default.png",
                 "top": "default.png",
                 "down": "default.png"
-            }
+            },
+            "id": "27037c1a-7cb0-4061-8b20-4046320dab4a"
         }
     ],
     "things": [
@@ -178,14 +187,19 @@
             "properties": {
                 "type": "light",
                 "name": "Light_1",
-                "colour": "[255, 255, 255]",
-                "intensity": "1.0",
-                "radius": "1024.0",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 1024.0,
                 "state": "on",
-                "show_radius": "False",
-                "casts_shadows": "True"
-            }
+                "show_radius": false,
+                "casts_shadows": true,
+                "id": "903958e5-f84a-47d1-b363-3ba597237e44"
+            },
+            "io_connections": []
         }
-    ],
-    "fingerprint": "RStudio"
+    ]
 }

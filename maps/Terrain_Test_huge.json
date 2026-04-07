@@ -1,5 +1,5 @@
 {
-    "fingerprint": "RStudio",
+    "version": 3,
     "brushes": [
         {
             "pos": [
@@ -24,7 +24,8 @@
                 0.4196078431372549,
                 0.4196078431372549,
                 0.4196078431372549
-            ]
+            ],
+            "id": "de7de337-4653-4180-acbc-c38025d4924e"
         },
         {
             "pos": [
@@ -49,7 +50,8 @@
                 0.4549019607843137,
                 0.4549019607843137,
                 0.4549019607843137
-            ]
+            ],
+            "id": "e2d0cf14-c6d2-4677-930e-67a4ab7d02ef"
         },
         {
             "pos": [
@@ -74,7 +76,8 @@
                 0.4392156862745098,
                 0.4392156862745098,
                 0.4392156862745098
-            ]
+            ],
+            "id": "bdc9c106-a37e-45fe-8556-95840f6dcf97"
         }
     ],
     "things": [
@@ -88,8 +91,10 @@
             "properties": {
                 "type": "playerstart",
                 "name": "PlayerStart_1",
-                "angle": "0.0"
-            }
+                "angle": 0.0,
+                "id": "7fe57a6d-492f-4d2d-b887-b1aad57afd4c"
+            },
+            "io_connections": []
         },
         {
             "type": "light",
@@ -101,13 +106,19 @@
             "properties": {
                 "type": "light",
                 "name": "Light_1",
-                "colour": "[255, 255, 255]",
-                "intensity": "1.0",
-                "radius": "8092.0",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 8092.0,
                 "state": "on",
-                "show_radius": "False",
-                "casts_shadows": "False"
-            }
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "4bab18f1-45d7-4e9f-b9d3-33d0cead6dfe"
+            },
+            "io_connections": []
         }
     ],
     "terrain_data": {
