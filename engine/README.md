@@ -4,7 +4,7 @@ Camera matrices, movement, projection.
 ### `constants.py`
 Shared constants (tile size, etc.).
 ### `logic_thread.py`
-Game logic loop (separate thread) — triggers, doors, movers, pickups, monsters, I/O event dispatching with dual ID/name entity resolution.
+Game logic loop (separate thread) — I/O event dispatching _with dual ID/name entity resolution_
 ### `monster_constants.py`
 Monster type definitions and stat tables.
 ### `obj_loader.py`
