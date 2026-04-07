@@ -1,7 +1,8 @@
 ### v1.2.0.0   |    MILESTONE 1
 
 * NEW: Monster entity (Very basic, no AI - work in progress)
-* NEW: Logic Graph Editor (**CTRL-L**) and Logic Wizard (**CTRL-SHIFT-W**)
+* NEW: Logic Graph Editor (**CTRL-L**) for visual scripting
+* NEW: Logic Wizard (**CTRL-SHIFT-W**) To create quick logic (25 examples)
 * Updated property editor layout
 * Entities now have stable UUIDs — I/O connections survive renames
 * Property types preserved in save files (no more stringifying numbers/bools)
