@@ -651,17 +651,14 @@ class LevelChanger(Thing):
     """Entity that loads a new level when triggered."""
     pixmap_path = "assets/sprites/levelchanger.png"
 
-    def __init__(self, pos=None, **kwargs):
-        super().__init__(pos=pos or [0, 0, 0], **kwargs)
-        self.properties.update({
-            'type': 'levelchanger',
-            'name': 'LevelChanger_1',
-            'target_map': 'Simple_Map_Test.json',
-            'delay': '0.0',
-            'fade_time': '0.5',
-            'show_radius': 'False',
-            'radius': '128.0'
-        })
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties['type'] = 'levelchanger'
+        self.properties.setdefault('target_map', 'maps/Simple_Map_Test.json')
+        self.properties.setdefault('delay', '0.0')
+        self.properties.setdefault('fade_time', '0.5')
+        self.properties.setdefault('show_radius', 'False')
+        self.properties.setdefault('radius', '128.0')
         
         # Store direct reference to MainWindow for reliable level changing
         self._main_window = None
@@ -702,6 +699,10 @@ class LevelChanger(Thing):
 
         if not target_map.lower().endswith('.json'):
             target_map += '.json'
+
+        # ENFORCE MAPS FOLDER: Prepend maps/ if not already present
+        if not (target_map.startswith('maps/') or target_map.startswith('maps\\')):
+            target_map = f"maps/{target_map}"
 
         print(f"[LevelChanger] Target resolved → '{target_map}' "
             f"(I/O parameter='{parameter}', entity property='{self.properties.get('target_map')}')")
@@ -765,5 +766,3 @@ ENTITY_CATEGORIES = {
     'Environment': ['Light', 'Speaker', 'Model'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer'],
 }
-
-
