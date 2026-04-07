@@ -28,7 +28,7 @@ from editor.view_2d import View2D
 from editor.editor_state import EditorState
 from editor.terrain_editor import TerrainEditorWindow
 from engine.terrain import Terrain
-from editor.debug_console import DebugConsole, debug_log
+from editor.debug_console import DebugConsole, CommandInput, debug_log
 from editor.console_commands import ConsoleCommandHandler
 
 
@@ -182,6 +182,9 @@ class MainWindow(QMainWindow):
         # --- Connect the command_issued signal to the command handler ---
         self.console_handler = ConsoleCommandHandler(self)
         self.debug_console.command_issued.connect(self.console_handler.handle_command)
+
+        # --- Play-mode console overlay (Quake-style drop-down input) ---
+        self._create_play_console_overlay()
 
         # If configured, switch to the Debug Console tab on startup
         if self.config.getboolean('Display', 'always_show_io_debug', fallback=False):
@@ -419,6 +422,15 @@ class MainWindow(QMainWindow):
         super().moveEvent(event)
 
     def toggle_debug_console(self):
+        # --- Play mode: use the overlay instead of switching tabs ---
+        if self.view_3d.play_mode:
+            if self._is_play_console_visible():
+                self._hide_play_console_overlay()
+            else:
+                self._show_play_console_overlay()
+            return
+
+        # --- Editor mode: switch tabs as before ---
         tab = self.properties_tab_widget
         console_idx = tab.indexOf(self.debug_console)
         # Ensure the properties dock is visible
@@ -428,6 +440,79 @@ class MainWindow(QMainWindow):
             tab.setCurrentIndex(0)
         else:
             tab.setCurrentIndex(console_idx)
+
+    # ------------------------------------------------------------------
+    #  Play-mode console overlay helpers
+    # ------------------------------------------------------------------
+
+    def _create_play_console_overlay(self):
+        """Create a translucent command overlay for use during play mode."""
+        from PyQt5.QtWidgets import QFrame, QVBoxLayout
+        from PyQt5.QtGui import QFont
+
+        # Container frame — parented to view_3d so it draws on top of the 3D view
+        self._play_console_frame = QFrame(self.view_3d)
+        self._play_console_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(0, 0, 0, 200);
+                border-bottom: 2px solid #4CAF50;
+            }
+        """)
+        self._play_console_frame.setFixedHeight(50)
+        self._play_console_frame.hide()
+
+        layout = QVBoxLayout(self._play_console_frame)
+        layout.setContentsMargins(8, 4, 8, 4)
+
+        self._play_console_input = CommandInput(self._play_console_frame)
+        self._play_console_input.setPlaceholderText("Enter command...")
+        self._play_console_input.setFont(QFont("Consolas", 12))
+        self._play_console_input.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(30, 30, 30, 220);
+                color: #00FF00;
+                border: 1px solid #555;
+                padding: 4px 8px;
+                selection-background-color: #4CAF50;
+            }
+        """)
+        self._play_console_input.returnPressed.connect(self._on_play_console_submit)
+        layout.addWidget(self._play_console_input)
+
+    def _show_play_console_overlay(self):
+        """Show the overlay and release the mouse cursor."""
+        frame = self._play_console_frame
+        # Stretch to full width of the 3D view
+        frame.setFixedWidth(self.view_3d.width())
+        frame.move(0, 0)
+        frame.show()
+        frame.raise_()
+
+        # Temporarily restore cursor so the user can see what they type
+        QApplication.restoreOverrideCursor()
+        self.view_3d.setCursor(Qt.ArrowCursor)
+
+        self._play_console_input.clear()
+        self._play_console_input.setFocus()
+
+    def _hide_play_console_overlay(self):
+        """Hide the overlay and re-grab the mouse."""
+        self._play_console_frame.hide()
+
+        # Re-hide cursor for FPS control
+        QApplication.setOverrideCursor(Qt.BlankCursor)
+        self.view_3d.setFocus()
+
+    def _is_play_console_visible(self):
+        return self._play_console_frame.isVisible()
+
+    def _on_play_console_submit(self):
+        """Submit the typed command, echo it in the debug console, then hide."""
+        cmd = self._play_console_input.text().strip()
+        if cmd:
+            self._play_console_input.add_history(cmd)
+            self.console_handler.handle_command(cmd)
+        self._hide_play_console_overlay()
 
 
     def cycle_2d_view(self):
@@ -1747,6 +1832,14 @@ class MainWindow(QMainWindow):
         # PLAY MODE HANDLING (hardcoded shortcuts first)
         # ------------------------------------------------------------------
         if self.view_3d.play_mode:
+            # If the play console overlay is open, swallow all keys except
+            # tilde (close it) and Escape (also close it).
+            if self._is_play_console_visible():
+                if event.key() in (Qt.Key_QuoteLeft, Qt.Key_Escape):
+                    self._hide_play_console_overlay()
+                # All other keys go to the overlay input — don't process as game input
+                return
+
             if event.key() == Qt.Key_Escape:
                 self.view_3d.toggle_play_mode(None, None)
                 self.ui.notification_label.setText("")
@@ -2226,3 +2319,5 @@ class MainWindow(QMainWindow):
             self.view_3d.logic_thread.join(timeout=1.0)
         
         super().closeEvent(event)
+
+

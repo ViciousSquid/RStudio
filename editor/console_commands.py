@@ -73,6 +73,8 @@ class ConsoleCommandHandler:
 
             # Original commands
             'noclip': self.cmd_noclip,
+            'god': self.cmd_god,
+            'buddha': self.cmd_buddha,
             'clear': self.cmd_clear,
             'fps': self.cmd_fps,
             'map': self.cmd_map,
@@ -344,6 +346,8 @@ class ConsoleCommandHandler:
 <b style="color:orange;">r_clearcolor</b> r g b — Set background colour<br>
 <b style="color:cyan;">=== Movement & Physics ===</b><br>
 <b style="color:orange;">noclip</b> — Toggle noclip<br>
+<b style="color:orange;">god</b> — Toggle invincibility<br>
+<b style="color:orange;">buddha</b> — Toggle buddha mode (health cannot go below 2)<br>
 <b style="color:orange;">physics</b> on/off/toggle<br>
 <b style="color:orange;">setpos</b>{sep}<b style="color:orange;">teleport</b> x y z<br>
 """
@@ -842,6 +846,30 @@ class ConsoleCommandHandler:
         self.main_window.show_toast(f"Noclip: {state}")
         debug_log("Info", f"Noclip set to {state}")
 
+    def cmd_god(self, args):
+        if not self._require_play_mode("god"):
+            return
+        lt = self.main_window.view_3d.logic_thread
+        lt.god_mode = not lt.god_mode
+        state = "ON" if lt.god_mode else "OFF"
+        if lt.god_mode:
+            # Turning on god also disables buddha to avoid confusion
+            lt.buddha_mode = False
+        self.main_window.show_toast(f"God mode: {state}")
+        debug_log("Info", f"God mode set to {state}")
+
+    def cmd_buddha(self, args):
+        if not self._require_play_mode("buddha"):
+            return
+        lt = self.main_window.view_3d.logic_thread
+        lt.buddha_mode = not lt.buddha_mode
+        state = "ON" if lt.buddha_mode else "OFF"
+        if lt.buddha_mode:
+            # Turning on buddha also disables god to avoid confusion
+            lt.god_mode = False
+        self.main_window.show_toast(f"Buddha mode: {state}")
+        debug_log("Info", f"Buddha mode set to {state}")
+
     def cmd_physics(self, args):
         if not self._require_play_mode("physics"):
             return
@@ -906,3 +934,6 @@ class ConsoleCommandHandler:
             debug_log("Info", f"Loaded map {map_name}")
         else:
             debug_log("Error", f"Map not found: {map_name}")
+
+
+
