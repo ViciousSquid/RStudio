@@ -102,33 +102,40 @@ class Thing:
 
     def to_dict(self):
         """Serialize to dictionary for saving."""
-        io_connections = self.properties.get('_io_connections', [])
-        
-        serialized_connections = []
-        for conn in io_connections:
-            if hasattr(conn, 'to_dict'):
-                serialized_connections.append(conn.to_dict())
-            elif isinstance(conn, dict):
-                serialized_connections.append(conn)
-        
         props_copy = {k: v for k, v in self.properties.items() if k != '_io_connections'}
+        
         serializable_props = {}
         for k, v in props_copy.items():
+            # Coerce legacy string-typed values to their native types on save.
+            # This heals old map files automatically on next save.
+            if isinstance(v, str):
+                try:
+                    v = ast.literal_eval(v)
+                except (ValueError, SyntaxError):
+                    pass  # Genuinely a string — keep it
+            
             if isinstance(v, (str, int, float, bool, list, dict, type(None))):
                 serializable_props[k] = v
             else:
-                # Fallback for non-JSON-native types (e.g. QColor)
-                serializable_props[k] = str(v)
-        
+                serializable_props[k] = str(v)  # QColor etc.
+
         result = {
             'type': self.properties.get('type'),
             'pos': self.pos,
             'properties': serializable_props
         }
-        
-        if serialized_connections:
-            result['io_connections'] = serialized_connections
-        
+
+        # Always emit io_connections, even if empty, so loaders are unambiguous
+        try:
+            from .io_system import serialize_connections
+            result['io_connections'] = serialize_connections(self)
+        except ImportError:
+            io_connections = self.properties.get('_io_connections', [])
+            result['io_connections'] = [
+                conn.to_dict() if hasattr(conn, 'to_dict') else conn
+                for conn in io_connections
+            ]
+
         return result
 
     @staticmethod

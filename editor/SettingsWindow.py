@@ -366,6 +366,8 @@ class SettingsWindow(QDialog):
             "Delete Brush": "DEL",
             "reset_layout": "Ctrl+Shift+R",
             "save_layout": "Ctrl+Shift+S",
+            "Logic Graph Editor": "Ctrl+L",
+            "Logic Wizard": "Ctrl+Shift+W",
             "Hide Brush": "H",
             "Unhide All Brushes": "Shift+H",
             "Decrease Grid Size": "[",
@@ -398,7 +400,7 @@ class SettingsWindow(QDialog):
                 right_form.addRow(label_text, shortcut_label)
 
         # 3. Switch 2D Views (Last item)
-        switch_2d_views_label = QLabel("Ctrlt+Tab")
+        switch_2d_views_label = QLabel("Ctrl+Tab")
         right_form.addRow("Switch 2D Views:", switch_2d_views_label)
 
         # Add columns to main layout

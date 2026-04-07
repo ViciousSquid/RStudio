@@ -346,6 +346,7 @@ class LogicGraphScene(QGraphicsScene):
 
         self._build_nodes()
         self._build_connections()
+        self._fix_source_target_order()
 
     def _entity_type(self, entity) -> str:
         if IO_AVAILABLE:
@@ -441,6 +442,48 @@ class LogicGraphScene(QGraphicsScene):
                     ci = ConnectionItem(src_pin, dst_pin, conn)
                     self.addItem(ci)
                     self._connections.append(ci)
+
+    def _fix_source_target_order(self):
+        """Swap node positions so source nodes sit left of their targets.
+
+        Only affects nodes that were auto-placed by the grid layout
+        (i.e. those without saved positions).  Nodes with persisted
+        positions are left alone.
+        """
+        saved = getattr(self.editor_state, '_logic_graph_positions', {})
+
+        # Collect (src_node, dst_node) pairs that need checking
+        swapped = set()
+        for ci in self._connections:
+            src_node = ci.src_pin.node
+            dst_node = ci.dst_pin.node
+            if src_node is dst_node:
+                continue
+
+            src_id = self._entity_id(src_node.entity)
+            dst_id = self._entity_id(dst_node.entity)
+
+            # Skip if either has a saved position — the user placed them deliberately
+            if (src_id and src_id in saved) or (dst_id and dst_id in saved):
+                continue
+
+            # If source is to the right of (or on top of) the target, swap
+            pair_key = (id(src_node), id(dst_node))
+            if pair_key in swapped:
+                continue
+
+            if src_node.x() >= dst_node.x():
+                sx, sy = src_node.x(), src_node.y()
+                dx, dy = dst_node.x(), dst_node.y()
+                src_node.setPos(dx, dy)
+                dst_node.setPos(sx, sy)
+                swapped.add(pair_key)
+                swapped.add((id(dst_node), id(src_node)))
+
+        # Refresh all connection lines after moves
+        if swapped:
+            for ci in self._connections:
+                ci.refresh()
 
     def refresh_node_connections(self, node: EntityNodeItem):
         for ci in self._connections:
