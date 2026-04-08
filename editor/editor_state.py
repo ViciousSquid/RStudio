@@ -504,8 +504,3 @@ class EditorState:
                     })
 
         return sources
-
-
-
-
-
