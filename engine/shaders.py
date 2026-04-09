@@ -45,8 +45,8 @@ void main() {
     'lit.frag': """#version 330 core
 precision mediump float;
 out vec4 FragColor;
-in highp vec3 FragPos;    // explicit highp to maintain world-space accuracy
-in vec3 Normal;           // implicitly mediump
+in highp vec3 FragPos;
+in vec3 Normal;
 uniform vec3 object_color;
 uniform float alpha;
 struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; };
@@ -54,13 +54,18 @@ uniform Light lights[8];
 uniform int active_lights;
 void main() {
     vec3 norm = normalize(Normal);
-    vec3 result = vec3(0.1) * object_color; // Ambient
+    vec3 result = vec3(0.1) * object_color;
     for(int i = 0; i < active_lights; i++) {
-        highp float distance = length(lights[i].position - FragPos);
-        if(distance < lights[i].radius) {
-            vec3 lightDir = normalize(lights[i].position - FragPos);
+        // FIX: use distSq to skip sqrt for out-of-range lights (matches ARM shader behaviour)
+        highp vec3  toLight  = lights[i].position - FragPos;
+        highp float distSq   = dot(toLight, toLight);
+        highp float radiusSq = lights[i].radius * lights[i].radius;
+        if(distSq < radiusSq) {
+            highp float dist = sqrt(distSq);
+            vec3  lightDir = toLight / dist;
             float diff = max(dot(norm, lightDir), 0.0);
-            float att = 1.0 - smoothstep(0.0, lights[i].radius, distance);
+            float att  = 1.0 - (dist / lights[i].radius);
+            att = att * att;
             result += (diff * lights[i].color * lights[i].intensity * att) * object_color;
         }
     }
@@ -105,16 +110,21 @@ uniform int active_lights;
 void main() {
     vec4 texColor = texture(texture_diffuse, TexCoords);
     if(texColor.a < 0.1) discard;
-    
+
     vec3 norm = normalize(Normal);
-    vec3 result = vec3(0.1) * texColor.rgb; // Ambient
-    
+    vec3 result = vec3(0.1) * texColor.rgb;
+
     for(int i = 0; i < active_lights; i++) {
-        highp float distance = length(lights[i].position - FragPos);
-        if(distance < lights[i].radius) {
-            vec3 lightDir = normalize(lights[i].position - FragPos);
+        // FIX: use distSq to skip sqrt for out-of-range lights (matches ARM shader behaviour)
+        highp vec3  toLight  = lights[i].position - FragPos;
+        highp float distSq   = dot(toLight, toLight);
+        highp float radiusSq = lights[i].radius * lights[i].radius;
+        if(distSq < radiusSq) {
+            highp float dist = sqrt(distSq);
+            vec3  lightDir = toLight / dist;
             float diff = max(dot(norm, lightDir), 0.0);
-            float att = 1.0 - smoothstep(0.0, lights[i].radius, distance);
+            float att  = 1.0 - (dist / lights[i].radius);
+            att = att * att;
             result += (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
         }
     }

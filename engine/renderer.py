@@ -116,6 +116,7 @@ ARM_FOG_FRAG = """#version 330 core
 out vec4 FragColor;
 in vec3 localPos;
 uniform mat4 model;
+uniform mat4 inverseModel;   // FIX: pre-computed on CPU, replaces inverse(model) per-fragment
 uniform vec3 viewPos;
 uniform float density;
 uniform vec3 fogColor;
@@ -125,40 +126,40 @@ uniform float time;
 
 vec2 intersectBox(vec3 rayOrigin, vec3 rayDir) {
     vec3 tMin = (-0.5 - rayOrigin) / rayDir;
-    vec3 tMax = (0.5 - rayOrigin) / rayDir;
+    vec3 tMax = ( 0.5 - rayOrigin) / rayDir;
     vec3 t1 = min(tMin, tMax);
     vec3 t2 = max(tMin, tMax);
     float tNear = max(max(t1.x, t1.y), t1.z);
-    float tFar = min(min(t2.x, t2.y), t2.z);
+    float tFar  = min(min(t2.x, t2.y), t2.z);
     return vec2(tNear, tFar);
 }
 
 void main() {
-    vec3 fragWorldPos = vec3(model * vec4(localPos, 1.0));
-    vec3 rayDirWorld = normalize(fragWorldPos - viewPos);
-    mat4 inverseModel = inverse(model);
-    vec3 rayOriginLocal = (inverseModel * vec4(viewPos, 1.0)).xyz;
-    vec3 rayDirLocal = normalize((inverseModel * vec4(rayDirWorld, 0.0)).xyz);
+    vec3 fragWorldPos   = vec3(model * vec4(localPos, 1.0));
+    vec3 rayDirWorld    = normalize(fragWorldPos - viewPos);
+    // FIX: inverseModel is a uniform -- no per-fragment inverse() call on GPU.
+    vec3 rayOriginLocal = (inverseModel * vec4(viewPos,       1.0)).xyz;
+    vec3 rayDirLocal    = normalize((inverseModel * vec4(rayDirWorld, 0.0)).xyz);
     vec2 t = intersectBox(rayOriginLocal, rayDirLocal);
     float tNear = t.x;
-    float tFar = t.y;
+    float tFar  = t.y;
     if (tNear >= tFar) discard;
     tNear = max(0.0, tNear);
-    
-    // ARM OPTIMIZATION: 16 steps instead of 32
-    int num_steps = 16;
-    float stepSize = (tFar - tNear) / float(num_steps);
-    vec4 accumulatedColor = vec4(0.0);
-    
+
+    // ARM OPTIMIZATION: 16 ray-march steps
+    int   num_steps = 16;
+    float stepSize  = (tFar - tNear) / float(num_steps);
+    vec4  accumulatedColor = vec4(0.0);
+
     for (int i = 0; i < num_steps; ++i) {
-        float currentT = tNear + float(i) * stepSize;
-        vec3 samplePos = rayOriginLocal + rayDirLocal * currentT;
-        vec3 noiseCoord = samplePos * noiseScale + vec3(0.0, 0.0, time * 0.1);
+        float currentT   = tNear + float(i) * stepSize;
+        vec3  samplePos  = rayOriginLocal + rayDirLocal * currentT;
+        vec3  noiseCoord = samplePos * noiseScale + vec3(0.0, 0.0, time * 0.1);
         float noiseValue = texture(noiseTexture, noiseCoord).r;
-        float stepDensity = density * noiseValue;
+        float stepDensity   = density * noiseValue;
         float transmittance = exp(-stepDensity * stepSize);
         accumulatedColor.rgb += fogColor * (1.0 - transmittance) * (1.0 - accumulatedColor.a);
-        accumulatedColor.a += (1.0 - transmittance);
+        accumulatedColor.a   += (1.0 - transmittance);
         if (accumulatedColor.a > 0.95) break;
     }
     accumulatedColor.a = clamp(accumulatedColor.a, 0.0, 1.0);
@@ -662,9 +663,8 @@ void main() {
         self.shaders['fog'] = fog_shader
         self.uniforms['fog'] = UniformCache(fog_shader)
         self._preload_lit_uniforms('fog')
-        self.uniforms['fog'].preload(['viewPos', 'time', 'noiseTexture', 'density', 'fogColor', 
-                                      'noiseScale', 'object_color', 'alpha'])
-        
+        self.uniforms['fog'].preload(['viewPos', 'time', 'noiseTexture', 'density', 'fogColor',
+                                      'noiseScale', 'object_color', 'alpha', 'inverseModel'])
         print("ARM-optimized shaders compiled successfully")
 
     def _compile_standard_shaders(self):
@@ -681,8 +681,8 @@ void main() {
         self._preload_lit_uniforms('textured')
         self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale', 'normalMatrix'])
         self._preload_lit_uniforms('fog')
-        self.uniforms['fog'].preload(['viewPos', 'time', 'noiseTexture', 'density', 'fogColor', 
-                                      'noiseScale', 'object_color', 'alpha'])
+        self.uniforms['fog'].preload(['viewPos', 'time', 'noiseTexture', 'density', 'fogColor',
+                                      'noiseScale', 'object_color', 'alpha', 'inverseModel'])
 
     def _preload_lit_uniforms(self, shader_name):
         uniforms = self.uniforms[shader_name]
@@ -726,6 +726,7 @@ void main() {
         gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
         gl.glEnableVertexAttribArray(0)
         gl.glBindVertexArray(0)
+        self._grid_vbo = vbo  # FIX: store to prevent GPU memory leak on each grid rebuild
         self.vaos['grid'] = vao
     
     def set_sprite_textures(self, textures): 
@@ -887,6 +888,22 @@ void main() {
     # MAIN RENDER SCENE - OPTIMIZED
     # =========================================================================
 
+
+    # =========================================================================
+    # BRUSH SPLIT HELPER (shared by forward and deferred paths)
+    # =========================================================================
+
+    def _split_opaque(self, brushes):
+        """Split opaque brushes into (textured, solid) lists."""
+        textured, solid = [], []
+        for b in brushes:
+            if any(t and t not in ('default.png', 'caulk.jpg')
+                   for t in b.get('textures', {}).values()):
+                textured.append(b)
+            else:
+                solid.append(b)
+        return textured, solid
+
     def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config):
         # Route to deferred pipeline when enabled (only in Lit mode; other modes fall through to forward)
         current_mode = config.get('render_mode', RENDER_MODE_LIT)
@@ -899,7 +916,7 @@ void main() {
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
         self._proj_ptr = glm.value_ptr(projection)
         self._view_ptr = glm.value_ptr(view)
-        current_mode = config.get('render_mode', RENDER_MODE_LIT)
+        # FIX: duplicate current_mode read removed (already set above)
 
         # Reset per-frame stats
         self.render_stats.reset()
@@ -922,20 +939,7 @@ void main() {
         opaque_brushes, transparent_brushes, sprite_things, fog_volumes, water_brushes, glass_brushes = \
             self._sort_objects(brushes, things, config)
         
-        # Split opaque brushes: textured vs solid
-        textured_opaque = []
-        solid_opaque = []
-        for b in opaque_brushes:
-            is_textured = False
-            if 'textures' in b:
-                for t_name in b['textures'].values():
-                    if t_name and t_name not in ['default.png', 'caulk.jpg']:
-                        is_textured = True
-                        break
-            if is_textured:
-                textured_opaque.append(b)
-            else:
-                solid_opaque.append(b)
+        textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)  # FIX: shared helper, no duplication
 
         # Separate models from sprites
         models_to_render = []
@@ -1066,11 +1070,7 @@ void main() {
         opaque_brushes, transparent_brushes, sprite_things, fog_volumes, water_brushes, glass_brushes = \
             self._sort_objects(brushes, things, config)
 
-        textured_opaque, solid_opaque = [], []
-        for b in opaque_brushes:
-            is_tex = any(t and t not in ['default.png', 'caulk.jpg']
-                         for t in b.get('textures', {}).values())
-            (textured_opaque if is_tex else solid_opaque).append(b)
+        textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)  # FIX: shared helper, no duplication
 
         models_to_render, final_sprites = [], []
         for thing in sprite_things:
@@ -1575,7 +1575,11 @@ void main() {
         if not is_play:
             sprites = [t for t in things if isinstance(t, Thing)]
         else:
-            from editor.things import Pickup, Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger
+            # FIX: types imported at module level; local names ensure graceful fallback
+            try:
+                from editor.things import Pickup, Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger
+            except ImportError:
+                pass
             for t in things:
                 if isinstance(t, Thing):
                     if isinstance(t, Pickup):
@@ -1702,16 +1706,20 @@ void main() {
         gl.glUniform1i(uniforms['noiseTexture'], 1)
         gl.glBindVertexArray(self.vaos['cube'])
         gl.glEnable(gl.GL_CULL_FACE)
-        model_loc = uniforms['model']
-        density_loc = uniforms['density']
-        fog_color_loc = uniforms['fogColor']
-        noise_scale_loc = uniforms['noiseScale']
+        model_loc        = uniforms['model']
+        inv_model_loc    = uniforms['inverseModel']  # FIX: upload CPU-computed inverse
+        density_loc      = uniforms['density']
+        fog_color_loc    = uniforms['fogColor']
+        noise_scale_loc  = uniforms['noiseScale']
         object_color_loc = uniforms['object_color']
-        alpha_loc = uniforms['alpha']
-        
+        alpha_loc        = uniforms['alpha']
+
         for brush in brushes:
             model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+            # FIX: compute matrix inverse on CPU once per brush, not per-fragment on GPU.
+            inv_matrix = glm.inverse(model_matrix)
+            gl.glUniformMatrix4fv(inv_model_loc, 1, gl.GL_FALSE, glm.value_ptr(inv_matrix))
             f_color = brush.get('fog_color', [0.5, 0.6, 0.7])
             gl.glUniform1f(density_loc, brush.get('fog_density', 0.01))
             gl.glUniform3fv(fog_color_loc, 1, f_color)
@@ -2020,6 +2028,7 @@ void main() {
             gl.glEnableVertexAttribArray(0)
             gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
             gl.glBindVertexArray(0)
+            self._edge_vbo = vbo  # FIX: store to prevent GPU memory leak
         
         gl.glLineWidth(1.0)
         gl.glBindVertexArray(self._edge_vao)
@@ -2057,6 +2066,7 @@ void main() {
         gl.glVertexAttribPointer(2, 2, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(24))
         gl.glEnableVertexAttribArray(2)
         gl.glBindVertexArray(0)
+        self._cube_vbo = vbo  # FIX: store to prevent GPU memory leak
         return vao
 
     def _create_sprite_vao(self):
@@ -2069,6 +2079,7 @@ void main() {
         gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
         gl.glEnableVertexAttribArray(0)
         gl.glBindVertexArray(0)
+        self._sprite_vbo = vbo  # FIX: store to prevent GPU memory leak
         return vao
 
     def reload_shaders(self):
@@ -2106,6 +2117,7 @@ void main() {
         axis_verts = np.array([0,0,0, 1,0,0, 0,0,0, 0,1,0, 0,0,0, 0,0,1], dtype=np.float32)
         self.vao_gizmo_lines = gl.glGenVertexArrays(1)
         vbo = gl.glGenBuffers(1)
+        self._gizmo_lines_vbo = vbo  # FIX: store to prevent GPU memory leak
         gl.glBindVertexArray(self.vao_gizmo_lines)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, axis_verts.nbytes, axis_verts, gl.GL_STATIC_DRAW)
@@ -2120,6 +2132,7 @@ void main() {
         cone_verts = np.array(cone_verts, dtype=np.float32)
         self.vao_gizmo_cone = gl.glGenVertexArrays(1)
         vbo2 = gl.glGenBuffers(1)
+        self._gizmo_cone_vbo = vbo2  # FIX: store to prevent GPU memory leak
         gl.glBindVertexArray(self.vao_gizmo_cone)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo2)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, cone_verts.nbytes, cone_verts, gl.GL_STATIC_DRAW)
@@ -2160,9 +2173,3 @@ void main() {
             gl.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
         gl.glBindVertexArray(0)
-
-
-
-
-
-

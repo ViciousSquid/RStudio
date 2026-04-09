@@ -171,6 +171,10 @@ class LogicThread(threading.Thread):
         # Monster AI state  { id(thing): {'shoot_timer': float, 'anim_timer': float} }
         self.monster_states: Dict[int, Dict[str, float]] = {}
         
+        # Entity lookup caches (rebuilt at play-mode start for O(1) I/O lookups)
+        self._name_cache: Dict[str, Any] = {}
+        self._id_cache:   Dict[str, Any] = {}
+
         # Performance Monitoring
         self.actual_tps = 0.0
         self._tick_count = 0
@@ -190,36 +194,38 @@ class LogicThread(threading.Thread):
     # ENTITY LOOKUP (for I/O system)
     # =========================================================================
     
+    def _build_entity_caches(self):
+        """Build O(1) lookup dicts for I/O entity resolution.
+        Called once when entering play mode and whenever entities are added/removed.
+        """
+        self._name_cache = {}
+        self._id_cache   = {}
+        for b in self.brushes:
+            n = b.get('name')
+            if n:
+                self._name_cache[n] = b
+            i = b.get('id')
+            if i:
+                self._id_cache[i] = b
+        for t in self.things:
+            n = t.properties.get('name')
+            if n:
+                self._name_cache[n] = t
+            i = t.properties.get('id')
+            if i:
+                self._id_cache[i] = t
+
     def _find_entity_by_name(self, name: str):
-        """Find an entity (brush or thing) by name."""
+        """Find an entity (brush or thing) by name — O(1) via cache."""
         if not name:
             return None
-        
-        for brush in self.brushes:
-            if brush.get('name') == name:
-                return brush
-        
-        for thing in self.things:
-            thing_name = thing.properties.get('name', '')
-            if thing_name == name:
-                return thing
-        
-        return None
+        return self._name_cache.get(name)
 
     def _find_entity_by_id(self, entity_id: str):
-        """Find an entity (brush or thing) by stable UUID."""
+        """Find an entity (brush or thing) by stable UUID — O(1) via cache."""
         if not entity_id:
             return None
-
-        for brush in self.brushes:
-            if brush.get('id') == entity_id:
-                return brush
-
-        for thing in self.things:
-            if thing.properties.get('id') == entity_id:
-                return thing
-
-        return None
+        return self._id_cache.get(entity_id)
 
     # =========================================================================
     # PLAYER & MODE MANAGEMENT
@@ -297,6 +303,9 @@ class LogicThread(threading.Thread):
                     for conn in get_connections(thing):
                         conn.reset()
             
+            # Build O(1) entity-lookup caches for I/O system
+            self._build_entity_caches()
+
             # Fire OnPlayerSpawn from player start
             self._fire_player_spawn_outputs()
             
@@ -1372,8 +1381,10 @@ class LogicThread(threading.Thread):
             if self.play_mode and Pickup and isinstance(thing, Pickup) and i in self.collected_pickups:
                 continue
             if Light and isinstance(thing, Light):
-                if hasattr(thing, 'pos') and hasattr(thing.pos, 'x'):
-                    thing.pos = [thing.pos[0], thing.pos[1], thing.pos[2]]
+                # FIX: Only convert to list if pos is a glm.vec3 (has .x attribute)
+                # Avoids unconditional list allocation at 60 Hz per light.
+                if hasattr(thing.pos, 'x'):
+                    thing.pos = [thing.pos.x, thing.pos.y, thing.pos.z]
             visible_things.append(thing)
         
         write_state.visible_things = visible_things
@@ -1383,45 +1394,38 @@ class LogicThread(threading.Thread):
         proj_view = projection * view_matrix
         frustum_planes = self._extract_frustum_planes(proj_view)
         
+        # FIX: Single pass builds both safe_brushes (culled) and all_brushes.
+        # Previously two separate loops iterated self.brushes — doubled cost at 60 Hz.
         safe_brushes = []
-        total_count = 0
+        all_brushes  = []
+        total_count  = 0
         culled_count = 0
-        
+
         for b in self.brushes:
             total_count += 1
             if b.get('hidden', False):
                 culled_count += 1
                 continue
-            
+
+            is_dynamic = b.get('is_mover', False) or b.get('is_door', False)
+            b_ref = b.copy() if is_dynamic else b  # copy dynamic brushes once
+
+            all_brushes.append(b_ref)
+
             if self.culling_enabled:
-                pos = b.get('pos', [0, 0, 0])
-                size = b.get('size', [64, 64, 64])
-                center = (pos[0], pos[1], pos[2])
+                pos       = b.get('pos',  [0, 0, 0])
+                size      = b.get('size', [64, 64, 64])
+                center    = (pos[0],        pos[1],        pos[2])
                 half_size = (size[0] / 2.0, size[1] / 2.0, size[2] / 2.0)
                 if not self._aabb_in_frustum(frustum_planes, center, half_size):
                     culled_count += 1
                     continue
-            
-            if b.get('is_mover', False) or b.get('is_door', False):
-                safe_brushes.append(b.copy())
-            else:
-                safe_brushes.append(b)
+
+            safe_brushes.append(b_ref)
 
         write_state.visible_brushes = safe_brushes
-        write_state.total_brushes = total_count
-        write_state.culled_brushes = culled_count
-        
-        all_brushes = []
-        for b in self.brushes:
-            if b.get('hidden', False):
-                continue
-            if b.get('is_mover', False) or b.get('is_door', False):
-                all_brushes.append(b.copy())
-            else:
-                all_brushes.append(b)
-        write_state.all_brushes = all_brushes
+        write_state.all_brushes     = all_brushes
+        write_state.total_brushes   = total_count
+        write_state.culled_brushes  = culled_count
         
         write_state.timestamp = time.perf_counter()
-
-
-

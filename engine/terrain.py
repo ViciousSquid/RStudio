@@ -607,12 +607,14 @@ class Terrain:
             return np.full((len(heights), 3), 0.5, dtype=np.float32)
         h = np.clip(normalized_heights, 0.0, 1.0)
         result = np.zeros((len(h), 3), dtype=np.float32)
+        # FIX: allocate t once outside the loop; reset in-place each iteration
+        t = np.zeros(len(h), dtype=np.float32)
         for i in range(len(colors) - 1):
             h0, c0 = colors[i]
             h1, c1 = colors[i + 1]
             mask = (h >= h0) & (h <= h1)
             if not np.any(mask): continue
-            t = np.zeros_like(h)
+            t[:] = 0.0
             if h1 > h0:
                 t[mask] = (h[mask] - h0) / (h1 - h0)
             for j in range(3):
@@ -1306,6 +1308,3 @@ class Terrain:
         else:
             self.heightmap_data = None
         self.mark_all_dirty()
-
-
-
