@@ -6,7 +6,7 @@
 * FIXED YZ view dragging behaviour
 * Updated property editor layout
 * Improved terrain editor: heightmaps, mouse-sculpting
-* Entities now have stable UUIDs — I/O connections survive renames
+* Entities now use internal UUIDs — I/O connections survive renames
 * Property types preserved in save files (no more stringifying numbers/bools)
 * Map format bumped to v3 (fully backwards compatible with v2/v1)
 
