@@ -712,6 +712,10 @@ class MainWindow(QMainWindow):
             finally:
                 # Always close the progress dialog
                 progress.close()
+
+            # Store terrain data in state so the scene hierarchy can see it
+            self.state.terrain_data = self.terrain.to_dict()
+            self.scene_hierarchy.refresh_list()
         
         # Create or show editor window
         if self.terrain_editor_window is None:
@@ -728,7 +732,7 @@ class MainWindow(QMainWindow):
         if self.terrain:
             if hasattr(self.state, 'terrain_data'):
                 self.state.terrain_data = self.terrain.to_dict()
-        self.update_views()
+        self.update_all_ui()
 
     def clone_selected_object(self):
         """Clone the selected object with offset, identical to pressing Space."""
@@ -2319,5 +2323,8 @@ class MainWindow(QMainWindow):
             self.view_3d.logic_thread.join(timeout=1.0)
         
         super().closeEvent(event)
+
+
+
 
 

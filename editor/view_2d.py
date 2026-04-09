@@ -2128,7 +2128,7 @@ class View2D(QWidget):
         min_x, max_x = old_pos[ix1] - old_size[ix1]/2, old_pos[ix1] + old_size[ix1]/2
         min_y, max_y = old_pos[ix2] - old_size[ix2]/2, old_pos[ix2] + old_size[ix2]/2
 
-        is_front_view = self.view_type == 'front'
+        is_front_view = self.view_type in ['front', 'side']
         
         if self.resize_handle_ix in [0, 2, 6]: min_x = snapped_pos.x()
         if self.resize_handle_ix in [1, 3, 7]: max_x = snapped_pos.x()

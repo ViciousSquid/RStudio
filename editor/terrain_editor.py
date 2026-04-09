@@ -1,10 +1,3 @@
-"""
-Terrain Editor Window for RStudio
-
-A floating dialog with comprehensive terrain creation and editing tools.
-With separate controls for mountains, valleys, and plateaus.
-"""
-
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QDoubleSpinBox,
     QComboBox, QPushButton, QGroupBox, QFormLayout, QSlider, QCheckBox,
@@ -66,8 +59,8 @@ class TerrainEditorWindow(QDialog):
         self.editor = parent
         
         self.setWindowTitle("Terrain Editor")
-        self.setMinimumSize(800, 850)
-        self.resize(810, 1080)
+        self.setMinimumSize(900, 850)
+        self.resize(900, 1080)
         self.setWindowFlags(Qt.Window | Qt.WindowCloseButtonHint)
         
         self._building_ui = False
@@ -622,6 +615,189 @@ class TerrainEditorWindow(QDialog):
         
         pos_layout.addStretch()
         tabs.addTab(pos_tab, "Position")
+
+        # === HEIGHTMAP TAB ===
+        hm_tab = QWidget()
+        hm_layout = QVBoxLayout(hm_tab)
+        hm_layout.setSpacing(12)
+        hm_layout.setContentsMargins(8, 8, 8, 8)
+
+        hm_load_group = QGroupBox("Heightmap Image")
+        hm_load_layout = QVBoxLayout(hm_load_group)
+        hm_load_layout.setSpacing(10)
+        hm_load_layout.setContentsMargins(12, 20, 12, 12)
+
+        hm_info = QLabel("Load a greyscale image to drive terrain height.\n"
+                         "White = high, Black = low.")
+        hm_info.setStyleSheet("color: #aaa; font-style: italic;")
+        hm_info.setWordWrap(True)
+        hm_load_layout.addWidget(hm_info)
+
+        hm_btn_row = QHBoxLayout()
+        load_hm_btn = QPushButton("📂 Load Image…")
+        load_hm_btn.clicked.connect(self.load_heightmap_image)
+        hm_btn_row.addWidget(load_hm_btn)
+
+        clear_hm_btn = QPushButton("✕ Clear")
+        clear_hm_btn.clicked.connect(self.clear_heightmap)
+        hm_btn_row.addWidget(clear_hm_btn)
+        hm_load_layout.addLayout(hm_btn_row)
+
+        self.hm_status_label = QLabel("No heightmap loaded")
+        self.hm_status_label.setStyleSheet("color: #F08000;")
+        hm_load_layout.addWidget(self.hm_status_label)
+
+        hm_load_group.setLayout(hm_load_layout)
+        hm_layout.addWidget(hm_load_group)
+
+        # Heightmap settings
+        hm_settings_group = QGroupBox("Heightmap Settings")
+        hm_settings_layout = QFormLayout(hm_settings_group)
+        hm_settings_layout.setSpacing(10)
+        hm_settings_layout.setContentsMargins(12, 20, 12, 12)
+
+        self.hm_strength_spin = QDoubleSpinBox()
+        self.hm_strength_spin.setRange(1, 2000)
+        self.hm_strength_spin.setSingleStep(10)
+        self.hm_strength_spin.setValue(self.terrain.heightmap_strength)
+        self.hm_strength_spin.valueChanged.connect(self.on_heightmap_settings_changed)
+        hm_settings_layout.addRow("Strength:", self.hm_strength_spin)
+
+        self.hm_blend_combo = QComboBox()
+        self.hm_blend_combo.addItem("Additive", "additive")
+        self.hm_blend_combo.addItem("Replace", "replace")
+        idx = 0 if self.terrain.heightmap_blend == 'additive' else 1
+        self.hm_blend_combo.setCurrentIndex(idx)
+        self.hm_blend_combo.currentIndexChanged.connect(self.on_heightmap_settings_changed)
+        hm_settings_layout.addRow("Blend Mode:", self.hm_blend_combo)
+
+        hm_settings_group.setLayout(hm_settings_layout)
+        hm_layout.addWidget(hm_settings_group)
+
+        hm_layout.addStretch()
+        tabs.addTab(hm_tab, "Heightmap")
+
+        # === SCULPT TAB ===
+        sculpt_tab = QWidget()
+        sculpt_layout = QVBoxLayout(sculpt_tab)
+        sculpt_layout.setSpacing(12)
+        sculpt_layout.setContentsMargins(8, 8, 8, 8)
+
+        # Sculpt brush settings
+        brush_group = QGroupBox("Sculpt Brush")
+        brush_layout = QFormLayout(brush_group)
+        brush_layout.setSpacing(10)
+        brush_layout.setContentsMargins(12, 20, 12, 12)
+
+        sculpt_info = QLabel("Paint directly in the 3D viewport, or enter coordinates manually below.")
+        sculpt_info.setStyleSheet("color: #aaa; font-style: italic;")
+        sculpt_info.setWordWrap(True)
+        brush_layout.addRow(sculpt_info)
+
+        self.sculpt_paint_btn = QPushButton("🎨 Enable 3D Viewport Painting")
+        self.sculpt_paint_btn.setCheckable(True)
+        self.sculpt_paint_btn.setChecked(False)
+        self.sculpt_paint_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #555;
+                color: white;
+                font-weight: bold;
+                padding: 10px;
+            }
+            QPushButton:checked {
+                background-color: #C62828;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #6a6a6a;
+            }
+            QPushButton:checked:hover {
+                background-color: #D32F2F;
+            }
+        """)
+        self.sculpt_paint_btn.toggled.connect(self.toggle_3d_sculpt_painting)
+        brush_layout.addRow(self.sculpt_paint_btn)
+
+        self.sculpt_mode_combo = QComboBox()
+        self.sculpt_mode_combo.addItem("Raise", "raise")
+        self.sculpt_mode_combo.addItem("Lower", "lower")
+        self.sculpt_mode_combo.addItem("Smooth", "smooth")
+        self.sculpt_mode_combo.addItem("Flatten", "flatten")
+        self.sculpt_mode_combo.currentIndexChanged.connect(self.on_sculpt_brush_setting_changed)
+        brush_layout.addRow("Mode:", self.sculpt_mode_combo)
+
+        self.sculpt_radius_spin = QDoubleSpinBox()
+        self.sculpt_radius_spin.setRange(4, 500)
+        self.sculpt_radius_spin.setSingleStep(10)
+        self.sculpt_radius_spin.setValue(50)
+        self.sculpt_radius_spin.valueChanged.connect(self.on_sculpt_brush_setting_changed)
+        brush_layout.addRow("Radius:", self.sculpt_radius_spin)
+
+        self.sculpt_strength_spin = QDoubleSpinBox()
+        self.sculpt_strength_spin.setRange(0.1, 200)
+        self.sculpt_strength_spin.setSingleStep(5)
+        self.sculpt_strength_spin.setValue(20)
+        self.sculpt_strength_spin.valueChanged.connect(self.on_sculpt_brush_setting_changed)
+        brush_layout.addRow("Strength:", self.sculpt_strength_spin)
+
+        brush_group.setLayout(brush_layout)
+        sculpt_layout.addWidget(brush_group)
+
+        # Manual coordinate entry
+        coord_group = QGroupBox("Apply At Coordinates")
+        coord_layout = QFormLayout(coord_group)
+        coord_layout.setSpacing(10)
+        coord_layout.setContentsMargins(12, 20, 12, 12)
+
+        self.sculpt_x_spin = QDoubleSpinBox()
+        self.sculpt_x_spin.setRange(-50000, 50000)
+        self.sculpt_x_spin.setSingleStep(50)
+        self.sculpt_x_spin.setValue(0)
+        coord_layout.addRow("World X:", self.sculpt_x_spin)
+
+        self.sculpt_z_spin = QDoubleSpinBox()
+        self.sculpt_z_spin.setRange(-50000, 50000)
+        self.sculpt_z_spin.setSingleStep(50)
+        self.sculpt_z_spin.setValue(0)
+        coord_layout.addRow("World Z:", self.sculpt_z_spin)
+
+        apply_sculpt_btn = QPushButton("🖌️ Apply Sculpt")
+        apply_sculpt_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #F08000;
+                color: white;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #FF9020;
+            }
+        """)
+        apply_sculpt_btn.clicked.connect(self.apply_sculpt)
+        coord_layout.addRow(apply_sculpt_btn)
+
+        coord_group.setLayout(coord_layout)
+        sculpt_layout.addWidget(coord_group)
+
+        # Sculpt info / clear
+        sculpt_actions_group = QGroupBox("Sculpt Data")
+        sculpt_actions_layout = QVBoxLayout(sculpt_actions_group)
+        sculpt_actions_layout.setSpacing(10)
+        sculpt_actions_layout.setContentsMargins(12, 20, 12, 12)
+
+        self.sculpt_info_label = QLabel("No sculpt deformations")
+        self.sculpt_info_label.setStyleSheet("color: #aaa;")
+        sculpt_actions_layout.addWidget(self.sculpt_info_label)
+        self._update_sculpt_info()
+
+        clear_sculpt_btn = QPushButton("🗑️ Clear All Sculpt Data")
+        clear_sculpt_btn.clicked.connect(self.clear_sculpt)
+        sculpt_actions_layout.addWidget(clear_sculpt_btn)
+
+        sculpt_actions_group.setLayout(sculpt_actions_layout)
+        sculpt_layout.addWidget(sculpt_actions_group)
+
+        sculpt_layout.addStretch()
+        tabs.addTab(sculpt_tab, "Sculpt")
         
         main_layout.addWidget(tabs)
         
@@ -731,6 +907,19 @@ class TerrainEditorWindow(QDialog):
         self.update_gradient_preview()
         self.update_size_info()
         
+        # Heightmap status
+        if self.terrain.heightmap_data is not None:
+            h, w = self.terrain.heightmap_data.shape
+            self.hm_status_label.setText(f"Loaded: {w}×{h} px")
+        else:
+            self.hm_status_label.setText("No heightmap loaded")
+        self.hm_strength_spin.setValue(self.terrain.heightmap_strength)
+        idx = 0 if self.terrain.heightmap_blend == 'additive' else 1
+        self.hm_blend_combo.setCurrentIndex(idx)
+
+        # Sculpt info
+        self._update_sculpt_info()
+
         self._building_ui = False
     
     def update_gradient_preview(self):
@@ -954,6 +1143,125 @@ class TerrainEditorWindow(QDialog):
         self.max_z_spin.setValue(bounds[1])
         self._building_ui = False
         self.on_bounds_changed(0)
+
+    # =========================================================================
+    # HEIGHTMAP
+    # =========================================================================
+
+    def load_heightmap_image(self):
+        """Open a file dialog and load a greyscale image as a heightmap."""
+        from PyQt5.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Heightmap Image", "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff);;All Files (*)"
+        )
+        if not path:
+            return
+        self.show_progress("Loading heightmap…")
+        try:
+            self.terrain.load_heightmap(path)
+            h, w = self.terrain.heightmap_data.shape
+            self.hm_status_label.setText(f"Loaded: {w}×{h} px  —  {path.split('/')[-1].split(chr(92))[-1]}")
+            self.terrain_changed.emit()
+        except Exception as e:
+            QMessageBox.warning(self, "Heightmap Error", str(e))
+        finally:
+            self.hide_progress()
+
+    def clear_heightmap(self):
+        """Remove the heightmap overlay."""
+        self.terrain.clear_heightmap()
+        self.hm_status_label.setText("No heightmap loaded")
+        self.terrain_changed.emit()
+
+    def on_heightmap_settings_changed(self, _=None):
+        if self._building_ui:
+            return
+        self.terrain.heightmap_strength = self.hm_strength_spin.value()
+        self.terrain.heightmap_blend = self.hm_blend_combo.currentData()
+        if self.terrain.heightmap_data is not None:
+            self.terrain.mark_all_dirty()
+            self.terrain_changed.emit()
+
+    # =========================================================================
+    # SCULPT
+    # =========================================================================
+
+    def apply_sculpt(self):
+        """Apply a single sculpt stroke at the entered coordinates."""
+        x = self.sculpt_x_spin.value()
+        z = self.sculpt_z_spin.value()
+        radius = self.sculpt_radius_spin.value()
+        strength = self.sculpt_strength_spin.value()
+        mode = self.sculpt_mode_combo.currentData()
+
+        self.show_progress("Sculpting terrain…")
+        try:
+            if mode == 'raise':
+                self.terrain.apply_sculpt_at(x, z, radius, strength)
+            elif mode == 'lower':
+                self.terrain.apply_sculpt_at(x, z, radius, -strength)
+            elif mode == 'smooth':
+                self.terrain.smooth_sculpt_at(x, z, radius, min(strength / 20.0, 1.0))
+            elif mode == 'flatten':
+                self.terrain.flatten_sculpt_at(x, z, radius, min(strength / 20.0, 1.0))
+            self._update_sculpt_info()
+            self.terrain_changed.emit()
+        finally:
+            self.hide_progress()
+
+    def clear_sculpt(self):
+        """Remove all sculpt deformations."""
+        self.terrain.clear_sculpt()
+        self._update_sculpt_info()
+        self.terrain_changed.emit()
+        if self.editor and hasattr(self.editor, 'show_toast'):
+            self.editor.show_toast("Sculpt data cleared")
+
+    def _update_sculpt_info(self):
+        count = len(self.terrain.sculpt_offsets)
+        if count == 0:
+            self.sculpt_info_label.setText("No sculpt deformations")
+        else:
+            self.sculpt_info_label.setText(f"{count:,} deformation points stored")
+
+    def toggle_3d_sculpt_painting(self, active):
+        """Enable or disable 3D viewport sculpt painting mode."""
+        view_3d = getattr(self.editor, 'view_3d', None) if self.editor else None
+        if view_3d is None:
+            self.sculpt_paint_btn.setChecked(False)
+            return
+        view_3d.set_terrain_sculpt_active(active)
+        if active:
+            self._sync_sculpt_to_viewport()
+            self.sculpt_paint_btn.setText("🛑 Disable 3D Viewport Painting")
+        else:
+            self.sculpt_paint_btn.setText("🎨 Enable 3D Viewport Painting")
+
+    def _sync_sculpt_to_viewport(self):
+        """Push current sculpt brush settings to the 3D view."""
+        view_3d = getattr(self.editor, 'view_3d', None) if self.editor else None
+        if view_3d is None:
+            return
+        view_3d.terrain_sculpt_mode = self.sculpt_mode_combo.currentData()
+        view_3d.terrain_sculpt_radius = self.sculpt_radius_spin.value()
+        view_3d.terrain_sculpt_strength = self.sculpt_strength_spin.value()
+
+    def on_sculpt_brush_setting_changed(self, _=None):
+        """Called when any sculpt brush setting changes — sync to viewport."""
+        self._sync_sculpt_to_viewport()
+
+    def closeEvent(self, event):
+        """Disable sculpt painting when the terrain editor is closed."""
+        if self.sculpt_paint_btn.isChecked():
+            self.sculpt_paint_btn.setChecked(False)
+        super().closeEvent(event)
+
+    def hideEvent(self, event):
+        """Disable sculpt painting when the terrain editor is hidden."""
+        if self.sculpt_paint_btn.isChecked():
+            self.sculpt_paint_btn.setChecked(False)
+        super().hideEvent(event)
     
     def regenerate_terrain(self):
         self.show_progress("Regenerating terrain...")
@@ -995,3 +1303,6 @@ class TerrainEditorWindow(QDialog):
         super().hideEvent(event)
         if hasattr(self, '_stats_timer'):
             self._stats_timer.stop()
+
+
+

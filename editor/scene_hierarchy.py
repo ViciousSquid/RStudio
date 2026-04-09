@@ -72,6 +72,7 @@ class SceneHierarchy(QWidget):
         self.lock_icon = QIcon("assets/lock.png")
         self.hidden_icon = QIcon("assets/hidden.png")
         self.tree.itemSelectionChanged.connect(self.handle_selection_change)
+        self.tree.itemDoubleClicked.connect(self.handle_double_click)
 
         # Enable extended selection (shift-click, ctrl-click)
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -190,6 +191,20 @@ class SceneHierarchy(QWidget):
         
         return things
 
+    def _get_terrain_display_name(self):
+        """Get a display name for the terrain based on its data."""
+        terrain_data = getattr(self.main_window.state, 'terrain_data', None)
+        if terrain_data:
+            biome = terrain_data.get('biome', '')
+            if biome:
+                return f'Terrain ({biome})'
+        return 'Terrain'
+
+    def _has_terrain(self):
+        """Check if terrain data exists in the current scene."""
+        terrain_data = getattr(self.main_window.state, 'terrain_data', None)
+        return terrain_data is not None
+
     def refresh_list(self):
         self.tree.blockSignals(True)
         self.tree.clear()
@@ -207,6 +222,31 @@ class SceneHierarchy(QWidget):
         
         # Header background colour
         header_brush = QBrush(QColor("#425F5D"))
+
+        # =====================================================================
+        # TERRAIN SECTION
+        # =====================================================================
+        if self._has_terrain():
+            terrain_header = QTreeWidgetItem(self.tree, ["Terrain", ""])
+            terrain_header.setFlags(terrain_header.flags() & ~Qt.ItemIsSelectable)
+            terrain_header.setForeground(0, QBrush(QColor("white")))
+            terrain_header.setBackground(0, header_brush)
+            terrain_header.setBackground(1, header_brush)
+            terrain_header.setFont(0, header_font)
+            terrain_header.setExpanded(True)
+
+            terrain_name = self._get_terrain_display_name()
+            terrain_item = QTreeWidgetItem(terrain_header, [terrain_name, ""])
+            terrain_item.setData(0, Qt.UserRole, ('terrain', 0))
+            terrain_item.setForeground(0, QBrush(QColor("#8FBC8F")))  # Earthy green
+
+            # Show if terrain is selected
+            if 'terrain' in [getattr(obj, '_terrain_marker', None) for obj in selected_objects]:
+                terrain_item.setSelected(True)
+
+        # =====================================================================
+        # BRUSHES SECTION
+        # =====================================================================
 
         # Add Brushes Header with full-width background
         brushes_header = QTreeWidgetItem(self.tree, ["Brushes", ""])
@@ -250,6 +290,10 @@ class SceneHierarchy(QWidget):
             # Check if this brush is in the selected_objects list
             if brush_dict in selected_objects:
                 item.setSelected(True)
+
+        # =====================================================================
+        # THINGS SECTION
+        # =====================================================================
 
         # Add Things Header with full-width background
         things_header = QTreeWidgetItem(self.tree, ["Things", ""])
@@ -383,6 +427,17 @@ class SceneHierarchy(QWidget):
         return QIcon(result_pixmap)
 
     def open_menu(self, position):
+        # Ensure the item under the cursor is selected (right-click doesn't
+        # always do this automatically in all selection modes).
+        # Block signals so this doesn't trigger handle_selection_change,
+        # which would rebuild the tree and destroy the item mid-menu.
+        item_at_pos = self.tree.itemAt(position)
+        if item_at_pos and not item_at_pos.isSelected():
+            self.tree.blockSignals(True)
+            self.tree.clearSelection()
+            item_at_pos.setSelected(True)
+            self.tree.blockSignals(False)
+
         menu = QMenu()
         selected_items = self.tree.selectedItems()
 
@@ -392,6 +447,7 @@ class SceneHierarchy(QWidget):
         # Check if we have multiple brushes or things selected
         brush_items = []
         thing_items = []
+        terrain_items = []
         for item in selected_items:
             data = item.data(0, Qt.UserRole)
             if data:
@@ -399,6 +455,33 @@ class SceneHierarchy(QWidget):
                     brush_items.append((item, data[1]))
                 elif data[0] == 'thing':
                     thing_items.append((item, data[1]))
+                elif data[0] == 'terrain':
+                    terrain_items.append((item, data[1]))
+
+        # -----------------------------------------------------------------
+        # Terrain context menu
+        # -----------------------------------------------------------------
+        if terrain_items and not brush_items and not thing_items:
+            edit_action = menu.addAction("Edit Terrain...")
+            menu.addSeparator()
+            delete_action = menu.addAction("Delete Terrain")
+
+            action = menu.exec_(self.tree.viewport().mapToGlobal(position))
+
+            if action == edit_action:
+                self.main_window.open_terrain_editor()
+            elif action == delete_action:
+                self.main_window.save_state()
+                self.main_window.state.terrain_data = None
+                # Remove the live terrain object so the 3D view stops rendering it
+                if hasattr(self.main_window, 'terrain'):
+                    self.main_window.terrain = None
+                if hasattr(self.main_window, 'terrain_editor_window') and self.main_window.terrain_editor_window:
+                    self.main_window.terrain_editor_window.close()
+                    self.main_window.terrain_editor_window = None
+                self.main_window.set_selected_objects([])
+                self.main_window.update_all_ui()
+            return
 
         # If multiple items of the same type selected, show bulk operations
         if len(brush_items) > 1 and len(thing_items) == 0:
@@ -572,6 +655,7 @@ class SceneHierarchy(QWidget):
             return
 
         selected_objects = []
+        terrain_selected = False
         for item in selected_items:
             data = item.data(0, Qt.UserRole)
             if data:
@@ -580,8 +664,23 @@ class SceneHierarchy(QWidget):
                     selected_objects.append(self.main_window.state.brushes[obj_index])
                 elif obj_type == 'thing':
                     selected_objects.append(self.main_window.state.things[obj_index])
+                elif obj_type == 'terrain':
+                    terrain_selected = True
         
+        if terrain_selected and not selected_objects:
+            # Terrain is selected in the hierarchy but it's not a brush/thing —
+            # nothing to pass to set_selected_objects.  Just leave it visually
+            # highlighted; the right-click menu handles Edit / Delete.
+            self.main_window.set_selected_objects([])
+            return
+
         self.main_window.set_selected_objects(selected_objects)
+
+    def handle_double_click(self, item, column):
+        """Double-clicking the terrain item opens the terrain editor."""
+        data = item.data(0, Qt.UserRole)
+        if data and data[0] == 'terrain':
+            self.main_window.open_terrain_editor()
 
     def set_brush_colour(self, brush_dict, colour_name, checked):
         """Set brush colour (method name uses British spelling, but internal dict key remains 'color')"""
