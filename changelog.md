@@ -9,6 +9,7 @@
 * Entities now use internal UUIDs — I/O connections survive renames
 * Property types preserved in save files (no more stringifying numbers/bools)
 * Map format bumped to v3 (fully backwards compatible with v2/v1)
+* Renderer optimisations
 
 ### v1.1.0.0
 
