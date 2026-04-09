@@ -8,11 +8,7 @@ from PyQt5.QtCore import Qt
 from editor.main_window import MainWindow
 
 
-def clean_pycache():
-    """
-    Depreceted 
-    """
-    pass
+# clean_pycache() removed: was a deprecated no-op stub.
 
 class ProgressSplashScreen(QWidget):
     """Splash screen with progress bar."""
@@ -55,8 +51,11 @@ class ProgressSplashScreen(QWidget):
         self.center_on_screen()
 
     def center_on_screen(self):
-        screen_geometry = QApplication.desktop().screenGeometry()
-        x = (screen_geometry.width() - self.width()) // 2
+        # FIX: QApplication.desktop() is deprecated since Qt 5.12;
+        # use primaryScreen() instead.
+        screen = QApplication.primaryScreen()
+        screen_geometry = screen.geometry() if screen else QApplication.desktop().screenGeometry()
+        x = (screen_geometry.width()  - self.width())  // 2
         y = (screen_geometry.height() - self.height()) // 2
         self.move(x, y)
 
@@ -207,9 +206,6 @@ if __name__ == "__main__":
     QSurfaceFormat.setDefaultFormat(fmt)
 
     splash.set_progress(15, "Loading editor modules...")
-
-    # Clean pycache (logic handles skipping if compiled)
-    clean_pycache()
 
     splash.set_progress(25, "Building editor UI...")
 
