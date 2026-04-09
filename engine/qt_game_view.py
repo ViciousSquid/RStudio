@@ -143,6 +143,12 @@ class QtGameView(QOpenGLWidget):
         self.gizmo_drag_axis = None
         self.gizmo_object_start_pos = None
         self.drag_start_on_axis = None
+        # Terrain sculpt painting mode
+        self.terrain_sculpt_active = False
+        self.terrain_sculpt_painting = False  # True while mouse is held down
+        self.terrain_sculpt_mode = 'raise'    # raise / lower / smooth / flatten
+        self.terrain_sculpt_radius = 50.0
+        self.terrain_sculpt_strength = 20.0
         self.projection_matrix = glm.mat4(1.0)
         self.view_matrix = glm.mat4(1.0)
         self._cached_aspect_ratio = 1.0
@@ -1098,6 +1104,88 @@ class QtGameView(QOpenGLWidget):
             self.editor.state.selected_object.pos = snapped
         self.update()
 
+    # =========================================================================
+    # TERRAIN SCULPT PAINTING
+    # =========================================================================
+
+    def set_terrain_sculpt_active(self, active: bool):
+        """Enable or disable terrain sculpt painting mode."""
+        self.terrain_sculpt_active = active
+        if active:
+            self.setCursor(Qt.CrossCursor)
+        else:
+            self.terrain_sculpt_painting = False
+            self.setCursor(Qt.ArrowCursor)
+
+    def raycast_terrain(self, mx: int, my: int):
+        """Cast a ray from the mouse position and find where it hits the terrain.
+        Returns (world_x, world_y, world_z) or None."""
+        terrain = getattr(self.editor, 'terrain', None)
+        if terrain is None or not terrain.enabled:
+            return None
+        ray_o, ray_d = self.get_ray_from_mouse(mx, my)
+        # March along the ray testing against the terrain heightfield
+        step = 4.0
+        max_dist = 5000.0
+        t = 1.0
+        prev_above = True
+        while t < max_dist:
+            px = ray_o.x + ray_d.x * t
+            py = ray_o.y + ray_d.y * t
+            pz = ray_o.z + ray_d.z * t
+            h = terrain.get_height_at_safe(px, pz)
+            if h is not None:
+                above = py >= h
+                if not above and prev_above:
+                    # Refine with binary search
+                    lo, hi = t - step, t
+                    for _ in range(12):
+                        mid = (lo + hi) * 0.5
+                        mpx = ray_o.x + ray_d.x * mid
+                        mpy = ray_o.y + ray_d.y * mid
+                        mpz = ray_o.z + ray_d.z * mid
+                        mh = terrain.get_height_at_safe(mpx, mpz)
+                        if mh is not None and mpy < mh:
+                            hi = mid
+                        else:
+                            lo = mid
+                    mid = (lo + hi) * 0.5
+                    fx = ray_o.x + ray_d.x * mid
+                    fy = ray_o.y + ray_d.y * mid
+                    fz = ray_o.z + ray_d.z * mid
+                    return (fx, fy, fz)
+                prev_above = above
+            t += step
+            # Increase step size further from camera
+            if t > 500:
+                step = 16.0
+            elif t > 200:
+                step = 8.0
+        return None
+
+    def _apply_sculpt_at_mouse(self, mx: int, my: int):
+        """Apply a single sculpt stroke at the mouse position."""
+        hit = self.raycast_terrain(mx, my)
+        if hit is None:
+            return
+        wx, wy, wz = hit
+        terrain = self.editor.terrain
+        mode = self.terrain_sculpt_mode
+        radius = self.terrain_sculpt_radius
+        strength = self.terrain_sculpt_strength
+        if mode == 'raise':
+            terrain.apply_sculpt_at(wx, wz, radius, strength)
+        elif mode == 'lower':
+            terrain.apply_sculpt_at(wx, wz, radius, -strength)
+        elif mode == 'smooth':
+            terrain.smooth_sculpt_at(wx, wz, radius, min(strength / 20.0, 1.0))
+        elif mode == 'flatten':
+            terrain.flatten_sculpt_at(wx, wz, radius, min(strength / 20.0, 1.0))
+        # Persist to state
+        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'terrain_data'):
+            self.editor.state.terrain_data = terrain.to_dict()
+        self.update()
+
     def get_ray_from_mouse(self, mx, my):
         w, h = self.width(), self.height()
         if w == 0 or h == 0: return glm.vec3(0), glm.vec3(0, 0, 1)
@@ -1198,6 +1286,12 @@ class QtGameView(QOpenGLWidget):
         return best_hit
 
     def mousePressEvent(self, event):
+        # Terrain sculpt painting
+        if self.terrain_sculpt_active and not self.play_mode and event.button() == Qt.LeftButton:
+            self.terrain_sculpt_painting = True
+            self._apply_sculpt_at_mouse(event.x(), event.y())
+            return
+
         if self.debug_mode_active and event.button() == Qt.LeftButton:
             if self.debug_window_rect.contains(event.pos()):
                 # Close button (top-right X)
@@ -1309,6 +1403,11 @@ class QtGameView(QOpenGLWidget):
             self.last_mouse_pos = self.mapFromGlobal(center)
             return
 
+        # Terrain sculpt drag painting
+        if self.terrain_sculpt_painting and self.terrain_sculpt_active:
+            self._apply_sculpt_at_mouse(event.x(), event.y())
+            return
+
         # Gizmo Drag
         if self.is_dragging_gizmo:
             ray_o, ray_d = self.get_ray_from_mouse(event.x(), event.y())
@@ -1328,6 +1427,10 @@ class QtGameView(QOpenGLWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if self.terrain_sculpt_painting and event.button() == Qt.LeftButton:
+            self.terrain_sculpt_painting = False
+            return
+
         if self.dragging_sysmon and event.button() == Qt.LeftButton:
             self.dragging_sysmon = False
             self.setCursor(Qt.ArrowCursor)
@@ -1438,3 +1541,6 @@ class QtGameView(QOpenGLWidget):
             self.debug_console_window.command_input.setText(cmd)
             self.debug_console_window._on_command_entered()
         self._close_console_overlay()
+
+
+

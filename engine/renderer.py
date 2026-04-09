@@ -406,7 +406,7 @@ class Renderer:
         self._view_ptr = None
         self._edge_vao = None
 
-        # Deferred rendering state
+        # Deferred rendering state  FUTURE IMPLEMENTATION
         self.use_deferred = False
         self._gbuffer_fbo = None
         self._gbuffer_position_tex = None
@@ -416,7 +416,7 @@ class Renderer:
         self._gbuffer_size = (0, 0)
         self._fullscreen_quad_vao = None
         self._fullscreen_quad_vbo = None
-        self._compile_deferred_shaders()
+        # self._compile_deferred_shaders()
 
     def _compile_deferred_shaders(self):
         """Compile deferred rendering geometry + lighting pass shaders."""

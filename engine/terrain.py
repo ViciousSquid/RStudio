@@ -405,6 +405,13 @@ class Terrain:
         self.enabled: bool = True
         self.wireframe: bool = False
         self.solid: bool = True
+        # Sculpt deformation map — sparse dict of (grid_x, grid_z) -> height offset
+        self.sculpt_offsets: Dict[Tuple[int, int], float] = {}
+        self.sculpt_grid_resolution: float = 4.0  # world units per grid cell
+        # Heightmap overlay
+        self.heightmap_data: Optional[np.ndarray] = None  # 2D float32, 0..1
+        self.heightmap_strength: float = 100.0
+        self.heightmap_blend: str = 'additive'  # 'additive' or 'replace'
         self._update_queue: List[Tuple[int, int]] = []
         self.grass_tex = 0
         self.rock_tex = 0
@@ -484,7 +491,12 @@ class Terrain:
             height = height + plateau_h * self.biome.plateaus_intensity
         height = (height + 1.0) * 0.5
         height = max(0.0, min(1.0, height))
-        return self.biome.base_height + height * self.biome.height_scale + self.offset_y
+        base = self.biome.base_height + height * self.biome.height_scale + self.offset_y
+        # Heightmap contribution
+        base += self._sample_heightmap_scalar(world_x, world_z, base)
+        # Sculpt deformation contribution
+        base += self._sample_sculpt_scalar(world_x, world_z)
+        return base
     
     def get_height_at(self, world_x: float, world_z: float) -> float:
         chunk_x = int(math.floor((world_x - self.offset_x) / self.chunk_size))
@@ -582,7 +594,12 @@ class Terrain:
             height = height + plateau_h * self.biome.plateaus_intensity
         height = (height + 1.0) * 0.5
         height = np.clip(height, 0.0, 1.0)
-        return self.biome.base_height + height * self.biome.height_scale + self.offset_y
+        result = self.biome.base_height + height * self.biome.height_scale + self.offset_y
+        # Heightmap contribution (batch)
+        result = result + self._sample_heightmap_batch(world_x, world_z, result)
+        # Sculpt deformation contribution (batch)
+        result = result + self._sample_sculpt_batch(world_x, world_z)
+        return result
     
     def _get_colors_batch(self, heights: np.ndarray, normalized_heights: np.ndarray) -> np.ndarray:
         colors = self.biome.color_gradient
@@ -802,8 +819,10 @@ class Terrain:
         gl.glUniform4f(self.uniforms['biomeWeights'], *self.biome.blend_weights)
         gl.glUniform1f(self.uniforms['terrainHeightScale'], self.biome.terrain_height_scale)
         
-        # Force textures off if flat_mode is enabled
-        use_tex = 0 if self.flat_mode else (1 if getattr(self, 'use_textures', True) else 0)
+        # Force textures off if flat_mode is enabled or textures aren't loaded
+        textures_loaded = (self.grass_tex != 0 and self.rock_tex != 0
+                           and self.sand_tex != 0 and self.snow_tex != 0)
+        use_tex = 0 if self.flat_mode or not textures_loaded else (1 if getattr(self, 'use_textures', True) else 0)
         gl.glUniform1i(self.uniforms['use_textures'], use_tex)
         
         gl.glUniform1i(self.uniforms['active_lights'], active_lights_count)
@@ -944,13 +963,281 @@ class Terrain:
             trees.append({"model_path": model_def["path"], "pos": [tx, ty, tz], "rotation": list(model_def["rot"]), "scale": [s, s, s]})
         return trees
     
+    # =========================================================================
+    # SCULPT DEFORMATION
+    # =========================================================================
+
+    def _sculpt_key(self, world_x: float, world_z: float) -> Tuple[int, int]:
+        """Quantize world position to sculpt grid key."""
+        gx = int(math.floor(world_x / self.sculpt_grid_resolution))
+        gz = int(math.floor(world_z / self.sculpt_grid_resolution))
+        return (gx, gz)
+
+    def _sample_sculpt_scalar(self, world_x: float, world_z: float) -> float:
+        """Get interpolated sculpt offset at a world position."""
+        if not self.sculpt_offsets:
+            return 0.0
+        res = self.sculpt_grid_resolution
+        gx_f = world_x / res
+        gz_f = world_z / res
+        gx0 = int(math.floor(gx_f))
+        gz0 = int(math.floor(gz_f))
+        fx = gx_f - gx0
+        fz = gz_f - gz0
+        h00 = self.sculpt_offsets.get((gx0, gz0), 0.0)
+        h10 = self.sculpt_offsets.get((gx0 + 1, gz0), 0.0)
+        h01 = self.sculpt_offsets.get((gx0, gz0 + 1), 0.0)
+        h11 = self.sculpt_offsets.get((gx0 + 1, gz0 + 1), 0.0)
+        top = h00 + fx * (h10 - h00)
+        bot = h01 + fx * (h11 - h01)
+        return top + fz * (bot - top)
+
+    def _sample_sculpt_batch(self, world_x: np.ndarray, world_z: np.ndarray) -> np.ndarray:
+        """Get interpolated sculpt offsets for arrays of world positions."""
+        if not self.sculpt_offsets:
+            return np.zeros(len(world_x), dtype=np.float32)
+        res = self.sculpt_grid_resolution
+        gx_f = world_x / res
+        gz_f = world_z / res
+        gx0 = np.floor(gx_f).astype(np.int32)
+        gz0 = np.floor(gz_f).astype(np.int32)
+        fx = gx_f - gx0
+        fz = gz_f - gz0
+        result = np.zeros(len(world_x), dtype=np.float32)
+        for i in range(len(world_x)):
+            h00 = self.sculpt_offsets.get((int(gx0[i]), int(gz0[i])), 0.0)
+            h10 = self.sculpt_offsets.get((int(gx0[i]) + 1, int(gz0[i])), 0.0)
+            h01 = self.sculpt_offsets.get((int(gx0[i]), int(gz0[i]) + 1), 0.0)
+            h11 = self.sculpt_offsets.get((int(gx0[i]) + 1, int(gz0[i]) + 1), 0.0)
+            top = h00 + fx[i] * (h10 - h00)
+            bot = h01 + fx[i] * (h11 - h01)
+            result[i] = top + fz[i] * (bot - top)
+        return result
+
+    def apply_sculpt_at(self, world_x: float, world_z: float, radius: float, strength: float):
+        """Raise/lower terrain in a circular area. Negative strength lowers."""
+        res = self.sculpt_grid_resolution
+        grid_radius = int(math.ceil(radius / res)) + 1
+        center_gx = world_x / res
+        center_gz = world_z / res
+        for dx in range(-grid_radius, grid_radius + 1):
+            for dz in range(-grid_radius, grid_radius + 1):
+                gx = int(math.floor(center_gx)) + dx
+                gz = int(math.floor(center_gz)) + dz
+                wx = gx * res
+                wz = gz * res
+                dist = math.sqrt((wx - world_x) ** 2 + (wz - world_z) ** 2)
+                if dist > radius:
+                    continue
+                # Smooth falloff
+                falloff = 1.0 - (dist / radius)
+                falloff = falloff * falloff  # quadratic
+                key = (gx, gz)
+                current = self.sculpt_offsets.get(key, 0.0)
+                self.sculpt_offsets[key] = current + strength * falloff
+        self._mark_sculpt_region_dirty(world_x, world_z, radius)
+
+    def smooth_sculpt_at(self, world_x: float, world_z: float, radius: float, strength: float):
+        """Smooth sculpt offsets by averaging neighbours."""
+        res = self.sculpt_grid_resolution
+        grid_radius = int(math.ceil(radius / res)) + 1
+        center_gx = int(math.floor(world_x / res))
+        center_gz = int(math.floor(world_z / res))
+        new_offsets = {}
+        for dx in range(-grid_radius, grid_radius + 1):
+            for dz in range(-grid_radius, grid_radius + 1):
+                gx = center_gx + dx
+                gz = center_gz + dz
+                wx = gx * res
+                wz = gz * res
+                dist = math.sqrt((wx - world_x) ** 2 + (wz - world_z) ** 2)
+                if dist > radius:
+                    continue
+                falloff = 1.0 - (dist / radius)
+                # Average with neighbours
+                avg = 0.0
+                count = 0
+                for nx, nz in [(gx-1, gz), (gx+1, gz), (gx, gz-1), (gx, gz+1), (gx, gz)]:
+                    avg += self.sculpt_offsets.get((nx, nz), 0.0)
+                    count += 1
+                avg /= count
+                current = self.sculpt_offsets.get((gx, gz), 0.0)
+                new_offsets[(gx, gz)] = current + (avg - current) * strength * falloff
+        self.sculpt_offsets.update(new_offsets)
+        self._mark_sculpt_region_dirty(world_x, world_z, radius)
+
+    def flatten_sculpt_at(self, world_x: float, world_z: float, radius: float, strength: float):
+        """Push sculpt offsets toward zero (flattening the deformation)."""
+        res = self.sculpt_grid_resolution
+        grid_radius = int(math.ceil(radius / res)) + 1
+        center_gx = int(math.floor(world_x / res))
+        center_gz = int(math.floor(world_z / res))
+        for dx in range(-grid_radius, grid_radius + 1):
+            for dz in range(-grid_radius, grid_radius + 1):
+                gx = center_gx + dx
+                gz = center_gz + dz
+                key = (gx, gz)
+                if key not in self.sculpt_offsets:
+                    continue
+                wx = gx * res
+                wz = gz * res
+                dist = math.sqrt((wx - world_x) ** 2 + (wz - world_z) ** 2)
+                if dist > radius:
+                    continue
+                falloff = 1.0 - (dist / radius)
+                current = self.sculpt_offsets[key]
+                self.sculpt_offsets[key] = current * (1.0 - strength * falloff)
+                # Clean up near-zero entries
+                if abs(self.sculpt_offsets[key]) < 0.01:
+                    del self.sculpt_offsets[key]
+        self._mark_sculpt_region_dirty(world_x, world_z, radius)
+
+    def clear_sculpt(self):
+        """Remove all sculpt deformations."""
+        self.sculpt_offsets.clear()
+        self.mark_all_dirty()
+
+    def _mark_sculpt_region_dirty(self, world_x: float, world_z: float, radius: float):
+        """Mark chunks overlapping a sculpted region as dirty."""
+        for key, chunk in self.chunks.items():
+            cx = chunk.world_x + chunk.size / 2
+            cz = chunk.world_z + chunk.size / 2
+            half = chunk.size / 2 + radius
+            if abs(cx - world_x) < half and abs(cz - world_z) < half:
+                chunk.is_dirty = True
+                if chunk.height_cache:
+                    chunk.height_cache.invalidate()
+
+    # =========================================================================
+    # HEIGHTMAP OVERLAY
+    # =========================================================================
+
+    def load_heightmap(self, image_path: str):
+        """Load a grayscale image as a heightmap overlay.
+        Bright pixels = high, dark pixels = low. Values are normalised to 0..1."""
+        try:
+            from PIL import Image
+        except ImportError:
+            # Fallback to Qt
+            from PyQt5.QtGui import QImage
+            img = QImage(image_path)
+            if img.isNull():
+                raise ValueError(f"Could not load image: {image_path}")
+            img = img.convertToFormat(QImage.Format_Grayscale8)
+            w, h = img.width(), img.height()
+            ptr = img.bits()
+            ptr.setsize(w * h)
+            arr = np.frombuffer(ptr, dtype=np.uint8).reshape((h, w))
+            self.heightmap_data = arr.astype(np.float32) / 255.0
+            self.mark_all_dirty()
+            return
+        img = Image.open(image_path).convert('L')
+        arr = np.array(img, dtype=np.float32) / 255.0
+        self.heightmap_data = arr
+        self.mark_all_dirty()
+
+    def clear_heightmap(self):
+        """Remove the heightmap overlay."""
+        self.heightmap_data = None
+        self.mark_all_dirty()
+
+    def _sample_heightmap_scalar(self, world_x: float, world_z: float, proc_height: float) -> float:
+        """Sample the heightmap at a world position. Returns height offset."""
+        if self.heightmap_data is None:
+            return 0.0
+        u, v = self._world_to_heightmap_uv(world_x, world_z)
+        if u < 0 or u > 1 or v < 0 or v > 1:
+            return 0.0
+        h = self._bilinear_sample(u, v)
+        if self.heightmap_blend == 'replace':
+            # Replace: heightmap value replaces procedural, return delta
+            target = self.biome.base_height + h * self.heightmap_strength + self.offset_y
+            return target - proc_height
+        else:
+            # Additive (default)
+            return (h - 0.5) * self.heightmap_strength
+
+    def _sample_heightmap_batch(self, world_x: np.ndarray, world_z: np.ndarray, proc_heights: np.ndarray) -> np.ndarray:
+        """Sample the heightmap for arrays of world positions."""
+        if self.heightmap_data is None:
+            return np.zeros(len(world_x), dtype=np.float32)
+        u, v = self._world_to_heightmap_uv_batch(world_x, world_z)
+        mask = (u >= 0) & (u <= 1) & (v >= 0) & (v <= 1)
+        result = np.zeros(len(world_x), dtype=np.float32)
+        if not np.any(mask):
+            return result
+        h_vals = self._bilinear_sample_batch(u[mask], v[mask])
+        if self.heightmap_blend == 'replace':
+            target = self.biome.base_height + h_vals * self.heightmap_strength + self.offset_y
+            result[mask] = target - proc_heights[mask]
+        else:
+            result[mask] = (h_vals - 0.5) * self.heightmap_strength
+        return result
+
+    def _world_to_heightmap_uv(self, world_x: float, world_z: float) -> Tuple[float, float]:
+        """Map world XZ to heightmap UV (0..1) based on terrain bounds."""
+        bounds = self.get_terrain_bounds()
+        min_x, max_x = bounds[0]
+        min_z, max_z = bounds[1]
+        range_x = max_x - min_x
+        range_z = max_z - min_z
+        if range_x == 0 or range_z == 0:
+            return (0.5, 0.5)
+        u = (world_x - min_x) / range_x
+        v = (world_z - min_z) / range_z
+        return (u, v)
+
+    def _world_to_heightmap_uv_batch(self, world_x: np.ndarray, world_z: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        bounds = self.get_terrain_bounds()
+        min_x, max_x = bounds[0]
+        min_z, max_z = bounds[1]
+        range_x = max_x - min_x
+        range_z = max_z - min_z
+        if range_x == 0 or range_z == 0:
+            return (np.full_like(world_x, 0.5), np.full_like(world_z, 0.5))
+        u = (world_x - min_x) / range_x
+        v = (world_z - min_z) / range_z
+        return (u, v)
+
+    def _bilinear_sample(self, u: float, v: float) -> float:
+        """Bilinear sample from heightmap_data at normalised UV."""
+        h, w = self.heightmap_data.shape
+        px = u * (w - 1)
+        py = v * (h - 1)
+        x0 = int(math.floor(px))
+        y0 = int(math.floor(py))
+        x1 = min(x0 + 1, w - 1)
+        y1 = min(y0 + 1, h - 1)
+        x0 = max(0, x0)
+        y0 = max(0, y0)
+        fx = px - x0
+        fy = py - y0
+        top = self.heightmap_data[y0, x0] * (1 - fx) + self.heightmap_data[y0, x1] * fx
+        bot = self.heightmap_data[y1, x0] * (1 - fx) + self.heightmap_data[y1, x1] * fx
+        return top * (1 - fy) + bot * fy
+
+    def _bilinear_sample_batch(self, u: np.ndarray, v: np.ndarray) -> np.ndarray:
+        """Bilinear sample from heightmap_data for arrays of UV coords."""
+        h, w = self.heightmap_data.shape
+        px = np.clip(u * (w - 1), 0, w - 1)
+        py = np.clip(v * (h - 1), 0, h - 1)
+        x0 = np.floor(px).astype(np.int32)
+        y0 = np.floor(py).astype(np.int32)
+        x1 = np.minimum(x0 + 1, w - 1)
+        y1 = np.minimum(y0 + 1, h - 1)
+        fx = px - x0
+        fy = py - y0
+        top = self.heightmap_data[y0, x0] * (1 - fx) + self.heightmap_data[y0, x1] * fx
+        bot = self.heightmap_data[y1, x0] * (1 - fx) + self.heightmap_data[y1, x1] * fx
+        return top * (1 - fy) + bot * fy
+
     def cleanup(self):
         for key in list(self.chunks.keys()):
             self._delete_chunk(key)
         self.chunks.clear()
     
     def to_dict(self) -> dict:
-        return {
+        data = {
             'enabled': self.enabled,
             'solid': self.solid,
             'seed': self.seed,
@@ -968,6 +1255,20 @@ class Terrain:
             'flat_mode': self.flat_mode,
             'custom_biome': self.biome.to_dict()
         }
+        # Sculpt offsets — serialise sparse dict as list of [gx, gz, offset]
+        if self.sculpt_offsets:
+            data['sculpt_offsets'] = [[gx, gz, val] for (gx, gz), val in self.sculpt_offsets.items()]
+            data['sculpt_grid_resolution'] = self.sculpt_grid_resolution
+        # Heightmap settings (image data is NOT saved — only the path is
+        # stored by the editor so the user can re-load it)
+        if self.heightmap_data is not None:
+            import base64, io
+            buf = io.BytesIO()
+            np.save(buf, self.heightmap_data)
+            data['heightmap_blob'] = base64.b64encode(buf.getvalue()).decode('ascii')
+            data['heightmap_strength'] = self.heightmap_strength
+            data['heightmap_blend'] = self.heightmap_blend
+        return data
     
     def from_dict(self, data: dict):
         self.enabled = data.get('enabled', True)
@@ -989,4 +1290,22 @@ class Terrain:
         self.use_textures = data.get('use_textures', True)
         self.flat_mode = data.get('flat_mode', False)
         if 'custom_biome' in data: self.biome = BiomeConfig.from_dict(data['custom_biome'])
+        # Sculpt offsets
+        self.sculpt_offsets = {}
+        self.sculpt_grid_resolution = data.get('sculpt_grid_resolution', 4.0)
+        for entry in data.get('sculpt_offsets', []):
+            gx, gz, val = entry
+            self.sculpt_offsets[(int(gx), int(gz))] = float(val)
+        # Heightmap
+        if 'heightmap_blob' in data:
+            import base64, io
+            buf = io.BytesIO(base64.b64decode(data['heightmap_blob']))
+            self.heightmap_data = np.load(buf)
+            self.heightmap_strength = data.get('heightmap_strength', 100.0)
+            self.heightmap_blend = data.get('heightmap_blend', 'additive')
+        else:
+            self.heightmap_data = None
         self.mark_all_dirty()
+
+
+
