@@ -9,8 +9,7 @@
 * Entities now use internal UUIDs — I/O connections survive renames
 * Property types preserved in save files (no more stringifying numbers/bools)
 * Map format bumped to v3 (fully backwards compatible with v2/v1)
-* `_find_entity_by_name` and `_find_entity_by_id` now do O(1) dict lookups instead of linear scans through all brushes/ents on every I/O event
-* Renderer optimisations
+* Performance optimisations in logic_thread and renderer
 
 ### v1.1.0.0
 
