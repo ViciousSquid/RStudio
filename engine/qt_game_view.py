@@ -1091,7 +1091,8 @@ class QtGameView(QOpenGLWidget):
 
     def get_selected_object_pos(self):
         if not self.editor.state.selected_object: return None
-        if isinstance(self.editor.state.selected_object, dict): return glm.vec3(self.editor.state.selected_object['pos'])
+        if isinstance(self.editor.state.selected_object, dict): 
+            return glm.vec3(self.editor.state.selected_object.get('pos', [0, 0, 0]))
         return glm.vec3(self.editor.state.selected_object.pos)
 
     def set_selected_object_pos(self, new_pos_vec):
@@ -1209,8 +1210,8 @@ class QtGameView(QOpenGLWidget):
         ray_o, ray_d = self.get_ray_from_mouse(mx, my)
         best_obj, best_t = None, float('inf')
         for brush in self.editor.state.brushes:
-            pos = glm.vec3(brush['pos'])
-            size = glm.vec3(brush['size'])
+            pos = glm.vec3(brush.get('pos', [0, 0, 0]))
+            size = glm.vec3(brush.get('size', [64, 64, 64]))
             bmin, bmax = pos - size/2, pos + size/2
             tmin, tmax = 0.0, float('inf')
             hit = True
@@ -1254,8 +1255,8 @@ class QtGameView(QOpenGLWidget):
         best_hit = None
         for brush in self.editor.state.brushes:
             if brush.get('hidden', False): continue
-            pos = glm.vec3(brush['pos'])
-            size = glm.vec3(brush['size'])
+            pos = glm.vec3(brush.get('pos', [0, 0, 0]))
+            size = glm.vec3(brush.get('size', [64, 64, 64]))
             bmin, bmax = pos - size/2, pos + size/2
             tmin_b, tmax_b = 0.0, float('inf')
             hit = True
@@ -1454,7 +1455,8 @@ class QtGameView(QOpenGLWidget):
         if not isinstance(self.editor.state.selected_object, dict): return None
         brush = self.editor.state.selected_object
         ray_o, ray_d = self.get_ray_from_mouse(mouse_pos.x(), mouse_pos.y())
-        pos, size = glm.vec3(brush['pos']), glm.vec3(brush['size'])
+        pos = glm.vec3(brush.get('pos', [0, 0, 0]))
+        size = glm.vec3(brush.get('size', [64, 64, 64]))
         bmin, bmax = pos - size/2, pos + size/2
         tmin, tmax = 0.0, float('inf')
         for i in range(3):

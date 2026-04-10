@@ -916,7 +916,6 @@ void main() {
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
         self._proj_ptr = glm.value_ptr(projection)
         self._view_ptr = glm.value_ptr(view)
-        # FIX: duplicate current_mode read removed (already set above)
 
         # Reset per-frame stats
         self.render_stats.reset()
@@ -939,7 +938,7 @@ void main() {
         opaque_brushes, transparent_brushes, sprite_things, fog_volumes, water_brushes, glass_brushes = \
             self._sort_objects(brushes, things, config)
         
-        textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)  # FIX: shared helper, no duplication
+        textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
 
         # Separate models from sprites
         models_to_render = []
@@ -980,20 +979,20 @@ void main() {
         if models_to_render:
             self.draw_models(projection, view, camera_pos, models_to_render, lights, config)
 
-        # Shadows (optional - disabled by default for ARM)
+        # Shadows
         if current_mode == RENDER_MODE_LIT and self.shadows_enabled:
             shadow_lights = [l for l in lights if l.properties.get('casts_shadows')]
             if shadow_lights:
                 all_brushes = config.get('all_brushes', brushes)
                 self.render_projected_shadows_optimized(projection, view, camera_pos, all_brushes, shadow_lights)
 
-        # Sort transparent objects by distance ONCE
+        # Sort transparent objects by distance ONCE - FIX: Use .get() to prevent crash on missing 'pos'
         if transparent_brushes: 
-            transparent_brushes.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
+            transparent_brushes.sort(key=lambda b: -self._distance_sq(b.get('pos', [0,0,0]), camera_pos))
         if water_brushes: 
-            water_brushes.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
+            water_brushes.sort(key=lambda b: -self._distance_sq(b.get('pos', [0,0,0]), camera_pos))
         if glass_brushes: 
-            glass_brushes.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
+            glass_brushes.sort(key=lambda b: -self._distance_sq(b.get('pos', [0,0,0]), camera_pos))
         if final_sprites: 
             final_sprites.sort(key=lambda s: -self._distance_sq(s.pos, camera_pos))
             
@@ -1019,11 +1018,16 @@ void main() {
         gl.glDisable(gl.GL_DEPTH_TEST)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         
+        # FIX: Safe Gizmo Rendering
         if selected_object:
             if isinstance(selected_object, dict):
+                # draw_selected_brush_outline has already been patched to use .get()
                 self.draw_selected_brush_outline(projection, view, selected_object)
-                if not selected_object.get('lock', False): 
-                    self.render_gizmo(projection, view, selected_object['pos'])
+                
+                # Check for 'pos' before rendering gizmo
+                pos = selected_object.get('pos')
+                if pos is not None and not selected_object.get('lock', False): 
+                    self.render_gizmo(projection, view, pos)
             elif isinstance(selected_object, Thing): 
                 self.render_gizmo(projection, view, selected_object.pos)
         
@@ -1304,8 +1308,8 @@ void main() {
             self.render_stats.visible_tris += 12
             
             # Build model matrix
-            pos = brush['pos']
-            size = brush['size']
+            pos = brush.get('pos', [0, 0, 0])
+            size = brush.get('size', [64, 64, 64])
             model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
             
@@ -1397,8 +1401,8 @@ void main() {
             for brush, face_idx in items:
                 self.render_stats.visible_tris += 2
                 
-                pos = brush['pos']
-                size = brush['size']
+                pos = brush.get('pos', [0, 0, 0])
+                size = brush.get('size', [64, 64, 64])
                 model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
                 gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
                 
@@ -1616,7 +1620,9 @@ void main() {
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         
         for brush in brushes:
-            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
+            pos = brush.get('pos', [0, 0, 0])
+            size = brush.get('size', [64, 64, 64])
+            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
             gl.glUniform1f(opacity_loc, brush.get('water_opacity', 0.5))
             gl.glUniform1f(reflectivity_loc, brush.get('water_reflectivity', 0.5))
@@ -1660,7 +1666,9 @@ void main() {
         gl.glCullFace(gl.GL_BACK)
         
         for brush in brushes:
-            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
+            pos = brush.get('pos', [0, 0, 0])
+            size = brush.get('size', [64, 64, 64])
+            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
             
             # Upload pre-computed normal matrix - was missing entirely before this fix.
@@ -1715,7 +1723,9 @@ void main() {
         alpha_loc        = uniforms['alpha']
 
         for brush in brushes:
-            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
+            pos = brush.get('pos', [0, 0, 0])
+            size = brush.get('size', [64, 64, 64])
+            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
             # FIX: compute matrix inverse on CPU once per brush, not per-fragment on GPU.
             inv_matrix = glm.inverse(model_matrix)
@@ -2002,11 +2012,22 @@ void main() {
     def draw_selected_brush_outline(self, projection, view, brush):
         if 'simple' not in self.shaders: 
             return
+        
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
+        
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
-        model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*brush['pos'])), glm.vec3(*brush['size']))
+        
+        # FIX: Use .get() to provide defaults if 'pos' or 'size' keys are missing
+        pos = brush.get('pos', [0, 0, 0])
+        size = brush.get('size', [64, 64, 64])
+        
+        model_matrix = glm.scale(
+            glm.translate(self._identity_mat4, glm.vec3(*pos)), 
+            glm.vec3(*size)
+        )
+        
         gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
         gl.glUniform3f(uniforms['color'], 1.0, 1.0, 0.0)
         gl.glUniform1f(uniforms['alpha'], 1.0)
@@ -2028,7 +2049,7 @@ void main() {
             gl.glEnableVertexAttribArray(0)
             gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
             gl.glBindVertexArray(0)
-            self._edge_vbo = vbo  # FIX: store to prevent GPU memory leak
+            self._edge_vbo = vbo  # Store to prevent GPU memory leak
         
         gl.glLineWidth(1.0)
         gl.glBindVertexArray(self._edge_vao)
