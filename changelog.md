@@ -1,4 +1,4 @@
-### v1.2.0.0   |    MILESTONE 1
+### v1.2.X.0   |    MILESTONE 1
 
 * NEW: Monster entity (Very basic, no AI - work in progress)
 * NEW: Logic Graph Editor (**CTRL-L**) for visual scripting
