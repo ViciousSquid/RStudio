@@ -2072,12 +2072,20 @@ class View2D(QWidget):
                     candidates.append(thing)
         
         for brush in reversed(self.editor.state.brushes):
-            if brush.get('hidden', False): continue
-            pos = brush['pos']
-            size = brush['size']
+            if brush.get('hidden', False): 
+                continue
+
+            # FIX: Use .get() to avoid KeyError if 'pos' or 'size' are missing
+            pos = brush.get('pos')
+            size = brush.get('size')
+            
+            if pos is None or size is None:
+                continue
+
             p1 = QPointF(pos[ax_map[ax1]] - size[ax_map[ax1]]/2, pos[ax_map[ax2]] - size[ax_map[ax2]]/2)
             p2 = QPointF(pos[ax_map[ax1]] + size[ax_map[ax1]]/2, pos[ax_map[ax2]] + size[ax_map[ax2]]/2)
             brush_rect = QRectF(p1, p2).normalized()
+            
             if brush_rect.contains(world_pos):
                 # Track locked brushes separately if setting is enabled
                 if locked_not_selectable and brush.get('lock', False):
@@ -2091,24 +2099,41 @@ class View2D(QWidget):
             if hasattr(self.main_window, 'highlight_in_hierarchy'):
                 self.main_window.highlight_in_hierarchy(locked_at_pos[0])
 
-        if not candidates: return None
+        if not candidates: 
+            return None
+
         current_selection = self.editor.state.selected_object
         if current_selection in candidates:
             idx = candidates.index(current_selection)
             next_idx = (idx + 1) % len(candidates)
             return candidates[next_idx]
+            
         return candidates[0]
 
     def get_handle_at(self, screen_pos):
         brush = self.editor.state.selected_object
-        if not isinstance(brush, dict) or brush.get('lock', False): return -1
+        if not isinstance(brush, dict) or brush.get('lock', False): 
+            return -1
+        
+        # FIX: Use .get() to prevent KeyError if 'pos' or 'size' are missing
+        pos = brush.get('pos')
+        size = brush.get('size')
+        
+        # If the brush is missing essential data, we cannot calculate handles
+        if pos is None or size is None:
+            return -1
+            
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
-        pos, size = brush['pos'], brush['size']
-        w_pos = QPointF(pos[ax_map[ax1]] - size[ax_map[ax1]]/2, pos[ax_map[ax2]] - size[ax_map[ax2]]/2)
+        
+        # Accessing indices is now safe because we verified pos/size exist
+        w_pos = QPointF(pos[ax_map[ax1]] - size[ax_map[ax1]]/2, 
+                        pos[ax_map[ax2]] - size[ax_map[ax2]]/2)
         w_size = QPointF(size[ax_map[ax1]], size[ax_map[ax2]])
+        
         p1, p2 = self.world_to_screen(w_pos), self.world_to_screen(w_pos + w_size)
         screen_rect = QRectF(p1, p2).normalized()
+        
         handles = self.get_resize_handles(screen_rect)
         handle_size = 10
         for i, handle in enumerate(handles):
