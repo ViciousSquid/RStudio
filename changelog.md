@@ -3,7 +3,7 @@
 * NEW: Monster entity (Very basic, no AI - work in progress)
 * NEW: Logic Graph Editor (**CTRL-L**) for visual scripting
 * NEW: Logic Wizard (**CTRL-SHIFT-W**) To create quick logic (25 examples)
-* FIXED YZ view dragging behaviour
+* FIXED YZ view dragging behaviour (was upside down!)
 * Updated property editor layout
 * Improved terrain editor: heightmaps, mouse-sculpting
 * Entities now use internal UUIDs — I/O connections survive renames
