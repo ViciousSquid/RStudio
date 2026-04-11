@@ -18,7 +18,7 @@
 * Added renderer-related console commands
 * Refactored level loading system - utilizes signals for safer state transitions
 * Partial implementation of Monster entity
-* Improvements to IO system robustness
+* Improvements to I/O system robustness
 * FIXED?: Logic gates ([3](https://github.com/ViciousSquid/Fio/issues/3))
 
 
