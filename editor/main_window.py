@@ -1446,6 +1446,15 @@ class MainWindow(QMainWindow):
             return
             
         self.state.clear_scene()
+
+        # Clear live terrain object
+        self.terrain = None
+        if hasattr(self, 'terrain_editor_window') and self.terrain_editor_window:
+            self.terrain_editor_window.close()
+            self.terrain_editor_window = None
+        if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
+            self.view_3d.logic_thread.set_terrain(None)
+
         self.file_path = None
         self.unsaved_changes = False # Reset dirty flag
         self.update_title()
@@ -2080,6 +2089,15 @@ class MainWindow(QMainWindow):
 
                 if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
                     self.view_3d.logic_thread.set_terrain(self.terrain)
+
+            else:
+                # New map has no terrain - clear the live object
+                self.terrain = None
+                if hasattr(self, 'terrain_editor_window') and self.terrain_editor_window:
+                    self.terrain_editor_window.close()
+                    self.terrain_editor_window = None
+                if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
+                    self.view_3d.logic_thread.set_terrain(None)
 
             # Reset camera to PlayerStart
             player_start_pos = None
