@@ -25,7 +25,7 @@ Built because modern tools lost the immediacy of Radiant/Hammer.
 * Visual scripting (with examples)
 * Terrain generation
 * OBJ model support
-* Monsters/NPCs
+* Monsters/NPCs (actively being worked on)
 * JSON level format
 * Supports Quake-style nodraw surfaces
 
