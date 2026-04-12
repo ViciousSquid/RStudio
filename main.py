@@ -203,6 +203,14 @@ if __name__ == "__main__":
     fmt.setProfile(QSurfaceFormat.CoreProfile)
     fmt.setDepthBufferSize(24)
     fmt.setStencilBufferSize(8)
+
+    # Read VSync from settings.ini
+    import configparser
+    config = configparser.ConfigParser()
+    config.read('settings.ini')
+    vsync = config.getboolean('Display', 'vsync', fallback=True)
+    fmt.setSwapInterval(1 if vsync else 0)
+
     QSurfaceFormat.setDefaultFormat(fmt)
 
     splash.set_progress(15, "Loading editor modules...")
