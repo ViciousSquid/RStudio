@@ -8,6 +8,7 @@ This thread runs game logic at a fixed timestep (60 Hz), handling:
 - Mover and door animations
 - Pickup collection
 - Monster AI (sight detection, movement, wake logic, shooting)
+- Monster physics (gravity, floor detection, wall collision, LOS)
 - Player death detection
 """
 
@@ -57,6 +58,13 @@ from .monster_constants import (
     MONSTER_SHOOT_ANIM_TIME,
     MONSTER_MOVE_SPEED,
     MONSTER_STOP_DISTANCE,
+    MONSTER_GRAVITY,
+    MONSTER_TERMINAL_VEL,
+    MONSTER_MIN_WIDTH,
+    MONSTER_WALL_MARGIN,
+    MONSTER_DEAD_FALL_SPEED,
+    WEAPON_DAMAGE,
+    WEAPON_SHOOT_SOUND,
 )
 
 # Qt key constants (matching PyQt5.QtCore.Qt)
@@ -168,8 +176,16 @@ class LogicThread(threading.Thread):
         # Active weapon
         self.active_weapon = None
 
-        # Monster AI state  { id(thing): {'shoot_timer': float, 'anim_timer': float} }
+        # Muzzle flash — set True for one frame after player fires
+        self.muzzle_flash_active = False
+
+        # Monster AI state  { id(thing): {'shoot_timer': float, 'anim_timer': float, ...} }
         self.monster_states: Dict[int, Dict[str, float]] = {}
+
+        # Monster debug toggle (F7)
+        self.monster_debug_active = False
+        # Collected debug rays for the current frame
+        self._debug_rays: list = []
         
         # Entity lookup caches (rebuilt at play-mode start for O(1) I/O lookups)
         self._name_cache: Dict[str, Any] = {}
@@ -274,6 +290,7 @@ class LogicThread(threading.Thread):
             
             # Reset visual fx
             self.bullet_marks = []
+            self.muzzle_flash_active = False
 
             # Reset monster AI state and clear any leftover shoot flags.
             # Also reset wake state so triggered/sight monsters sleep again.
@@ -282,6 +299,9 @@ class LogicThread(threading.Thread):
                 for thing in self.things:
                     if isinstance(thing, MonsterThing):
                         thing.properties.pop('is_shooting', None)
+                        thing.properties.pop('dead', None)
+                        # Reset vertical velocity for monster physics
+                        thing.properties.pop('_vel_y', None)
                         # Restore dormant state so triggered monsters sleep on replay
                         triggered   = thing.properties.get('triggered', False)
                         wake_sight  = thing.properties.get('wake_on_sight', True)
@@ -328,6 +348,7 @@ class LogicThread(threading.Thread):
             self.active_weapon = None
             self.bullet_marks = []
             self.player_dead = False
+            self.muzzle_flash_active = False
 
             # Reset monster AI state and clear shoot flags from entities
             self.monster_states = {}
@@ -335,6 +356,7 @@ class LogicThread(threading.Thread):
                 for thing in self.things:
                     if isinstance(thing, MonsterThing):
                         thing.properties.pop('is_shooting', None)
+                        thing.properties.pop('_vel_y', None)
                         triggered  = thing.properties.get('triggered', False)
                         wake_sight = thing.properties.get('wake_on_sight', True)
                         if triggered or wake_sight:
@@ -549,6 +571,9 @@ class LogicThread(threading.Thread):
             self._update_monsters(delta)
             return
         
+        # Clear muzzle flash from previous frame
+        self.muzzle_flash_active = False
+
         # Player input
         keys = self.game_state.get_keys()
         mouse_dx, mouse_dy = self.game_state.consume_mouse_delta()
@@ -926,8 +951,6 @@ class LogicThread(threading.Thread):
             if state['forward']:
                 state['progress'] += progress_delta
                 if state['progress'] >= 1.0:
-                    # This timer.stop() here is fine as it applies to initial manual steps,
-                    # but in auto-run mode, we ensure the timer is started after these.
                     state['progress'] = 1.0
                     state['forward'] = False
                     if not was_at_end and self.io_manager:
@@ -1019,6 +1042,12 @@ class LogicThread(threading.Thread):
         if not self.player or not self.active_weapon:
             return
 
+        # Activate muzzle flash for one frame
+        self.muzzle_flash_active = True
+
+        # NOTE: shoot sound is played directly by QtGameView.mousePressEvent
+        # for zero-latency response.  Do NOT also queue it here.
+
         yaw_rad = self.player.angle
         pitch_rad = self.player.pitch
 
@@ -1073,16 +1102,16 @@ class LogicThread(threading.Thread):
                         closest_monster = thing
 
         if closest_monster is not None:
-            WEAPON_DAMAGE = 25
+            damage = WEAPON_DAMAGE.get(self.active_weapon, 25)
             health_raw = closest_monster.properties.get('health', 100)
             try:
                 health = int(health_raw)
             except (ValueError, TypeError):
                 health = 100
-            new_health = health - WEAPON_DAMAGE
+            new_health = health - damage
             closest_monster.properties['health'] = new_health
 
-            print(f"[DEBUG] Monster {closest_monster.properties.get('name')} health: {health} -> {new_health}")
+            print(f"[DEBUG] Monster {closest_monster.properties.get('name')} health: {health} -> {new_health} (weapon={self.active_weapon}, dmg={damage})")
 
             if hasattr(self.game_state, 'sound_queue'):
                 self.game_state.sound_queue.append({
@@ -1143,6 +1172,107 @@ class LogicThread(threading.Thread):
         ]
 
     # =========================================================================
+    # MONSTER AI — HELPER: wall-brush collision for monsters
+    # =========================================================================
+
+    def _get_wall_brushes(self):
+        """Return only solid wall brushes (skip triggers, water, fog, hidden)."""
+        walls = []
+        for brush in self.brushes:
+            if brush.get('hidden') or brush.get('is_water') or brush.get('is_fog'):
+                continue
+            if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
+                continue
+            walls.append(brush)
+        return walls
+
+    def _monster_raycast_down(self, x, z, start_y=10000.0):
+        """
+        Cast a ray straight down from (x, start_y, z) and return the Y of
+        the highest solid brush surface below that point, or None.
+        """
+        best_y = None
+        for brush in self.brushes:
+            if brush.get('hidden') or brush.get('is_water') or brush.get('is_fog'):
+                continue
+            if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
+                continue
+            pos = brush['pos']
+            size = brush['size']
+            bx_min = pos[0] - size[0] * 0.5
+            bx_max = pos[0] + size[0] * 0.5
+            bz_min = pos[2] - size[2] * 0.5
+            bz_max = pos[2] + size[2] * 0.5
+            by_min = pos[1] - size[1] * 0.5
+            by_max = pos[1] + size[1] * 0.5
+
+            # Check if the XZ position is within this brush's horizontal footprint
+            if bx_min <= x <= bx_max and bz_min <= z <= bz_max:
+                # The top surface of this brush is a potential floor
+                if by_max <= start_y:
+                    if best_y is None or by_max > best_y:
+                        best_y = by_max
+        return best_y
+
+    def _has_line_of_sight(self, start, end):
+        """
+        Return True if a ray from start to end does NOT hit any solid wall brush.
+        Checks only wall brushes (skips triggers, water, fog, hidden).
+        """
+        ray_dir = end - start
+        ray_len = glm.length(ray_dir)
+        if ray_len < 0.001:
+            return True
+        ray_dir = ray_dir / ray_len
+
+        for brush in self.brushes:
+            if brush.get('hidden') or brush.get('is_water') or brush.get('is_fog'):
+                continue
+            if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
+                continue
+            pos = glm.vec3(brush['pos'])
+            size = glm.vec3(brush['size'])
+            b_min = pos - size * 0.5
+            b_max = pos + size * 0.5
+            hit, dist = self._intersect_ray_aabb(start, ray_dir, b_min, b_max)
+            if hit and dist < ray_len - 0.1:
+                return False
+        return True
+
+    def _monster_overlaps_wall(self, mx, my, mz, margin):
+        """
+        Return True if a monster-sized box at (mx, my, mz) with horizontal
+        half-extent = margin overlaps any solid wall brush.
+        """
+        for brush in self.brushes:
+            if brush.get('hidden') or brush.get('is_water') or brush.get('is_fog'):
+                continue
+            if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
+                continue
+            pos = brush['pos']
+            size = brush['size']
+            bx_min = pos[0] - size[0] * 0.5
+            bx_max = pos[0] + size[0] * 0.5
+            by_min = pos[1] - size[1] * 0.5
+            by_max = pos[1] + size[1] * 0.5
+            bz_min = pos[2] - size[2] * 0.5
+            bz_max = pos[2] + size[2] * 0.5
+
+            # Monster AABB (horizontal extent = margin, vertical: my to my+128)
+            m_xmin = mx - margin
+            m_xmax = mx + margin
+            m_ymin = my
+            m_ymax = my + 128.0
+            m_zmin = mz - margin
+            m_zmax = mz + margin
+
+            if (m_xmax > bx_min and m_xmin < bx_max and
+                    m_ymax > by_min and m_ymin < by_max and
+                    m_zmax > bz_min and m_zmin < bz_max):
+                return True
+        return False
+
+    # =========================================================================
     # MONSTER AI
     # =========================================================================
 
@@ -1158,9 +1288,11 @@ class LogicThread(threading.Thread):
 
         Once awake:
           - Ground-type monsters slide toward the player horizontally at MONSTER_MOVE_SPEED,
-            stopping at MONSTER_STOP_DISTANCE.
+            stopping at MONSTER_STOP_DISTANCE. They are affected by gravity and cannot
+            walk through walls.
           - Flying monsters move in full 3D toward the player.
-          - Attacks fire on MONSTER_SHOOT_INTERVAL cooldown while in MONSTER_SIGHT_RANGE.
+          - Attacks fire on MONSTER_SHOOT_INTERVAL cooldown while in MONSTER_SIGHT_RANGE
+            AND the monster has line-of-sight (not blocked by wall brushes).
           - Out-of-range monsters go idle but stay awake (they chase when you return).
 
         I/O events fired:
@@ -1170,6 +1302,7 @@ class LogicThread(threading.Thread):
           - OnDeath      — when Kill input is received
 
         Dead / hidden / disabled monsters are always skipped.
+        Dead monsters' sprites fall to ground if above ground level.
         """
         if not self.player or not MonsterThing:
             return
@@ -1179,22 +1312,49 @@ class LogicThread(threading.Thread):
 
         player_pos = self.player.pos
 
+        # Clear per-frame debug rays
+        self._debug_rays = []
+
         for thing in self.things:
             if not isinstance(thing, MonsterThing):
                 continue
 
-            if thing.properties.get('dead', False) or thing.properties.get('hidden', False):
+            if thing.properties.get('hidden', False):
                 thing.properties.pop('is_shooting', None)
                 continue
             if thing.properties.get('disabled', False):
                 continue
 
             mid = id(thing)
+
+            # --- Handle dead monsters: sprite falls to ground ---
+            if thing.properties.get('dead', False):
+                thing.properties.pop('is_shooting', None)
+                # Apply gravity to the dead sprite until it hits the floor
+                vel_y = thing.properties.get('_vel_y', 0.0)
+                thing_pos = thing.pos
+                ground_y = self._monster_raycast_down(thing_pos[0], thing_pos[2], thing_pos[1])
+                if ground_y is not None and thing_pos[1] > ground_y + 1.0:
+                    vel_y += MONSTER_GRAVITY * delta
+                    if vel_y < MONSTER_TERMINAL_VEL:
+                        vel_y = MONSTER_TERMINAL_VEL
+                    new_y = thing_pos[1] + vel_y * delta
+                    if new_y <= ground_y:
+                        new_y = ground_y
+                        vel_y = 0.0
+                    thing.pos = [thing_pos[0], new_y, thing_pos[2]]
+                    thing.properties['_vel_y'] = vel_y
+                else:
+                    # On the ground already or no floor found
+                    thing.properties['_vel_y'] = 0.0
+                continue
+
             if mid not in self.monster_states:
                 self.monster_states[mid] = {
                     'shoot_timer': MONSTER_SHOOT_INTERVAL,
                     'anim_timer':  0.0,
-                    'in_sight':    False,   # ← NEW: tracks sight-range transitions
+                    'in_sight':    False,
+                    'vel_y':       0.0,   # vertical velocity for gravity
                 }
 
             # ---- Process deferred Kill input --------------------------------
@@ -1226,29 +1386,90 @@ class LogicThread(threading.Thread):
                     continue
             # -----------------------------------------------------------------
 
+            mtype = thing.properties.get('monster_type', 'human')
+
+            # ---- Monster gravity & floor detection (ground types) ------------
+            if mtype != 'flying':
+                vel_y = state.get('vel_y', 0.0)
+                ground_y = self._monster_raycast_down(thing_pos.x, thing_pos.z, thing_pos.y + 10.0)
+                if ground_y is not None:
+                    if thing_pos.y > ground_y + 1.0:
+                        # In the air — apply gravity
+                        vel_y += MONSTER_GRAVITY * delta
+                        if vel_y < MONSTER_TERMINAL_VEL:
+                            vel_y = MONSTER_TERMINAL_VEL
+                        new_y = thing_pos.y + vel_y * delta
+                        if new_y <= ground_y:
+                            new_y = ground_y
+                            vel_y = 0.0
+                        thing_pos = glm.vec3(thing_pos.x, new_y, thing_pos.z)
+                        thing.pos = [thing_pos.x, thing_pos.y, thing_pos.z]
+                    else:
+                        # Snap to ground
+                        if abs(thing_pos.y - ground_y) > 1.0:
+                            thing_pos = glm.vec3(thing_pos.x, ground_y, thing_pos.z)
+                            thing.pos = [thing_pos.x, thing_pos.y, thing_pos.z]
+                        vel_y = 0.0
+                state['vel_y'] = vel_y
+
+            # ---- LOS check — needed for both shooting and debug drawing ------
+            monster_eye = glm.vec3(thing_pos.x, thing_pos.y + 64.0, thing_pos.z)
+            player_eye  = glm.vec3(player_pos.x,
+                                   player_pos.y + self.player.camera_height,
+                                   player_pos.z)
+            has_los = self._has_line_of_sight(monster_eye, player_eye)
+
+            # Collect debug ray if F7 monster debug is active
+            if self.monster_debug_active:
+                self._debug_rays.append({
+                    'start': [monster_eye.x, monster_eye.y, monster_eye.z],
+                    'end':   [player_eye.x, player_eye.y, player_eye.z],
+                    'color': 'green' if has_los else 'red',
+                })
+
             if distance <= MONSTER_SIGHT_RANGE:
                 # ---- Fire OnSeePlayer on sight transition -------------------
                 if not state['in_sight']:
                     state['in_sight'] = True
                     if self.io_manager:
                         self.io_manager.fire_output(thing, 'OnSeePlayer')
+
+                    if self.monster_debug_active:
+                        mname = thing.properties.get('name', '?')
+                        print(f"[MonsterAI] {mname} sees player (dist={distance:.0f})")
                 # -------------------------------------------------------------
 
+                # Movement toward player (with wall collision)
                 if distance > MONSTER_STOP_DISTANCE:
                     direction = player_pos - thing_pos
                     dir_len = glm.length(direction)
                     if dir_len > 0.001:
                         direction = direction / dir_len
-                        mtype = thing.properties.get('monster_type', 'human')
                         if mtype != 'flying':
                             direction = glm.normalize(glm.vec3(direction.x, 0.0, direction.z))
                         step = direction * MONSTER_MOVE_SPEED * delta
                         new_pos = thing_pos + step
-                        thing.pos = [new_pos.x, new_pos.y, new_pos.z]
 
+                        # ---- Wall collision: reject move if it causes overlap ----
+                        if not self._monster_overlaps_wall(new_pos.x, new_pos.y, new_pos.z, MONSTER_WALL_MARGIN):
+                            thing.pos = [new_pos.x, new_pos.y, new_pos.z]
+                        else:
+                            # Try axis-separated movement (slide along walls)
+                            slide_x = glm.vec3(thing_pos.x + step.x, thing_pos.y, thing_pos.z)
+                            slide_z = glm.vec3(thing_pos.x, thing_pos.y, thing_pos.z + step.z)
+                            if not self._monster_overlaps_wall(slide_x.x, slide_x.y, slide_x.z, MONSTER_WALL_MARGIN):
+                                thing.pos = [slide_x.x, slide_x.y, slide_x.z]
+                            elif not self._monster_overlaps_wall(slide_z.x, slide_z.y, slide_z.z, MONSTER_WALL_MARGIN):
+                                thing.pos = [slide_z.x, slide_z.y, slide_z.z]
+                            # else: blocked on both axes — don't move
+                            if self.monster_debug_active:
+                                mname = thing.properties.get('name', '?')
+                                print(f"[MonsterAI] {mname} blocked by wall at ({new_pos.x:.0f}, {new_pos.z:.0f})")
+
+                # ---- Shooting (only if LOS is clear) -------------------------
                 state['shoot_timer'] -= delta
 
-                if state['shoot_timer'] <= 0.0:
+                if state['shoot_timer'] <= 0.0 and has_los:
                     state['shoot_timer'] = MONSTER_SHOOT_INTERVAL
                     state['anim_timer']  = MONSTER_SHOOT_ANIM_TIME
 
@@ -1265,6 +1486,18 @@ class LogicThread(threading.Thread):
                     if self.io_manager:
                         self.io_manager.fire_output(thing, 'OnAttack')
 
+                    if self.monster_debug_active:
+                        mname = thing.properties.get('name', '?')
+                        print(f"[MonsterAI] {mname} attacks player for {damage} damage (LOS clear)")
+
+                elif state['shoot_timer'] <= 0.0 and not has_los:
+                    # Timer expired but no LOS — reset timer so it fires
+                    # immediately when LOS is restored, but don't damage player.
+                    state['shoot_timer'] = 0.1  # re-check shortly
+                    if self.monster_debug_active:
+                        mname = thing.properties.get('name', '?')
+                        print(f"[MonsterAI] {mname} cannot shoot — LOS blocked")
+
                 if state['anim_timer'] > 0.0:
                     state['anim_timer'] -= delta
                     thing.properties['is_shooting'] = True
@@ -1277,6 +1510,9 @@ class LogicThread(threading.Thread):
                     state['in_sight'] = False
                     if self.io_manager:
                         self.io_manager.fire_output(thing, 'OnLostPlayer')
+                    if self.monster_debug_active:
+                        mname = thing.properties.get('name', '?')
+                        print(f"[MonsterAI] {mname} lost player (dist={distance:.0f})")
                 # -------------------------------------------------------------
 
                 thing.properties['is_shooting'] = False
@@ -1377,6 +1613,13 @@ class LogicThread(threading.Thread):
         write_state.collected_keys = set(self.collected_keys)
         write_state.hud_message = self.current_hud_message
         write_state.active_weapon = self.active_weapon
+
+        # Muzzle flash
+        write_state.muzzle_flash_active = self.muzzle_flash_active
+
+        # Monster debug state
+        write_state.monster_debug_active = self.monster_debug_active
+        write_state.monster_debug_rays = list(self._debug_rays)
 
         # Bullet marks
         current_time = time.perf_counter()

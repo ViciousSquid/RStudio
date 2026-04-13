@@ -39,6 +39,15 @@ class RenderState:
         # Visual FX
         self.bullet_marks = [] # List of {'pos': [x,y,z], 'alpha': float}
         self.projectiles = []  # list of {'pos': [x, y, z]}
+
+        # Muzzle flash — True for one frame after the player fires
+        self.muzzle_flash_active = False
+
+        # Monster debug visualisation (F7 toggle)
+        self.monster_debug_active = False
+        # List of {'start': [x,y,z], 'end': [x,y,z], 'color': str}
+        #   color is 'green' (has LOS) or 'red' (blocked)
+        self.monster_debug_rays = []
         
         # Debug / Stats
         self.total_brushes = 0
