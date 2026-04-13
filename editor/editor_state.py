@@ -94,8 +94,7 @@ class EditorState:
         self.selected_object = None
         self.undo_stack.clear()
         self.redo_stack.clear()
-        self.terrain_data = None
-        self.mark_lighting_dirty()
+        self.mark_lighting_dirty()   # new scene always needs a bake
         self.save_state()
 
     def get_level_data(self):
