@@ -4,6 +4,7 @@
 * NEW: Logic Graph Editor (**CTRL-L**) for visual scripting
 * NEW: Logic Wizard (**CTRL-SHIFT-W**) To create quick logic (25 examples)
 * FIXED YZ view dragging behaviour (was upside down!)
+* FIXED frame pacing race condition (was causing flickering)
 * Updated property editor layout
 * Improved terrain editor: heightmaps, mouse-sculpting
 * Entities now use internal UUIDs — I/O connections survive renames
