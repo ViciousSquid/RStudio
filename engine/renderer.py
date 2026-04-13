@@ -1766,6 +1766,7 @@ void main() {
     def draw_sprites(self, projection, view, things_to_draw, sprite_textures, instance_textures=None):
         if not things_to_draw or 'sprite' not in self.shaders:
             return
+
         shader, uniforms = self.shaders['sprite'], self.uniforms['sprite']
         gl.glUseProgram(shader)
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
@@ -1774,11 +1775,48 @@ void main() {
         gl.glUniform1i(uniforms['sprite_texture'], 0)
         pos_loc, size_loc = uniforms['sprite_pos_world'], uniforms['sprite_size']
         gl.glBindVertexArray(self.vaos['sprite'])
+
+        from editor.things import Monster
+
         current_tex = None
-
-        from editor.things import Monster  # import at top if needed
-
         for thing in things_to_draw:
+            # ---- MONSTER SNAPSHOT (dictionary) ----
+            if isinstance(thing, dict) and 'dead' in thing:
+                # Build a texture key from custom sprite paths and monster type
+                if thing.get('dead'):
+                    custom = thing.get('custom_dead', '')
+                    sprite_type = 'dead'
+                elif thing.get('is_shooting'):
+                    custom = thing.get('custom_shoot', '')
+                    sprite_type = 'shoot'
+                else:
+                    custom = thing.get('custom_idle', '')
+                    sprite_type = 'idle'
+
+                mtype = thing.get('monster_type', 'human')
+                tex_key = f"msprite_{mtype}_{sprite_type}_{custom}"
+                tex_id = self.sprite_textures.get(tex_key)
+                if tex_id is None:
+                    # Try to load the sprite
+                    rel_path = f"assets/sprites/monsters/{mtype}/{sprite_type}.png"
+                    if custom:
+                        rel_path = custom
+                    tex_id = self.load_texture(rel_path, 'sprites')
+                    if tex_id:
+                        self.sprite_textures[tex_key] = tex_id
+
+                if tex_id and tex_id != current_tex:
+                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                    current_tex = tex_id
+
+                gl.glUniform3fv(pos_loc, 1, thing['pos'])
+                w = thing.get('sprite_width', 128)
+                h = thing.get('sprite_height', 128)
+                gl.glUniform2f(size_loc, float(w), float(h))
+                gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
+                continue
+
+            # ---- REGULAR THINGS (Light, Pickup, etc.) ----
             tex_id = None
             if instance_textures:
                 tex_id = instance_textures.get(id(thing))
@@ -1789,146 +1827,13 @@ void main() {
                     gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                     current_tex = tex_id
                 gl.glUniform3fv(pos_loc, 1, thing.pos)
-
-                # Set sprite size based on thing type
-                if isinstance(thing, Monster):
-                    # Per-instance override (set via Customise Sprites dialog) takes
-                    # priority; otherwise use the subtype default from monster_constants.
-                    mtype = thing.properties.get('monster_type', 'human')
-                    default_w, default_h = MONSTER_SPRITE_SIZES.get(
-                        mtype, MONSTER_SPRITE_SIZE_DEFAULT)
-                    _w = float(thing.properties.get('sprite_width',  default_w))
-                    _h = float(thing.properties.get('sprite_height', default_h))
-                    gl.glUniform2f(size_loc, _w, _h)
-                elif isinstance(thing, Light):
+                # Sprite size for non‑monsters
+                if isinstance(thing, Light):
                     gl.glUniform2f(size_loc, 16.0, 16.0)
                 else:
                     gl.glUniform2f(size_loc, 32.0, 32.0)
-
                 gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
 
-        gl.glBindVertexArray(0)
-
-    # =========================================================================
-    # SHADOW RENDERING (Optional - disabled by default for ARM)
-    # =========================================================================
-
-    def render_projected_shadows_optimized(self, projection, view, camera_pos, brushes, shadow_lights):
-        if not brushes or not shadow_lights or 'lit' not in self.shaders: 
-            return
-        shader, uniforms = self.shaders['lit'], self.uniforms['lit']
-        gl.glUseProgram(shader)
-        gl.glUniform1i(uniforms['active_lights'], 0)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
-        gl.glBindVertexArray(self.vaos['cube'])
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        model_loc, color_loc, alpha_loc = uniforms['model'], uniforms['object_color'], uniforms['alpha']
-        solid_brushes = [b for b in brushes if not b.get('is_trigger')]
-        
-        for light in shadow_lights:
-            lx, ly, lz = light.pos[0], light.pos[1], light.pos[2]
-            light_radius, light_radius_sq = light.get_radius(), light.get_radius()**2
-            floor_y = None
-            for b in solid_brushes:
-                top_y = b['pos'][1] + b['size'][1] * 0.5
-                if top_y < ly and (floor_y is None or top_y > floor_y): 
-                    floor_y = top_y
-            if floor_y is None: 
-                continue
-            shadow_y, light_height = floor_y + 0.1, ly - floor_y
-            if light_height <= 0: 
-                continue
-            
-            shadow_casters = []
-            for brush in solid_brushes:
-                bx, by, bz = brush['pos']
-                sx, sy, sz = brush['size']
-                brush_top = by + sy * 0.5
-                if abs(brush_top - floor_y) < 0.1 or brush_top <= floor_y or sx > 500 or sz > 500: 
-                    continue
-                if (bx-lx)**2 + (by-ly)**2 + (bz-lz)**2 > light_radius_sq * 1.5: 
-                    continue
-                shadow_casters.append(brush)
-            if not shadow_casters: 
-                continue
-            
-            self._floor_shadow_batch.reset()
-            gl.glEnable(gl.GL_STENCIL_TEST)
-            gl.glStencilMask(0xFF)
-            gl.glClear(gl.GL_STENCIL_BUFFER_BIT)
-            gl.glStencilFunc(gl.GL_ALWAYS, 1, 0xFF)
-            gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_REPLACE)
-            gl.glColorMask(gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE)
-            gl.glDepthMask(gl.GL_FALSE)
-            gl.glDisable(gl.GL_DEPTH_TEST)
-            
-            for brush in shadow_casters:
-                bx, by, bz = brush['pos']
-                sx, sy, sz = brush['size']
-                brush_diag = ((sx*sx + sz*sz) ** 0.5) * 0.5
-                footprint_size = brush_diag * 2.5 + 2.0
-                footprint_mat = glm.translate(self._identity_mat4, glm.vec3(bx, shadow_y, bz))
-                footprint_mat = glm.scale(footprint_mat, glm.vec3(footprint_size, 0.01, footprint_size))
-                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(footprint_mat))
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
-            
-            gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
-            gl.glStencilFunc(gl.GL_EQUAL, 0, 0xFF)
-            gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
-            gl.glStencilMask(0x00)
-            gl.glEnable(gl.GL_BLEND)
-            gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-            gl.glEnable(gl.GL_DEPTH_TEST)
-            gl.glDepthFunc(gl.GL_LEQUAL)
-            gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
-            gl.glPolygonOffset(-1.0, -1.0)
-            gl.glUniform3f(color_loc, 0.0, 0.0, 0.0)
-            
-            for brush in shadow_casters:
-                bx, by, bz = brush['pos']
-                sx, sy, sz = brush['size']
-                ratio = (by + sy * 0.5 - floor_y) / light_height
-                dir_x, dir_z = bx - lx, bz - lz
-                dir_len = (dir_x**2 + dir_z**2)**0.5
-                if dir_len > 0.001: 
-                    dir_x /= dir_len
-                    dir_z /= dir_len
-                else: 
-                    dir_x, dir_z = 1, 0
-                total_len = ((bx + dir_x * dir_len * ratio - bx)**2 + (bz + dir_z * dir_len * ratio - bz)**2) ** 0.5
-                if total_len < 0.1: 
-                    continue
-                total_len = min(total_len, light_radius * 0.75)
-                brush_diagonal = ((sx*sx + sz*sz) ** 0.5) * 0.5
-                shadow_len = total_len + brush_diagonal * 3
-                shadow_cx = bx + dir_x * (shadow_len * 0.5 - brush_diagonal)
-                shadow_cz = bz + dir_z * (shadow_len * 0.5 - brush_diagonal)
-                dist = ((bx-lx)**2 + (by-ly)**2 + (bz-lz)**2)**0.5
-                shadow_alpha = max(0.4, min(0.7, 0.6 * (1.0 - (dist / light_radius) * 0.3)))
-                self._floor_shadow_batch.add((shadow_cx, shadow_y, shadow_cz), 
-                                            (brush_diagonal * 2.5, 0.01, shadow_len), 
-                                            glm.atan(dir_x, dir_z), shadow_alpha)
-            
-            for i in range(self._floor_shadow_batch.count):
-                pos = self._floor_shadow_batch.positions[i]
-                scale = self._floor_shadow_batch.scales[i]
-                rot = self._floor_shadow_batch.rotations[i]
-                alpha = self._floor_shadow_batch.alphas[i]
-                final_mat = glm.translate(self._identity_mat4, glm.vec3(*pos))
-                final_mat = glm.rotate(final_mat, rot, glm.vec3(0, 1, 0))
-                final_mat = glm.scale(final_mat, glm.vec3(*scale))
-                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(final_mat))
-                gl.glUniform1f(alpha_loc, alpha)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
-                self.render_stats.shadow_draw_calls += 1
-            
-            gl.glDisable(gl.GL_POLYGON_OFFSET_FILL)
-            gl.glDisable(gl.GL_STENCIL_TEST)
-        
-        gl.glDepthFunc(gl.GL_LESS)
-        gl.glDepthMask(gl.GL_TRUE)
-        gl.glDisable(gl.GL_BLEND)
         gl.glBindVertexArray(0)
 
     # =========================================================================

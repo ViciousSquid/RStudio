@@ -1333,72 +1333,68 @@ class LogicThread(threading.Thread):
     # =========================================================================
 
     def _prepare_render_state(self):
-        """Prepare render state with frustum culling."""
         write_state = self.game_state.get_write_state()
-        
         write_state.is_play_mode = self.play_mode
-        
+
+        # Camera / view matrices
         if self.play_mode and self.player:
-            write_state.player_pos = glm.vec3(self.player.pos)
-            write_state.player_angle = self.player.angle
-            write_state.player_pitch = self.player.pitch
-            view_matrix = self.player.get_view_matrix()
+            # --- Take a snapshot of player state ---
+            # Copy position (glm.vec3)
+            player_pos = glm.vec3(self.player.pos.x, self.player.pos.y, self.player.pos.z)
+            player_angle = self.player.angle
+            player_pitch = self.player.pitch
+            camera_height = self.player.camera_height   # constant, safe
+
+            # Compute view matrix from the snapshot
+            cam_pos = player_pos + glm.vec3(0, camera_height, 0)
+            direction = glm.vec3(
+                math.sin(player_angle) * math.cos(player_pitch),
+                math.sin(player_pitch),
+                math.cos(player_angle) * math.cos(player_pitch),
+            )
+            view_matrix = glm.lookAt(cam_pos, cam_pos + direction, glm.vec3(0, 1, 0))
+
+            # Store snapshot in render state (optional, for HUD)
+            write_state.player_pos = player_pos
+            write_state.player_angle = player_angle
+            write_state.player_pitch = player_pitch
             fov = 90.0
         else:
+            # Editor mode – copy editor camera
             write_state.editor_camera_pos = glm.vec3(self.editor_camera.pos)
             write_state.editor_camera_yaw = self.editor_camera.yaw
             write_state.editor_camera_pitch = self.editor_camera.pitch
             write_state.editor_camera_fov = self.editor_camera.fov
             view_matrix = self.editor_camera.get_view_matrix()
             fov = self.editor_camera.fov
-        
+
         write_state.camera_view_matrix = view_matrix
-        
+
+        # Player stats
         write_state.player_health = self.player_health
         write_state.player_max_health = self.player_max_health
         write_state.player_dead = self.player_dead
-        
         write_state.collected_keys = set(self.collected_keys)
         write_state.hud_message = self.current_hud_message
         write_state.active_weapon = self.active_weapon
 
-        # Transfer bullet marks
+        # Bullet marks
         current_time = time.perf_counter()
-        render_marks = []
-        for m in self.bullet_marks:
-            age = current_time - m['time']
-            if age < self.BULLET_FADE_TIME:
-                alpha = max(0.0, 1.0 - (age / self.BULLET_FADE_TIME))
-                render_marks.append({
-                    'pos': [m['pos'].x, m['pos'].y, m['pos'].z],
-                    'alpha': alpha
-                })
-        write_state.bullet_marks = render_marks
+        write_state.bullet_marks = [
+            {'pos': [m['pos'].x, m['pos'].y, m['pos'].z],
+            'alpha': max(0.0, 1.0 - (current_time - m['time']) / self.BULLET_FADE_TIME)}
+            for m in self.bullet_marks
+            if current_time - m['time'] < self.BULLET_FADE_TIME
+        ]
 
-        # Things
-        visible_things = []
-        for i, thing in enumerate(self.things):
-            if self.play_mode and Pickup and isinstance(thing, Pickup) and i in self.collected_pickups:
-                continue
-            if Light and isinstance(thing, Light):
-                # FIX: Only convert to list if pos is a glm.vec3 (has .x attribute)
-                # Avoids unconditional list allocation at 60 Hz per light.
-                if hasattr(thing.pos, 'x'):
-                    thing.pos = [thing.pos.x, thing.pos.y, thing.pos.z]
-            visible_things.append(thing)
-        
-        write_state.visible_things = visible_things
-
-        # Frustum culling
+        # ---------- FIX: COPY DYNAMIC OBJECTS ----------
         projection = glm.perspective(glm.radians(fov), self.frustum_aspect, 1.0, 10000.0)
         proj_view = projection * view_matrix
         frustum_planes = self._extract_frustum_planes(proj_view)
-        
-        # FIX: Single pass builds both safe_brushes (culled) and all_brushes.
-        # Previously two separate loops iterated self.brushes — doubled cost at 60 Hz.
-        safe_brushes = []
-        all_brushes  = []
-        total_count  = 0
+
+        visible_brushes = []
+        all_brushes = []
+        total_count = 0
         culled_count = 0
 
         for b in self.brushes:
@@ -1408,24 +1404,52 @@ class LogicThread(threading.Thread):
                 continue
 
             is_dynamic = b.get('is_mover', False) or b.get('is_door', False)
-            b_ref = b.copy() if is_dynamic else b  # copy dynamic brushes once
+
+            if is_dynamic:
+                # Shallow copy of the brush dict, then copy mutable lists
+                b_ref = b.copy()
+                b_ref['pos'] = list(b['pos'])
+                b_ref['size'] = list(b['size'])
+                # Copy other lists if they exist (e.g. direction)
+                if 'direction' in b:
+                    b_ref['direction'] = list(b['direction'])
+                if 'original_pos' in b:
+                    b_ref['original_pos'] = list(b['original_pos'])
+            else:
+                b_ref = b   # static brush – safe to reference directly
 
             all_brushes.append(b_ref)
 
             if self.culling_enabled:
-                pos       = b.get('pos',  [0, 0, 0])
-                size      = b.get('size', [64, 64, 64])
-                center    = (pos[0],        pos[1],        pos[2])
-                half_size = (size[0] / 2.0, size[1] / 2.0, size[2] / 2.0)
-                if not self._aabb_in_frustum(frustum_planes, center, half_size):
+                pos = b.get('pos', [0, 0, 0])
+                size = b.get('size', [64, 64, 64])
+                center = (pos[0], pos[1], pos[2])
+                half = (size[0] / 2.0, size[1] / 2.0, size[2] / 2.0)
+                if not self._aabb_in_frustum(frustum_planes, center, half):
                     culled_count += 1
                     continue
 
-            safe_brushes.append(b_ref)
+            visible_brushes.append(b_ref)
 
-        write_state.visible_brushes = safe_brushes
-        write_state.all_brushes     = all_brushes
-        write_state.total_brushes   = total_count
-        write_state.culled_brushes  = culled_count
-        
+        write_state.visible_brushes = visible_brushes
+        write_state.all_brushes = all_brushes
+        write_state.total_brushes = total_count
+        write_state.culled_brushes = culled_count
+
+        # ---------- Things (including monster snapshots) ----------
+        visible_things = []
+        for i, thing in enumerate(self.things):
+            if self.play_mode and Pickup and isinstance(thing, Pickup) and i in self.collected_pickups:
+                continue
+            # Convert glm.vec3 positions to list for consistency
+            if hasattr(thing.pos, 'x'):
+                thing.pos = [thing.pos.x, thing.pos.y, thing.pos.z]
+
+            # Snapshot monsters to avoid data races
+            if isinstance(thing, MonsterThing):
+                visible_things.append(thing.get_render_snapshot())
+            else:
+                visible_things.append(thing)
+
+        write_state.visible_things = visible_things
         write_state.timestamp = time.perf_counter()
