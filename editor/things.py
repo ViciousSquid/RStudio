@@ -322,6 +322,20 @@ class Monster(Thing):
             print(f"[Monster] Custom sprite not found, using default: {custom_path}")
         return default_path
 
+    def get_render_snapshot(self):
+        """Return a lightweight dictionary snapshot for the renderer."""
+        return {
+            'pos': list(self.pos),                         # copy list
+            'dead': self.properties.get('dead', False),
+            'is_shooting': self.properties.get('is_shooting', False),
+            'monster_type': self.properties.get('monster_type', 'human'),
+            'sprite_width': self.properties.get('sprite_width', 128),
+            'sprite_height': self.properties.get('sprite_height', 128),
+            'custom_idle': self.properties.get('custom_idle', ''),
+            'custom_shoot': self.properties.get('custom_shoot', ''),
+            'custom_dead': self.properties.get('custom_dead', ''),
+        }
+
     def get_sprite_path(self) -> str:
         """
         Return the sprite path for the current monster type and state.
