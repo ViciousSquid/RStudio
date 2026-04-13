@@ -364,8 +364,8 @@ class QtGameView(QOpenGLWidget):
             # empty key-set so movement and other game actions are frozen.
             keys = set() if self.console_overlay_active else self.editor.keys_pressed
             self.game_state.set_keys(keys)
-            if self.game_state.try_swap(): self.update()
-        else: self.update()
+            self.game_state.try_swap()  # consume the new-frame flag
+        self.update()  # always repaint to avoid flickering from stale frames
 
     def _process_sound_queue(self):
         """Checks the game state for new sound requests and plays them using pooled objects."""
@@ -388,6 +388,28 @@ class QtGameView(QOpenGLWidget):
 
     def paintGL(self):
         if not self.renderer: return
+
+        # ---- GL state firewall ------------------------------------------------
+        # QPainter (used for HUD/SysMon at the end of each frame) can leave
+        # behind modified GL state — viewport, scissor, color-mask, depth-mask,
+        # bound FBO, etc.  If any of these carry over into the NEXT frame the
+        # geometry draw calls still execute (SysMon reports normal draw counts)
+        # but produce no visible output.  Reset everything safety-critical here.
+        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self.defaultFramebufferObject())
+        w, h = self.width(), self.height()
+        if w > 0 and h > 0:
+            gl.glViewport(0, 0, w, h)
+        gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glDisable(gl.GL_SCISSOR_TEST)
+        gl.glDisable(gl.GL_STENCIL_TEST)
+        gl.glDisable(gl.GL_BLEND)
+        gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glDepthFunc(gl.GL_LESS)
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl.glUseProgram(0)
+        gl.glBindVertexArray(0)
+        # -----------------------------------------------------------------------
 
         if self.grid_dirty:
             self.renderer.update_grid_buffers(self.world_size, self.grid_size)
@@ -465,6 +487,10 @@ class QtGameView(QOpenGLWidget):
             self.sysmon_stats['visible_brushes'] = len(render_state.visible_brushes)
             self.sysmon_stats['culled_brushes'] = render_state.culled_brushes
             self.sysmon_stats['total_brushes'] = render_state.total_brushes
+
+        # Flush OpenGL commands before switching to QPainter to prevent
+        # transient framebuffer corruption on some drivers (notably Adreno).
+        gl.glFlush()
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
@@ -1583,6 +1609,3 @@ class QtGameView(QOpenGLWidget):
             self.debug_console_window.command_input.setText(cmd)
             self.debug_console_window._on_command_entered()
         self._close_console_overlay()
-
-
-
