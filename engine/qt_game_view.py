@@ -596,8 +596,6 @@ class QtGameView(QOpenGLWidget):
             return QKeySequence(event.key() | int(event.modifiers())) == seq
 
         # ---- In-game console overlay ----------------------------------------
-        # Toggle on the configured key (default backtick).  Works only in play
-        # mode; in editor mode the standalone DebugConsole window is used instead.
         if self.play_mode and check_key('key_console', '`'):
             if self.console_overlay_active:
                 self._close_console_overlay()
@@ -605,12 +603,8 @@ class QtGameView(QOpenGLWidget):
                 self._open_console_overlay()
             return
 
-        # While the overlay is open every keypress is swallowed here so that
-        # typing does not accidentally trigger game actions.  Escape is handled
-        # by the eventFilter installed on _console_input.
         if self.console_overlay_active:
             return
-        # ---------------------------------------------------------------------
 
         if check_key('key_show_connections', 'F1'):
             current_state = getattr(self.editor, 'show_logic_links', False)
@@ -620,18 +614,22 @@ class QtGameView(QOpenGLWidget):
                 status = "ON" if self.editor.show_logic_links else "OFF"
                 self.editor.show_toast(f"Logic Links: {status}")
             return
+
         if check_key('key_toggle_wireframe', 'F2'):
-            if self.current_render_mode == RENDER_MODE_WIREFRAME: self.current_render_mode = RENDER_MODE_LIT
-            else: self.current_render_mode = RENDER_MODE_WIREFRAME
+            if self.current_render_mode == RENDER_MODE_WIREFRAME:
+                self.current_render_mode = RENDER_MODE_LIT
+            else:
+                self.current_render_mode = RENDER_MODE_WIREFRAME
             mode_name = self.render_mode_names.get(self.current_render_mode, "Unknown")
-            if hasattr(self.editor, 'show_toast'): self.editor.show_toast(f"Render Mode: {mode_name}")
+            if hasattr(self.editor, 'show_toast'):
+                self.editor.show_toast(f"Render Mode: {mode_name}")
             self.update()
             return
+
         if check_key('key_sysmon', 'F3'):
             self.debug_mode_active = not self.debug_mode_active
-            if self.play_mode:
-                if self.debug_mode_active: QApplication.restoreOverrideCursor(); self.setCursor(Qt.ArrowCursor)
-                else: center_pos = self.mapToGlobal(self.rect().center()); QCursor.setPos(center_pos); self.last_mouse_pos = self.mapFromGlobal(center_pos); QApplication.setOverrideCursor(Qt.BlankCursor)
+            # In play mode, never change cursor behaviour – keep mouse captured.
+            # Only update the view so the overlay appears/disappears.
             self.update()
             return
 
@@ -642,7 +640,6 @@ class QtGameView(QOpenGLWidget):
                 if event.key() == Qt.Key_Escape:
                     self._exit_play_mode()
                     return
-                # Any other key during death screen is swallowed (no phantom inputs)
                 return
 
         if not self.play_mode:
@@ -650,22 +647,36 @@ class QtGameView(QOpenGLWidget):
                 if hasattr(self.editor, 'set_grid_size'):
                     new_size = max(1, self.grid_size // 2)
                     self.editor.set_grid_size(new_size)
-                    if hasattr(self.editor, 'show_toast'): self.editor.show_toast(f"Grid Size: {new_size}")
+                    if hasattr(self.editor, 'show_toast'):
+                        self.editor.show_toast(f"Grid Size: {new_size}")
                 return
             elif event.key() == Qt.Key_BracketRight:
                 if hasattr(self.editor, 'set_grid_size'):
                     new_size = min(2048, self.grid_size * 2)
                     self.editor.set_grid_size(new_size)
-                    if hasattr(self.editor, 'show_toast'): self.editor.show_toast(f"Grid Size: {new_size}")
+                    if hasattr(self.editor, 'show_toast'):
+                        self.editor.show_toast(f"Grid Size: {new_size}")
                 return
+
         if self.play_mode:
             if getattr(self, 'show_render_menu', False):
-                if event.key() == Qt.Key_1: self.current_render_mode = RENDER_MODE_LIT; self.update()
-                elif event.key() == Qt.Key_2: self.current_render_mode = RENDER_MODE_UNLIT; self.update()
-                elif event.key() == Qt.Key_3: self.current_render_mode = RENDER_MODE_WIREFRAME; self.update()
-                elif event.key() == Qt.Key_4: self.current_render_mode = RENDER_MODE_VERTEX; self.update()
-                elif event.key() == Qt.Key_Escape: self.show_render_menu = False; self.update()
+                if event.key() == Qt.Key_1:
+                    self.current_render_mode = RENDER_MODE_LIT
+                    self.update()
+                elif event.key() == Qt.Key_2:
+                    self.current_render_mode = RENDER_MODE_UNLIT
+                    self.update()
+                elif event.key() == Qt.Key_3:
+                    self.current_render_mode = RENDER_MODE_WIREFRAME
+                    self.update()
+                elif event.key() == Qt.Key_4:
+                    self.current_render_mode = RENDER_MODE_VERTEX
+                    self.update()
+                elif event.key() == Qt.Key_Escape:
+                    self.show_render_menu = False
+                    self.update()
                 return
+
         super().keyPressEvent(event)
 
     def _draw_sprites_text(self, painter):
@@ -1028,31 +1039,47 @@ class QtGameView(QOpenGLWidget):
 
     def toggle_play_mode(self, player_start_pos, player_start_angle, physics_enabled=True):
         self.play_mode = not self.play_mode
-        self.debug_mode_active = False
+
+        # Store the previous state of debug_mode_active so we can restore it later
+        # but we don't change it when entering or exiting play mode.
+        # The sysmon overlay will remain visible if it was on before.
+
         if self.play_mode:
-            # Store spawn info so _exit_play_mode can use it without parameters
+            # Store spawn info
             self._last_player_start_pos = player_start_pos
             self._last_player_start_angle = player_start_angle
 
+            # Capture mouse for mouselook
             center_pos = self.mapToGlobal(self.rect().center())
             QCursor.setPos(center_pos)
             self.last_mouse_pos = self.mapFromGlobal(center_pos)
             QApplication.setOverrideCursor(Qt.BlankCursor)
-            self.player = Player(player_start_pos[0], player_start_pos[2], np.radians(player_start_angle), physics_enabled=physics_enabled)
+
+            # Create player
+            self.player = Player(
+                player_start_pos[0], player_start_pos[2],
+                np.radians(player_start_angle),
+                physics_enabled=physics_enabled
+            )
             self.player.pos.y = player_start_pos[1]
+
             if self.logic_thread:
                 self.logic_thread.set_player(self.player)
                 self.logic_thread.set_play_mode(True)
+
+            # Do NOT change debug_mode_active – keep whatever it was
+            # The overlay will be drawn if debug_mode_active is True
+
         else:
-            # Close the console overlay if it happened to be open when exiting
+            # Exiting play mode
+            # Close console overlay if open
             if self.console_overlay_active:
                 self._console_input.hide()
                 self.console_overlay_active = False
 
-            # FULL cursor restore (fixes stacking issue)
+            # Restore cursor
             while QApplication.overrideCursor() is not None:
                 QApplication.restoreOverrideCursor()
-
             self.setCursor(Qt.ArrowCursor)
 
             if self.logic_thread:
@@ -1061,10 +1088,7 @@ class QtGameView(QOpenGLWidget):
 
             self.player = None
             self.update()
-            self.logic_thread.set_play_mode(False)
-            self.logic_thread.set_player(None)
-            self.player = None
-            self.update()
+
 
     def _exit_play_mode(self):
         """
@@ -1293,7 +1317,8 @@ class QtGameView(QOpenGLWidget):
             self._apply_sculpt_at_mouse(event.x(), event.y())
             return
 
-        if self.debug_mode_active and event.button() == Qt.LeftButton:
+        # System monitor interaction – only allowed in editor mode
+        if not self.play_mode and self.debug_mode_active and event.button() == Qt.LeftButton:
             if self.debug_window_rect.contains(event.pos()):
                 # Close button (top-right X)
                 if event.x() > self.debug_window_rect.right() - 25 and event.y() < self.debug_window_rect.y() + 25:
@@ -1304,7 +1329,7 @@ class QtGameView(QOpenGLWidget):
 
                 # Title bar drag (top 25 px)
                 title_bar_rect = QRect(self.debug_window_rect.x(), self.debug_window_rect.y(),
-                                       self.debug_window_rect.width(), 25)
+                                    self.debug_window_rect.width(), 25)
                 if title_bar_rect.contains(event.pos()):
                     self.dragging_sysmon = True
                     self.sysmon_drag_offset = event.pos() - QPoint(self.debug_window_rect.x(), self.debug_window_rect.y())
@@ -1321,13 +1346,14 @@ class QtGameView(QOpenGLWidget):
         # Legacy Face Selection (Ctrl+Click)
         if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ControlModifier and not self.play_mode:
             face = self.get_face_at(event.pos())
-            if face: self.editor.selected_face = face; self.update(); return
+            if face:
+                self.editor.selected_face = face
+                self.update()
+            return
 
         if self.play_mode and event.button() == Qt.LeftButton:
-            # Block all clicks while the console overlay is open
             if self.console_overlay_active:
                 return
-            # Block shooting when dead
             render_state = self.game_state.get_render_state()
             if getattr(render_state, 'player_dead', False):
                 return
@@ -1335,12 +1361,17 @@ class QtGameView(QOpenGLWidget):
             if active_weapon:
                 self.game_state.queue_shot()
                 effect = self._get_sound_instance('shoot.wav')
-                if effect: effect.play()
+                if effect:
+                    effect.play()
                 return
 
         if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ShiftModifier and not self.play_mode:
             obj = self.get_object_at_3d(event.x(), event.y())
-            if obj: self.editor.save_state(); self.editor.set_selected_object(obj); self.update(); return
+            if obj:
+                self.editor.save_state()
+                self.editor.set_selected_object(obj)
+                self.update()
+            return
 
         if event.button() == Qt.LeftButton and self.editor.state.selected_object and not self.play_mode:
             obj_pos = self.get_selected_object_pos()
@@ -1352,7 +1383,10 @@ class QtGameView(QOpenGLWidget):
                 for axis, vec in [('x', glm.vec3(1,0,0)), ('y', glm.vec3(0,1,0)), ('z', glm.vec3(0,0,1))]:
                     pt, dist = self.intersect_ray_with_axis(ray_o, ray_d, obj_pos, vec)
                     if pt and dist < 1.5 and glm.distance(pt, obj_pos) < 40.0:
-                        if dist < best_dist: best_dist = dist; hit_axis = axis; start_pt = pt
+                        if dist < best_dist:
+                            best_dist = dist
+                            hit_axis = axis
+                            start_pt = pt
                 if hit_axis:
                     self.editor.save_state()
                     self.is_dragging_gizmo = True
@@ -1370,8 +1404,8 @@ class QtGameView(QOpenGLWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        # SysMon title-bar dragging
-        if self.dragging_sysmon:
+        # SysMon title-bar dragging – only in editor mode
+        if not self.play_mode and self.dragging_sysmon:
             new_pos = event.pos() - self.sysmon_drag_offset
             new_x = max(5, min(new_pos.x(), self.width() - self.debug_window_rect.width() - 5))
             new_y = max(5, min(new_pos.y(), self.height() - 120))
@@ -1382,22 +1416,25 @@ class QtGameView(QOpenGLWidget):
         # Mouselook (priority over face hover)
         if self.mouselook_active:
             dx, dy = event.x() - self.last_mouse_pos.x(), event.y() - self.last_mouse_pos.y()
-            if self.use_threading and self.logic_thread: self.game_state.set_mouse_delta(float(dx), float(dy))
-            else: self.camera.rotate(dx, dy)
+            if self.use_threading and self.logic_thread:
+                self.game_state.set_mouse_delta(float(dx), float(dy))
+            else:
+                self.camera.rotate(dx, dy)
             center = self.mapToGlobal(self.rect().center())
             QCursor.setPos(center)
             self.last_mouse_pos = self.mapFromGlobal(center)
             self.editor.update_views()
             return
 
-        # Play Mode Mouse — skip entirely while the console overlay is capturing input
+        # Play Mode Mouse – only skip if console overlay is capturing input.
+        # Sysmon (debug_mode_active) should NOT block mouselook.
         if self.play_mode:
-            if self.debug_mode_active or self.console_overlay_active:
+            if self.console_overlay_active:
                 return
             cp = event.pos()
             dx, dy = cp.x() - self.last_mouse_pos.x(), cp.y() - self.last_mouse_pos.y()
-            if dx == 0 and dy == 0: return
-            # Still set mouse delta even when dead — the logic thread drains it without applying
+            if dx == 0 and dy == 0:
+                return
             self.game_state.set_mouse_delta(float(dx), float(dy))
             center = self.mapToGlobal(self.rect().center())
             QCursor.setPos(center)
@@ -1432,7 +1469,8 @@ class QtGameView(QOpenGLWidget):
             self.terrain_sculpt_painting = False
             return
 
-        if self.dragging_sysmon and event.button() == Qt.LeftButton:
+        # SysMon dragging end – only in editor mode
+        if not self.play_mode and self.dragging_sysmon and event.button() == Qt.LeftButton:
             self.dragging_sysmon = False
             self.setCursor(Qt.ArrowCursor)
             return
@@ -1441,9 +1479,11 @@ class QtGameView(QOpenGLWidget):
             self.is_dragging_gizmo = False
             self.setCursor(Qt.ArrowCursor)
             self.editor.save_state()
+
         if self.mouselook_active and event.button() == Qt.RightButton:
             self.mouselook_active = False
             self.setCursor(Qt.ArrowCursor)
+
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event):
