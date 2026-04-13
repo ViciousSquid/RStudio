@@ -364,8 +364,9 @@ class QtGameView(QOpenGLWidget):
             # empty key-set so movement and other game actions are frozen.
             keys = set() if self.console_overlay_active else self.editor.keys_pressed
             self.game_state.set_keys(keys)
-            self.game_state.try_swap()  # consume the new-frame flag
-        self.update()  # always repaint to avoid flickering from stale frames
+            # NOTE: try_swap() moved into paintGL() so the flag consumption and
+            # state read happen atomically in the render thread.
+        self.update()
 
     def _process_sound_queue(self):
         """Checks the game state for new sound requests and plays them using pooled objects."""
@@ -404,9 +405,12 @@ class QtGameView(QOpenGLWidget):
         gl.glDisable(gl.GL_SCISSOR_TEST)
         gl.glDisable(gl.GL_STENCIL_TEST)
         gl.glDisable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)  # FIX: QPainter can leave premultiplied-alpha blend mode
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDepthFunc(gl.GL_LESS)
+        gl.glDisable(gl.GL_CULL_FACE)      # FIX: QPainter may enable face culling
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl.glActiveTexture(gl.GL_TEXTURE0)  # FIX: reset active texture unit
         gl.glUseProgram(0)
         gl.glBindVertexArray(0)
         # -----------------------------------------------------------------------
@@ -419,6 +423,7 @@ class QtGameView(QOpenGLWidget):
         render_state: Optional[RenderState] = None
 
         if self.use_threading and self.logic_thread:
+            self.game_state.try_swap()  # FIX: consume new-frame flag here, right before reading state
             render_state = self.game_state.get_render_state()
             self.view_matrix = render_state.camera_view_matrix
             if render_state.is_play_mode:
@@ -488,9 +493,12 @@ class QtGameView(QOpenGLWidget):
             self.sysmon_stats['culled_brushes'] = render_state.culled_brushes
             self.sysmon_stats['total_brushes'] = render_state.total_brushes
 
-        # Flush OpenGL commands before switching to QPainter to prevent
-        # transient framebuffer corruption on some drivers (notably Adreno).
-        gl.glFlush()
+        # FIX: glFinish() instead of glFlush() — guarantees all GL commands have
+        # completed before QPainter starts modifying the framebuffer.  glFlush()
+        # only *initiates* execution; on Adreno and some Intel/Mesa drivers the
+        # GPU may still be writing when QPainter begins, causing intermittent
+        # framebuffer corruption that manifests as per-frame brightness flicker.
+        gl.glFinish()
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
@@ -1609,3 +1617,5 @@ class QtGameView(QOpenGLWidget):
             self.debug_console_window.command_input.setText(cmd)
             self.debug_console_window._on_command_entered()
         self._close_console_overlay()
+
+
