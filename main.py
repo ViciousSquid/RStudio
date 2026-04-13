@@ -203,6 +203,7 @@ if __name__ == "__main__":
     fmt.setProfile(QSurfaceFormat.CoreProfile)
     fmt.setDepthBufferSize(24)
     fmt.setStencilBufferSize(8)
+    fmt.setSwapBehavior(QSurfaceFormat.DoubleBuffer)
 
     # Read VSync from settings.ini
     import configparser
