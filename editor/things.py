@@ -300,14 +300,16 @@ class Monster(Thing):
         self.properties.setdefault('damage', 10)
 
         # --- Wake / AI behaviour ---
-        # triggered=True  → monster starts dormant; must receive Wake input via I/O
-        # triggered=False → uses wake_on_sight logic (default)
         self.properties.setdefault('triggered', False)
-        # wake_on_sight=True  → wakes when player enters MONSTER_SIGHT_RANGE (default)
-        # wake_on_sight=False → only wakes via I/O trigger (ignored when triggered=True)
         self.properties.setdefault('wake_on_sight', True)
-        # Runtime flag – set to True when the monster has been woken up
         self.properties.setdefault('awake', False)
+
+        # --- Set default sprite dimensions based on monster_type ---
+        from engine.monster_constants import MONSTER_SPRITE_SIZES, MONSTER_SPRITE_SIZE_DEFAULT
+        mtype = self.properties.get('monster_type', 'human')
+        default_w, default_h = MONSTER_SPRITE_SIZES.get(mtype, MONSTER_SPRITE_SIZE_DEFAULT)
+        self.properties.setdefault('sprite_width', default_w)
+        self.properties.setdefault('sprite_height', default_h)
 
     @staticmethod
     def _resolve_sprite(custom_path: str, default_path: str, project_root: str) -> str:
