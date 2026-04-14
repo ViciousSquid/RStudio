@@ -1,7 +1,7 @@
 ### v1.2.4.0_PreRelease
 
 * NEW: Monster AI<br>
-  _Press F7 during play mode to view monster logic in main console_
+  _Press F7 during play mode for real-time monster logic in main console_
 * Improved property editor flags, pickup types
 * Added second weapon type (shotgun)
 * Resized and tidied up sprites and backported to 1.2.0
