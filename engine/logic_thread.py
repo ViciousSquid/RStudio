@@ -1334,18 +1334,26 @@ class LogicThread(threading.Thread):
                 vel_y = thing.properties.get('_vel_y', 0.0)
                 thing_pos = thing.pos
                 ground_y = self._monster_raycast_down(thing_pos[0], thing_pos[2], thing_pos[1])
-                if ground_y is not None and thing_pos[1] > ground_y + 1.0:
-                    vel_y += MONSTER_GRAVITY * delta
-                    if vel_y < MONSTER_TERMINAL_VEL:
-                        vel_y = MONSTER_TERMINAL_VEL
-                    new_y = thing_pos[1] + vel_y * delta
-                    if new_y <= ground_y:
-                        new_y = ground_y
-                        vel_y = 0.0
-                    thing.pos = [thing_pos[0], new_y, thing_pos[2]]
-                    thing.properties['_vel_y'] = vel_y
+                if ground_y is not None:
+                    sprite_h = thing.properties.get('sprite_height', 128)
+                    target_y = ground_y + sprite_h / 2.0
+                    if thing_pos[1] > target_y + 1.0:
+                        vel_y += MONSTER_GRAVITY * delta
+                        if vel_y < MONSTER_TERMINAL_VEL:
+                            vel_y = MONSTER_TERMINAL_VEL
+                        new_y = thing_pos[1] + vel_y * delta
+                        if new_y <= target_y:
+                            new_y = target_y
+                            vel_y = 0.0
+                        thing.pos = [thing_pos[0], new_y, thing_pos[2]]
+                        thing.properties['_vel_y'] = vel_y
+                    else:
+                        # Snap to correct height
+                        if abs(thing_pos[1] - target_y) > 1.0:
+                            thing.pos = [thing_pos[0], target_y, thing_pos[2]]
+                        thing.properties['_vel_y'] = 0.0
                 else:
-                    # On the ground already or no floor found
+                    # No floor found – stop falling
                     thing.properties['_vel_y'] = 0.0
                 continue
 
