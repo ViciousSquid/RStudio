@@ -87,6 +87,11 @@ class ThreadedGameState:
         """Called by LogicThread to get the object to write to."""
         return self._write_state
 
+    def peek_has_new_frame(self) -> bool:
+        """Non-consuming check used by update_loop."""
+        with self._render_state_lock:
+            return self._has_new_frame
+
     def request_swap(self):
         """Called by LogicThread when a frame is completely written."""
         with self._render_state_lock:

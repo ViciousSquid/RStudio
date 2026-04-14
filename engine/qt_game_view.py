@@ -369,16 +369,21 @@ class QtGameView(QOpenGLWidget):
             self.fps = self.frame_count / fps_elapsed
             self.frame_count = 0
             self.last_fps_time = current_time
+
         self.frame_times.append(delta * 1000.0)
         self._process_sound_queue()
+
         if self.use_threading and self.logic_thread:
-            # While the console overlay is capturing keyboard input, pass an
-            # empty key-set so movement and other game actions are frozen.
             keys = set() if self.console_overlay_active else self.editor.keys_pressed
             self.game_state.set_keys(keys)
-            # NOTE: try_swap() moved into paintGL() so the flag consumption and
-            # state read happen atomically in the render thread.
-        self.update()
+
+            # ONLY repaint when logic thread gave us new data
+            if self.game_state.try_swap():          # peek
+                self.game_state.try_swap()          # consume
+                self.update()                       # request paintGL
+            # else: do nothing — Qt will keep showing the last good frame
+        else:
+            self.update()
 
     def _process_sound_queue(self):
         """Checks the game state for new sound requests and plays them using pooled objects."""
@@ -400,44 +405,22 @@ class QtGameView(QOpenGLWidget):
                 effect.play()
 
     def paintGL(self):
-        if not self.renderer: return
+        if not self.renderer:
+            return
 
-        # ---- GL state firewall ------------------------------------------------
-        # QPainter (used for HUD/SysMon at the end of each frame) can leave
-        # behind modified GL state — viewport, scissor, color-mask, depth-mask,
-        # bound FBO, etc.  If any of these carry over into the NEXT frame the
-        # geometry draw calls still execute (SysMon reports normal draw counts)
-        # but produce no visible output.  Reset everything safety-critical here.
-        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self.defaultFramebufferObject())
-        w, h = self.width(), self.height()
-        if w > 0 and h > 0:
-            gl.glViewport(0, 0, w, h)
-        gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
-        gl.glDepthMask(gl.GL_TRUE)
-        gl.glDisable(gl.GL_SCISSOR_TEST)
-        gl.glDisable(gl.GL_STENCIL_TEST)
-        gl.glDisable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)  # FIX: QPainter can leave premultiplied-alpha blend mode
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glDepthFunc(gl.GL_LESS)
-        gl.glDisable(gl.GL_CULL_FACE)      # FIX: QPainter may enable face culling
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        gl.glActiveTexture(gl.GL_TEXTURE0)  # FIX: reset active texture unit
-        gl.glUseProgram(0)
-        gl.glBindVertexArray(0)
-        # -----------------------------------------------------------------------
-
-        if self.grid_dirty:
-            self.renderer.update_grid_buffers(self.world_size, self.grid_size)
-            self.grid_dirty = False
-
-        camera_pos = glm.vec3(0, 0, 0)
+        # === THREADED RENDER PATH - FIXED ===
         render_state: Optional[RenderState] = None
 
         if self.use_threading and self.logic_thread:
-            self.game_state.try_swap()  # FIX: consume new-frame flag here, right before reading state
-            render_state = self.game_state.get_render_state()
+            # Only swap when the logic thread actually produced a new frame
+            if self.game_state.try_swap():
+                render_state = self.game_state.get_render_state()
+            else:
+                # No new frame yet → reuse the last known good render state
+                render_state = self.game_state.get_render_state()
+
             self.view_matrix = render_state.camera_view_matrix
+
             if render_state.is_play_mode:
                 camera_pos = render_state.player_pos
             else:
@@ -452,6 +435,7 @@ class QtGameView(QOpenGLWidget):
                 self.camera.pitch = render_state.editor_camera_pitch
                 self.camera.fov = render_state.editor_camera_fov
         else:
+            # Non-threaded fallback (editor only)
             self.view_matrix = self.camera.get_view_matrix()
             camera_pos = self.camera.pos
             brushes_to_render = self.editor.state.brushes
