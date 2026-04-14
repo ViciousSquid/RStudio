@@ -41,7 +41,7 @@ Built because modern tools lost the immediacy of Radiant/Hammer.
   ------------------------------
 
  #### Requirements:
-* PyQt5, numpy, Pillow,  PyOpenGL, pygame, PyGLM
+* Python 3.9+ with PyQt5, numpy, Pillow,  PyOpenGL, pygame, PyGLM
 
   -----------------------------
 
