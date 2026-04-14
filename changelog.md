@@ -5,7 +5,7 @@
 * Improved property editor flags, pickup types
 * Added second weapon type (shotgun)
 * Resized. tidied/replaced some sprites and backported to 1.2.0.0
-* Development is now focused on making a full example playable game
+
 
 
 ### v1.2.0.0_stable  |    MILESTONE 1
