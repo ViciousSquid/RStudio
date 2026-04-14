@@ -441,6 +441,29 @@ class MainWindow(QMainWindow):
         else:
             tab.setCurrentIndex(console_idx)
 
+    def _clear_terrain(self):
+        """Remove the terrain object and clear all references."""
+        # Destroy the live terrain object
+        if self.terrain is not None:
+            self.terrain.cleanup()
+            self.terrain = None
+
+        # Clear terrain data from editor state
+        if hasattr(self.state, 'terrain_data'):
+            self.state.terrain_data = None
+
+        # Notify the 3D view's logic thread (if any) that terrain is gone
+        if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
+            self.view_3d.logic_thread.set_terrain(None)
+
+        # Close the terrain editor window if it is open
+        if self.terrain_editor_window:
+            self.terrain_editor_window.close()
+            self.terrain_editor_window = None
+
+        # Force a UI refresh
+        self.update_all_ui()
+
     # ------------------------------------------------------------------
     #  Play-mode console overlay helpers
     # ------------------------------------------------------------------
@@ -1444,10 +1467,14 @@ class MainWindow(QMainWindow):
         # Check for unsaved changes
         if not self.check_unsaved_changes():
             return
-            
+
+        # Clear terrain completely before resetting the scene
+        self._clear_terrain()
+
+        # Clear the rest of the scene (brushes, things, etc.)
         self.state.clear_scene()
         self.file_path = None
-        self.unsaved_changes = False # Reset dirty flag
+        self.unsaved_changes = False
         self.update_title()
         self.update_all_ui()
 
@@ -2056,7 +2083,7 @@ class MainWindow(QMainWindow):
         try:
             print(f"[MainWindow] Loading level: {filePath}")
 
-            # ✅ Capture play state BEFORE doing anything
+            # Capture play state BEFORE doing anything
             was_playing = hasattr(self.view_3d, 'play_mode') and self.view_3d.play_mode
 
             with open(filePath, 'r') as f:
@@ -2065,10 +2092,18 @@ class MainWindow(QMainWindow):
             # Clear current scene completely
             self.state.clear_scene()
 
+            # --- Clear existing terrain BEFORE loading new data ---
+            # This prevents leftover terrain from the previous map.
+            self._clear_terrain()
+            # Also clear any lingering references in the 3D view
+            self.view_3d.terrain = None
+            if self.view_3d.logic_thread:
+                self.view_3d.logic_thread.set_terrain(None)
+
             # Load new data
             self.state.load_from_data(level_data)
 
-            # Re-initialize terrain if present
+            # Re-initialize terrain if present in the new map
             if hasattr(self.state, 'terrain_data') and self.state.terrain_data:
                 if self.terrain is None:
                     from engine.terrain import Terrain
@@ -2080,6 +2115,9 @@ class MainWindow(QMainWindow):
 
                 if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
                     self.view_3d.logic_thread.set_terrain(self.terrain)
+            else:
+                # No terrain in the new map – ensure it is absent from the scene
+                self._clear_terrain()
 
             # Reset camera to PlayerStart
             player_start_pos = None
@@ -2107,16 +2145,14 @@ class MainWindow(QMainWindow):
             self.set_selected_object(None)
             self.update_all_ui()
 
-            # ✅ Proper, synchronous play mode restart
+            # Proper, synchronous play mode restart
             if was_playing:
                 print("[MainWindow] Restarting Play Mode with new level...")
-
                 # Clean exit (avoid toggle)
                 if hasattr(self, 'exit_play_mode'):
                     self.exit_play_mode()
                 else:
                     self.view_3d.play_mode = False
-
                 # Immediate re-entry (no QTimer!)
                 self.enter_play_mode()
 

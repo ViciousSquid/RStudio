@@ -92,9 +92,10 @@ class EditorState:
         self.brushes.clear()
         self.things.clear()
         self.selected_object = None
+        self.terrain_data = None
         self.undo_stack.clear()
         self.redo_stack.clear()
-        self.mark_lighting_dirty()   # new scene always needs a bake
+        self.mark_lighting_dirty()
         self.save_state()
 
     def get_level_data(self):
