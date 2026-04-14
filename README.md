@@ -8,7 +8,7 @@
 
 Built because modern tools lost the immediacy of Radiant/Hammer.
 
-### >>> [DOWNLOAD FOR WINDOWS x64](https://github.com/ViciousSquid/Fio/releases) <<<
+### >>> [Download for Windows and MacOS](https://github.com/ViciousSquid/Fio/releases) <<<
 
 
  <img width="2039" height="1171" alt="image" src="https://github.com/user-attachments/assets/0422c267-5131-4306-a25d-cc2f716e5eae" />
