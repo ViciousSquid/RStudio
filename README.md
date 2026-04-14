@@ -34,7 +34,8 @@ Built because modern tools lost the immediacy of Radiant/Hammer.
 
   ------------------------
 
-<img width="1609" height="1119" alt="image" src="https://github.com/user-attachments/assets/af6ec711-e8b2-41cd-a089-c31557683d03" />
+<img width="1609" height="1119" alt="image" src="https://github.com/user-attachments/assets/6251500b-1396-476a-9e92-b58c00d6ba90" />
+
 
   ------------------------------
 
