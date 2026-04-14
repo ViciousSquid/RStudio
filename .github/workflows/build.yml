@@ -7,7 +7,7 @@ on:
   pull_request:
     branches:
       - main
-      - "1.2.4.0_PreRelease"
+      - "1.2.4.0_Latest"
   workflow_dispatch:
 
 jobs:
