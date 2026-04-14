@@ -23,7 +23,7 @@ Built because modern tools lost the immediacy of Radiant/Hammer.
 * Classic brush-based workflow
 * **Fog, glass & water shaders** with configurable surface parms
 * **Entity I/O system** _inspired by Half-Life 2_ (logic, triggers, lights, speakers)
-* Visual scripting (with examples)
+* Visual scripting (with 25 examples)
 * Terrain generation
 * OBJ model support
 * Monsters/NPCs (actively being worked on)
