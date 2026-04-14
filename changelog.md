@@ -1,9 +1,9 @@
 ### v1.2.4.0_PreRelease
 
 * NEW: Monster improvements and AI
+* Improved console with monster debugging
 * Added second weapon type (shotgun)
 * Improved property editor flags, pickup types
-* Improved debug console with new filters
 * Resized/tidied/replaced some sprites and backported them to _1.2.0.0_stable_
 * Named brushes can be triggered by I/O system (show/hide, change colour, non-solid)<br>
 _Hidden brushes have **zero** render calls_
