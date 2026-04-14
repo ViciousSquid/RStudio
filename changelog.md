@@ -1,7 +1,6 @@
 ### v1.2.4.0_PreRelease
 
-* NEW: Monster improvements and AI<br>
-  _F7 during play mode toggles real-time monster debugging in main console_
+* NEW: Monster improvements and AI
 * Added second weapon type (shotgun)
 * Improved property editor flags, pickup types
 * Improved debug console with new filters
