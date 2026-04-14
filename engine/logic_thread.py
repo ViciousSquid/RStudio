@@ -1357,6 +1357,11 @@ class LogicThread(threading.Thread):
                     thing.properties['_vel_y'] = 0.0
                 continue
 
+            # --- Get sprite dimensions for foot-based positioning ---
+            sprite_width = thing.properties.get('sprite_width', 128)
+            sprite_height = thing.properties.get('sprite_height', 128)
+            half_height = sprite_height / 2.0
+
             if mid not in self.monster_states:
                 self.monster_states[mid] = {
                     'shoot_timer': MONSTER_SHOOT_INTERVAL,
@@ -1399,23 +1404,27 @@ class LogicThread(threading.Thread):
             # ---- Monster gravity & floor detection (ground types) ------------
             if mtype != 'flying':
                 vel_y = state.get('vel_y', 0.0)
+                # Raycast down from above the monster's current position
                 ground_y = self._monster_raycast_down(thing_pos.x, thing_pos.z, thing_pos.y + 10.0)
                 if ground_y is not None:
-                    if thing_pos.y > ground_y + 1.0:
-                        # In the air — apply gravity
+                    foot_y = thing_pos.y - half_height
+                    if foot_y > ground_y + 1.0:
+                        # In the air — apply gravity to foot position
                         vel_y += MONSTER_GRAVITY * delta
                         if vel_y < MONSTER_TERMINAL_VEL:
                             vel_y = MONSTER_TERMINAL_VEL
-                        new_y = thing_pos.y + vel_y * delta
-                        if new_y <= ground_y:
-                            new_y = ground_y
+                        new_foot_y = foot_y + vel_y * delta
+                        if new_foot_y <= ground_y:
+                            new_foot_y = ground_y
                             vel_y = 0.0
-                        thing_pos = glm.vec3(thing_pos.x, new_y, thing_pos.z)
+                        new_center_y = new_foot_y + half_height
+                        thing_pos = glm.vec3(thing_pos.x, new_center_y, thing_pos.z)
                         thing.pos = [thing_pos.x, thing_pos.y, thing_pos.z]
                     else:
-                        # Snap to ground
-                        if abs(thing_pos.y - ground_y) > 1.0:
-                            thing_pos = glm.vec3(thing_pos.x, ground_y, thing_pos.z)
+                        # Snap to ground: foot exactly on ground
+                        desired_center_y = ground_y + half_height
+                        if abs(thing_pos.y - desired_center_y) > 1.0:
+                            thing_pos = glm.vec3(thing_pos.x, desired_center_y, thing_pos.z)
                             thing.pos = [thing_pos.x, thing_pos.y, thing_pos.z]
                         vel_y = 0.0
                 state['vel_y'] = vel_y
@@ -1539,6 +1548,7 @@ class LogicThread(threading.Thread):
                 except ImportError:
                     pass
             print("[Logic] Player has died.")
+        
 
     # =========================================================================
     # FRUSTUM CULLING
