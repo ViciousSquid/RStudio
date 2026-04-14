@@ -776,20 +776,25 @@ class PropertyEditor(QWidget):
         # Create the dropdown for Key Name
         self.pickup_key_name_label = QLabel("Key Name:")
         self.pickup_key_name_combo = QComboBox()
-        self.pickup_key_name_combo.setEditable(False) # No manual typing allowed
+        self.pickup_key_name_combo.setEditable(False)
 
         key_options = ['red_key', 'blue_key', 'yellow_key', 'custom']
         self.pickup_key_name_combo.addItems(key_options)
 
-        # Set current value
-        current_key = brush.get('key_name', 'red_key')
+        # Set current value from the door's key property
+        current_key = brush.get('door_key_name', 'red_key')
         if current_key in key_options:
             self.pickup_key_name_combo.setCurrentText(current_key)
 
-        # Connect to a handler that also updates UI visibility
-        self.pickup_key_name_combo.currentTextChanged.connect(self.on_pickup_key_name_changed)
+        # Connect to update door_key_name (not key_name, which is for pickup things)
+        self.pickup_key_name_combo.currentTextChanged.connect(
+            lambda name: self.update_object_prop('door_key_name', name))
 
-        layout.addRow(self.pickup_key_name_label, self.pickup_key_name_combo)
+        # Add as a horizontal row inside the options group
+        key_row = QHBoxLayout()
+        key_row.addWidget(self.pickup_key_name_label)
+        key_row.addWidget(self.pickup_key_name_combo)
+        options_layout.addLayout(key_row)
         self._pickup_key_widgets.append((self.pickup_key_name_label, self.pickup_key_name_combo))
         
         # Preview button
