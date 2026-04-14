@@ -33,6 +33,7 @@ jobs:
         run: |
           python -m nuitka `
             --standalone `
+            --output-filename=Fio `
             --assume-yes-for-downloads `
             --plugin-enable=pyqt5 `
             --include-package=engine `
@@ -40,6 +41,7 @@ jobs:
             --include-package=PIL `
             --include-data-dir=assets=assets `
             --include-data-dir=tools=tools `
+            --include-data-dir=maps=maps `
             --include-data-files=settings.ini=settings.ini `
             --include-data-files=editor/version.txt=editor/version.txt `
             --windows-icon-from-ico=assets/icon.ico `
@@ -50,10 +52,10 @@ jobs:
       - name: Validate executable exists
         shell: pwsh
         run: |
-          if (Test-Path "build/main.dist/main.exe") {
-            Write-Host "Build successful - main.exe found"
+          if (Test-Path "build/main.dist/Fio.exe") {
+            Write-Host "Build successful - Fio.exe found"
           } else {
-            Write-Error "Build failed: main.exe not found"
+            Write-Error "Build failed: Fio.exe not found"
             exit 1
           }
 
@@ -62,6 +64,7 @@ jobs:
         with:
           name: fio-windows
           path: build/main.dist/
+
 
   build-macos:
     runs-on: macos-latest
@@ -99,6 +102,7 @@ jobs:
             --standalone \
             --macos-create-app-bundle \
             --macos-app-name=Fio \
+            --output-filename=Fio \
             --assume-yes-for-downloads \
             --plugin-enable=pyqt5 \
             --include-package=engine \
@@ -106,6 +110,7 @@ jobs:
             --include-package=PIL \
             --include-data-dir=assets=assets \
             --include-data-dir=tools=tools \
+            --include-data-dir=maps=maps \
             --include-data-files=settings.ini=settings.ini \
             --include-data-files=editor/version.txt=editor/version.txt \
             --macos-app-icon=build/icon.icns \
@@ -114,7 +119,7 @@ jobs:
 
       - name: Validate app bundle
         run: |
-          if [ -f "build/main.app/Contents/MacOS/main" ]; then
+          if [ -f "build/main.app/Contents/MacOS/Fio" ]; then
             echo "App bundle OK"
           else
             echo "App bundle broken"
@@ -126,6 +131,7 @@ jobs:
         with:
           name: fio-macos
           path: build/main.app/
+
 
   build-linux:
     runs-on: ubuntu-latest
@@ -154,6 +160,7 @@ jobs:
         run: |
           python -m nuitka \
             --standalone \
+            --output-filename=Fio \
             --assume-yes-for-downloads \
             --plugin-enable=pyqt5 \
             --include-package=engine \
@@ -161,6 +168,7 @@ jobs:
             --include-package=PIL \
             --include-data-dir=assets=assets \
             --include-data-dir=tools=tools \
+            --include-data-dir=maps=maps \
             --include-data-files=settings.ini=settings.ini \
             --include-data-files=editor/version.txt=editor/version.txt \
             --output-dir=build \
@@ -168,8 +176,8 @@ jobs:
 
       - name: Validate executable exists
         run: |
-          if [ -f "build/main.dist/main" ]; then
-            echo "Build successful - main found"
+          if [ -f "build/main.dist/Fio" ]; then
+            echo "Build successful - Fio found"
           else
             echo "Build failed: executable not found"
             exit 1
