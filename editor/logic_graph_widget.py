@@ -762,6 +762,7 @@ class LogicGraphWindow(QWidget):
         super().__init__(parent, Qt.Window)
         self.editor_state = editor_state
         self._dirty = False
+        self._first_show = True
         self.setWindowTitle("Logic Graph Editor")
         self.resize(1200, 750)
         self.setMinimumSize(800, 500)
@@ -862,6 +863,16 @@ class LogicGraphWindow(QWidget):
         self._btn_apply.setStyleSheet(
             "background:#3a3312; border:1px solid #a08020; color:#ffe080;")
 
+    def showEvent(self, event):
+        """Auto-fit nodes into view on first show so the user doesn't
+        have to click Reload to see them."""
+        super().showEvent(event)
+        if self._first_show:
+            self._first_show = False
+            # Defer fit_all so the view geometry is fully resolved first
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(0, self.graph_view.fit_all)
+
     def _reload(self):
         if self._dirty:
             res = QMessageBox.warning(
@@ -919,5 +930,8 @@ class LogicGraphWindow(QWidget):
 
     def get_scene(self) -> LogicGraphScene:
         return self.graph_scene
+
+
+
 
 

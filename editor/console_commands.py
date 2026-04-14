@@ -103,6 +103,11 @@ class ConsoleCommandHandler:
             'deferred': self.cmd_render_deferred,
             'vsync': self.cmd_render_vsync,
             'reloadshaders': self.cmd_reload_shaders,
+
+            # Visibility & Tint
+            'hide': self.cmd_hide,
+            'show': self.cmd_show,
+            'tint': self.cmd_tint,
         }
 
     def handle_command(self, cmd_string):
@@ -302,6 +307,82 @@ class ConsoleCommandHandler:
             pass
 
     # ===================================================================
+    # VISIBILITY & TINT
+    # ===================================================================
+
+    def cmd_hide(self, args):
+        """hide <name> — Set hidden flag on a brush or entity."""
+        if not args:
+            debug_log("Error", "Usage: hide <entity_name>")
+            return
+        name = args.strip()
+        entity = self.editor_state.find_entity_by_name(name)
+        if not entity:
+            debug_log("Error", f"Entity '{name}' not found")
+            return
+        if isinstance(entity, dict):
+            entity['hidden'] = True
+        elif hasattr(entity, 'properties'):
+            entity.properties['hidden'] = True
+        debug_log("Info", f"'{name}' is now hidden")
+
+    def cmd_show(self, args):
+        """show <name> — Clear hidden flag on a brush or entity."""
+        if not args:
+            debug_log("Error", "Usage: show <entity_name>")
+            return
+        name = args.strip()
+        entity = self.editor_state.find_entity_by_name(name)
+        if not entity:
+            debug_log("Error", f"Entity '{name}' not found")
+            return
+        if isinstance(entity, dict):
+            entity['hidden'] = False
+        elif hasattr(entity, 'properties'):
+            entity.properties['hidden'] = False
+        debug_log("Info", f"'{name}' is now visible")
+
+    def cmd_tint(self, args):
+        """tint <name> <R G B> — Set tint on a brush, or 'tint <name> clear'."""
+        if not args:
+            debug_log("Error", "Usage: tint <name> <R> <G> <B>  or  tint <name> clear")
+            return
+        parts = args.split()
+        if len(parts) < 2:
+            debug_log("Error", "Usage: tint <name> <R> <G> <B>  or  tint <name> clear")
+            return
+        name = parts[0]
+        entity = self.editor_state.find_entity_by_name(name)
+        if not entity:
+            debug_log("Error", f"Entity '{name}' not found")
+            return
+
+        if parts[1].lower() == 'clear':
+            if isinstance(entity, dict):
+                entity.pop('tint', None)
+            elif hasattr(entity, 'properties'):
+                entity.properties.pop('tint', None)
+            debug_log("Info", f"Cleared tint on '{name}'")
+            return
+
+        if len(parts) < 4:
+            debug_log("Error", "Usage: tint <name> <R> <G> <B>  (values 0-255)")
+            return
+        try:
+            r = max(0, min(255, int(parts[1])))
+            g = max(0, min(255, int(parts[2])))
+            b = max(0, min(255, int(parts[3])))
+        except ValueError:
+            debug_log("Error", "R, G, B must be integers 0-255")
+            return
+
+        if isinstance(entity, dict):
+            entity['tint'] = [r, g, b]
+        elif hasattr(entity, 'properties'):
+            entity.properties['tint'] = [r, g, b]
+        debug_log("Info", f"Set tint on '{name}' to ({r}, {g}, {b})")
+
+    # ===================================================================
     # HELP
     # ===================================================================
     def cmd_help(self, args):
@@ -336,6 +417,10 @@ class ConsoleCommandHandler:
 <b style="color:orange;">monster_kill</b> &lt;name&gt; — Instantly kill a named monster<br>
 <b style="color:orange;">monster_revive</b> &lt;name&gt; — Restore a named monster to full health<br>
 <b style="color:orange;">monster_revive_all</b> — Restore every monster in the level<br>
+<b style="color:cyan;">=== Visibility & Tint ===</b><br>
+<b style="color:orange;">hide</b> &lt;name&gt; — Hide a brush or entity<br>
+<b style="color:orange;">show</b> &lt;name&gt; — Show a hidden brush or entity<br>
+<b style="color:orange;">tint</b> &lt;name&gt; &lt;R&gt; &lt;G&gt; &lt;B&gt; — Set tint colour (0-255) or 'clear'<br>
 <b style="color:cyan;">=== Rendering ===</b><br>
 <b style="color:orange;">r_list</b> — Show all current render settings<br>
 <b style="color:orange;">r_wireframe</b>{sep}<b style="color:orange;">wireframe</b> — Toggle wireframe mode<br>
@@ -934,6 +1019,9 @@ class ConsoleCommandHandler:
             debug_log("Info", f"Loaded map {map_name}")
         else:
             debug_log("Error", f"Map not found: {map_name}")
+
+
+
 
 
 

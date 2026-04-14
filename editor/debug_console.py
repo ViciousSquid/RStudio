@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextBrowser, QPushButton, 
-    QLabel, QCheckBox, QComboBox, QFrame, QLineEdit
+    QLabel, QCheckBox, QComboBox, QFrame, QLineEdit, QSplitter
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QUrl
 from PyQt5.QtGui import QFont, QTextCursor, QColor, QDesktopServices
@@ -116,6 +116,7 @@ class DebugConsole(QWidget):
         'Error': '#EF5350',     # Red
         'Warning': '#FFEE58',   # Yellow
         'Info': '#FFFFFF',      # White
+        'MonsterAI': '#FF7043', # Deep orange — monster combat / sight / attack
     }
 
     FONT_SIZE_MIN = 6
@@ -205,32 +206,6 @@ class DebugConsole(QWidget):
         sep2.setStyleSheet("color: #444;")
         toolbar.addWidget(sep2)
 
-        # Entity type filters
-        filter_label2 = QLabel("Hide:")
-        filter_label2.setStyleSheet("color: #888; font-weight: bold;")
-        toolbar.addWidget(filter_label2)
-
-        self.hide_movers_cb = QCheckBox("Movers")
-        self.hide_movers_cb.setToolTip("Hide I/O messages from Movers")
-        self.hide_movers_cb.toggled.connect(self._refresh_console)
-        toolbar.addWidget(self.hide_movers_cb)
-
-        self.hide_triggers_cb = QCheckBox("Triggers")
-        self.hide_triggers_cb.setToolTip("Hide I/O messages from Triggers")
-        self.hide_triggers_cb.toggled.connect(self._refresh_console)
-        toolbar.addWidget(self.hide_triggers_cb)
-
-        self.hide_doors_cb = QCheckBox("Doors")
-        self.hide_doors_cb.setToolTip("Hide I/O messages from Doors")
-        self.hide_doors_cb.toggled.connect(self._refresh_console)
-        toolbar.addWidget(self.hide_doors_cb)
-
-        # Separator
-        sep3 = QFrame()
-        sep3.setFrameShape(QFrame.VLine)
-        sep3.setStyleSheet("color: #444;")
-        toolbar.addWidget(sep3)
-
         # Font size controls
         font_label = QLabel("Size:")
         font_label.setStyleSheet("color: #888;")
@@ -298,14 +273,50 @@ class DebugConsole(QWidget):
             }
         """)
         toolbar.addWidget(clear_btn)
+
+        # Toggle filter-panel button (far right)
+        self._filter_btn = QPushButton("☰")
+        self._filter_btn.setFixedWidth(28)
+        self._filter_btn.setToolTip("Show / hide entity filters")
+        self._filter_btn.clicked.connect(self._toggle_filter_panel)
+        self._filter_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #444;
+                color: #ccc;
+                border: 1px solid #555;
+                border-radius: 3px;
+                padding: 3px 6px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #555;
+                border-color: #F08000;
+            }
+            QPushButton:pressed {
+                background-color: #333;
+            }
+        """)
+        toolbar.addWidget(self._filter_btn)
         
         layout.addLayout(toolbar)
-        
-        # Console text area (Switching to QTextBrowser to support links/clicks)
+
+        # --- Middle area: console + right-side filter column (resizable) ---
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setHandleWidth(4)
+        splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: #444;
+            }
+            QSplitter::handle:hover {
+                background-color: #F08000;
+            }
+        """)
+
+        # Console text area
         self.console = QTextBrowser()
         self.console.setReadOnly(True)
         self.console.setFont(QFont("Consolas", self.font_size))
-        self.console.setOpenLinks(False) # Handle links manually via signal
+        self.console.setOpenLinks(False)
         self.console.anchorClicked.connect(self._on_anchor_clicked)
         self.console.setStyleSheet("""
             QTextBrowser {
@@ -315,7 +326,73 @@ class DebugConsole(QWidget):
                 selection-background-color: #F08000;
             }
         """)
-        layout.addWidget(self.console)
+        splitter.addWidget(self.console)
+
+        # Right-side entity-type filter column
+        filter_panel = QFrame()
+        filter_panel.setMinimumWidth(80)
+        filter_panel.setStyleSheet("""
+            QFrame {
+                background-color: #252525;
+                border: 1px solid #333;
+                border-radius: 3px;
+            }
+        """)
+        fp_layout = QVBoxLayout(filter_panel)
+        fp_layout.setContentsMargins(6, 6, 6, 6)
+        fp_layout.setSpacing(4)
+
+        hide_label = QLabel("Hide:")
+        hide_label.setStyleSheet("color: #888; font-weight: bold; border: none;")
+        fp_layout.addWidget(hide_label)
+
+        # Horizontal separator
+        sep_h = QFrame()
+        sep_h.setFrameShape(QFrame.HLine)
+        sep_h.setStyleSheet("color: #444; border: none; max-height: 1px; background-color: #444;")
+        fp_layout.addWidget(sep_h)
+
+        cb_style = "color: #aaa; border: none;"
+
+        self.hide_movers_cb = QCheckBox("Movers")
+        self.hide_movers_cb.setToolTip("Hide I/O messages from Movers")
+        self.hide_movers_cb.setStyleSheet(cb_style)
+        self.hide_movers_cb.toggled.connect(self._refresh_console)
+        fp_layout.addWidget(self.hide_movers_cb)
+
+        self.hide_triggers_cb = QCheckBox("Triggers")
+        self.hide_triggers_cb.setToolTip("Hide I/O messages from Triggers")
+        self.hide_triggers_cb.setStyleSheet(cb_style)
+        self.hide_triggers_cb.toggled.connect(self._refresh_console)
+        fp_layout.addWidget(self.hide_triggers_cb)
+
+        self.hide_doors_cb = QCheckBox("Doors")
+        self.hide_doors_cb.setToolTip("Hide I/O messages from Doors")
+        self.hide_doors_cb.setStyleSheet(cb_style)
+        self.hide_doors_cb.toggled.connect(self._refresh_console)
+        fp_layout.addWidget(self.hide_doors_cb)
+
+        self.hide_monsters_cb = QCheckBox("Monsters")
+        self.hide_monsters_cb.setToolTip("Hide MonsterAI debug messages")
+        self.hide_monsters_cb.setStyleSheet(cb_style)
+        self.hide_monsters_cb.toggled.connect(self._refresh_console)
+        fp_layout.addWidget(self.hide_monsters_cb)
+
+        fp_layout.addStretch()
+        splitter.addWidget(filter_panel)
+
+        # Console gets all the stretch; filter panel keeps its width
+        splitter.setStretchFactor(0, 1)   # console stretches
+        splitter.setStretchFactor(1, 0)   # panel stays put
+
+        self._splitter = splitter
+        self._filter_panel = filter_panel
+        self._filter_panel_width = 150
+
+        # Start collapsed
+        filter_panel.hide()
+
+        layout.addWidget(splitter, stretch=1)
         
         # --- Command input area at the bottom ---
         input_layout = QHBoxLayout()
@@ -511,6 +588,10 @@ class DebugConsole(QWidget):
                 if self.hide_triggers_cb.isChecked():
                     return
 
+        # 2b. Filter MonsterAI messages when "Monsters" checkbox is checked
+        if self.hide_monsters_cb.isChecked() and category == 'MonsterAI':
+            return
+
         # 3. Check "Filter Empty" Logic
         if self.filter_empty_cb.isChecked():
             if "(0 connections)" in message:
@@ -626,6 +707,45 @@ class DebugConsole(QWidget):
             self.raise_()
             self.activateWindow()
     
+    def _toggle_filter_panel(self):
+        """Show or hide the right-side filter column."""
+        if self._filter_panel.isVisible():
+            self._filter_panel.hide()
+            self._filter_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #444;
+                    color: #ccc;
+                    border: 1px solid #555;
+                    border-radius: 3px;
+                    padding: 3px 6px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #555;
+                    border-color: #F08000;
+                }
+                QPushButton:pressed { background-color: #333; }
+            """)
+        else:
+            self._filter_panel.show()
+            pw = self._filter_panel_width
+            self._splitter.setSizes([self.width() - pw, pw])
+            self._filter_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #3a3312;
+                    color: #F08000;
+                    border: 1px solid #F08000;
+                    border-radius: 3px;
+                    padding: 3px 6px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #4a4322;
+                    border-color: #F08000;
+                }
+                QPushButton:pressed { background-color: #2a2308; }
+            """)
+
     def closeEvent(self, event):
         """Handle close - just hide instead of destroying."""
         self.hide()

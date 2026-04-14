@@ -347,6 +347,54 @@ class IOManager:
                 entity['_kill'] = True
             elif hasattr(entity, 'properties'):
                 entity.properties['_kill'] = True
+
+        # ---- Generic Hide / Show / ToggleVisibility --------------------------
+        elif input_lower == 'hide':
+            if isinstance(entity, dict):
+                entity['hidden'] = True
+            elif hasattr(entity, 'properties'):
+                entity.properties['hidden'] = True
+
+        elif input_lower == 'show':
+            if isinstance(entity, dict):
+                entity['hidden'] = False
+            elif hasattr(entity, 'properties'):
+                entity.properties['hidden'] = False
+
+        elif input_lower == 'togglevisibility':
+            if isinstance(entity, dict):
+                entity['hidden'] = not entity.get('hidden', False)
+            elif hasattr(entity, 'properties'):
+                entity.properties['hidden'] = not entity.properties.get('hidden', False)
+
+        # ---- Generic SetTint / ClearTint ------------------------------------
+        elif input_lower == 'settint':
+            self._apply_tint(entity, parameter)
+
+        elif input_lower == 'cleartint':
+            if isinstance(entity, dict):
+                entity.pop('tint', None)
+            elif hasattr(entity, 'properties'):
+                entity.properties.pop('tint', None)
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _apply_tint(entity, parameter: str):
+        """Parse 'R G B' (0-255) and store as tint list."""
+        try:
+            parts = parameter.split()
+            if len(parts) >= 3:
+                r, g, b = int(parts[0]), int(parts[1]), int(parts[2])
+                tint = [max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b))]
+            else:
+                return
+        except (ValueError, IndexError):
+            return
+        if isinstance(entity, dict):
+            entity['tint'] = tint
+        elif hasattr(entity, 'properties'):
+            entity.properties['tint'] = tint
+    # ------------------------------------------------------------------
     
     def _get_connections(self, entity) -> List[OutputConnection]:
         """Get output connections from an entity."""
@@ -402,6 +450,11 @@ def register_default_io():
             IODef('Disable', 'Disable this trigger'),
             IODef('Toggle', 'Toggle enabled state'),
             IODef('TouchTest', 'Fire OnTrigger if player is inside'),
+            IODef('Hide', 'Hide this trigger'),
+            IODef('Show', 'Show this trigger'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
+            IODef('SetTint', 'Set tint colour (R G B, 0-255)', 'color'),
+            IODef('ClearTint', 'Remove tint override'),
         ],
         outputs=[
             IODef('OnTrigger', 'Fired when activated'),
@@ -419,6 +472,11 @@ def register_default_io():
             IODef('Lock', 'Lock the door'),
             IODef('Unlock', 'Unlock the door'),
             IODef('SetSpeed', 'Set movement speed', 'float'),
+            IODef('Hide', 'Hide this door'),
+            IODef('Show', 'Show this door'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
+            IODef('SetTint', 'Set tint colour (R G B, 0-255)', 'color'),
+            IODef('ClearTint', 'Remove tint override'),
         ],
         outputs=[
             IODef('OnOpen', 'Fired when door starts opening'),
@@ -439,6 +497,11 @@ def register_default_io():
             IODef('SetSpeed', 'Set movement speed', 'float'),
             IODef('Enable', 'Enable movement'),
             IODef('Disable', 'Disable movement'),
+            IODef('Hide', 'Hide this mover'),
+            IODef('Show', 'Show this mover'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
+            IODef('SetTint', 'Set tint colour (R G B, 0-255)', 'color'),
+            IODef('ClearTint', 'Remove tint override'),
         ],
         outputs=[
             IODef('OnFullyOpen', 'Fired when reaching end position'),
@@ -456,6 +519,9 @@ def register_default_io():
             IODef('SetColor', 'Set color (R G B)', 'color'),
             IODef('FadeIn', 'Fade in over time', 'float'),
             IODef('FadeOut', 'Fade out over time', 'float'),
+            IODef('Hide', 'Hide this light entity'),
+            IODef('Show', 'Show this light entity'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
         ],
         outputs=[
             IODef('OnTurnedOn', 'Fired when light turns on'),
@@ -470,6 +536,9 @@ def register_default_io():
             IODef('StopSound', 'Stop playing sound'),
             IODef('Toggle', 'Toggle playback'),
             IODef('SetVolume', 'Set volume (0-1)', 'float'),
+            IODef('Hide', 'Hide this speaker entity'),
+            IODef('Show', 'Show this speaker entity'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
         ],
         outputs=[
             IODef('OnSoundStarted', 'Fired when sound starts'),
@@ -484,6 +553,9 @@ def register_default_io():
             IODef('Disable', 'Disable pickup'),
             IODef('Respawn', 'Force respawn'),
             IODef('SetValue', 'Set pickup value', 'int'),
+            IODef('Hide', 'Hide this pickup'),
+            IODef('Show', 'Show this pickup'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
         ],
         outputs=[
             IODef('OnPickedUp', 'Fired when collected'),
@@ -536,6 +608,9 @@ def register_default_io():
             IODef('Kill',      'Kill this monster'),
             IODef('SetTarget', 'Set pursuit target (entity name, blank = player)', 'string'),
             IODef('Wake',      'Wake from dormant state'),
+            IODef('Hide',      'Hide this monster'),
+            IODef('Show',      'Show this monster'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
         ],
         outputs=[
             IODef('OnDeath',      'Fired when killed'),
@@ -553,6 +628,11 @@ def register_default_io():
             IODef('Disable', 'Disable (make non-solid)'),
             IODef('Toggle', 'Toggle solid state'),
             IODef('Kill', 'Remove from world'),
+            IODef('Hide', 'Hide this brush'),
+            IODef('Show', 'Show this brush'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
+            IODef('SetTint', 'Set tint colour (R G B, 0-255)', 'color'),
+            IODef('ClearTint', 'Remove tint override'),
         ],
         outputs=[]
     )
@@ -577,6 +657,9 @@ def register_default_io():
             IODef('Disable', 'Hide model'),
             IODef('SetSkin', 'Set model skin', 'int'),
             IODef('SetAnimation', 'Play animation', 'string'),
+            IODef('Hide', 'Hide this model'),
+            IODef('Show', 'Show this model'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
         ],
         outputs=[]
     )
@@ -671,5 +754,3 @@ def reset_all_connections(entities):
 
 # Initialize default I/O definitions when module is imported
 register_default_io()
-
-

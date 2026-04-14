@@ -473,7 +473,113 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('monster', 'kill', monster_kill)
     io_manager.register_input_handler('monster', 'enable', relay_enable)
     io_manager.register_input_handler('monster', 'disable', relay_disable)
+
+    def monster_wake(entity, param, logic):
+        """Wake a dormant (triggered=True) monster via I/O."""
+        entity.properties['awake'] = True
+        entity.properties['triggered'] = False   # clear dormant flag
+
+    def monster_set_target(entity, param, logic):
+        """Override pursuit target by entity name (empty string = back to player)."""
+        entity.properties['target_name'] = param.strip() if param else ''
+
+    io_manager.register_input_handler('monster', 'wake', monster_wake)
+    io_manager.register_input_handler('monster', 'settarget', monster_set_target)
+
+    # ==========================================================================
+    # BRUSH HIDE / SHOW / TINT INPUTS
+    # (Brushes are dicts — these handlers work for brush, door, mover, trigger)
+    # ==========================================================================
+
+    def brush_hide(entity, param, logic):
+        """Hide a brush (set hidden flag — renderer skips it)."""
+        entity['hidden'] = True
+        name = entity.get('name', 'unnamed')
+        debug_log('IO', f"Brush '{name}' hidden")
+
+    def brush_show(entity, param, logic):
+        """Show a brush (clear hidden flag)."""
+        entity['hidden'] = False
+        name = entity.get('name', 'unnamed')
+        debug_log('IO', f"Brush '{name}' shown")
+
+    def brush_toggle_vis(entity, param, logic):
+        """Toggle brush visibility."""
+        entity['hidden'] = not entity.get('hidden', False)
+        name = entity.get('name', 'unnamed')
+        state = "hidden" if entity.get('hidden') else "visible"
+        debug_log('IO', f"Brush '{name}' toggled → {state}")
+
+    def brush_set_tint(entity, param, logic):
+        """Set tint colour on a brush.  Param: 'R G B' (0-255)."""
+        try:
+            parts = param.split()
+            if len(parts) >= 3:
+                r = max(0, min(255, int(parts[0])))
+                g = max(0, min(255, int(parts[1])))
+                b = max(0, min(255, int(parts[2])))
+                entity['tint'] = [r, g, b]
+                name = entity.get('name', 'unnamed')
+                debug_log('IO', f"Brush '{name}' tint set to ({r}, {g}, {b})")
+        except (ValueError, IndexError):
+            debug_log('Error', f"SetTint: bad parameter '{param}' — expected 'R G B'")
+
+    def brush_clear_tint(entity, param, logic):
+        """Remove tint override from a brush."""
+        entity.pop('tint', None)
+        name = entity.get('name', 'unnamed')
+        debug_log('IO', f"Brush '{name}' tint cleared")
+
+    # Register for every brush-based type
+    for btype in ('brush', 'door', 'mover', 'trigger'):
+        io_manager.register_input_handler(btype, 'hide', brush_hide)
+        io_manager.register_input_handler(btype, 'show', brush_show)
+        io_manager.register_input_handler(btype, 'togglevisibility', brush_toggle_vis)
+        io_manager.register_input_handler(btype, 'settint', brush_set_tint)
+        io_manager.register_input_handler(btype, 'cleartint', brush_clear_tint)
+
+    # ==========================================================================
+    # THING (ENTITY) HIDE / SHOW INPUTS
+    # (Things have .properties dict — covers monster, light, speaker, pickup, model)
+    # ==========================================================================
+
+    def thing_hide(entity, param, logic):
+        """Hide a thing entity."""
+        entity.properties['hidden'] = True
+        name = entity.properties.get('name', 'unnamed')
+        debug_log('IO', f"Entity '{name}' hidden")
+
+    def thing_show(entity, param, logic):
+        """Show a thing entity."""
+        entity.properties['hidden'] = False
+        name = entity.properties.get('name', 'unnamed')
+        debug_log('IO', f"Entity '{name}' shown")
+
+    def thing_toggle_vis(entity, param, logic):
+        """Toggle thing visibility."""
+        entity.properties['hidden'] = not entity.properties.get('hidden', False)
+        name = entity.properties.get('name', 'unnamed')
+        state = "hidden" if entity.properties.get('hidden') else "visible"
+        debug_log('IO', f"Entity '{name}' toggled → {state}")
+
+    # Register for every thing-based type that declares Hide/Show
+    for ttype in ('monster', 'light', 'speaker', 'pickup', 'model'):
+        io_manager.register_input_handler(ttype, 'hide', thing_hide)
+        io_manager.register_input_handler(ttype, 'show', thing_show)
+        io_manager.register_input_handler(ttype, 'togglevisibility', thing_toggle_vis)
+
+    # ==========================================================================
+    # LEVEL CHANGER INPUTS
+    # ==========================================================================
     
+    def levelchanger_changelevel(entity, param, logic):
+        # We route to change_level() because it is more robust
+        if hasattr(entity, 'change_level'):
+            entity.change_level(param)
+            
+    io_manager.register_input_handler('levelchanger', 'changelevel', levelchanger_changelevel)
+    io_manager.register_input_handler('levelchanger', 'trigger', levelchanger_changelevel)
+
     # Log summary
     # Retrieve version from version.txt in the same directory
     version_str = "Unknown"
@@ -490,31 +596,6 @@ def register_all_input_handlers(io_manager: IOManager):
     debug_log('Info', f"Registered {len(io_manager._input_handlers)} input handlers")
     debug_log('Info', f"Type 'help' to see all available commands")
 
-
-    def monster_wake(entity, param, logic):
-        """Wake a dormant (triggered=True) monster via I/O."""
-        entity.properties['awake'] = True
-        entity.properties['triggered'] = False   # clear dormant flag
-
-    def monster_set_target(entity, param, logic):
-        """Override pursuit target by entity name (empty string = back to player)."""
-        entity.properties['target_name'] = param.strip() if param else ''
-
-    io_manager.register_input_handler('monster', 'wake', monster_wake)
-    io_manager.register_input_handler('monster', 'settarget', monster_set_target)
-
-
-    # ==========================================================================
-    # LEVEL CHANGER INPUTS
-    # ==========================================================================
-    
-    def levelchanger_changelevel(entity, param, logic):
-        # We route to change_level() because it is more robust
-        if hasattr(entity, 'change_level'):
-            entity.change_level(param)
-            
-    io_manager.register_input_handler('levelchanger', 'changelevel', levelchanger_changelevel)
-    io_manager.register_input_handler('levelchanger', 'trigger', levelchanger_changelevel)
 
 # =============================================================================
 # HELPER FUNCTIONS
