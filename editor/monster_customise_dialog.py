@@ -101,7 +101,14 @@ class MonsterCustomiseDialog(QDialog):
             "Sprites must be PNG files inside  assets/sprites/monsters/\n"
             "Missing custom files fall back to the default monster sprites automatically."
         )
-        info.setStyleSheet("color: #aaa; font-size: 11px;")
+        # Increased font-size to 13px and adjusted color for better contrast
+        info.setStyleSheet("""
+            QLabel {
+                color: #bbb; 
+                font-size: 13px;
+                margin-top: 4px;
+            }
+        """)
         info.setWordWrap(True)
         root.addWidget(info)
 

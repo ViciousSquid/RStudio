@@ -772,18 +772,24 @@ class PropertyEditor(QWidget):
         options_layout.addWidget(needs_key_cb)
         self._widgets['door_needs_key_cb'] = needs_key_cb
         
-        # Key name field
-        key_layout = QHBoxLayout()
-        key_layout.addWidget(QLabel("Key Name:"))
-        key_input = QLineEdit(brush.get('door_key_name', ''))
-        key_input.setPlaceholderText("e.g. blue_key")
-        key_input.editingFinished.connect(lambda: self.update_object_prop('door_key_name', key_input.text()))
-        key_layout.addWidget(key_input)
-        options_layout.addLayout(key_layout)
-        self._widgets['door_key_input'] = key_input
-        key_input.setEnabled(brush.get('door_needs_key', False))
-        
-        layout.addWidget(options_group)
+        # Create the dropdown for Key Name
+        self.pickup_key_name_label = QLabel("Key Name:")
+        self.pickup_key_name_combo = QComboBox()
+        self.pickup_key_name_combo.setEditable(False) # No manual typing allowed
+
+        key_options = ['red_key', 'blue_key', 'yellow_key', 'custom']
+        self.pickup_key_name_combo.addItems(key_options)
+
+        # Set current value
+        current_key = thing.properties.get('key_name', 'red_key')
+        if current_key in key_options:
+            self.pickup_key_name_combo.setCurrentText(current_key)
+
+        # Connect to a handler that also updates UI visibility
+        self.pickup_key_name_combo.currentTextChanged.connect(self.on_pickup_key_name_changed)
+
+        layout.addRow(self.pickup_key_name_label, self.pickup_key_name_combo)
+        self._pickup_key_widgets.append((self.pickup_key_name_label, self.pickup_key_name_combo))
         
         # Preview button
         preview_btn = QPushButton("▶ Preview Door")
@@ -1517,7 +1523,7 @@ class PropertyEditor(QWidget):
         self._pickup_sprite_widgets = []
 
         _MONSTER_ONLY_KEYS = {'awake', 'damage', 'health', 'monster_type',
-                               'trigger', 'wake_when_see_player', 'dead', 'non_hostile', 'sight'}
+                               'triggered', 'wake_on_sight', 'dead', 'non_hostile', 'sight'}
 
         for key, value in sorted(thing.properties.items()):
             if key == 'name': continue
@@ -1526,7 +1532,7 @@ class PropertyEditor(QWidget):
             if isinstance(thing, Light) and key in ['colour']: continue
             if isinstance(thing, Model) and key in ['model_path', 'scale', 'rotation']: continue
             if not isinstance(thing, Monster) and key in _MONSTER_ONLY_KEYS: continue
-            if isinstance(thing, Monster) and key in ('trigger', 'wake_when_see_player', 'dead', 'non_hostile', 'sight'): continue
+            if isinstance(thing, Monster) and key in ('triggered', 'wake_on_sight', 'dead', 'non_hostile', 'sight'): continue
             if is_pickup and key in ['key_name', 'custom_sprite', 'respawns', 'respawn_time']: continue
 
             label_text = key.replace('_', ' ').title() + ":"
@@ -1535,7 +1541,24 @@ class PropertyEditor(QWidget):
                 widget_w = QComboBox()
                 widget_w.addItems(['human', 'flying'])
                 widget_w.setCurrentText(value)
-                widget_w.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
+
+                def on_monster_type_changed(new_type):
+                    # Update the property
+                    self.update_object_prop('monster_type', new_type)
+                    # If the user hasn't manually overridden sprite dimensions, apply defaults
+                    from engine.monster_constants import MONSTER_SPRITE_SIZES
+                    default_w, default_h = MONSTER_SPRITE_SIZES.get(new_type, (128, 128))
+                    # Only set if the current dimensions match the previous default (i.e. not custom)
+                    current_w = thing.properties.get('sprite_width', 128)
+                    current_h = thing.properties.get('sprite_height', 128)
+                    # If both width and height match the old human defaults (128,192) or flying defaults (160,160)
+                    # we consider them auto‑generated and update them.
+                    self.update_object_prop('sprite_width', default_w)
+                    self.update_object_prop('sprite_height', default_h)
+                    # Force a refresh of the property editor to show the new values
+                    self.set_object(thing)
+
+                widget_w.currentTextChanged.connect(on_monster_type_changed)
                 layout.addRow(label_text, widget_w)
             elif isinstance(thing, Light) and key == 'state':
                 widget_w = QComboBox()
@@ -1553,7 +1576,7 @@ class PropertyEditor(QWidget):
                 layout.addRow("Logic Type:", widget_w)
             elif isinstance(thing, Pickup) and key == 'item_type':
                 widget_w = QComboBox()
-                item_types = ['health', 'key', 'gun1']  # add 'gun2' in future update
+                item_types = ['health', 'key', 'gun1', 'gun2']
                 widget_w.addItems(item_types)
                 widget_w.setCurrentText(value)
                 widget_w.currentTextChanged.connect(self.on_pickup_item_type_changed)
@@ -1686,8 +1709,8 @@ class PropertyEditor(QWidget):
         # === MONSTER AI + FLAGS ===
         if isinstance(thing, Monster):
             thing.properties.setdefault('sight', 512)
-            thing.properties.setdefault('trigger', False)
-            thing.properties.setdefault('wake_when_see_player', True)
+            thing.properties.setdefault('triggered', False)
+            thing.properties.setdefault('wake_on_sight', True)
             thing.properties.setdefault('dead', False)
             thing.properties.setdefault('non_hostile', False)
 
@@ -1773,9 +1796,9 @@ class PropertyEditor(QWidget):
             flags_layout.setSpacing(6)
 
             _flag_defs = [
-                ('trigger',              'Trigger',
+                ('triggered',            'Trigger',
                  'Monster starts dormant — must be woken via an I/O input'),
-                ('wake_when_see_player', 'Wake when sees player',
+                ('wake_on_sight',        'Wake when sees player',
                  'Monster wakes automatically when the player enters its sight range'),
                 ('dead',                 'Dead',
                  'Monster is placed in a dead/inactive state at level start'),
@@ -1856,32 +1879,35 @@ class PropertyEditor(QWidget):
             self.respawn_time_spin.setVisible(respawns)
 
     def on_pickup_key_name_changed(self, key_name):
-        """Handle key name dropdown change - updates sprite immediately."""
-        if self.current_object is None: return
+        """Updates key_name property and toggles sprite visibility if 'custom' is selected."""
         self.update_object_prop('key_name', key_name)
-        # Clear sprite cache to force reload
-        if hasattr(Pickup, 'clear_sprite_cache'):
-            Pickup.clear_sprite_cache()
-        # Refresh views to show new sprite
-        self.editor.update_all_ui()
+        
+        # Show sprite widgets if it's a 'custom' key
+        is_custom = (key_name == 'custom')
+        if hasattr(self, '_pickup_sprite_widgets'):
+            for label, widget in self._pickup_sprite_widgets:
+                label.setVisible(is_custom)
+                widget.setVisible(is_custom)
 
     def on_pickup_sprite_select(self):
         """Open file dialog to select custom sprite for pickup."""
         if self.current_object is None or not isinstance(self.current_object, Pickup):
             return
         
-        start_path = os.path.join('assets', 'sprites')
+        # Ensure the file dialog starts in the assets/sprites directory
+        start_path = os.path.join(os.getcwd(), 'assets', 'sprites')
         if not os.path.exists(start_path):
-            start_path = 'assets'
+            os.makedirs(start_path, exist_ok=True)
         
         filepath, _ = QFileDialog.getOpenFileName(
             self, "Select Sprite Image", start_path,
-            "Image Files (*.png *.jpg *.jpeg *.bmp)"
+            "Image Files (*.png *.jpg *.jpeg *.bmp *.tga)"
         )
         
         if filepath:
             try:
-                rel_path = os.path.relpath(filepath, '.').replace('\\', '/')
+                # Force path relative to the project root for cross-platform compatibility
+                rel_path = os.path.relpath(filepath, os.getcwd()).replace('\\', '/')
             except ValueError:
                 rel_path = filepath
             
@@ -1889,7 +1915,7 @@ class PropertyEditor(QWidget):
             if hasattr(self, 'pickup_sprite_path'):
                 self.pickup_sprite_path.setText(rel_path)
             
-            # Clear sprite cache to force reload
+            # Clear sprite cache to force reload in the editor view
             if hasattr(Pickup, 'clear_sprite_cache'):
                 Pickup.clear_sprite_cache()
             
@@ -1918,6 +1944,10 @@ class PropertyEditor(QWidget):
         is_health = (item_type == 'health')
         is_gun = (item_type in ['gun1', 'gun2'])
         
+        # Check current key name to determine if the sprite picker should be visible
+        # Defaulting to 'red_key' if not set
+        current_key_name = self.current_object.properties.get('key_name', 'red_key')
+        
         # Show/hide key name widgets
         if hasattr(self, '_pickup_key_widgets'):
             for label, widget in self._pickup_key_widgets:
@@ -1930,42 +1960,41 @@ class PropertyEditor(QWidget):
                 label.setVisible(not is_key)
                 widget.setVisible(not is_key)
         
-        # Show/hide sprite widgets (hide for keys - they use predefined sprites)
+        # Show/hide sprite widgets
+        # Sprites are visible for all generic items, OR specifically for 'custom' keys
+        show_sprite_picker = (not is_key) or (is_key and current_key_name == 'custom')
+        
         if hasattr(self, '_pickup_sprite_widgets'):
             for label, widget in self._pickup_sprite_widgets:
-                label.setVisible(not is_key)
-                widget.setVisible(not is_key)
+                label.setVisible(show_sprite_picker)
+                widget.setVisible(show_sprite_picker)
         
         # Handle specific item type logic
         if is_health:
-            # Set default sprite for health pickups
             self.update_object_prop('custom_sprite', 'assets/sprites/health.png')
             if hasattr(self, 'pickup_sprite_path'):
                 self.pickup_sprite_path.setText('assets/sprites/health.png')
-            # Force walk_over activation
             self.update_object_prop('activation', 'walk_over')
             if hasattr(self, '_pickup_activation_widget'):
                 self._pickup_activation_widget.setCurrentText('walk_over')
                 self._pickup_activation_widget.setEnabled(False)
         
         elif is_gun:
-            # Set default sprite for guns (e.g. assets/sprites/gun1.png)
             sprite_path = f'assets/sprites/{item_type}.png'
             self.update_object_prop('custom_sprite', sprite_path)
             if hasattr(self, 'pickup_sprite_path'):
                 self.pickup_sprite_path.setText(sprite_path)
-            # Force walk_over activation for guns
             self.update_object_prop('activation', 'walk_over')
             if hasattr(self, '_pickup_activation_widget'):
                 self._pickup_activation_widget.setCurrentText('walk_over')
                 self._pickup_activation_widget.setEnabled(False)
                 
         else:
-            # Re-enable activation dropdown for generic pickups
+            # Re-enable activation dropdown for generic pickups and keys
             if hasattr(self, '_pickup_activation_widget'):
                 self._pickup_activation_widget.setEnabled(True)
         
-        # Clear sprite cache and refresh views
+        # Refresh views
         if hasattr(Pickup, 'clear_sprite_cache'):
             Pickup.clear_sprite_cache()
         
