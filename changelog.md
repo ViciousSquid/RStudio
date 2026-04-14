@@ -1,7 +1,7 @@
 ### v1.2.4.0_PreRelease
 
 * NEW: Monster improvements and AI
-* Improved console with monster debugging
+* Added monster debugging to console
 * Added second weapon type (shotgun)
 * Improved property editor flags, pickup types
 * Resized/tidied/replaced some sprites and backported them to _1.2.0.0_stable_
