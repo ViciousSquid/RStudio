@@ -6,7 +6,7 @@
 * Improved property editor flags, pickup types
 * Improved debug console with new filters
 * Resized/tidied/replaced some sprites and backported them to _1.2.0.0_stable_
-* Brushes can be fully controlled by I/O system (show/hide, change colour, non-solid)<br>
+* Named brushes can be fully controlled by I/O system (show/hide, change colour, non-solid)<br>
 _Hidden brushes have **zero** render calls_
 
 ---------------
