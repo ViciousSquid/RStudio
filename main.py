@@ -31,7 +31,7 @@ class ProgressSplashScreen(QWidget):
         
         # Progress bar
         self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedHeight(20)
+        self.progress_bar.setFixedHeight(35)
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setAlignment(Qt.AlignCenter)
         self.progress_bar.setStyleSheet("""
