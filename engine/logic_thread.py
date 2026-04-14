@@ -51,6 +51,13 @@ except ImportError as e:
     IO_AVAILABLE = False
     IOManager = None
 
+# Import debug logger for MonsterAI console output
+try:
+    from editor.debug_console import debug_log
+except ImportError:
+    def debug_log(category, message):
+        print(f"[{category}] {message}")
+
 # Monster AI tuning values
 from .monster_constants import (
     MONSTER_SIGHT_RANGE,
@@ -1111,7 +1118,7 @@ class LogicThread(threading.Thread):
             new_health = health - damage
             closest_monster.properties['health'] = new_health
 
-            print(f"[DEBUG] Monster {closest_monster.properties.get('name')} health: {health} -> {new_health} (weapon={self.active_weapon}, dmg={damage})")
+            debug_log("MonsterAI", f"Monster {closest_monster.properties.get('name')} health: {health} -> {new_health} (weapon={self.active_weapon}, dmg={damage})")
 
             if hasattr(self.game_state, 'sound_queue'):
                 self.game_state.sound_queue.append({
@@ -1453,7 +1460,7 @@ class LogicThread(threading.Thread):
 
                     if self.monster_debug_active:
                         mname = thing.properties.get('name', '?')
-                        print(f"[MonsterAI] {mname} sees player (dist={distance:.0f})")
+                        debug_log("MonsterAI", f"{mname} sees player (dist={distance:.0f})")
                 # -------------------------------------------------------------
 
                 # Movement toward player (with wall collision)
@@ -1479,9 +1486,7 @@ class LogicThread(threading.Thread):
                             elif not self._monster_overlaps_wall(slide_z.x, slide_z.y, slide_z.z, MONSTER_WALL_MARGIN):
                                 thing.pos = [slide_z.x, slide_z.y, slide_z.z]
                             # else: blocked on both axes — don't move
-                            if self.monster_debug_active:
-                                mname = thing.properties.get('name', '?')
-                                print(f"[MonsterAI] {mname} blocked by wall at ({new_pos.x:.0f}, {new_pos.z:.0f})")
+                            # (pathfinding noise — intentionally not logged)
 
                 # ---- Shooting (only if LOS is clear) -------------------------
                 state['shoot_timer'] -= delta
@@ -1505,7 +1510,7 @@ class LogicThread(threading.Thread):
 
                     if self.monster_debug_active:
                         mname = thing.properties.get('name', '?')
-                        print(f"[MonsterAI] {mname} attacks player for {damage} damage (LOS clear)")
+                        debug_log("MonsterAI", f"{mname} attacks player for {damage} damage (LOS clear)")
 
                 elif state['shoot_timer'] <= 0.0 and not has_los:
                     # Timer expired but no LOS — reset timer so it fires
@@ -1513,7 +1518,7 @@ class LogicThread(threading.Thread):
                     state['shoot_timer'] = 0.1  # re-check shortly
                     if self.monster_debug_active:
                         mname = thing.properties.get('name', '?')
-                        print(f"[MonsterAI] {mname} cannot shoot — LOS blocked")
+                        debug_log("MonsterAI", f"{mname} cannot shoot — LOS blocked")
 
                 if state['anim_timer'] > 0.0:
                     state['anim_timer'] -= delta
@@ -1529,7 +1534,7 @@ class LogicThread(threading.Thread):
                         self.io_manager.fire_output(thing, 'OnLostPlayer')
                     if self.monster_debug_active:
                         mname = thing.properties.get('name', '?')
-                        print(f"[MonsterAI] {mname} lost player (dist={distance:.0f})")
+                        debug_log("MonsterAI", f"{mname} lost player (dist={distance:.0f})")
                 # -------------------------------------------------------------
 
                 thing.properties['is_shooting'] = False
@@ -1714,3 +1719,6 @@ class LogicThread(threading.Thread):
 
         write_state.visible_things = visible_things
         write_state.timestamp = time.perf_counter()
+
+
+

@@ -884,11 +884,16 @@ class Renderer:
             elif brush.get('operation') == 'subtract': 
                 color, alpha = [1.0, 0.0, 0.0], 1.0
             else:
-                brush_colour = brush.get('colour')
-                if brush_colour and isinstance(brush_colour, (list, tuple)) and len(brush_colour) >= 3:
-                    color = [c / 255.0 if c > 1.0 else c for c in brush_colour[:3]]
-                else: 
-                    color = [0.8, 0.8, 0.8]
+                # Tint overrides colour when set via I/O (SetTint input)
+                brush_tint = brush.get('tint')
+                if brush_tint and isinstance(brush_tint, (list, tuple)) and len(brush_tint) >= 3:
+                    color = [c / 255.0 if c > 1.0 else c for c in brush_tint[:3]]
+                else:
+                    brush_colour = brush.get('colour')
+                    if brush_colour and isinstance(brush_colour, (list, tuple)) and len(brush_colour) >= 3:
+                        color = [c / 255.0 if c > 1.0 else c for c in brush_colour[:3]]
+                    else: 
+                        color = [0.8, 0.8, 0.8]
                 alpha = 1.0
             
             gl.glUniform3fv(color_loc, 1, color)
@@ -1660,4 +1665,7 @@ class Renderer:
             gl.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
         gl.glBindVertexArray(0)
+
+
+
 
