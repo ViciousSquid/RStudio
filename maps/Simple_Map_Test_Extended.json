@@ -93,12 +93,12 @@
         {
             "pos": [
                 256.0,
-                192.0,
+                248.0,
                 960.0
             ],
             "size": [
                 1280.0,
-                512.0,
+                400.0,
                 128.0
             ],
             "textures": {
@@ -207,13 +207,13 @@
         {
             "pos": [
                 488.0,
-                -32.0,
-                728.0
+                -64.0,
+                792.0
             ],
             "size": [
                 144.0,
-                192.0,
-                592.0
+                256.0,
+                720.0
             ],
             "operation": "add",
             "textures": {
@@ -340,7 +340,7 @@
             "pos": [
                 672.0,
                 352.0,
-                728.0
+                720.0
             ],
             "size": [
                 224.0,
@@ -384,12 +384,12 @@
             "pos": [
                 256.0,
                 -128.0,
-                312.0
+                120.0
             ],
             "size": [
                 512.0,
                 128.0,
-                1424.0
+                1040.0
             ],
             "operation": "add",
             "textures": {
@@ -427,12 +427,12 @@
         },
         {
             "pos": [
-                -108.0,
+                -176.0,
                 -128.0,
                 832.0
             ],
             "size": [
-                616.0,
+                480.0,
                 128.0,
                 384.0
             ],
@@ -1579,12 +1579,12 @@
             "pos": [
                 -160.0,
                 0.0,
-                876.0
+                940.0
             ],
             "size": [
                 448.0,
                 128,
-                40.0
+                168.0
             ],
             "textures": {
                 "north": "default.png",
@@ -1786,13 +1786,13 @@
         {
             "pos": [
                 32.0,
-                -152.0,
-                444.0
+                -160.0,
+                508.0
             ],
             "size": [
                 1056.0,
-                80.0,
-                904.0
+                64.0,
+                1032.0
             ],
             "textures": {
                 "north": "default.png",
@@ -1875,6 +1875,171 @@
             },
             "texture_tiling": true,
             "id": "dfc37a7c-ed25-490f-9a95-07518212b000"
+        },
+        {
+            "pos": [
+                256.0,
+                -136.0,
+                672.0
+            ],
+            "size": [
+                512.0,
+                112.0,
+                64.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "fffd0acc-16eb-4497-a614-0c79c7c6cc90"
+        },
+        {
+            "pos": [
+                256.0,
+                -144.0,
+                728.0
+            ],
+            "size": [
+                512.0,
+                96.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "09ceb67f-a3d5-42f3-982f-0136a2b42044"
+        },
+        {
+            "pos": [
+                256.0,
+                -152.0,
+                776.0
+            ],
+            "size": [
+                512.0,
+                80.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "020dcf85-6bd5-4673-8024-38fe533b6478"
+        },
+        {
+            "pos": [
+                32.0,
+                -64.0,
+                1096.0
+            ],
+            "size": [
+                1056.0,
+                256.0,
+                144.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "bf05cb72-944c-4e8c-b06b-24229f77687f",
+            "colour": [
+                0.0,
+                0.0,
+                0.0
+            ]
+        },
+        {
+            "pos": [
+                368.0,
+                -72.0,
+                1000.0
+            ],
+            "size": [
+                96.0,
+                240.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "6f5f815f-e1e3-4248-ad57-17124f093dc4"
+        },
+        {
+            "pos": [
+                112.0,
+                -72.0,
+                1000.0
+            ],
+            "size": [
+                96.0,
+                240.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "cb2fbe02-0db2-4a2b-b8a3-4f442a44aea2"
+        },
+        {
+            "pos": [
+                240.0,
+                -40.0,
+                1000.0
+            ],
+            "size": [
+                160.0,
+                176.0,
+                48.0
+            ],
+            "textures": {
+                "north": "trigger.jpg",
+                "south": "trigger.jpg",
+                "east": "trigger.jpg",
+                "west": "trigger.jpg",
+                "top": "trigger.jpg",
+                "down": "default.png",
+                "bottom": "trigger.jpg"
+            },
+            "is_trigger": true,
+            "trigger_type": "Once",
+            "id": "85a5eb07-c2e7-46c3-810e-73c627c06e79",
+            "io_connections": [
+                {
+                    "output": "OnTrigger",
+                    "target": "LevelChanger_1",
+                    "input": "ChangeLevel",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false
+                }
+            ]
         }
     ],
     "things": [
@@ -2021,9 +2186,9 @@
         {
             "type": "light",
             "pos": [
-                -160.0,
+                -96.0,
                 176.0,
-                736.0
+                752.0
             ],
             "properties": {
                 "type": "light",
@@ -2033,7 +2198,7 @@
                     255,
                     255
                 ],
-                "intensity": 0.45,
+                "intensity": 0.75,
                 "radius": 512.0,
                 "state": "on",
                 "show_radius": false,
@@ -2093,9 +2258,9 @@
         {
             "type": "pickup",
             "pos": [
-                704.0,
-                112.0,
-                -800.0
+                -32.0,
+                96.0,
+                752.0
             ],
             "properties": {
                 "type": "pickup",
@@ -2109,6 +2274,99 @@
                 "key_name": "blue_key",
                 "custom_sprite": "assets/sprites/gun1.png",
                 "id": "bf40606e-a530-4a0c-9d96-b532638bbb05"
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                240.0,
+                40,
+                944.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "id": "18939147-26f5-4fc2-a7b7-ab6b57a48655",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "levelchanger",
+            "pos": [
+                240.0,
+                -16.0,
+                960.0
+            ],
+            "properties": {
+                "type": "levelchanger",
+                "name": "LevelChanger_1",
+                "id": "19f5aff1-59aa-4aaa-b079-82dbcc82aeae",
+                "target_map": "Terrain_Test_small",
+                "delay": 0.0,
+                "fade_time": 0.5,
+                "show_radius": false,
+                "radius": 128.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "monster",
+            "pos": [
+                704.0,
+                144.0,
+                -448.0
+            ],
+            "properties": {
+                "type": "monster",
+                "name": "Monster_1",
+                "id": "63496dec-3e88-4f90-ab3f-d25470ba38dd",
+                "monster_type": "human",
+                "health": 100,
+                "damage": 10,
+                "triggered": false,
+                "wake_on_sight": true,
+                "awake": false,
+                "sprite_width": 128,
+                "sprite_height": 192,
+                "sight": 512,
+                "dead": false,
+                "non_hostile": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "monster",
+            "pos": [
+                128.0,
+                272.0,
+                -784.0
+            ],
+            "properties": {
+                "type": "monster",
+                "name": "Monster_3",
+                "id": "7b40fa02-1496-4899-9387-c196bcac585d",
+                "monster_type": "flying",
+                "health": 100,
+                "damage": 10,
+                "triggered": false,
+                "wake_on_sight": true,
+                "awake": false,
+                "sprite_width": 160,
+                "sprite_height": 160,
+                "sight": 512,
+                "dead": false,
+                "non_hostile": false
             },
             "io_connections": []
         }

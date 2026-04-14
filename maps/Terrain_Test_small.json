@@ -3,12 +3,12 @@
     "brushes": [
         {
             "pos": [
-                872.0,
+                1024.0,
                 200.0,
                 448.0
             ],
             "size": [
-                208.0,
+                512.0,
                 400.0,
                 640.0
             ],
@@ -63,15 +63,57 @@
                 "down": "default.png"
             },
             "id": "9c17a961-6625-4076-b05e-7b0e83fd9edb"
+        },
+        {
+            "pos": [
+                384.0,
+                96.0,
+                -760.0
+            ],
+            "size": [
+                1792.0,
+                192.0,
+                496.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "9670efa1-6557-477d-97fb-ad6f194f0cbf"
+        },
+        {
+            "pos": [
+                1024.0,
+                96.0,
+                -192.0
+            ],
+            "size": [
+                512.0,
+                192.0,
+                640.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "0e7b4c63-a288-460e-93de-ae70bb62ce80"
         }
     ],
     "things": [
         {
             "type": "playerstart",
             "pos": [
-                448.0,
-                192.0,
-                -16.0
+                384.0,
+                272.0,
+                -704.0
             ],
             "properties": {
                 "type": "playerstart",
@@ -174,6 +216,30 @@
                 "show_radius": false,
                 "casts_shadows": false,
                 "id": "305ca295-fe60-4d09-97dc-c417fa43818b"
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                368.0,
+                304.0,
+                -752.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_2",
+                "id": "fdf452f0-2f07-40f2-908d-70bdfa200c2e",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false
             },
             "io_connections": []
         }
