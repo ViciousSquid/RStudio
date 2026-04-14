@@ -4,8 +4,7 @@
   _F7 during play mode toggles real-time monster debugging in main console_
 * Improved property editor flags, pickup types
 * Added second weapon type (shotgun)
-* Resized and tidied up sprites and backported to 1.2.0
-* Found some crashes and fixed them
+* Resized and tidied up sprites and backported to 1.2.0.0
 
 
 ### v1.2.0.0_stable  |    MILESTONE 1
