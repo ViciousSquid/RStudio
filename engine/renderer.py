@@ -994,7 +994,7 @@ void main() {
         if glass_brushes: 
             glass_brushes.sort(key=lambda b: -self._distance_sq(b.get('pos', [0,0,0]), camera_pos))
         if final_sprites: 
-            final_sprites.sort(key=lambda s: -self._distance_sq(s['pos'] if isinstance(s, dict) else s.pos, camera_pos))
+            final_sprites.sort(key=lambda s: -self._distance_sq(s.pos, camera_pos))
             
         gl.glEnable(gl.GL_BLEND)
         gl.glDepthMask(gl.GL_FALSE)
@@ -1163,7 +1163,7 @@ void main() {
             if lst:
                 lst.sort(key=lambda b: -self._distance_sq(b['pos'], camera_pos))
         if final_sprites:
-            final_sprites.sort(key=lambda s: -self._distance_sq(s['pos'] if isinstance(s, dict) else s.pos, camera_pos))
+            final_sprites.sort(key=lambda s: -self._distance_sq(s.pos, camera_pos))
 
         gl.glEnable(gl.GL_BLEND)
         gl.glDepthMask(gl.GL_FALSE)
@@ -1577,7 +1577,7 @@ void main() {
                 opaque.append(brush)
         
         if not is_play:
-            sprites = [t for t in things if isinstance(t, Thing) or (isinstance(t, dict) and 'monster_type' in t)]
+            sprites = [t for t in things if isinstance(t, Thing)]
         else:
             # FIX: types imported at module level; local names ensure graceful fallback
             try:
@@ -1585,10 +1585,7 @@ void main() {
             except ImportError:
                 pass
             for t in things:
-                # Monster dict snapshots (from get_render_snapshot) — always visible
-                if isinstance(t, dict) and 'monster_type' in t:
-                    sprites.append(t)
-                elif isinstance(t, Thing):
+                if isinstance(t, Thing):
                     if isinstance(t, Pickup):
                         sprites.append(t)
                     elif isinstance(t, (Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger)):
@@ -1800,15 +1797,11 @@ void main() {
                 tex_key = f"msprite_{mtype}_{sprite_type}_{custom}"
                 tex_id = self.sprite_textures.get(tex_key)
                 if tex_id is None:
-                    # load_texture(name, subfolder) builds: assets/{subfolder}/{name}
+                    # Try to load the sprite
+                    rel_path = f"assets/sprites/monsters/{mtype}/{sprite_type}.png"
                     if custom:
-                        custom_clean = custom.replace('assets/', '', 1)
-                        subfolder = os.path.dirname(custom_clean)
-                        filename  = os.path.basename(custom_clean)
-                    else:
-                        subfolder = f"sprites/monsters/{mtype}"
-                        filename  = f"{sprite_type}.png"
-                    tex_id = self.load_texture(filename, subfolder)
+                        rel_path = custom
+                    tex_id = self.load_texture(rel_path, 'sprites')
                     if tex_id:
                         self.sprite_textures[tex_key] = tex_id
 
@@ -2106,4 +2099,3 @@ void main() {
             gl.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
         gl.glBindVertexArray(0)
-

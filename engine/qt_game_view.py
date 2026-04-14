@@ -102,8 +102,6 @@ class QtGameView(QOpenGLWidget):
         self.texture_manager = {}
         self.sprite_textures = {}
         self.gun_hud_pixmaps = {}
-        self.gun_flash_pixmaps = {}  # gunxHUD_flash.png muzzle flash overlays
-        self.monster_debug_active = False  # F7 toggle
         self.renderer = None
 
         # Debug Rendering Resources
@@ -210,12 +208,7 @@ class QtGameView(QOpenGLWidget):
         print(f"Preloaded {count} sound files.")
 
     def _preload_sound_file(self, name, path, pool_size=4):
-        """Creates a pool of QSoundEffects for a specific file to allow polyphony.
-
-        After setting the source we play once at zero volume and immediately
-        stop.  This forces the audio backend to decode and buffer the sample
-        so the very first *real* play() has no start-up latency.
-        """
+        """Creates a pool of QSoundEffects for a specific file to allow polyphony."""
         if name in self.sound_pool:
             return
 
@@ -225,11 +218,6 @@ class QtGameView(QOpenGLWidget):
         for _ in range(pool_size):
             effect = QSoundEffect(self)
             effect.setSource(url)
-            # Prime the audio pipeline: play silent then stop
-            effect.setVolume(0.0)
-            effect.play()
-            effect.stop()
-            effect.setVolume(1.0)
             self.sound_pool[name].append(effect)
 
     def _get_sound_instance(self, name):
@@ -494,10 +482,6 @@ class QtGameView(QOpenGLWidget):
         if render_state and hasattr(render_state, 'projectiles') and render_state.projectiles:
             self._render_projectiles(render_state.projectiles)
 
-        # Render monster debug rays (F7 toggle)
-        if render_state and getattr(render_state, 'monster_debug_active', False):
-            self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []))
-
         # Face Mode Highlight
         if self.face_mode_active and self.hovered_face_info:
             brush, face_name = self.hovered_face_info
@@ -639,39 +623,6 @@ class QtGameView(QOpenGLWidget):
         gl.glBindVertexArray(0)
         gl.glDisable(gl.GL_BLEND)
 
-    def _render_monster_debug_rays(self, rays):
-        """Draw LOS debug lines from monsters to player (F7 toggle).
-
-        Green = has line-of-sight, Red = blocked by wall brush.
-        Uses the debug_shader / debug_vao already initialised for
-        the editor debug renderer.
-        """
-        if not rays or not self.debug_shader:
-            return
-
-        gl.glUseProgram(self.debug_shader)
-        proj_loc  = gl.glGetUniformLocation(self.debug_shader, 'projection')
-        view_loc  = gl.glGetUniformLocation(self.debug_shader, 'view')
-        color_loc = gl.glGetUniformLocation(self.debug_shader, 'color')
-        gl.glUniformMatrix4fv(proj_loc, 1, gl.GL_FALSE, self._proj_ptr)
-        gl.glUniformMatrix4fv(view_loc, 1, gl.GL_FALSE, self._view_ptr)
-
-        gl.glBindVertexArray(self.debug_vao)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.debug_vbo)
-
-        for ray in rays:
-            s, e = ray['start'], ray['end']
-            if ray.get('color') == 'green':
-                gl.glUniform3f(color_loc, 0.0, 1.0, 0.0)
-            else:
-                gl.glUniform3f(color_loc, 1.0, 0.0, 0.0)
-            data = np.array([s[0], s[1], s[2], e[0], e[1], e[2]], dtype=np.float32)
-            gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data.nbytes, data)
-            gl.glDrawArrays(gl.GL_LINES, 0, 2)
-
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
-        gl.glBindVertexArray(0)
-
     def keyPressEvent(self, event):
         def check_key(cfg_key, default):
             key_str = self.editor.config.get('Shortcuts', cfg_key, fallback=default)
@@ -713,17 +664,6 @@ class QtGameView(QOpenGLWidget):
             self.debug_mode_active = not self.debug_mode_active
             # In play mode, never change cursor behaviour – keep mouse captured.
             # Only update the view so the overlay appears/disappears.
-            self.update()
-            return
-
-        # ---- F7: Monster debug visualisation toggle ----
-        if self.play_mode and event.key() == Qt.Key_F7:
-            self.monster_debug_active = not self.monster_debug_active
-            if self.logic_thread:
-                self.logic_thread.monster_debug_active = self.monster_debug_active
-            if hasattr(self.editor, 'show_toast'):
-                status = "ON" if self.monster_debug_active else "OFF"
-                self.editor.show_toast(f"Monster Debug: {status}")
             self.update()
             return
 
@@ -850,11 +790,6 @@ class QtGameView(QOpenGLWidget):
                 x = self.width() - target_w - 20
                 y = self.height() - target_h
                 painter.drawPixmap(x, y, target_w, target_h, hud_pixmap)
-                # Muzzle flash overlay — drawn on top of gun sprite for one frame
-                if getattr(render_state, 'muzzle_flash_active', False):
-                    flash_pixmap = self._load_gun_flash_pixmap(active_weapon)
-                    if flash_pixmap and not flash_pixmap.isNull():
-                        painter.drawPixmap(x, y, target_w, target_h, flash_pixmap)
         collected_keys = getattr(render_state, 'collected_keys', set())
         if collected_keys:
             key_x = self.width() - hud_margin - 100
@@ -1176,11 +1111,6 @@ class QtGameView(QOpenGLWidget):
                 self._console_input.hide()
                 self.console_overlay_active = False
 
-            # Reset monster debug overlay
-            self.monster_debug_active = False
-            if self.logic_thread:
-                self.logic_thread.monster_debug_active = False
-
             # Restore cursor
             while QApplication.overrideCursor() is not None:
                 QApplication.restoreOverrideCursor()
@@ -1464,10 +1394,7 @@ class QtGameView(QOpenGLWidget):
             active_weapon = getattr(render_state, 'active_weapon', None)
             if active_weapon:
                 self.game_state.queue_shot()
-                # Play weapon-specific sound immediately (zero latency)
-                from engine.monster_constants import WEAPON_SHOOT_SOUND
-                sound_file = WEAPON_SHOOT_SOUND.get(active_weapon, 'shoot.wav')
-                effect = self._get_sound_instance(sound_file)
+                effect = self._get_sound_instance('shoot.wav')
                 if effect:
                     effect.play()
                 return
@@ -1634,17 +1561,6 @@ class QtGameView(QOpenGLWidget):
             return pixmap
         return None
 
-    def _load_gun_flash_pixmap(self, gun_type):
-        """Lazy load muzzle flash pixmap for guns (gunxHUD_flash.png)."""
-        if gun_type in self.gun_flash_pixmaps:
-            return self.gun_flash_pixmaps[gun_type]
-        path = os.path.join('assets', 'sprites', f'{gun_type}HUD_flash.png')
-        if os.path.exists(path):
-            pixmap = QPixmap(path)
-            self.gun_flash_pixmaps[gun_type] = pixmap
-            return pixmap
-        return None
-
     # =========================================================================
     # IN-GAME CONSOLE OVERLAY
     # =========================================================================
@@ -1701,7 +1617,5 @@ class QtGameView(QOpenGLWidget):
             self.debug_console_window.command_input.setText(cmd)
             self.debug_console_window._on_command_entered()
         self._close_console_overlay()
-
-
 
 
