@@ -6,7 +6,7 @@
 ### _A real-time Quake/Hammer-style level editor with built-in game engine_
 
 
-Built because modern tools lost the immediacy of Radiant/Hammer.
+Built because modern tools lost the immediacy of Radiant/Worldcraft
 
 ### >>> [Download for Windows and MacOS](https://github.com/ViciousSquid/Fio/releases) <<< <br> Linux users are welcome to use the included Dockerfile
 
