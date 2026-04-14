@@ -1,231 +1,182 @@
 name: Nuitka Build and Validate
 
 on:
-push:
-branches:
-- main
-- "1.2.4.0_PreRelease"
-- "release/*"
-pull_request:
-branches:
-- main
-- "1.2.4.0_PreRelease"
-workflow_dispatch:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - main
+      - "1.2.4.0_PreRelease"
+  workflow_dispatch:
 
 jobs:
+  build-windows:
+    runs-on: windows-latest
 
-# ─────────────────────────────────────────────
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-# Windows
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
 
-# ─────────────────────────────────────────────
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install nuitka zstandard
 
-build-windows:
-runs-on: windows-latest
+      - name: Build with Nuitka
+        run: |
+          python -m nuitka `
+            --standalone `
+            --assume-yes-for-downloads `
+            --plugin-enable=pyqt5 `
+            --include-package=engine `
+            --include-package=editor `
+            --include-package=PIL `
+            --include-data-dir=assets=assets `
+            --include-data-dir=tools=tools `
+            --include-data-files=settings.ini=settings.ini `
+            --include-data-files=editor/version.txt=editor/version.txt `
+            --windows-icon-from-ico=assets/icon.ico `
+            --windows-console-mode=disable `
+            --output-dir=build `
+            main.py
 
-```
-steps:
-  - name: Checkout code
-    uses: actions/checkout@v4
+      - name: Validate executable exists
+        shell: pwsh
+        run: |
+          if (Test-Path "build/main.dist/main.exe") {
+            Write-Host "Build successful - main.exe found"
+          } else {
+            Write-Error "Build failed: main.exe not found"
+            exit 1
+          }
 
-  - name: Set up Python
-    uses: actions/setup-python@v5
-    with:
-      python-version: '3.10'
-      cache: pip
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fio-windows
+          path: build/main.dist/
 
-  - name: Install dependencies
-    run: |
-      pip install -r requirements.txt
-      pip install nuitka zstandard
+  build-macos:
+    runs-on: macos-latest
 
-  - name: Build with Nuitka
-    run: |
-      python -m nuitka `
-        --standalone `
-        --assume-yes-for-downloads `
-        --plugin-enable=pyqt5 `
-        --include-package=engine `
-        --include-package=editor `
-        --include-package=PIL `
-        --include-data-dir=assets=assets `
-        --include-data-dir=tools=tools `
-        --include-data-files=settings.ini=settings.ini `
-        --include-data-files=editor/version.txt=editor/version.txt `
-        --windows-icon-from-ico=assets/icon.ico `
-        --windows-console-mode=disable `
-        --output-dir=build `
-        main.py
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-  - name: Validate executable exists
-    shell: pwsh
-    run: |
-      if (Test-Path "build/main.dist/main.exe") {
-        Write-Host "Build successful - main.exe found"
-      } else {
-        Write-Error "Build failed: main.exe not found"
-        exit 1
-      }
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
 
-  - name: Upload artifact
-    uses: actions/upload-artifact@v4
-    with:
-      name: fio-windows
-      path: build/main.dist/
-```
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install nuitka zstandard imageio pillow
 
-# ─────────────────────────────────────────────
+      - name: Convert icon to .icns
+        run: |
+          mkdir -p build/icon.iconset
+          sips -s format png assets/icon.ico --out build/icon.png
 
-# macOS
+          for size in 16 32 64 128 256 512; do
+            sips -z $size $size build/icon.png --out build/icon.iconset/icon_${size}x${size}.png
+            sips -z $(($size*2)) $(($size*2)) build/icon.png --out build/icon.iconset/icon_${size}x${size}@2x.png
+          done
 
-# ─────────────────────────────────────────────
+          iconutil -c icns build/icon.iconset -o build/icon.icns
 
-build-macos:
-runs-on: macos-latest
+      - name: Build with Nuitka (App Bundle)
+        run: |
+          python -m nuitka \
+            --standalone \
+            --macos-create-app-bundle \
+            --macos-app-name=Fio \
+            --assume-yes-for-downloads \
+            --plugin-enable=pyqt5 \
+            --include-package=engine \
+            --include-package=editor \
+            --include-package=PIL \
+            --include-data-dir=assets=assets \
+            --include-data-dir=tools=tools \
+            --include-data-files=settings.ini=settings.ini \
+            --include-data-files=editor/version.txt=editor/version.txt \
+            --macos-app-icon=build/icon.icns \
+            --output-dir=build \
+            main.py
 
-```
-steps:
-  - name: Checkout code
-    uses: actions/checkout@v4
+      - name: Validate app bundle
+        run: |
+          if [ -f "build/main.app/Contents/MacOS/main" ]; then
+            echo "App bundle OK"
+          else
+            echo "App bundle broken"
+            exit 1
+          fi
 
-  - name: Set up Python
-    uses: actions/setup-python@v5
-    with:
-      python-version: '3.10'
-      cache: pip
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fio-macos
+          path: build/main.app/
 
-  - name: Install dependencies
-    run: |
-      pip install -r requirements.txt
-      pip install nuitka zstandard imageio pillow
+  build-linux:
+    runs-on: ubuntu-latest
 
-  - name: Convert icon to .icns
-    run: |
-      mkdir -p build/icon.iconset
-      sips -s format png assets/icon.ico --out build/icon.png
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      for size in 16 32 64 128 256 512; do
-        sips -z $size $size build/icon.png --out build/icon.iconset/icon_${size}x${size}.png
-        sips -z $(($size*2)) $(($size*2)) build/icon.png --out build/icon.iconset/icon_${size}x${size}@2x.png
-      done
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgl1-mesa-glx libegl1-mesa libxkbcommon-x11-0 libdbus-1-3 libxcb-xinerama0 libxcb-cursor0 libglib2.0-0 patchelf
 
-      iconutil -c icns build/icon.iconset -o build/icon.icns
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
 
-  - name: Build with Nuitka (App Bundle)
-    run: |
-      python -m nuitka \
-        --standalone \
-        --macos-create-app-bundle \
-        --macos-app-name=Fio \
-        --assume-yes-for-downloads \
-        --plugin-enable=pyqt5 \
-        --include-package=engine \
-        --include-package=editor \
-        --include-package=PIL \
-        --include-data-dir=assets=assets \
-        --include-data-dir=tools=tools \
-        --include-data-files=settings.ini=settings.ini \
-        --include-data-files=editor/version.txt=editor/version.txt \
-        --macos-app-icon=build/icon.icns \
-        --output-dir=build \
-        main.py
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install nuitka zstandard
 
-  - name: Validate app bundle
-    run: |
-      if [ -f "build/main.app/Contents/MacOS/main" ]; then
-        echo "App bundle OK"
-        ls -R build/main.app
-      else
-        echo "App bundle broken"
-        exit 1
-      fi
+      - name: Build with Nuitka
+        run: |
+          python -m nuitka \
+            --standalone \
+            --assume-yes-for-downloads \
+            --plugin-enable=pyqt5 \
+            --include-package=engine \
+            --include-package=editor \
+            --include-package=PIL \
+            --include-data-dir=assets=assets \
+            --include-data-dir=tools=tools \
+            --include-data-files=settings.ini=settings.ini \
+            --include-data-files=editor/version.txt=editor/version.txt \
+            --output-dir=build \
+            main.py
 
-  - name: Quick launch test
-    run: |
-      chmod +x build/main.app/Contents/MacOS/main
-      timeout 15 build/main.app/Contents/MacOS/main > output.log 2>&1 || true
-      cat output.log
+      - name: Validate executable exists
+        run: |
+          if [ -f "build/main.dist/main" ]; then
+            echo "Build successful - main found"
+          else
+            echo "Build failed: executable not found"
+            exit 1
+          fi
 
-  - name: Upload artifact
-    uses: actions/upload-artifact@v4
-    with:
-      name: fio-macos
-      path: build/main.app/
-```
-
-# ─────────────────────────────────────────────
-
-# Linux
-
-# ─────────────────────────────────────────────
-
-build-linux:
-runs-on: ubuntu-latest
-
-```
-steps:
-  - name: Checkout code
-    uses: actions/checkout@v4
-
-  - name: Install system dependencies
-    run: |
-      sudo apt-get update
-      sudo apt-get install -y \
-        xvfb \
-        libgl1-mesa-glx \
-        libegl1-mesa \
-        libxkbcommon-x11-0 \
-        libdbus-1-3 \
-        libxcb-xinerama0 \
-        libxcb-cursor0 \
-        libglib2.0-0 \
-        patchelf
-
-  - name: Set up Python
-    uses: actions/setup-python@v5
-    with:
-      python-version: '3.10'
-      cache: pip
-
-  - name: Install dependencies
-    run: |
-      pip install -r requirements.txt
-      pip install nuitka zstandard
-
-  - name: Build with Nuitka
-    run: |
-      python -m nuitka \
-        --standalone \
-        --assume-yes-for-downloads \
-        --plugin-enable=pyqt5 \
-        --include-package=engine \
-        --include-package=editor \
-        --include-package=PIL \
-        --include-data-dir=assets=assets \
-        --include-data-dir=tools=tools \
-        --include-data-files=settings.ini=settings.ini \
-        --include-data-files=editor/version.txt=editor/version.txt \
-        --output-dir=build \
-        main.py
-
-  - name: Validate executable exists
-    run: |
-      if [ -f "build/main.dist/main" ]; then
-        echo "Build successful - main found"
-      else
-        echo "Build failed: executable not found"
-        exit 1
-      fi
-
-  - name: Run headless test
-    run: |
-      chmod +x build/main.dist/main
-      xvfb-run --auto-servernum timeout 15 ./build/main.dist/main > output.log 2>&1 || true
-      cat output.log
-
-  - name: Upload artifact
-    uses: actions/upload-artifact@v4
-    with:
-      name: fio-linux
-      path: build/main.dist/
-```
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fio-linux
+          path: build/main.dist/
