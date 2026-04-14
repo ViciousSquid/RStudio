@@ -48,28 +48,3 @@ MONSTER_SPRITE_SIZE_DEFAULT = (128, 128)
 MONSTER_PROJECTILE_SPEED    = 160.0   # world-units / second
 MONSTER_PROJECTILE_MAX_DIST = 1024.0  # despawn after travelling this far
 MONSTER_PROJECTILE_SPRITE_SIZE = (40.0, 40.0)   # billboard size in world units
-
-# ---------------------------------------------------------------------------
-# Monster physics & collision
-# ---------------------------------------------------------------------------
-MONSTER_GRAVITY        = -500.0   # same gravity as player
-MONSTER_TERMINAL_VEL   = -500.0
-MONSTER_MIN_WIDTH      = 200.0    # monsters are always at least 200px wide
-MONSTER_WALL_MARGIN    = 100.0    # half of MONSTER_MIN_WIDTH — keep this far from wall surfaces
-MONSTER_DEAD_FALL_SPEED = 300.0   # world-units/sec the dead sprite falls
-
-# ---------------------------------------------------------------------------
-# Weapon damage per gun type
-# ---------------------------------------------------------------------------
-WEAPON_DAMAGE = {
-    'gun1': 25,
-    'gun2': 75,    # shotgun — 3× gun1
-}
-
-# ---------------------------------------------------------------------------
-# Per-weapon shoot sound
-# ---------------------------------------------------------------------------
-WEAPON_SHOOT_SOUND = {
-    'gun1': 'shoot.wav',
-    'gun2': 'shoot2.wav',
-}
