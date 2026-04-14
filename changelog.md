@@ -4,6 +4,7 @@
 * Press F7 during play mode to view monster logic in main console
 * Improved property editor flags, pickup types
 * Added second weapon type (shotgun)
+* Resized and tidied up sprites and backported to 1.2.0
 
 
 ### v1.2.0.0_stable  |    MILESTONE 1
