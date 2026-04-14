@@ -1,9 +1,10 @@
 ### v1.2.4.0_PreRelease
 
 * NEW: Monster AI
+* Press F7 during play mode to view monster logic in main console
 * Improved property editor flags, pickup types
 * Added second weapon type (shotgun)
-* 
+* **UNSTABLE - Not for use as daily driver**, use version 1.2.0..0_stable below
 
 
 ### v1.2.0.0_stable  |    MILESTONE 1
