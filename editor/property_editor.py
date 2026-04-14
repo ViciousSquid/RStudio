@@ -1,3 +1,4 @@
+
 import os
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFormLayout, QCheckBox, QComboBox, QPushButton,
@@ -781,7 +782,7 @@ class PropertyEditor(QWidget):
         self.pickup_key_name_combo.addItems(key_options)
 
         # Set current value
-        current_key = thing.properties.get('key_name', 'red_key')
+        current_key = brush.get('key_name', 'red_key')
         if current_key in key_options:
             self.pickup_key_name_combo.setCurrentText(current_key)
 
@@ -2099,3 +2100,4 @@ class PropertyEditor(QWidget):
         # This prevents infinite recursion when populate calls update_object_prop
         if not self._populating:
             self.editor.update_all_ui()
+
