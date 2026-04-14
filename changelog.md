@@ -5,7 +5,7 @@
 * Added second weapon type (shotgun)
 * Improved property editor flags, pickup types
 * Resized/tidied/replaced some sprites and backported them to _1.2.0.0_stable_
-* Named brushes can be triggered by I/O system (show/hide, change colour, non-solid)<br>
+* Named brushes can be triggered by I/O (show/hide, change colour, non-solid)<br>
 _Hidden brushes have **zero** render calls_
 
 ---------------
