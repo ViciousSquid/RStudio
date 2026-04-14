@@ -1,6 +1,6 @@
 ### v1.2.4.0_PreRelease
 
-* NEW: Monster AI<br>
+* NEW: Monster AI _(Doomguy will kill you!)_<br>
   _F7 during play mode toggles real-time monster debugging in main console_
 * Improved property editor flags, pickup types
 * Added second weapon type (shotgun)
