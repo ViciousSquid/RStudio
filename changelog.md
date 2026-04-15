@@ -1,4 +1,4 @@
-### v1.2.4.0_Release
+### v1.2.4.0 |    MILESTONE 1
 
 * NEW: Monster improvements and AI
 * NEW: Moving lights (see `maps/dLight_Test.json`)
@@ -13,7 +13,7 @@ _Hidden brushes have **zero** render calls_
 
 ---------------
 
-### v1.2.0.0_stable  |    MILESTONE 1
+### v1.2.0.0_stable
 
 * NEW: Monster entity (Very basic, no AI - work in progress)
 * NEW: Logic Graph Editor (**CTRL-L**) for visual scripting
