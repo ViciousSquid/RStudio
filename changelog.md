@@ -1,4 +1,4 @@
-### v1.2.4.0_PreRelease
+### v1.2.4.0_Release
 
 * NEW: Monster improvements and AI
 * FIXED: Broken I/O import
