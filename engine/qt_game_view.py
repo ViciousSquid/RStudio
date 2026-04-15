@@ -1141,7 +1141,7 @@ class QtGameView(QOpenGLWidget):
             # Create player
             self.player = Player(
                 player_start_pos[0], player_start_pos[2],
-                np.radians(player_start_angle),
+                np.radians(90.0 - player_start_angle),
                 physics_enabled=physics_enabled
             )
             self.player.pos.y = player_start_pos[1]
