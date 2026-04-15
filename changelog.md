@@ -2,6 +2,7 @@
 
 * NEW: Monster improvements and AI
 * NEW: Moving lights (see `maps/dLight_Test.json`)
+* NEW: Terrain can be sculpted with mouse
 * FIXED: Broken I/O import
 * FIXED: Glow brushes
 * Added monster debugging to console
