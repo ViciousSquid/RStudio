@@ -172,6 +172,9 @@ class LogicThread(threading.Thread):
         
         # Door Animation State
         self.door_states: Dict[int, Dict[str, Any]] = {}
+
+        # Parented lights: list of (Light, brush_dict, [ox,oy,oz]) tuples
+        self._parented_lights: list = []
         
         # Interaction State
         self.current_hud_message = ""
@@ -265,6 +268,7 @@ class LogicThread(threading.Thread):
         if enabled:
             self._init_movers()
             self._init_doors()
+            self._init_parented_lights()
             
             # Reset player stats
             self.player_health = 100
@@ -349,6 +353,7 @@ class LogicThread(threading.Thread):
             self.hurt_trigger_timers.clear()
             self._reset_movers()
             self._reset_doors()
+            self._reset_parented_lights()
             self.current_hud_message = ""
             self.gate_inputs = {}
             self.timer_states = {}
@@ -560,6 +565,7 @@ class LogicThread(threading.Thread):
         self._update_respawns(delta)
         self._update_movers(delta)
         self._update_doors(delta)
+        self._update_parented_lights()
         
         # Update I/O system (delayed events)
         if self.io_manager:
@@ -1040,6 +1046,60 @@ class LogicThread(threading.Thread):
             
             if self.player and self.player.ground_object == brush:
                 self.player.pos += glm.vec3(move_delta[0], move_delta[1], move_delta[2])
+
+    # =========================================================================
+    # PARENTED LIGHTS  (light follows a mover brush)
+    # =========================================================================
+
+    def _init_parented_lights(self):
+        """Snapshot original positions and build the parented-lights list."""
+        self._parented_lights = []
+        if not Light:
+            return
+        for thing in self.things:
+            if not isinstance(thing, Light):
+                continue
+            parent_name = thing.properties.get('parent_mover', '')
+            if not parent_name:
+                continue
+            # Find the mover brush by name
+            brush = None
+            for b in self.brushes:
+                if b.get('is_mover') and b.get('name') == parent_name:
+                    brush = b
+                    break
+            if brush is None:
+                print(f"[Light] Warning: parent_mover '{parent_name}' "
+                      f"not found for light '{thing.name}'")
+                continue
+            # Save the light's original editor position so we can restore it
+            thing.properties['_original_pos'] = list(thing.pos)
+            # Use the stored offset if present, otherwise compute it now
+            offset = thing.properties.get('parent_offset')
+            if not offset or offset == [0.0, 0.0, 0.0]:
+                offset = [
+                    thing.pos[0] - brush['pos'][0],
+                    thing.pos[1] - brush['pos'][1],
+                    thing.pos[2] - brush['pos'][2],
+                ]
+                thing.properties['parent_offset'] = offset
+            self._parented_lights.append((thing, brush, offset))
+
+    def _reset_parented_lights(self):
+        """Restore lights to their original editor positions."""
+        for light, _brush, _offset in self._parented_lights:
+            original = light.properties.pop('_original_pos', None)
+            if original is not None:
+                light.pos = list(original)
+        self._parented_lights = []
+
+    def _update_parented_lights(self):
+        """Move each parented light to its mover's current pos + offset."""
+        for light, brush, offset in self._parented_lights:
+            bpos = brush['pos']
+            light.pos[0] = bpos[0] + offset[0]
+            light.pos[1] = bpos[1] + offset[1]
+            light.pos[2] = bpos[2] + offset[2]
 
     # =========================================================================
     # PLAYER SHOOTING
@@ -1719,6 +1779,9 @@ class LogicThread(threading.Thread):
 
         write_state.visible_things = visible_things
         write_state.timestamp = time.perf_counter()
+
+
+
 
 
 
