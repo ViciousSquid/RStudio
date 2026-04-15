@@ -3,6 +3,7 @@
 * NEW: Monster improvements and AI
 * NEW: Moving lights (see `maps/dLight_Test.json`)
 * FIXED: Broken I/O import
+* FIXED: Glow brushes
 * Added monster debugging to console
 * Added second weapon type (shotgun)
 * Improved property editor flags, pickup types
