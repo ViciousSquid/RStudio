@@ -4,10 +4,8 @@
 
 ### _A real-time Quake/Hammer-style level editor with built-in game engine_
 
-For rapid block-out, logic wiring, and gameplay testing.
-
-
-Built because modern tools lost the immediacy of Radiant/Worldcraft
+* For rapid block-out, logic wiring, and gameplay testing.
+* Built because modern tools lost the immediacy of Radiant/Worldcraft
 
  <img width="2039" height="1171" alt="image" src="https://github.com/user-attachments/assets/0422c267-5131-4306-a25d-cc2f716e5eae" />
 
