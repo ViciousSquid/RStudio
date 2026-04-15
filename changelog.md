@@ -1,11 +1,11 @@
 ### v1.2.4.0 |    MILESTONE 1
 
 * NEW: Monster improvements and AI
+* NEW: monster debugging in console
 * NEW: Moving lights (see `maps/dLight_Test.json`)
 * NEW: Terrain can be sculpted with mouse
 * FIXED: Broken I/O import
 * FIXED: Glow brushes
-* Added monster debugging to console
 * Added second weapon type (shotgun)
 * Improved property editor flags, pickup types
 * Resized/tidied/replaced some sprites and backported them to _1.2.0.0_stable_
