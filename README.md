@@ -9,14 +9,11 @@ For rapid block-out, logic wiring, and gameplay testing.
 
 Built because modern tools lost the immediacy of Radiant/Worldcraft
 
-### [Download for Windows and MacOS](https://github.com/ViciousSquid/Fio/releases) | [Quickstart guide](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) 
-Linux users are invited to use the included Dockerfile
-
-
  <img width="2039" height="1171" alt="image" src="https://github.com/user-attachments/assets/0422c267-5131-4306-a25d-cc2f716e5eae" />
 
  ------------------------
-
+### [Download for Windows and MacOS](https://github.com/ViciousSquid/Fio/releases) | [Quickstart guide](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) 
+#### Linux users are invited to use the included Dockerfile
 * **Build a level, hit play, and walk around instantly** — no compile or lightmap baking
 * Compact and lightweight (target: Snapdragon 8CX, OpenGL 3.3)
 * Dockable UI for multi monitor workflow
@@ -43,8 +40,30 @@ Linux users are invited to use the included Dockerfile
 
   ------------------------------
 
- #### Requirements:
-* Python 3.9+ with PyQt5, numpy, Pillow,  PyOpenGL, pygame, PyGLM
+ #### 🚀 Quickstart:
+ 
+ 1. Clone and Enter the Directory:
+```bash
+git clone https://github.com/ViciousSquid/Fio.git
+cd Fio
+```
+2. Setup Virtual Environment (Recommended)
+```bash
+python -m venv venv
+# Windows:
+venv\Scripts\activate
+# macOS/Linux:
+source venv/bin/activate
+```
+3. Install Dependencies:
+```bash
+pip install -r requirements.txt
+```
+4. Launch the Editor:
+```bash
+python main.py
+```
+   
 
   -----------------------------
 
