@@ -1,5 +1,6 @@
+### `dLight_Test.json`
 
-
+Demonstrates how to attach (parent) a light entity to a mover to create a moving light
 
 ### `Key_Test.json`
 
