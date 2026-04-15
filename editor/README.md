@@ -24,9 +24,6 @@ OBJ file parser (shared between editor & engine).
 ### `property_editor.py`
 "Per-object property panel (position, size, shader, colour, I/O, etc.)."
 
-### `rand_map_gen.py`
-Random map / terrain generation UI and algorithm.
-
 ### `scene_hierarchy.py`
 Tree view of all brushes + entities.
 
