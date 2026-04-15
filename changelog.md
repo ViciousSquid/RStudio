@@ -1,6 +1,7 @@
 ### v1.2.4.0_Release
 
 * NEW: Monster improvements and AI
+* NEW: Moving lights (see `maps/dLight_Test.json`)
 * FIXED: Broken I/O import
 * Added monster debugging to console
 * Added second weapon type (shotgun)
