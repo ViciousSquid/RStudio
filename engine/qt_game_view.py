@@ -408,6 +408,11 @@ class QtGameView(QOpenGLWidget):
         if not self.renderer:
             return
 
+        # Rebuild 3D grid VBO when grid/world size changed
+        if self.grid_dirty:
+            self.renderer.update_grid_buffers(self.world_size, self.grid_size)
+            self.grid_dirty = False
+
         # === THREADED RENDER PATH - FIXED ===
         render_state: Optional[RenderState] = None
 
@@ -723,14 +728,14 @@ class QtGameView(QOpenGLWidget):
         if not self.play_mode:
             if event.key() == Qt.Key_BracketLeft:
                 if hasattr(self.editor, 'set_grid_size'):
-                    new_size = max(1, self.grid_size // 2)
+                    new_size = max(2, self.grid_size // 2)
                     self.editor.set_grid_size(new_size)
                     if hasattr(self.editor, 'show_toast'):
                         self.editor.show_toast(f"Grid Size: {new_size}")
                 return
             elif event.key() == Qt.Key_BracketRight:
                 if hasattr(self.editor, 'set_grid_size'):
-                    new_size = min(2048, self.grid_size * 2)
+                    new_size = min(128, self.grid_size * 2)
                     self.editor.set_grid_size(new_size)
                     if hasattr(self.editor, 'show_toast'):
                         self.editor.show_toast(f"Grid Size: {new_size}")
@@ -1685,6 +1690,9 @@ class QtGameView(QOpenGLWidget):
             self.debug_console_window.command_input.setText(cmd)
             self.debug_console_window._on_command_entered()
         self._close_console_overlay()
+
+
+
 
 
 

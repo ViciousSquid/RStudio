@@ -18,6 +18,8 @@ try:
 except ImportError:
     OBJ = None
 
+
+
 # Pre-compute normal matrix on CPU, pass it to shader
 ARM_LIT_VERT = """#version 330 core
 layout (location = 0) in vec3 aPos;
@@ -721,7 +723,7 @@ class Renderer:
                       config.get('play_mode', False), config.get('grid_visible', True))
         
         # Sort objects ONCE
-        opaque_brushes, transparent_brushes, sprite_things, fog_volumes, water_brushes, glass_brushes = \
+        opaque_brushes, transparent_brushes, sprite_things, fog_volumes, water_brushes, glass_brushes, glow_brushes = \
             self._sort_objects(brushes, things, config)
         
         textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
@@ -760,6 +762,10 @@ class Renderer:
                 self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config)
         else:
             self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config)
+
+        # Glow brushes — draw overbright in the opaque pass (depth writes ON)
+        if glow_brushes:
+            self.draw_glow_brushes(projection, view, camera_pos, glow_brushes, lights, config)
 
         # Models
         if models_to_render:
@@ -1119,8 +1125,70 @@ class Renderer:
             return (pos1[0]-pos2.x)**2 + (pos1[1]-pos2.y)**2 + (pos1[2]-pos2.z)**2
         return (pos1.x-pos2.x)**2 + (pos1.y-pos2.y)**2 + (pos1.z-pos2.z)**2
 
+    # =========================================================================
+    # GLOW BRUSH SUPPORT
+    # =========================================================================
+
+    def draw_glow_brushes(self, projection, view, camera_pos, brushes, lights, config):
+        """Render glow brushes as overbright solid geometry.
+
+        Uses the standard 'lit' shader but overrides object_color to
+        tint_colour * glow_intensity so the surface appears self-illuminated.
+        Falls back to white when no tint/colour is set on the brush.
+        """
+        if not brushes or 'lit' not in self.shaders:
+            return
+
+        shader, uniforms = self.shaders['lit'], self.uniforms['lit']
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        self._upload_lights_once('lit', lights)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
+
+        gl.glBindVertexArray(self.vaos['cube'])
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+
+        model_loc = uniforms['model']
+        color_loc = uniforms['object_color']
+        alpha_loc = uniforms['alpha']
+        normal_mat_loc = uniforms.get('normalMatrix', -1)
+        if normal_mat_loc is None:
+            normal_mat_loc = -1
+
+        for brush in brushes:
+            self.render_stats.visible_tris += 12
+
+            pos = brush.get('pos', [0, 0, 0])
+            size = brush.get('size', [64, 64, 64])
+            model_matrix = glm.scale(
+                glm.translate(self._identity_mat4, glm.vec3(*pos)),
+                glm.vec3(*size))
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+
+            if normal_mat_loc > 0:
+                normal_mat = self._compute_normal_matrix(model_matrix)
+                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
+
+            # Use brush tint colour, or white if none set
+            tint = brush.get('tint') or brush.get('colour')
+            if tint and isinstance(tint, (list, tuple)) and len(tint) >= 3:
+                base_color = [c / 255.0 if c > 1.0 else c for c in tint[:3]]
+            else:
+                base_color = [1.0, 1.0, 1.0]
+
+            intensity = float(brush.get('glow_intensity', 10.0))
+            overbright = [min(c * intensity, 10.0) for c in base_color]
+
+            gl.glUniform3fv(color_loc, 1, overbright)
+            gl.glUniform1f(alpha_loc, 1.0)
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+            self.render_stats.draw_calls += 1
+
+        gl.glBindVertexArray(0)
+
     def _sort_objects(self, brushes, things, config):
-        opaque, transparent, sprites, fog, water, glass = [], [], [], [], [], []
+        opaque, transparent, sprites, fog, water, glass, glow = [], [], [], [], [], [], []
         is_play, show_sprites = config.get('play_mode', False), config.get('show_sprites_in_play_mode', False)
         
         for brush in brushes:
@@ -1133,6 +1201,8 @@ class Renderer:
                 fog.append(brush)
             elif brush.get('shader') == 'Glass': 
                 glass.append(brush)
+            elif brush.get('shader') == 'Glow':
+                glow.append(brush)
             elif brush.get('is_trigger'): 
                 if not is_play: 
                     transparent.append(brush)
@@ -1159,7 +1229,7 @@ class Renderer:
                     elif show_sprites:
                         sprites.append(t)      # Optional sprites (lights, speakers, etc.)
         
-        return opaque, transparent, sprites, fog, water, glass
+        return opaque, transparent, sprites, fog, water, glass, glow
 
     def draw_water_brushes(self, projection, view, camera_pos, brushes, lights, config):
         if not brushes: 
@@ -1665,6 +1735,9 @@ class Renderer:
             gl.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
         gl.glBindVertexArray(0)
+
+
+
 
 
 
