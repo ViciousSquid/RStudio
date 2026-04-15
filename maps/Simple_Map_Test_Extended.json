@@ -1286,36 +1286,6 @@
         },
         {
             "pos": [
-                -40.0,
-                60.0,
-                752.0
-            ],
-            "size": [
-                32.0,
-                24.0,
-                32.0
-            ],
-            "textures": {
-                "north": "default.png",
-                "south": "default.png",
-                "east": "default.png",
-                "west": "default.png",
-                "top": "default.png",
-                "down": "default.png"
-            },
-            "shader": "Glow",
-            "is_fog": false,
-            "is_trigger": false,
-            "light_direction": "top",
-            "colour": [
-                1.0,
-                1.0,
-                1.0
-            ],
-            "id": "564e11ac-1971-48ac-bfb9-211675e8104a"
-        },
-        {
-            "pos": [
                 -104.0,
                 0.0,
                 688.0
@@ -1374,7 +1344,7 @@
         },
         {
             "pos": [
-                -40.0,
+                -32.0,
                 0.0,
                 752.0
             ],
@@ -1685,106 +1655,6 @@
         },
         {
             "pos": [
-                -264.0,
-                72.0,
-                912.0
-            ],
-            "size": [
-                16.0,
-                16.0,
-                64.0
-            ],
-            "textures": {
-                "north": "default.png",
-                "south": "default.png",
-                "east": "default.png",
-                "west": "default.png",
-                "top": "default.png",
-                "down": "default.png"
-            },
-            "shader": "Glow",
-            "is_fog": false,
-            "is_trigger": false,
-            "light_direction": "south",
-            "id": "90943f51-57fd-4776-a79e-953f8b050aa4"
-        },
-        {
-            "pos": [
-                -8.0,
-                72.0,
-                912.0
-            ],
-            "size": [
-                16.0,
-                16.0,
-                64.0
-            ],
-            "textures": {
-                "north": "default.png",
-                "south": "default.png",
-                "east": "default.png",
-                "west": "default.png",
-                "top": "default.png",
-                "down": "default.png"
-            },
-            "shader": "Glow",
-            "is_fog": false,
-            "is_trigger": false,
-            "light_direction": "south",
-            "id": "64749614-43ab-468f-b935-5a8124f2edc0"
-        },
-        {
-            "pos": [
-                248.0,
-                72.0,
-                912.0
-            ],
-            "size": [
-                16.0,
-                16.0,
-                64.0
-            ],
-            "textures": {
-                "north": "default.png",
-                "south": "default.png",
-                "east": "default.png",
-                "west": "default.png",
-                "top": "default.png",
-                "down": "default.png"
-            },
-            "shader": "Glow",
-            "is_fog": false,
-            "is_trigger": false,
-            "light_direction": "south",
-            "id": "1ed4a0b8-1ba2-4b0f-adbf-65ecd8664b97"
-        },
-        {
-            "pos": [
-                504.0,
-                72.0,
-                912.0
-            ],
-            "size": [
-                16.0,
-                16.0,
-                64.0
-            ],
-            "textures": {
-                "north": "default.png",
-                "south": "default.png",
-                "east": "default.png",
-                "west": "default.png",
-                "top": "default.png",
-                "down": "default.png"
-            },
-            "shader": "Glow",
-            "is_fog": false,
-            "is_trigger": false,
-            "light_direction": "south",
-            "id": "1a65585f-f840-4327-b02d-c433099bc02c"
-        },
-        {
-            "pos": [
                 32.0,
                 -160.0,
                 508.0
@@ -2068,7 +1938,13 @@
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
-                "id": "4744495e-5f75-45f5-93c7-870ea49b6fb9"
+                "id": "4744495e-5f75-45f5-93c7-870ea49b6fb9",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
             },
             "io_connections": []
         },
@@ -2107,7 +1983,13 @@
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
-                "id": "ff8d70c3-9c15-48b3-8c67-5a95afd63df1"
+                "id": "ff8d70c3-9c15-48b3-8c67-5a95afd63df1",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
             },
             "io_connections": []
         },
@@ -2131,7 +2013,13 @@
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
-                "id": "8d0bdb7e-fe6b-464c-897d-fadb678ad09d"
+                "id": "8d0bdb7e-fe6b-464c-897d-fadb678ad09d",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
             },
             "io_connections": []
         },
@@ -2155,7 +2043,13 @@
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
-                "id": "c756306d-d6b0-4daf-ac31-54212fa09e1b"
+                "id": "c756306d-d6b0-4daf-ac31-54212fa09e1b",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
             },
             "io_connections": []
         },
@@ -2179,7 +2073,13 @@
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
-                "id": "4f85ded8-2a48-46c0-ac17-8f83eede0687"
+                "id": "4f85ded8-2a48-46c0-ac17-8f83eede0687",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
             },
             "io_connections": []
         },
@@ -2203,7 +2103,13 @@
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
-                "id": "2861f65f-6f47-4322-a274-a31f8e9e70a6"
+                "id": "2861f65f-6f47-4322-a274-a31f8e9e70a6",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
             },
             "io_connections": []
         },
@@ -2227,7 +2133,13 @@
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
-                "id": "1497b36c-e6f4-4fa0-8728-17a9433a3a30"
+                "id": "1497b36c-e6f4-4fa0-8728-17a9433a3a30",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
             },
             "io_connections": []
         },
@@ -2251,7 +2163,13 @@
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
-                "id": "f8ba28b1-e1f9-42a6-8ca4-fb8f50c5407f"
+                "id": "f8ba28b1-e1f9-42a6-8ca4-fb8f50c5407f",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
             },
             "io_connections": []
         },
@@ -2268,7 +2186,7 @@
                 "item_type": "gun1",
                 "value": 25,
                 "activation": "walk_over",
-                "collected": true,
+                "collected": false,
                 "respawns": false,
                 "respawn_time": 20.0,
                 "key_name": "blue_key",
@@ -2297,7 +2215,13 @@
                 "radius": 512.0,
                 "state": "on",
                 "show_radius": false,
-                "casts_shadows": false
+                "casts_shadows": false,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
             },
             "io_connections": []
         },
@@ -2340,8 +2264,8 @@
                 "sprite_width": 128,
                 "sprite_height": 192,
                 "sight": 512,
-                "dead": false,
-                "non_hostile": false
+                "non_hostile": false,
+                "monster_id": 0
             },
             "io_connections": []
         },
@@ -2365,8 +2289,8 @@
                 "sprite_width": 160,
                 "sprite_height": 160,
                 "sight": 512,
-                "dead": false,
-                "non_hostile": false
+                "non_hostile": false,
+                "monster_id": 0
             },
             "io_connections": []
         }
