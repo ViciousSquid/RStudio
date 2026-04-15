@@ -1,6 +1,7 @@
 ### v1.2.4.0_PreRelease
 
 * NEW: Monster improvements and AI
+* FIXED: Broken I/O import
 * Added monster debugging to console
 * Added second weapon type (shotgun)
 * Improved property editor flags, pickup types
