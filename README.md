@@ -1,8 +1,7 @@
 <img src="https://github.com/user-attachments/assets/65cb6de0-45ba-4e96-b9e7-2e9a92aa910f" width="400">
 
-![MIT License](https://img.shields.io/badge/license-MIT-green)
-![Status](https://img.shields.io/badge/status-Active%20Development-orange)  [Wiki](https://github.com/ViciousSquid/Fio/wiki) | [changelog
-](https://github.com/ViciousSquid/Fio/blob/1.2.4.0_Latest/changelog.md)
+<img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="MIT License">  <img src="https://img.shields.io/badge/status-Active%20Development-orange?style=for-the-badge" alt="Status">
+
 ### _A real-time Quake/Hammer-style level editor with built-in game engine_
 
 
