@@ -62,20 +62,24 @@ class PropertyEditor(QWidget):
                     source_type = 'trigger' if is_trigger else 'mover'
                     sources.append((source_name, source_type))
             
-            # Also check I/O connections
+            # Also check I/O connections (handles both OutputConnection objects and dicts)
             io_connections = brush.get('_io_connections', [])
             for conn in io_connections:
-                if isinstance(conn, dict) and conn.get('target') == target_name:
+                conn_target = getattr(conn, 'target_name', None) or (conn.get('target') if isinstance(conn, dict) else None)
+                conn_output = getattr(conn, 'output_name', None) or (conn.get('output', '?') if isinstance(conn, dict) else '?')
+                if conn_target == target_name:
                     source_name = brush.get('name', 'unnamed')
-                    sources.append((source_name, f"I/O: {conn.get('output', '?')}"))
+                    sources.append((source_name, f"I/O: {conn_output}"))
         
         # Check I/O connections on Things
         for thing in self.editor.state.things:
             io_connections = thing.properties.get('_io_connections', [])
             for conn in io_connections:
-                if isinstance(conn, dict) and conn.get('target') == target_name:
+                conn_target = getattr(conn, 'target_name', None) or (conn.get('target') if isinstance(conn, dict) else None)
+                conn_output = getattr(conn, 'output_name', None) or (conn.get('output', '?') if isinstance(conn, dict) else '?')
+                if conn_target == target_name:
                     source_name = thing.properties.get('name', 'unnamed')
-                    sources.append((source_name, f"I/O: {conn.get('output', '?')}"))
+                    sources.append((source_name, f"I/O: {conn_output}"))
         
         return sources
     
@@ -2110,4 +2114,3 @@ class PropertyEditor(QWidget):
         # This prevents infinite recursion when populate calls update_object_prop
         if not self._populating:
             self.editor.update_all_ui()
-

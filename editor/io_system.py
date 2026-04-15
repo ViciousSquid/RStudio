@@ -664,7 +664,7 @@ def register_default_io():
         outputs=[]
     )
 
-        # === LEVEL CHANGER ===
+    # === LEVEL CHANGER ===
     register_io('levelchanger',
         inputs=[
             IODef('Trigger', 'Trigger level change'),

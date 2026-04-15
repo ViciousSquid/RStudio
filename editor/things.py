@@ -11,6 +11,16 @@ from PyQt5.QtCore import Qt   # Needed for scaling flags in get_icon_pixmap
 import json
 import ast
 
+# Import debug logger - with fallback to print if not available
+try:
+    from .debug_console import debug_log
+except ImportError:
+    try:
+        from editor.debug_console import debug_log
+    except ImportError:
+        def debug_log(category, message):
+            print(f"[{category}] {message}")
+
 def find_subclasses(cls):
     """Recursively finds all subclasses of a given class."""
     all_subclasses = []
@@ -295,7 +305,7 @@ class Monster(Thing):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'monster')
         self.properties.setdefault('monster_type', 'human')  # 'human' or 'flying'
-        self.properties.setdefault('id', 0)
+        self.properties.setdefault('monster_id', 0)
         self.properties.setdefault('health', 100)
         self.properties.setdefault('damage', 10)
 
@@ -636,7 +646,7 @@ class LogicGate(Thing):
                 if not pix.isNull():
                     self._pixmap_cache[expected_path] = pix
                     return pix
-        except:
+        except Exception:
             pass
             
         return super().get_instance_pixmap()
@@ -671,10 +681,10 @@ class LevelChanger(Thing):
         super().__init__(pos, properties)
         self.properties['type'] = 'levelchanger'
         self.properties.setdefault('target_map', 'maps/Simple_Map_Test.json')
-        self.properties.setdefault('delay', '0.0')
-        self.properties.setdefault('fade_time', '0.5')
-        self.properties.setdefault('show_radius', 'False')
-        self.properties.setdefault('radius', '128.0')
+        self.properties.setdefault('delay', 0.0)
+        self.properties.setdefault('fade_time', 0.5)
+        self.properties.setdefault('show_radius', False)
+        self.properties.setdefault('radius', 128.0)
         
         # Store direct reference to MainWindow for reliable level changing
         self._main_window = None
@@ -684,24 +694,20 @@ class LevelChanger(Thing):
                 if widget.__class__.__name__ == 'MainWindow':
                     self._main_window = widget
                     break
-        except:
+        except Exception:
             pass
 
     def on_input(self, input_name: str, parameter: str = ""):
-        """Called by I/O system and by ent_fire. Now literally simulates the working console command."""
-        entity_name = self.properties.get('name', 'LevelChanger_2')
+        """Called by I/O system and by ent_fire."""
+        entity_name = self.properties.get('name', 'LevelChanger')
         map_name = (parameter or self.properties.get('target_map', '')).strip()
 
-        print(f"[LevelChanger DEBUG] 🔥 on_input('{input_name}') called!")
-        print(f"          entity  = {entity_name}")
-        print(f"          parameter = '{parameter}'")
-        print(f"          target_map property = '{self.properties.get('target_map', 'MISSING')}'")
-        print(f"          final map name = '{map_name}'")
+        debug_log("IO", f"LevelChanger '{entity_name}' on_input('{input_name}'), map='{map_name}'")
 
         if input_name == "ChangeLevel":
             return self.change_level(map_name)
 
-        print(f"[LevelChanger] Unknown input '{input_name}'")
+        debug_log("Warning", f"LevelChanger '{entity_name}': unknown input '{input_name}'")
         return False
 
     def change_level(self, parameter: str = ""):
@@ -710,7 +716,7 @@ class LevelChanger(Thing):
         target_map = parameter.strip() if parameter else self.properties.get('target_map', '').strip()
 
         if not target_map:
-            print("ERROR: LevelChanger has no target_map and no parameter was provided!")
+            debug_log("Error", "LevelChanger has no target_map and no parameter was provided!")
             return False
 
         if not target_map.lower().endswith('.json'):
@@ -720,8 +726,7 @@ class LevelChanger(Thing):
         if not (target_map.startswith('maps/') or target_map.startswith('maps\\')):
             target_map = f"maps/{target_map}"
 
-        print(f"[LevelChanger] Target resolved → '{target_map}' "
-            f"(I/O parameter='{parameter}', entity property='{self.properties.get('target_map')}')")
+        debug_log("IO", f"LevelChanger target resolved → '{target_map}'")
 
         # Get MainWindow reference
         main_window = getattr(self, '_main_window', None)
@@ -735,26 +740,25 @@ class LevelChanger(Thing):
                         self._main_window = w
                         break
             except Exception as e:
-                print(f"[LevelChanger] QApplication lookup failed: {e}")
+                debug_log("Error", f"LevelChanger QApplication lookup failed: {e}")
 
         if not main_window:
-            print("ERROR: Could not find MainWindow!")
+            debug_log("Error", "LevelChanger could not find MainWindow!")
             return False
 
         # Use signal instead of direct call
         if hasattr(main_window, 'load_level_signal'):
             try:
-                print(f"[LevelChanger] Emitting load_level_signal('{target_map}')")
                 main_window.load_level_signal.emit(target_map)
-                print(f"[LevelChanger] SUCCESS: signal emitted")
+                debug_log("IO", f"LevelChanger emitted load_level_signal('{target_map}')")
                 return True
             except Exception as e:
-                print(f"ERROR emitting signal: {e}")
+                debug_log("Error", f"LevelChanger failed to emit signal: {e}")
                 import traceback
                 traceback.print_exc()
                 return False
         else:
-            print("ERROR: MainWindow has no load_level_signal! Did you add it?")
+            debug_log("Error", "MainWindow has no load_level_signal!")
             return False
 
 

@@ -7,7 +7,7 @@ from editor.debug_console import debug_log
 # Try to import I/O system (available in both editor and play mode)
 try:
     from .io_system import (
-        fire_output, send_input, get_connections,
+        get_connections,
         OutputConnection, get_output_names, get_input_names,
         get_entity_type_for_io
     )
@@ -17,7 +17,7 @@ except ImportError:
     # debug_log("Warning", "I/O system not fully loaded in console")
 
 # For spawn command
-from editor.things import Pickup, Light, PlayerStart
+from editor.things import Pickup, Light, PlayerStart, LevelChanger
 
 
 class ConsoleCommandHandler:
@@ -138,7 +138,7 @@ class ConsoleCommandHandler:
         debug_log("Info", f"Bound '{key_str}' to '{command}'")
 
     def _open_bind_dialog(self):
-        from PyQt5.QtWidgets import QInputDialog, QDialog, QVBoxLayout, QLabel, QKeySequenceEdit, QPushButton
+        from PyQt5.QtWidgets import QInputDialog, QDialog, QVBoxLayout, QLabel, QKeySequenceEdit, QPushButton, QLineEdit, QDialogButtonBox
         from PyQt5.QtCore import Qt
 
         dialog = QDialog(self.main_window)
@@ -446,9 +446,19 @@ class ConsoleCommandHandler:
         try:
             if hasattr(self.main_window, 'view_3d') and hasattr(self.main_window.view_3d, 'renderer'):
                 return self.main_window.view_3d.renderer
-        except:
+        except Exception:
             pass
         debug_log("Error", "Renderer not accessible (not in 3D view).")
+        return None
+
+    def _get_io_manager(self):
+        """Safely retrieve the I/O manager from the logic thread."""
+        try:
+            if hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.logic_thread:
+                return self.main_window.view_3d.logic_thread.io_manager
+        except Exception:
+            pass
+        debug_log("Error", "I/O manager not accessible.")
         return None
 
     # ===================================================================
@@ -553,7 +563,7 @@ class ConsoleCommandHandler:
                 debug_log("Info", f"Clear color set to {renderer.clear_color}")
             else:
                 debug_log("Error", "Usage: r_clearcolor r g b   (values 0.0 to 1.0)")
-        except:
+        except Exception:
             debug_log("Error", "Usage: r_clearcolor r g b")
 
     def cmd_reload_shaders(self, args):
@@ -661,7 +671,7 @@ class ConsoleCommandHandler:
         if hasattr(self.main_window, 'iomanager') and self.main_window.iomanager is not None:
             try:
                 self.main_window.iomanager.fire_output(entity, input_name, parameter)
-            except:
+            except Exception:
                 pass
 
     def cmd_trigger(self, args):
@@ -678,8 +688,9 @@ class ConsoleCommandHandler:
         # Brush-based toggle
         if isinstance(entity, dict) and (entity.get('is_door') or entity.get('is_mover')):
             debug_log("Info", f"🔄 Toggling {entity_name}")
-            if IO_AVAILABLE:
-                send_input(entity, "Toggle", "")
+            io = self._get_io_manager()
+            if io:
+                io._execute_input(entity_name, "Toggle", "", "console")
             return
 
         # Generic entity fallback
@@ -696,7 +707,9 @@ class ConsoleCommandHandler:
         param = " ".join(parts[2:]) if len(parts) > 2 else ""
         entity = self.editor_state.find_entity_by_name(entity_name)
         if entity:
-            send_input(entity, input_name, param)
+            io = self._get_io_manager()
+            if io:
+                io._execute_input(entity_name, input_name, param, "console")
             debug_log("Info", f"Sent input '{input_name}' to {entity_name}")
         else:
             debug_log("Error", f"Entity '{entity_name}' not found")
@@ -988,7 +1001,7 @@ class ConsoleCommandHandler:
             self.main_window.view_3d.player.position = [x, y, z]
             debug_log("Info", f"Player teleported to [{x:.1f}, {y:.1f}, {z:.1f}]")
             self.main_window.show_toast(f"Teleported to {x:.1f}, {y:.1f}, {z:.1f}")
-        except:
+        except Exception:
             debug_log("Error", "Usage: setpos x y z   (example: setpos 0 50 100)")
 
     def cmd_clear(self, args):
@@ -1019,9 +1032,3 @@ class ConsoleCommandHandler:
             debug_log("Info", f"Loaded map {map_name}")
         else:
             debug_log("Error", f"Map not found: {map_name}")
-
-
-
-
-
-

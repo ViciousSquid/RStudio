@@ -210,6 +210,10 @@ class EditorState:
             # Backfill stable IDs for v1 brushes
             for brush in self.brushes:
                 brush.setdefault('id', str(uuid.uuid4()))
+            # Migrate legacy 'target' property to I/O connections
+            if IO_AVAILABLE:
+                for brush in self.brushes:
+                    self._migrate_legacy_target(brush)
 
         self.terrain_data = level_data.get('terrain_data', None)
 

@@ -229,7 +229,7 @@ class MainWindow(QMainWindow):
         # Timer for occasional tooltips
         self.tooltip_timer = QTimer(self)
         self.tooltip_timer.timeout.connect(self._check_occasional_tooltip)
-        self.tooltip_timer.start(10000)  # Check every 30 seconds
+        self.tooltip_timer.start(10000)  # Check every 10 seconds (tooltip_interval throttles display)
         
         # Track right-click state for camera movement detection
         self.right_mouse_held = False
@@ -2359,8 +2359,3 @@ class MainWindow(QMainWindow):
             self.view_3d.logic_thread.join(timeout=1.0)
         
         super().closeEvent(event)
-
-
-
-
-
