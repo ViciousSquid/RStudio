@@ -4,12 +4,12 @@
 
 ### _A real-time Quake/Hammer-style level editor with built-in game engine_
 
-For rapid block-out, logic wiring, and gameplay testing. Optimised for mobile CPUs
+For rapid block-out, logic wiring, and gameplay testing.
 
 
 Built because modern tools lost the immediacy of Radiant/Worldcraft
 
-### [Download for Windows and MacOS](https://github.com/ViciousSquid/Fio/releases) | [View the Wiki](https://github.com/ViciousSquid/Fio/wiki) 
+### [Download for Windows and MacOS](https://github.com/ViciousSquid/Fio/releases) | [Quickstart guide](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) 
 Linux users are invited to use the included Dockerfile
 
 
@@ -51,9 +51,5 @@ Linux users are invited to use the included Dockerfile
 
 <img width="1875" height="1697" alt="image" src="https://github.com/user-attachments/assets/ce564bef-3e9d-4bc5-a93a-e9628638cadb" />
 
-in memory of David Lynch
 
-<p align="left">
-  <img src="https://komarev.com/ghpvc/?username=vicioussquid2&color=lightgrey&style=flat-square" alt="vc" />
-</p>
 
