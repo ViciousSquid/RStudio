@@ -1,40 +1,40 @@
-# `editor/`
+# `Engine/`
 
-### `asset_browser.py`		
-"Texture & model browser with live thumbnails, “FIT / TILE / FACE” actions, drag-and-drop support
+### `camera.py`
+Camera matrices, movement, projection.
 
-### `console_commands.py`
-"Debug console command handler (noclip, map, fps, clear)."
+### `constants.py`
+Shared constants (tile size, etc.).
 
-### `debug_console.py`
-"Full-featured Quake-style console with category filtering, entity-name hyperlinks, I/O tracing, font sizing, command history, singleton logger."
-
-### `editor_state.py`
-"Central model: stores brushes, things, terrain, undo/redo, serialisation (JSON v2 with I/O), lightmap dirty tracking, legacy migration."
-
-### `io_editor_widget.py`
-"“Output Connections” panel (Hammer-style) for adding/editing entity I/O (target, input, delay, fire-once)."
-
-### `main_window.py`
-"Main editor window – docks all UI components, menu, toolbar, play-mode toggle, toast notifications."
+### `logic_thread.py`
+Game logic - runs in separate thread
 
 ### `obj_loader.py`
-OBJ file parser (shared between editor & engine).
+Runtime OBJ loader.
 
-### `property_editor.py`
-"Per-object property panel (position, size, shader, colour, I/O, etc.)."
+### `physics.py`
+Collision & physics simulation
 
-### `scene_hierarchy.py`
-Tree view of all brushes + entities.
+### `player.py`
+Player controller, noclip, strafe movement.
 
-### `terrain_editor.py`
-Dedicated terrain parameter editor.
+### `qt_game_view.py`
+Qt OpenGL widget that hosts the Renderer
 
-### things.py
-THINGS: Entity classes (playerstart, light, speaker, pickup, logic entities).
+### `renderer.py`
+Core OpenGL renderer with Frustum culling
 
-### `ui.py`
-Shared UI helpers / widgets.
+### `resource_manager.py`
+Caches textures, models, shaders.
 
-### `view_2d.py`
-Orthographic 2D top-down / side editor view.
+### `shaders.py`
+Shader compilation & uniform binding.
+
+### `terrain.py`
+Chunked terrain mesh generation (perlin noise), texturing, collision
+
+### `textures.py`
+Texture loading & binding.
+
+### `threaded_game_state.py`
+Thread-safe wrapper for game state in Play mode.

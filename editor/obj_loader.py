@@ -136,7 +136,7 @@ class OBJ:
                     interleaved_data.extend([0.0, 0.0])
 
             vertex_data = np.array(interleaved_data, dtype=np.float32)
-            self.vertex_count = len(faces)
+            self.vertex_count = len(faces) * 3
             
             # OpenGL Setup
             self.vao = glGenVertexArrays(1)
