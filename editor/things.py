@@ -265,6 +265,12 @@ class Light(Thing):
         self.properties.setdefault('show_radius', False)
         self.properties.setdefault('casts_shadows', False)
 
+        # Parenting: attach this light to a mover brush by name.
+        # When parent_mover is non-empty the logic thread moves this
+        # light to (mover.pos + parent_offset) every tick during play.
+        self.properties.setdefault('parent_mover', '')
+        self.properties.setdefault('parent_offset', [0.0, 0.0, 0.0])
+
     def get_color(self):
         color = self.properties.get('colour', [255, 255, 255])
         return [c / 255.0 for c in color]
@@ -786,3 +792,6 @@ ENTITY_CATEGORIES = {
     'Environment': ['Light', 'Speaker', 'Model'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer'],
 }
+
+
+

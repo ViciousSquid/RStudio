@@ -1530,6 +1530,67 @@ class PropertyEditor(QWidget):
         if isinstance(thing, Light):
             self.add_color_picker_widget(layout, thing, 'colour')
 
+            # --- Attach to Mover: checkbox + conditional dropdown ---
+            current_parent = thing.properties.get('parent_mover', '')
+            is_attached = bool(current_parent)
+
+            attach_cb = QCheckBox("Attach to Mover")
+            attach_cb.setChecked(is_attached)
+            layout.addRow("", attach_cb)
+
+            mover_combo = QComboBox()
+            mover_combo.addItem("(none)")
+            for brush in self.editor.state.brushes:
+                if brush.get('is_mover'):
+                    mover_name = brush.get('name', '')
+                    if mover_name:
+                        mover_combo.addItem(mover_name)
+
+            if current_parent:
+                idx = mover_combo.findText(current_parent)
+                if idx >= 0:
+                    mover_combo.setCurrentIndex(idx)
+                else:
+                    # Parent name in file but mover was deleted
+                    mover_combo.addItem(current_parent + " (missing)")
+                    mover_combo.setCurrentIndex(mover_combo.count() - 1)
+
+            mover_label = QLabel("Parent Mover:")
+            mover_label.setVisible(is_attached)
+            mover_combo.setVisible(is_attached)
+
+            def on_attach_toggled(checked):
+                mover_label.setVisible(checked)
+                mover_combo.setVisible(checked)
+                if not checked:
+                    thing.properties['parent_mover'] = ''
+                    thing.properties['parent_offset'] = [0.0, 0.0, 0.0]
+                    mover_combo.setCurrentIndex(0)
+                    self.editor.update_all_ui()
+
+            attach_cb.toggled.connect(on_attach_toggled)
+
+            def on_parent_mover_changed(text):
+                clean = text.replace(" (missing)", "")
+                if clean == "(none)":
+                    thing.properties['parent_mover'] = ''
+                    thing.properties['parent_offset'] = [0.0, 0.0, 0.0]
+                else:
+                    thing.properties['parent_mover'] = clean
+                    # Compute offset = light pos − mover pos
+                    for b in self.editor.state.brushes:
+                        if b.get('is_mover') and b.get('name') == clean:
+                            thing.properties['parent_offset'] = [
+                                thing.pos[0] - b['pos'][0],
+                                thing.pos[1] - b['pos'][1],
+                                thing.pos[2] - b['pos'][2],
+                            ]
+                            break
+                self.editor.update_all_ui()
+
+            mover_combo.currentTextChanged.connect(on_parent_mover_changed)
+            layout.addRow(mover_label, mover_combo)
+
         is_pickup = isinstance(thing, Pickup)
         current_item_type = thing.properties.get('item_type', 'health') if is_pickup else None
 
@@ -1544,7 +1605,7 @@ class PropertyEditor(QWidget):
             if key == 'name': continue
             if key == '_io_connections': continue
             if key == 'type': continue
-            if isinstance(thing, Light) and key in ['colour']: continue
+            if isinstance(thing, Light) and key in ['colour', 'parent_mover', 'parent_offset']: continue
             if isinstance(thing, Model) and key in ['model_path', 'scale', 'rotation']: continue
             if not isinstance(thing, Monster) and key in _MONSTER_ONLY_KEYS: continue
             if isinstance(thing, Monster) and key in ('triggered', 'wake_on_sight', 'dead', 'non_hostile', 'sight'): continue
@@ -2114,3 +2175,6 @@ class PropertyEditor(QWidget):
         # This prevents infinite recursion when populate calls update_object_prop
         if not self._populating:
             self.editor.update_all_ui()
+
+
+
