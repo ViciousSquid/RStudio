@@ -1,6 +1,6 @@
 ### `dLight_Test.json`
 
-Demonstrates how to attach (parent) a light entity to a moving brush to create a moving light
+Demonstrates how to attach a light entity to a moving brush to create a moving light
 
 ### `Key_Test.json`
 
