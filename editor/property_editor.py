@@ -794,8 +794,10 @@ class PropertyEditor(QWidget):
         door_key_combo.currentTextChanged.connect(
             lambda name: self.update_object_prop('door_key_name', name))
             
-        # Initialize the enabled state based on the checkbox
-        door_key_combo.setEnabled(brush.get('door_needs_key', False))
+        # Initialize visibility based on the checkbox
+        needs_key_init = brush.get('door_needs_key', False)
+        door_key_label.setVisible(needs_key_init)
+        door_key_combo.setVisible(needs_key_init)
 
         # Add as a horizontal row inside the options group
         key_row = QHBoxLayout()
@@ -805,7 +807,35 @@ class PropertyEditor(QWidget):
         
         # Store in _widgets so on_door_needs_key_changed can toggle it
         self._widgets['door_key_input'] = door_key_combo
-        
+        self._widgets['door_key_label'] = door_key_label
+
+        # --- Linked Key Pickup cross-reference ---
+        link_label = QLabel("")
+        link_label.setWordWrap(True)
+        link_label.setStyleSheet("QLabel { padding: 4px; }")
+        options_layout.addWidget(link_label)
+        self._widgets['door_key_link_label'] = link_label
+
+        select_key_btn = QPushButton("Select Key Pickup ▸")
+        select_key_btn.setStyleSheet("""
+            QPushButton { background-color: #2a5a2a; color: #88FF88; border: 1px solid #44AA44;
+                          border-radius: 3px; padding: 4px 8px; font-size: 11px; }
+            QPushButton:hover { background-color: #3a6a3a; }
+        """)
+        select_key_btn.setVisible(False)
+        select_key_btn.clicked.connect(self._select_linked_key_pickup)
+        options_layout.addWidget(select_key_btn)
+        self._widgets['door_key_select_btn'] = select_key_btn
+
+        # Populate the linked key info
+        self._update_door_key_link(brush)
+
+        # Also refresh link when key name dropdown changes
+        door_key_combo.currentTextChanged.connect(
+            lambda _name: self._update_door_key_link(self.current_object))
+
+        layout.addWidget(options_group)
+
         # Preview button
         preview_btn = QPushButton("▶ Preview Door")
         preview_btn.setCheckable(True)
@@ -1363,11 +1393,125 @@ class PropertyEditor(QWidget):
         if needs_key:
             if 'door_key_name' not in self.current_object: self.current_object['door_key_name'] = ''
         
-        # Enable/disable key input
+        # Show/hide key name widgets
         if 'door_key_input' in self._widgets:
-            self._widgets['door_key_input'].setEnabled(needs_key)
+            self._widgets['door_key_input'].setVisible(needs_key)
+        if 'door_key_label' in self._widgets:
+            self._widgets['door_key_label'].setVisible(needs_key)
+        
+        # Refresh cross-reference
+        self._update_door_key_link(self.current_object)
         
         self.editor.update_all_ui()
+
+    def _update_door_key_link(self, brush):
+        """Update the 'Linked Key Pickup' label on the Door tab."""
+        link_label = self._widgets.get('door_key_link_label')
+        select_btn = self._widgets.get('door_key_select_btn')
+        if not link_label:
+            return
+
+        if not brush or not brush.get('door_needs_key', False):
+            link_label.setText("")
+            link_label.setVisible(False)
+            if select_btn:
+                select_btn.setVisible(False)
+            return
+
+        key_name = brush.get('door_key_name', '')
+        if not key_name:
+            link_label.setText("⚠ No key name set")
+            link_label.setStyleSheet("QLabel { color: #FF8800; padding: 4px; }")
+            link_label.setVisible(True)
+            if select_btn:
+                select_btn.setVisible(False)
+            return
+
+        # Search for matching key pickups in the map
+        self._linked_key_pickup = None
+        for thing in self.editor.state.things:
+            if isinstance(thing, Pickup):
+                if thing.properties.get('item_type') == 'key' and thing.properties.get('key_name') == key_name:
+                    self._linked_key_pickup = thing
+                    break
+
+        if self._linked_key_pickup:
+            name = self._linked_key_pickup.properties.get('name', 'unnamed')
+            pos = self._linked_key_pickup.pos
+            pos_str = f"({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f})" if pos else ""
+            link_label.setText(f"🔑 Linked to: {name} {pos_str}")
+            link_label.setStyleSheet("QLabel { color: #88FF88; padding: 4px; }")
+            link_label.setVisible(True)
+            if select_btn:
+                select_btn.setVisible(True)
+        else:
+            link_label.setText(f"⚠ No key pickup named '{key_name}' found in map")
+            link_label.setStyleSheet("QLabel { color: #FF4444; padding: 4px; }")
+            link_label.setVisible(True)
+            if select_btn:
+                select_btn.setVisible(False)
+
+    def _select_linked_key_pickup(self):
+        """Jump to the key pickup that matches this door's key requirement."""
+        pickup = getattr(self, '_linked_key_pickup', None)
+        if pickup:
+            self.editor.select_object(pickup)
+
+    def _update_pickup_door_link(self, thing):
+        """Update the 'Doors Unlocked' label on the Pickup properties."""
+        link_label = self._widgets.get('pickup_door_link_label')
+        select_btn = self._widgets.get('pickup_door_select_btn')
+        if not link_label:
+            return
+
+        if not isinstance(thing, Pickup) or thing.properties.get('item_type') != 'key':
+            link_label.setVisible(False)
+            if select_btn:
+                select_btn.setVisible(False)
+            return
+
+        key_name = thing.properties.get('key_name', '')
+        if not key_name:
+            link_label.setText("⚠ No key name set")
+            link_label.setStyleSheet("QLabel { color: #FF8800; padding: 4px; }")
+            link_label.setVisible(True)
+            if select_btn:
+                select_btn.setVisible(False)
+            return
+
+        # Search for doors that require this key
+        self._linked_door_brush = None
+        matching_doors = []
+        for brush in self.editor.state.brushes:
+            if brush.get('is_door') and brush.get('door_needs_key') and brush.get('door_key_name') == key_name:
+                matching_doors.append(brush)
+
+        if matching_doors:
+            self._linked_door_brush = matching_doors[0]
+            door_name = matching_doors[0].get('name', 'unnamed door')
+            pos = matching_doors[0].get('pos', [0, 0, 0])
+            pos_str = f"({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f})"
+            if len(matching_doors) == 1:
+                link_label.setText(f"🚪 Unlocks: {door_name} {pos_str}")
+            else:
+                link_label.setText(f"🚪 Unlocks: {door_name} {pos_str} (+{len(matching_doors)-1} more)")
+            link_label.setStyleSheet("QLabel { color: #88AAFF; padding: 4px; }")
+            link_label.setVisible(True)
+            if select_btn:
+                select_btn.setVisible(True)
+        else:
+            link_label.setText(f"⚠ No door requires key '{key_name}'")
+            link_label.setStyleSheet("QLabel { color: #FF4444; padding: 4px; }")
+            link_label.setVisible(True)
+            self._linked_door_brush = None
+            if select_btn:
+                select_btn.setVisible(False)
+
+    def _select_linked_door(self):
+        """Jump to the door brush that this key pickup unlocks."""
+        brush = getattr(self, '_linked_door_brush', None)
+        if brush:
+            self.editor.select_object(brush)
 
     def toggle_mover_preview(self, checked):
         if self.editor:
@@ -1632,6 +1776,35 @@ class PropertyEditor(QWidget):
                 is_key_type = (value == 'key')
                 self.pickup_key_name_label.setVisible(is_key_type)
                 self.pickup_key_name_combo.setVisible(is_key_type)
+
+                # --- Doors Unlocked cross-reference ---
+                door_link_label = QLabel("")
+                door_link_label.setWordWrap(True)
+                door_link_label.setStyleSheet("QLabel { padding: 4px; }")
+                door_link_label.setVisible(False)
+                layout.addRow("", door_link_label)
+                self._widgets['pickup_door_link_label'] = door_link_label
+                self._pickup_key_widgets.append((QLabel(""), door_link_label))
+
+                door_select_btn = QPushButton("Select Door ▸")
+                door_select_btn.setStyleSheet("""
+                    QPushButton { background-color: #2a3a5a; color: #88AAFF; border: 1px solid #4466AA;
+                                  border-radius: 3px; padding: 4px 8px; font-size: 11px; }
+                    QPushButton:hover { background-color: #3a4a6a; }
+                """)
+                door_select_btn.setVisible(False)
+                door_select_btn.clicked.connect(self._select_linked_door)
+                layout.addRow("", door_select_btn)
+                self._widgets['pickup_door_select_btn'] = door_select_btn
+                self._pickup_key_widgets.append((QLabel(""), door_select_btn))
+
+                # Populate cross-reference
+                if is_key_type:
+                    self._update_pickup_door_link(thing)
+
+                # Refresh cross-reference when key name changes
+                self.pickup_key_name_combo.currentTextChanged.connect(
+                    lambda _name: self._update_pickup_door_link(self.current_object))
 
             elif isinstance(thing, Pickup) and key == 'activation':
                 widget_w = QComboBox()
@@ -1991,6 +2164,10 @@ class PropertyEditor(QWidget):
                 label.setVisible(is_key)
                 widget.setVisible(is_key)
         
+        # Refresh door cross-reference when switching to key type
+        if is_key:
+            self._update_pickup_door_link(self.current_object)
+        
         # Show/hide value widgets (hide for keys)
         if hasattr(self, '_pickup_value_widgets'):
             for label, widget in self._pickup_value_widgets:
@@ -2136,6 +2313,9 @@ class PropertyEditor(QWidget):
         # This prevents infinite recursion when populate calls update_object_prop
         if not self._populating:
             self.editor.update_all_ui()
+
+
+
 
 
 
