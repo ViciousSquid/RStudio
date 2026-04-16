@@ -17,6 +17,7 @@
 #### Linux users are invited to use the included Dockerfile of follow [these quick steps](https://github.com/ViciousSquid/Fio#-quickstart)
 * **Build a level, hit play, and walk around instantly** — no compile or lightmap baking
 * Compact and lightweight (target: Snapdragon 8CX, OpenGL 3.3)
+* Targets Windows-on-ARM
 * Dockable UI for multi monitor workflow
 * Real-time lighting with stencil shadows
 * Unified Forward Renderer
