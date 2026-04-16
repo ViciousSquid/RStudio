@@ -1610,7 +1610,8 @@ class Renderer:
                     sprite_type = 'idle'
 
                 mtype = thing.get('monster_type', 'human')
-                tex_key = f"msprite_{mtype}_{sprite_type}_{custom}"
+                variant = thing.get('variant', '<None>')
+                tex_key = f"msprite_{mtype}_{variant}_{sprite_type}_{custom}"
                 tex_id = self.sprite_textures.get(tex_key)
                 if tex_id is None:
                     # load_texture(name, subfolder) builds: assets/{subfolder}/{name}
@@ -1619,9 +1620,16 @@ class Renderer:
                         subfolder = os.path.dirname(custom_clean)
                         filename  = os.path.basename(custom_clean)
                     else:
-                        subfolder = f"sprites/monsters/{mtype}"
+                        if variant and variant != '<None>':
+                            subfolder = f"sprites/monsters/{mtype}/{variant}"
+                        else:
+                            subfolder = f"sprites/monsters/{mtype}"
                         filename  = f"{sprite_type}.png"
                     tex_id = self.load_texture(filename, subfolder)
+                    # If variant file missing, fall back to base type folder
+                    if not tex_id and variant and variant != '<None>':
+                        subfolder = f"sprites/monsters/{mtype}"
+                        tex_id = self.load_texture(filename, subfolder)
                     if tex_id:
                         self.sprite_textures[tex_key] = tex_id
 
@@ -1915,12 +1923,3 @@ class Renderer:
             gl.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
         gl.glBindVertexArray(0)
-
-
-
-
-
-
-
-
-

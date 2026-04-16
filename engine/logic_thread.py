@@ -71,6 +71,8 @@ from .monster_constants import (
     MONSTER_MIN_WIDTH,
     MONSTER_WALL_MARGIN,
     MONSTER_DEAD_FALL_SPEED,
+    MONSTER_STUCK_THRESHOLD,
+    MONSTER_DETOUR_RANGE,
     WEAPON_DAMAGE,
     WEAPON_SHOOT_SOUND,
 )
@@ -1378,6 +1380,65 @@ class LogicThread(threading.Thread):
             current = node.get_next_node_name()
         return chain
 
+    def _find_nearby_detour_node(self, m_pos, blocked_node_name, mtype):
+        """
+        Search for a nearby PathNode the monster can walk to in order to
+        navigate around an obstacle.
+
+        Returns the PathNode name (str) if a suitable detour is found,
+        or '' if nothing is reachable.
+
+        Selection criteria:
+          - Must accept this monster's type (affects_type)
+          - Must not be the node we're currently stuck heading to
+          - Must not be disabled
+          - Must be within MONSTER_DETOUR_RANGE
+          - The first movement step toward it must not overlap a wall
+        Ties are broken by distance (nearest wins).
+        """
+        if PathNode is None:
+            return ''
+
+        best_name = ''
+        best_dist = MONSTER_DETOUR_RANGE + 1.0
+
+        for t in self.things:
+            if not isinstance(t, PathNode):
+                continue
+            node_name = t.properties.get('name', '')
+            if not node_name or node_name == blocked_node_name:
+                continue
+            if t.properties.get('disabled', False):
+                continue
+            if not t.accepts_monster_type(mtype):
+                continue
+
+            n_pos = glm.vec3(t.pos)
+            if mtype == 'flying':
+                diff = n_pos - m_pos
+            else:
+                diff = glm.vec3(n_pos.x - m_pos.x, 0.0, n_pos.z - m_pos.z)
+            dist = glm.length(diff)
+            if dist > MONSTER_DETOUR_RANGE or dist < 1.0:
+                continue
+            if dist >= best_dist:
+                continue
+
+            # Quick reachability check: would the first step toward this
+            # node be free of wall overlap?
+            direction = diff / dist
+            if mtype != 'flying':
+                direction = glm.normalize(glm.vec3(direction.x, 0.0, direction.z))
+            test_pos = m_pos + direction * MONSTER_MOVE_SPEED * 0.016  # ~1 frame
+            if self._monster_overlaps_wall(test_pos.x, test_pos.y, test_pos.z,
+                                           MONSTER_WALL_MARGIN):
+                continue
+
+            best_dist = dist
+            best_name = node_name
+
+        return best_name
+
     def _advance_patrol_index(self, monster, state, chain, patrol_mode, mname):
         """
         Advance the patrol chain index according to patrol_mode.
@@ -1473,6 +1534,7 @@ class LogicThread(threading.Thread):
             if state.get('patrol_at_target'):
                 state['patrol_at_target'] = False
                 state['patrol_chain'] = []
+            state.pop('detour_node', None)
             return
 
         target_name = monster.properties.get('patrol_target', '') or ''
@@ -1513,6 +1575,7 @@ class LogicThread(threading.Thread):
             state['patrol_warn_missing'] = ''
             state['patrol_warn_mismatch'] = ''
             state['patrol_walking_to'] = ''
+            state['detour_node'] = ''
             debug_log("Pathfinding",
                       f"'{mname}' patrol chain built: "
                       f"{' -> '.join(chain)}  (mode={patrol_mode})")
@@ -1652,8 +1715,48 @@ class LogicThread(threading.Thread):
                       f"'{mname}' patrolling -> '{current_node_name}' "
                       f"(dist={dist_to_node:.0f})")
 
+        # --- Detour override: if we have an active detour, walk toward
+        #     the detour node instead of the chain target. -----------------
+        detour_name = state.get('detour_node', '')
+        if detour_name:
+            detour_node = self._find_path_node_by_name(detour_name)
+            if detour_node is None or detour_node.properties.get('disabled', False):
+                # Detour node was removed / disabled — cancel detour
+                state['detour_node'] = ''
+                debug_log("Pathfinding",
+                          f"'{mname}' detour node '{detour_name}' "
+                          f"gone — resuming normal patrol")
+            else:
+                d_pos = glm.vec3(detour_node.pos)
+                if mtype == 'flying':
+                    d_vec = d_pos - m_pos
+                else:
+                    d_vec = glm.vec3(d_pos.x - m_pos.x, 0.0, d_pos.z - m_pos.z)
+                d_dist = glm.length(d_vec)
+                d_radius = detour_node.get_radius()
+
+                if d_dist <= d_radius:
+                    # Reached the detour node — clear and resume normal patrol
+                    state['detour_node'] = ''
+                    state['patrol_blocked_count'] = 0
+                    debug_log("Pathfinding",
+                              f"'{mname}' reached detour node "
+                              f"'{detour_name}' — resuming patrol "
+                              f"toward '{current_node_name}'")
+                    # Fall through to normal movement on the next tick
+                    return
+
+                # Override the movement vector to head for the detour node
+                to_node = d_vec
+                dist_to_node = d_dist
+                speed_mult = detour_node.get_patrol_speed()
+                # (node variable is NOT reassigned — only the movement
+                #  direction is redirected)
+
         # --- Movement toward node -----------------------------------------
-        speed_mult = node.get_patrol_speed()
+        if not (detour_name and state.get('detour_node')):
+            speed_mult = node.get_patrol_speed()
+        # else: speed_mult was set inside the detour block above
         dir_len = glm.length(to_node)
         if dir_len <= 0.001:
             return
@@ -1684,6 +1787,19 @@ class LogicThread(threading.Thread):
                               f"'{mname}' blocked by wall collision "
                               f"en route to '{current_node_name}' "
                               f"(stuck for {blocked_count} ticks)")
+
+                # --- Detour: after being stuck long enough, search for a
+                #     nearby PathNode to route around the obstacle. ---------
+                if blocked_count >= MONSTER_STUCK_THRESHOLD and not state.get('detour_node'):
+                    detour = self._find_nearby_detour_node(
+                        m_pos, current_node_name, mtype)
+                    if detour:
+                        state['detour_node'] = detour
+                        state['patrol_blocked_count'] = 0
+                        debug_log("Pathfinding",
+                                  f"'{mname}' detouring via '{detour}' "
+                                  f"to get around obstacle en route "
+                                  f"to '{current_node_name}'")
                 return
 
         # Movement succeeded — reset blocked counter
@@ -2130,11 +2246,3 @@ class LogicThread(threading.Thread):
 
         write_state.visible_things = visible_things
         write_state.timestamp = time.perf_counter()
-
-
-
-
-
-
-
-

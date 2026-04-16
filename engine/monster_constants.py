@@ -43,6 +43,24 @@ MONSTER_SPRITE_SIZES = {
 MONSTER_SPRITE_SIZE_DEFAULT = (128, 128)
 
 # ---------------------------------------------------------------------------
+# Monster variants — per-type list of alternate sprite folder names.
+#
+# When a monster's 'variant' property is set to one of these values, the
+# sprite path changes from:
+#   assets/sprites/monsters/<monster_type>/<frame>.png
+# to:
+#   assets/sprites/monsters/<monster_type>/<variant>/<frame>.png
+#
+# The special value '<None>' (the default) means no variant — use the
+# base folder.  Add more entries per type as new variant art is created.
+# ---------------------------------------------------------------------------
+
+MONSTER_VARIANTS = {
+    'human':  ['variant1'],
+    'flying': ['variant1'],
+}
+
+# ---------------------------------------------------------------------------
 # Projectile constants  (flying monster ranged attack)
 # ---------------------------------------------------------------------------
 MONSTER_PROJECTILE_SPEED    = 160.0   # world-units / second
@@ -57,6 +75,15 @@ MONSTER_TERMINAL_VEL   = -500.0
 MONSTER_MIN_WIDTH      = 200.0    # monsters are always at least 200px wide
 MONSTER_WALL_MARGIN    = 100.0    # half of MONSTER_MIN_WIDTH — keep this far from wall surfaces
 MONSTER_DEAD_FALL_SPEED = 300.0   # world-units/sec the dead sprite falls
+
+# ---------------------------------------------------------------------------
+# Patrol obstacle avoidance
+# ---------------------------------------------------------------------------
+# When a monster is blocked by walls for this many consecutive ticks,
+# it will search for a nearby PathNode to detour around the obstacle.
+MONSTER_STUCK_THRESHOLD  = 30    # ticks (~0.5s at 60fps) before detour kicks in
+# Maximum distance (world units) to search for a detour node
+MONSTER_DETOUR_RANGE     = 1024.0
 
 # ---------------------------------------------------------------------------
 # Weapon damage per gun type
