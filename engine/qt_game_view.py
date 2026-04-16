@@ -377,14 +377,21 @@ class QtGameView(QOpenGLWidget):
             keys = set() if self.console_overlay_active else self.editor.keys_pressed
             self.game_state.set_keys(keys)
 
-            # ONLY repaint when logic thread gave us new data
-            if self.game_state.try_swap():          # peek
-                self.game_state.try_swap()          # consume
-                self.update()                       # request paintGL for 3D view
-                # Also update the 2D views in play mode so monster positions are shown moving
-                if self.play_mode:
-                    self.editor.update_views()
-            # else: do nothing — Qt will keep showing the last good frame
+            # Consume new-frame flag so the logic thread can write again.
+            # try_swap() both checks AND consumes in a single atomic call.
+            has_new = self.game_state.try_swap()
+
+            # Always request a repaint.  Previously this was conditional on
+            # has_new, which meant Qt's QOpenGLWidget FBO could go stale when
+            # the logic thread was between frames — the compositor would then
+            # present uninitialised / previous-frame FBO content, visible as
+            # per-frame brightness flicker (especially with an empty scene
+            # where the render completes almost instantly).
+            self.update()
+
+            # Also update the 2D views in play mode so monster positions are shown moving
+            if has_new and self.play_mode:
+                self.editor.update_views()
         else:
             self.update()
 
@@ -416,16 +423,15 @@ class QtGameView(QOpenGLWidget):
             self.renderer.update_grid_buffers(self.world_size, self.grid_size)
             self.grid_dirty = False
 
-        # === THREADED RENDER PATH - FIXED ===
+        # === THREADED RENDER PATH ===
         render_state: Optional[RenderState] = None
 
         if self.use_threading and self.logic_thread:
-            # Only swap when the logic thread actually produced a new frame
-            if self.game_state.try_swap():
-                render_state = self.game_state.get_render_state()
-            else:
-                # No new frame yet → reuse the last known good render state
-                render_state = self.game_state.get_render_state()
+            # The swap is already handled by update_loop.  Here we just read
+            # whatever the current read-side state is — it is always valid
+            # (initialised to a sensible default RenderState, then replaced
+            # atomically by request_swap each time the logic thread finishes).
+            render_state = self.game_state.get_render_state()
 
             self.view_matrix = render_state.camera_view_matrix
 
@@ -529,7 +535,7 @@ class QtGameView(QOpenGLWidget):
         if getattr(self.editor, 'show_logic_links', False):
             painter.setPen(QColor(255, 255, 0))
             painter.setFont(QFont("Arial", 10, QFont.Bold))
-            painter.drawText(10, self.height() - 40, "LINKS VISIBLE [F1]")
+            #painter.drawText(10, self.height() - 40, "LINKS VISIBLE [F1]")
 
         # Draw Face Mode UI Text
         if self.face_mode_active:
@@ -1693,6 +1699,9 @@ class QtGameView(QOpenGLWidget):
             self.debug_console_window.command_input.setText(cmd)
             self.debug_console_window._on_command_entered()
         self._close_console_overlay()
+
+
+
 
 
 
