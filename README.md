@@ -13,8 +13,8 @@
  <img width="2039" height="1171" alt="image" src="https://github.com/user-attachments/assets/0422c267-5131-4306-a25d-cc2f716e5eae" />
 
  ------------------------
-### [Download for Windows and MacOS](https://github.com/ViciousSquid/Fio/releases) | [Quickstart guide](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) 
-#### Linux users are invited to use the included Dockerfile of follow [this quick guide](https://github.com/ViciousSquid/Fio#-quickstart)
+### [Download for Windows and MacOS](https://github.com/ViciousSquid/Fio/releases) | [📄Getting started guide](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) 
+#### Linux users are invited to use the included Dockerfile of follow [these quick steps](https://github.com/ViciousSquid/Fio#-quickstart)
 * **Build a level, hit play, and walk around instantly** — no compile or lightmap baking
 * Compact and lightweight (target: Snapdragon 8CX, OpenGL 3.3)
 * Dockable UI for multi monitor workflow
