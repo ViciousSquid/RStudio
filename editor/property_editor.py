@@ -1703,7 +1703,7 @@ class PropertyEditor(QWidget):
         self._pickup_key_widgets = []
         self._pickup_sprite_widgets = []
 
-        _MONSTER_ONLY_KEYS = {'awake', 'damage', 'health', 'monster_type',
+        _MONSTER_ONLY_KEYS = {'awake', 'damage', 'health', 'monster_type', 'variant',
                                'triggered', 'wake_on_sight', 'dead', 'non_hostile', 'sight',
                                'patrol', 'patrol_target', 'patrol_mode'}
 
@@ -1714,7 +1714,7 @@ class PropertyEditor(QWidget):
             if isinstance(thing, Light) and key in ['colour', 'parent_mover', 'parent_offset']: continue
             if isinstance(thing, Model) and key in ['model_path', 'scale', 'rotation']: continue
             if not isinstance(thing, Monster) and key in _MONSTER_ONLY_KEYS: continue
-            if isinstance(thing, Monster) and key in ('triggered', 'wake_on_sight', 'dead', 'non_hostile', 'sight', 'patrol', 'patrol_target', 'patrol_mode'): continue
+            if isinstance(thing, Monster) and key in ('triggered', 'wake_on_sight', 'dead', 'non_hostile', 'sight', 'patrol', 'patrol_target', 'patrol_mode', 'variant'): continue
             if isinstance(thing, PathNode) and key in ('radius', 'show_radius', 'affects_type', 'next_node', 'wait_time', 'patrol_speed'): continue
             if is_pickup and key in ['key_name', 'custom_sprite', 'respawns', 'respawn_time']: continue
 
@@ -1724,6 +1724,47 @@ class PropertyEditor(QWidget):
                 widget_w = QComboBox()
                 widget_w.addItems(['human', 'flying'])
                 widget_w.setCurrentText(value)
+
+                # --- Variant combo (added immediately after monster_type) ---
+                from engine.monster_constants import MONSTER_VARIANTS
+                variant_combo = QComboBox()
+                variant_combo.setToolTip(
+                    "Sprite variant — selects an alternate sprite subfolder.\n"
+                    "<None> uses the default sprites for this monster type."
+                )
+                self._widgets['monster_variant_combo'] = variant_combo
+
+                def _populate_variant_combo(_combo=variant_combo, _mtype=None):
+                    """Rebuild variant choices for the given monster_type."""
+                    if _mtype is None:
+                        _mtype = thing.properties.get('monster_type', 'human')
+                    _combo.blockSignals(True)
+                    _combo.clear()
+                    _combo.addItem('<None>')
+                    for v in MONSTER_VARIANTS.get(_mtype, []):
+                        _combo.addItem(v)
+                    cur = thing.properties.get('variant', '<None>')
+                    idx = _combo.findText(cur)
+                    _combo.setCurrentIndex(idx if idx >= 0 else 0)
+                    _combo.blockSignals(False)
+
+                _populate_variant_combo()
+
+                def on_variant_changed(text, _thing=thing):
+                    _thing.properties['variant'] = text
+                    # Flush sprite cache so viewport reloads with new variant
+                    try:
+                        Monster.clear_sprite_cache()
+                    except Exception:
+                        pass
+                    if hasattr(self.editor, 'mark_dirty'):
+                        self.editor.mark_dirty()
+                    try:
+                        self.editor.view_3d.update()
+                    except Exception:
+                        pass
+
+                variant_combo.currentTextChanged.connect(on_variant_changed)
 
                 def on_monster_type_changed(new_type):
                     # Update the property
@@ -1738,11 +1779,16 @@ class PropertyEditor(QWidget):
                     # we consider them auto‑generated and update them.
                     self.update_object_prop('sprite_width', default_w)
                     self.update_object_prop('sprite_height', default_h)
+                    # Reset variant when type changes (old variant may not exist
+                    # for the new type) and rebuild the dropdown
+                    thing.properties['variant'] = '<None>'
+                    _populate_variant_combo(_mtype=new_type)
                     # Force a refresh of the property editor to show the new values
                     self.set_object(thing)
 
                 widget_w.currentTextChanged.connect(on_monster_type_changed)
                 layout.addRow(label_text, widget_w)
+                layout.addRow("Variant:", variant_combo)
             elif isinstance(thing, Light) and key == 'state':
                 widget_w = QComboBox()
                 widget_w.addItems(['on', 'off'])
@@ -2666,14 +2712,3 @@ class PropertyEditor(QWidget):
         # This prevents infinite recursion when populate calls update_object_prop
         if not self._populating:
             self.editor.update_all_ui()
-
-
-
-
-
-
-
-
-
-
-

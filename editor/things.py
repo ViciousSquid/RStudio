@@ -332,6 +332,11 @@ class Monster(Thing):
         #   'once'      — A→B→C  then holds at the last node
         self.properties.setdefault('patrol_mode', 'loop')
 
+        # --- Sprite variant (alternate skin) ---
+        # '<None>' = base sprites in assets/sprites/monsters/<type>/
+        # 'variant1' etc = assets/sprites/monsters/<type>/variant1/
+        self.properties.setdefault('variant', '<None>')
+
         # --- Set default sprite dimensions based on monster_type ---
         from engine.monster_constants import MONSTER_SPRITE_SIZES, MONSTER_SPRITE_SIZE_DEFAULT
         mtype = self.properties.get('monster_type', 'human')
@@ -359,6 +364,7 @@ class Monster(Thing):
             'dead': self.properties.get('dead', False),
             'is_shooting': self.properties.get('is_shooting', False),
             'monster_type': self.properties.get('monster_type', 'human'),
+            'variant': self.properties.get('variant', '<None>'),
             'sprite_width': self.properties.get('sprite_width', 128),
             'sprite_height': self.properties.get('sprite_height', 128),
             'custom_idle': self.properties.get('custom_idle', ''),
@@ -371,11 +377,18 @@ class Monster(Thing):
         Return the sprite path for the current monster type and state.
         Priority: dead > shooting > idle.
 
+        When a variant is set (anything other than '<None>'), the sprite
+        subfolder changes:
+          base:    assets/sprites/monsters/<type>/<frame>.png
+          variant: assets/sprites/monsters/<type>/<variant>/<frame>.png
+        If the variant file is missing on disk, falls back to the base path.
+
         Custom sprites set via the Customise dialog are tried first.
         Any missing custom file is logged once and falls back to the
         appropriate default sprite for this monster_type automatically.
         """
         mtype       = self.properties.get('monster_type', 'human')
+        variant     = self.properties.get('variant', '<None>')
         is_dead     = self.properties.get('dead', False)
         is_shooting = self.properties.get('is_shooting', False)
 
@@ -385,9 +398,23 @@ class Monster(Thing):
         except Exception:
             project_root = os.getcwd()
 
-        default_idle  = f"assets/sprites/monsters/{mtype}/idle.png"
-        default_dead  = f"assets/sprites/monsters/{mtype}/dead.png"
-        default_shoot = f"assets/sprites/monsters/{mtype}/shoot.png"
+        # Build base and variant default paths
+        base_idle  = f"assets/sprites/monsters/{mtype}/idle.png"
+        base_dead  = f"assets/sprites/monsters/{mtype}/dead.png"
+        base_shoot = f"assets/sprites/monsters/{mtype}/shoot.png"
+
+        if variant and variant != '<None>':
+            var_idle  = f"assets/sprites/monsters/{mtype}/{variant}/idle.png"
+            var_dead  = f"assets/sprites/monsters/{mtype}/{variant}/dead.png"
+            var_shoot = f"assets/sprites/monsters/{mtype}/{variant}/shoot.png"
+            # Use variant path if the file exists, otherwise fall back to base
+            default_idle  = var_idle  if os.path.isfile(os.path.join(project_root, var_idle))  else base_idle
+            default_dead  = var_dead  if os.path.isfile(os.path.join(project_root, var_dead))  else base_dead
+            default_shoot = var_shoot if os.path.isfile(os.path.join(project_root, var_shoot)) else base_shoot
+        else:
+            default_idle  = base_idle
+            default_dead  = base_dead
+            default_shoot = base_shoot
 
         # Verify default dead/shoot files exist; fall back to idle if not
         if not os.path.isfile(os.path.join(project_root, default_dead)):
@@ -895,8 +922,3 @@ ENTITY_CATEGORIES = {
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer'],
     'AI': ['PathNode'],
 }
-
-
-
-
-
