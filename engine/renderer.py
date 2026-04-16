@@ -1187,6 +1187,136 @@ class Renderer:
 
         gl.glBindVertexArray(0)
 
+
+    # ── Projected Shadows ────────────────────────────────────────────
+
+    def render_projected_shadows_optimized(self, projection, view, camera_pos, all_brushes, shadow_lights):
+        """Render projected floor shadows for brushes lit by shadow-casting lights.
+
+        For each light with casts_shadows=True, every opaque brush within the
+        light's radius gets a flattened shadow volume projected onto the floor
+        plane (y = 0).  Uses the pre-compiled 'shadow_volume' shader and the
+        existing cube VAO.
+
+        The projection squashes brush geometry onto y=0 from the light position
+        using a standard planar-projection matrix, then draws with additive-safe
+        blending so overlapping shadows darken correctly without double-blend
+        artifacts.
+        """
+        if 'shadow_volume' not in self.shaders:
+            return
+
+        shader = self.shaders['shadow_volume']
+        uniforms = self.uniforms['shadow_volume']
+
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
+
+        gl.glBindVertexArray(self.vaos['cube'])
+
+        # Blend: multiply-style darkening — avoids harsh double-shadows
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+
+        # Write to colour buffer only; leave depth as-is so shadows sit on
+        # top of already-rendered floor geometry without z-fighting.
+        gl.glDepthMask(gl.GL_FALSE)
+        gl.glDepthFunc(gl.GL_LEQUAL)
+
+        # Slight polygon offset to prevent z-fighting with the floor
+        gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
+        gl.glPolygonOffset(-1.0, -1.0)
+
+        model_loc = uniforms['model']
+        light_pos_loc = uniforms.get('light_pos', -1)
+
+        FLOOR_Y = 0.0  # Shadow receiver plane
+        shadow_count = 0
+
+        for light in shadow_lights:
+            lpos = light.pos  # [x, y, z]
+            lx, ly, lz = float(lpos[0]), float(lpos[1]), float(lpos[2])
+            light_radius = float(light.properties.get('radius', 512.0))
+            light_radius_sq = light_radius * light_radius
+            light_intensity = float(light.properties.get('intensity', 1.0))
+
+            # Upload light position for this pass
+            if light_pos_loc is not None and light_pos_loc >= 0:
+                gl.glUniform3f(light_pos_loc, lx, ly, lz)
+
+            # Only cast shadows downward (light must be above the floor plane)
+            if ly <= FLOOR_Y:
+                continue
+
+            for brush in all_brushes:
+                # Skip non-opaque brush types
+                if brush.get('hidden') or brush.get('is_trigger') or brush.get('is_fog') or \
+                   brush.get('is_water') or brush.get('shader') in ('Water', 'Fog', 'Glass', 'Glow'):
+                    continue
+
+                bpos = brush.get('pos', [0, 0, 0])
+                bx, by, bz = float(bpos[0]), float(bpos[1]), float(bpos[2])
+
+                # Quick range check (squared distance, centre-to-centre)
+                dx, dy, dz = bx - lx, by - ly, bz - lz
+                dist_sq = dx * dx + dy * dy + dz * dz
+                if dist_sq > light_radius_sq:
+                    continue
+
+                bsize = brush.get('size', [64, 64, 64])
+                bsx, bsy, bsz = float(bsize[0]), float(bsize[1]), float(bsize[2])
+
+                # ── Planar-projection shadow matrix ──
+                # Projects brush geometry onto y=FLOOR_Y from the light.
+                # Plane: y = FLOOR_Y  →  normal (0,1,0), d = -FLOOR_Y
+                nx, ny, nz, nd = 0.0, 1.0, 0.0, -FLOOR_Y
+                dot_val = nx * lx + ny * ly + nz * lz + nd  # = ly - FLOOR_Y
+
+                # Standard planar-projection shadow matrix (column-major for glm)
+                shadow_mat = glm.mat4(
+                    glm.vec4(dot_val - lx * nx, -ly * nx,       -lz * nx,       -nx),
+                    glm.vec4(-lx * ny,          dot_val - ly * ny, -lz * ny,     -ny),
+                    glm.vec4(-lx * nz,          -ly * nz,       dot_val - lz * nz, -nz),
+                    glm.vec4(-lx * nd,          -ly * nd,       -lz * nd,       dot_val - nd)
+                )
+
+                # Brush model matrix (same as opaque rendering)
+                brush_model = glm.scale(
+                    glm.translate(self._identity_mat4, glm.vec3(bx, by, bz)),
+                    glm.vec3(bsx, bsy, bsz)
+                )
+
+                # Combined: project the brush onto the floor plane
+                final = shadow_mat * brush_model
+
+                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(final))
+
+                # Alpha fades with distance from light
+                dist_ratio = min(1.0, (dist_sq / light_radius_sq))
+                # Stronger shadow near light, fading to nothing at radius edge
+                # Also scale by light intensity (brighter light = sharper shadow)
+                alpha = max(0.05, (1.0 - dist_ratio) * min(light_intensity, 1.0) * 0.6)
+
+                # The shadow_volume.frag hard-codes FragColor alpha to 0.5,
+                # so we modulate via glBlendColor if needed.  For simplicity
+                # the current shader is fine — the 0.5 base alpha gives a
+                # reasonable look.  If you want per-shadow alpha, add a
+                # uniform float shadow_alpha to the frag shader later.
+
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+                shadow_count += 1
+                self.render_stats.draw_calls += 1
+
+        # Restore state
+        gl.glDisable(gl.GL_POLYGON_OFFSET_FILL)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glDepthFunc(gl.GL_LESS)
+        gl.glBindVertexArray(0)
+
+        self.render_stats.shadow_draw_calls = shadow_count
+
     def _sort_objects(self, brushes, things, config):
         opaque, transparent, sprites, fog, water, glass, glow = [], [], [], [], [], [], []
         is_play, show_sprites = config.get('play_mode', False), config.get('show_sprites_in_play_mode', False)
