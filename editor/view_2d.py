@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
 from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Monster, 
-                          LogicGate, LogicRelay, LogicTimer, LevelChanger)
+                          LogicGate, LogicRelay, LogicTimer, LevelChanger, PathNode)
 from editor.scene_hierarchy import SceneHierarchy
 # I/O System imports for drawing connections
 try:
@@ -311,6 +311,7 @@ class View2D(QWidget):
         
         if show_f1_key:
             self.draw_logic_connections(painter, visible_bounds)
+            self.draw_patrol_paths(painter, visible_bounds)
 
         if self.is_drawing_brush:
             pen = QPen(QColor(255, 255, 0), 1, Qt.DashLine)
@@ -424,6 +425,100 @@ class View2D(QWidget):
                 self._draw_connection_arrow(painter, p1, p2, color)
         
         self.last_connections = current_connections
+
+    def draw_patrol_paths(self, painter, visible_bounds):
+        """
+        Draw dashed teal lines between connected PathNodes (next_node chains)
+        and thin dotted lines from patrolling Monsters to their patrol_target.
+        """
+        ax1, ax2 = self.get_axes()
+        if not ax1 or not ax2:
+            return
+        ax_map = {'x': 0, 'y': 1, 'z': 2}
+        a1 = ax_map[ax1]
+        a2 = ax_map[ax2]
+
+        # Build a lookup: node-name → thing, for fast resolution
+        node_lookup = {}
+        for t in self.editor.state.things:
+            if isinstance(t, PathNode):
+                n = t.properties.get('name', '') or ''
+                if n:
+                    node_lookup[n] = t
+
+        # --- 1. PathNode → next_node chain lines (teal, dashed) ----------
+        teal = QColor(38, 166, 154, 200)
+        teal_dim = QColor(38, 166, 154, 80)
+        chain_pen = QPen(teal, 2, Qt.DashLine)
+
+        for name, node in node_lookup.items():
+            next_name = node.get_next_node_name()
+            if not next_name:
+                continue
+            next_node = node_lookup.get(next_name)
+            if next_node is None:
+                continue
+
+            src_w = QPointF(node.pos[a1], node.pos[a2])
+            dst_w = QPointF(next_node.pos[a1], next_node.pos[a2])
+
+            # Cull if both endpoints are off-screen
+            margin = 100.0
+            sr = QRectF(src_w.x() - margin, src_w.y() - margin, margin * 2, margin * 2)
+            dr = QRectF(dst_w.x() - margin, dst_w.y() - margin, margin * 2, margin * 2)
+            if not (visible_bounds.intersects(sr) or visible_bounds.intersects(dr)):
+                continue
+
+            p1 = self.world_to_screen(src_w)
+            p2 = self.world_to_screen(dst_w)
+
+            painter.setPen(chain_pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawLine(p1, p2)
+
+            # Small arrowhead at destination
+            self._draw_connection_arrow(painter, p1, p2, teal)
+
+            # Tiny "next" label at midpoint
+            mid = QPointF((p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2)
+            painter.save()
+            painter.setPen(QPen(teal_dim))
+            font = QFont()
+            font.setPointSize(7)
+            painter.setFont(font)
+            painter.drawText(mid + QPointF(4, -4), "next")
+            painter.restore()
+
+        # --- 2. Monster → patrol_target lines (teal, dotted, thinner) ----
+        patrol_pen = QPen(QColor(38, 166, 154, 120), 1, Qt.DotLine)
+        for t in self.editor.state.things:
+            if not isinstance(t, Monster):
+                continue
+            if not t.properties.get('patrol', False):
+                continue
+            target_name = t.properties.get('patrol_target', '') or ''
+            if not target_name:
+                continue
+            target_node = node_lookup.get(target_name)
+            if target_node is None:
+                continue
+
+            src_w = QPointF(t.pos[a1], t.pos[a2])
+            dst_w = QPointF(target_node.pos[a1], target_node.pos[a2])
+
+            margin = 100.0
+            sr = QRectF(src_w.x() - margin, src_w.y() - margin, margin * 2, margin * 2)
+            dr = QRectF(dst_w.x() - margin, dst_w.y() - margin, margin * 2, margin * 2)
+            if not (visible_bounds.intersects(sr) or visible_bounds.intersects(dr)):
+                continue
+
+            p1 = self.world_to_screen(src_w)
+            p2 = self.world_to_screen(dst_w)
+
+            painter.setPen(patrol_pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawLine(p1, p2)
+            self._draw_connection_arrow(painter, p1, p2, QColor(38, 166, 154, 120))
 
     def draw_grid(self, painter):
         # Don't draw grid if hidden or in play mode
@@ -884,8 +979,46 @@ class View2D(QWidget):
                     painter.drawText(QPointF(s_pos.x() + sight_px + 4, s_pos.y() + 4), f"{sight} u")
                     painter.restore()
 
-                # 2. Draw Sprite
-                if hasattr(thing, 'get_icon_pixmap'):
+                # 1c. Draw PathNode Radius (teal, dashed — mirrors Light's
+                # show_radius toggle but uses a distinct colour so patrol
+                # areas are unambiguous when stacked over light radii)
+                if isinstance(thing, PathNode) and thing.properties.get('show_radius', False):
+                    radius = thing.get_radius() * self.zoom_factor
+                    # Translucent teal fill
+                    painter.setBrush(QBrush(QColor(38, 166, 154, 30)))
+                    painter.setPen(QPen(QColor(38, 166, 154, 220), 1, Qt.DashLine))
+                    painter.drawEllipse(s_pos, radius, radius)
+                    # Label with radius value and affects_type
+                    painter.save()
+                    painter.setPen(QPen(QColor(77, 208, 196)))
+                    font = QFont()
+                    font.setPointSize(8)
+                    painter.setFont(font)
+                    label = f"{int(thing.get_radius())} u  [{thing.get_affects_type()}]"
+                    painter.drawText(QPointF(s_pos.x() + radius + 4, s_pos.y() + 4), label)
+                    painter.restore()
+
+                # 2. Draw Sprite (or orange cube marker for PathNode)
+                pixmap = None
+                if isinstance(thing, PathNode):
+                    # PathNode renders as a small solid orange square — no sprite
+                    half = 10
+                    painter.save()
+                    painter.setBrush(QBrush(QColor(255, 128, 0)))
+                    painter.setPen(QPen(QColor(200, 80, 0), 1))
+                    node_rect = QRectF(s_pos.x() - half, s_pos.y() - half, half * 2, half * 2)
+                    painter.drawRect(node_rect)
+                    # Label with node name
+                    painter.setPen(QPen(QColor(255, 180, 80)))
+                    font = QFont()
+                    font.setPointSize(8)
+                    font.setBold(True)
+                    painter.setFont(font)
+                    node_name = thing.properties.get('name', '')
+                    painter.drawText(QPointF(s_pos.x() + half + 4, s_pos.y() + 4), node_name)
+                    painter.restore()
+                    draw_rect = node_rect
+                elif hasattr(thing, 'get_icon_pixmap'):
                     pixmap = thing.get_icon_pixmap()
                 else:
                     pixmap = thing.get_instance_pixmap()
@@ -1731,6 +1864,10 @@ class View2D(QWidget):
         add_logic_timer_action = logic_menu.addAction("LogicTimer")
         add_logic_gate_action = logic_menu.addAction("LogicGate")
 
+        # AI Menu Sub-section (navigation waypoints and AI hints)
+        ai_menu = menu.addMenu("AI")
+        add_path_node_action = ai_menu.addAction("PathNode")
+
         # Open the menu using the captured position
         action = menu.exec_(self.mapToGlobal(click_pos))
         
@@ -1775,6 +1912,10 @@ class View2D(QWidget):
         elif action == add_logic_gate_action:
             new_thing = LogicGate(pos=pos_3d)
             new_thing.properties['logic_type'] = 'AND' 
+
+        # AI / Navigation entities
+        elif action == add_path_node_action:
+            new_thing = PathNode(pos=pos_3d)
         
         # Model
         elif action == add_model_action:
@@ -2191,3 +2332,4 @@ class View2D(QWidget):
     def zoom_out(self):
         self.zoom_factor *= 0.8
         self.update()
+

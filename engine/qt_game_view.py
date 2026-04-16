@@ -377,11 +377,21 @@ class QtGameView(QOpenGLWidget):
             keys = set() if self.console_overlay_active else self.editor.keys_pressed
             self.game_state.set_keys(keys)
 
-            # ONLY repaint when logic thread gave us new data
-            if self.game_state.try_swap():          # peek
-                self.game_state.try_swap()          # consume
-                self.update()                       # request paintGL
-            # else: do nothing — Qt will keep showing the last good frame
+            # Consume new-frame flag so the logic thread can write again.
+            # try_swap() both checks AND consumes in a single atomic call.
+            has_new = self.game_state.try_swap()
+
+            # Always request a repaint.  Previously this was conditional on
+            # has_new, which meant Qt's QOpenGLWidget FBO could go stale when
+            # the logic thread was between frames — the compositor would then
+            # present uninitialised / previous-frame FBO content, visible as
+            # per-frame brightness flicker (especially with an empty scene
+            # where the render completes almost instantly).
+            self.update()
+
+            # Also update the 2D views in play mode so monster positions are shown moving
+            if has_new and self.play_mode:
+                self.editor.update_views()
         else:
             self.update()
 
@@ -404,6 +414,96 @@ class QtGameView(QOpenGLWidget):
                 effect.setVolume(volume)
                 effect.play()
 
+    def _gather_io_connections(self):
+        """Collect all connection lines for 3D rendering.
+
+        Gathers three kinds of link:
+          1. I/O system connections  (yellow = logic, cyan = standard)
+          2. PathNode → next_node chains  (teal)
+          3. Monster → patrol_target  (teal)
+
+        Returns a list of dicts with 'src', 'dst', 'color' keys suitable
+        for Renderer.draw_connection_lines().
+        """
+        COLOR_LOGIC   = (1.0, 1.0, 0.0)            # yellow
+        COLOR_IO      = (0.0, 1.0, 1.0)            # cyan
+        COLOR_PATROL  = (0.15, 0.65, 0.60)         # teal (matches 2D view)
+
+        try:
+            from editor.io_system import get_connections
+            io_available = True
+        except ImportError:
+            io_available = False
+
+        try:
+            from editor.things import PathNode, Monster
+        except ImportError:
+            PathNode = None
+            Monster = None
+
+        def find_pos_by_name(name):
+            for b in self.editor.state.brushes:
+                if b.get('name') == name:
+                    return b['pos']
+            for t in self.editor.state.things:
+                t_name = getattr(t, 'name', t.properties.get('name', ''))
+                if t_name == name:
+                    return t.pos
+            return None
+
+        lines = []
+
+        # --- 1. I/O system connections ---
+        if io_available:
+            for brush in self.editor.state.brushes:
+                for conn in get_connections(brush):
+                    dst = find_pos_by_name(conn.target_name)
+                    if dst:
+                        is_logic = brush.get('is_trigger') or brush.get('is_mover') or brush.get('is_door')
+                        color = COLOR_LOGIC if is_logic else COLOR_IO
+                        lines.append({'src': brush['pos'], 'dst': dst, 'color': color})
+            for thing in self.editor.state.things:
+                for conn in get_connections(thing):
+                    dst = find_pos_by_name(conn.target_name)
+                    if dst:
+                        is_logic = thing.properties.get('type') == 'logic_gate'
+                        color = COLOR_LOGIC if is_logic else COLOR_IO
+                        lines.append({'src': thing.pos, 'dst': dst, 'color': color})
+
+        # --- 2. PathNode → next_node chains ---
+        if PathNode is not None:
+            node_lookup = {}
+            for t in self.editor.state.things:
+                if isinstance(t, PathNode):
+                    n = t.properties.get('name', '') or ''
+                    if n:
+                        node_lookup[n] = t
+
+            for name, node in node_lookup.items():
+                next_name = node.get_next_node_name()
+                if not next_name:
+                    continue
+                next_node = node_lookup.get(next_name)
+                if next_node is None:
+                    continue
+                lines.append({'src': node.pos, 'dst': next_node.pos, 'color': COLOR_PATROL})
+
+        # --- 3. Monster → patrol_target ---
+        if Monster is not None and PathNode is not None:
+            for t in self.editor.state.things:
+                if not isinstance(t, Monster):
+                    continue
+                if not t.properties.get('patrol', False):
+                    continue
+                target_name = t.properties.get('patrol_target', '') or ''
+                if not target_name:
+                    continue
+                dst = find_pos_by_name(target_name)
+                if dst:
+                    lines.append({'src': t.pos, 'dst': dst, 'color': COLOR_PATROL})
+
+        return lines
+
     def paintGL(self):
         if not self.renderer:
             return
@@ -413,16 +513,15 @@ class QtGameView(QOpenGLWidget):
             self.renderer.update_grid_buffers(self.world_size, self.grid_size)
             self.grid_dirty = False
 
-        # === THREADED RENDER PATH - FIXED ===
+        # === THREADED RENDER PATH ===
         render_state: Optional[RenderState] = None
 
         if self.use_threading and self.logic_thread:
-            # Only swap when the logic thread actually produced a new frame
-            if self.game_state.try_swap():
-                render_state = self.game_state.get_render_state()
-            else:
-                # No new frame yet → reuse the last known good render state
-                render_state = self.game_state.get_render_state()
+            # The swap is already handled by update_loop.  Here we just read
+            # whatever the current read-side state is — it is always valid
+            # (initialised to a sensible default RenderState, then replaced
+            # atomically by request_swap each time the logic thread finishes).
+            render_state = self.game_state.get_render_state()
 
             self.view_matrix = render_state.camera_view_matrix
 
@@ -487,6 +586,13 @@ class QtGameView(QOpenGLWidget):
         if render_state and getattr(render_state, 'monster_debug_active', False):
             self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []))
 
+        # 3D I/O connection lines (editor only — never in play mode)
+        if not self.play_mode and getattr(self.editor, 'show_logic_links', False):
+            conn_lines = self._gather_io_connections()
+            if conn_lines:
+                self.renderer.draw_connection_lines(
+                    self.projection_matrix, self.view_matrix, conn_lines)
+
         # Face Mode Highlight
         if self.face_mode_active and self.hovered_face_info:
             brush, face_name = self.hovered_face_info
@@ -523,10 +629,10 @@ class QtGameView(QOpenGLWidget):
         if self.debug_mode_active:
             self._draw_window_manager(painter)
 
-        if getattr(self.editor, 'show_logic_links', False):
+        if not self.play_mode and getattr(self.editor, 'show_logic_links', False):
             painter.setPen(QColor(255, 255, 0))
             painter.setFont(QFont("Arial", 10, QFont.Bold))
-            painter.drawText(10, self.height() - 40, "LINKS VISIBLE [F1]")
+            #painter.drawText(10, self.height() - 40, "LINKS VISIBLE [F1]")
 
         # Draw Face Mode UI Text
         if self.face_mode_active:
@@ -1690,6 +1796,9 @@ class QtGameView(QOpenGLWidget):
             self.debug_console_window.command_input.setText(cmd)
             self.debug_console_window._on_command_entered()
         self._close_console_overlay()
+
+
+
 
 
 

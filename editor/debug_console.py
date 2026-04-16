@@ -117,6 +117,7 @@ class DebugConsole(QWidget):
         'Warning': '#FFEE58',   # Yellow
         'Info': '#FFFFFF',      # White
         'MonsterAI': '#FF7043', # Deep orange — monster combat / sight / attack
+        'Pathfinding': '#26A69A', # Teal — monster patrol / navigation
     }
 
     FONT_SIZE_MIN = 6
@@ -378,6 +379,12 @@ class DebugConsole(QWidget):
         self.hide_monsters_cb.toggled.connect(self._refresh_console)
         fp_layout.addWidget(self.hide_monsters_cb)
 
+        self.hide_pathfinding_cb = QCheckBox("Pathfinding")
+        self.hide_pathfinding_cb.setToolTip("Hide monster pathfinding / patrol debug messages")
+        self.hide_pathfinding_cb.setStyleSheet(cb_style)
+        self.hide_pathfinding_cb.toggled.connect(self._refresh_console)
+        fp_layout.addWidget(self.hide_pathfinding_cb)
+
         fp_layout.addStretch()
         splitter.addWidget(filter_panel)
 
@@ -592,6 +599,10 @@ class DebugConsole(QWidget):
         if self.hide_monsters_cb.isChecked() and category == 'MonsterAI':
             return
 
+        # 2c. Filter Pathfinding messages when "Pathfinding" checkbox is checked
+        if self.hide_pathfinding_cb.isChecked() and category == 'Pathfinding':
+            return
+
         # 3. Check "Filter Empty" Logic
         if self.filter_empty_cb.isChecked():
             if "(0 connections)" in message:
@@ -750,3 +761,5 @@ class DebugConsole(QWidget):
         """Handle close - just hide instead of destroying."""
         self.hide()
         event.ignore()
+
+
