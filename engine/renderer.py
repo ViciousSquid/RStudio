@@ -3,6 +3,10 @@ import numpy as np
 import OpenGL.GL as gl
 import ctypes 
 from editor.things import Thing, Light, Model
+try:
+    from editor.things import PathNode
+except ImportError:
+    PathNode = None
 from OpenGL.GL.shaders import compileProgram, compileShader 
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from engine.monster_constants import MONSTER_SPRITE_SIZES, MONSTER_SPRITE_SIZE_DEFAULT 
@@ -788,6 +792,10 @@ class Renderer:
         if final_sprites: 
             final_sprites.sort(key=lambda s: -self._distance_sq(s['pos'] if isinstance(s, dict) else s.pos, camera_pos))
             
+        # PathNode cubes — solid opaque geometry, drawn before the
+        # transparency pass so they are proper depth-tested objects.
+        self.draw_path_node_cubes(projection, view, things)
+
         gl.glEnable(gl.GL_BLEND)
         gl.glDepthMask(gl.GL_FALSE)
         
@@ -1340,7 +1348,8 @@ class Renderer:
                 opaque.append(brush)
         
         if not is_play:
-            sprites = [t for t in things if isinstance(t, Thing) or (isinstance(t, dict) and 'monster_type' in t)]
+            sprites = [t for t in things if (isinstance(t, Thing) or (isinstance(t, dict) and 'monster_type' in t))
+                       and not (PathNode is not None and isinstance(t, PathNode))]
         else:
             # FIX: types imported at module level; local names ensure graceful fallback
             try:
@@ -1348,6 +1357,9 @@ class Renderer:
             except ImportError:
                 pass
             for t in things:
+                # PathNode entities are never rendered as sprites
+                if PathNode is not None and isinstance(t, PathNode):
+                    continue
                 # Monster dict snapshots (from get_render_snapshot) — always visible
                 if isinstance(t, dict) and 'monster_type' in t:
                     sprites.append(t)
@@ -1528,6 +1540,44 @@ class Renderer:
         gl.glBindVertexArray(self.vaos['grid'])
         gl.glDrawArrays(gl.GL_LINES, 0, grid_indices_count)
         gl.glBindVertexArray(0)
+
+    def draw_path_node_cubes(self, projection, view, things):
+        """
+        Draw each PathNode as a small solid orange cube ("fake brush").
+        Uses the 'simple' shader with the unit-cube VAO.
+        """
+        if 'simple' not in self.shaders or PathNode is None:
+            return
+
+        nodes = [t for t in things if isinstance(t, PathNode)]
+        if not nodes:
+            return
+
+        shader, uniforms = self.shaders['simple'], self.uniforms['simple']
+        gl.glUseProgram(shader)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
+
+        # Orange colour  (r=1.0, g=0.5, b=0.0)
+        gl.glUniform3f(uniforms['color'], 1.0, 0.5, 0.0)
+        gl.glUniform1f(uniforms['alpha'], 1.0)
+
+        cube_size = 16.0   # world units — small marker cube
+
+        gl.glBindVertexArray(self.vaos['cube'])
+
+        for node in nodes:
+            pos = node.pos
+            model_matrix = glm.scale(
+                glm.translate(self._identity_mat4, glm.vec3(float(pos[0]), float(pos[1]), float(pos[2]))),
+                glm.vec3(cube_size, cube_size, cube_size)
+            )
+            gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+            self.render_stats.draw_calls += 1
+
+        gl.glBindVertexArray(0)
+        gl.glUseProgram(0)
 
     def draw_sprites(self, projection, view, things_to_draw, sprite_textures, instance_textures=None):
         if not things_to_draw or 'sprite' not in self.shaders:
@@ -1865,6 +1915,8 @@ class Renderer:
             gl.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
         gl.glBindVertexArray(0)
+
+
 
 
 

@@ -25,12 +25,13 @@ from .camera import Camera
 
 # Import Thing subclasses for type checking
 try:
-    from editor.things import Speaker, Pickup, Light, Monster as MonsterThing
+    from editor.things import Speaker, Pickup, Light, Monster as MonsterThing, PathNode
 except ImportError:
     Speaker = None
     Pickup = None
     Light = None
     MonsterThing = None
+    PathNode = None
 
 # Import I/O system
 try:
@@ -1343,6 +1344,351 @@ class LogicThread(threading.Thread):
     # MONSTER AI
     # =========================================================================
 
+    # =========================================================================
+    # MONSTER AI — PATROL (PathNode navigation)
+    # =========================================================================
+
+    def _find_path_node_by_name(self, name: str):
+        """Return the PathNode with the given name, or None."""
+        if not name or PathNode is None:
+            return None
+        for t in self.things:
+            if isinstance(t, PathNode) and t.properties.get('name', '') == name:
+                return t
+        return None
+
+    def _build_patrol_chain(self, start_name: str, mtype: str):
+        """
+        Walk the next_node links starting from *start_name* and return an
+        ordered list of node names.  Stops at a dead-end or when a cycle
+        is detected.  Nodes that reject *mtype* via affects_type are
+        skipped — chain ends there.
+        """
+        chain = []
+        visited = set()
+        current = start_name
+        while current and current not in visited:
+            node = self._find_path_node_by_name(current)
+            if node is None:
+                break
+            if not node.accepts_monster_type(mtype):
+                break
+            visited.add(current)
+            chain.append(current)
+            current = node.get_next_node_name()
+        return chain
+
+    def _advance_patrol_index(self, monster, state, chain, patrol_mode, mname):
+        """
+        Advance the patrol chain index according to patrol_mode.
+        Fires OnMonsterLeft on the node being departed.
+        """
+        if not chain:
+            return
+
+        old_idx = state.get('patrol_chain_idx', 0)
+        old_name = chain[old_idx] if old_idx < len(chain) else ''
+        direction = state.get('patrol_chain_dir', 1)
+
+        # Fire OnMonsterLeft on the node we are departing
+        if old_name:
+            old_node = self._find_path_node_by_name(old_name)
+            if old_node is not None and self.io_manager:
+                self.io_manager.fire_output(old_node, 'OnMonsterLeft')
+        state['patrol_at_target'] = False
+        state['patrol_walking_to'] = ''
+
+        new_idx = old_idx + direction
+
+        if patrol_mode == 'loop':
+            if new_idx >= len(chain):
+                new_idx = 0
+            elif new_idx < 0:
+                new_idx = len(chain) - 1
+
+        elif patrol_mode == 'ping_pong':
+            if new_idx >= len(chain):
+                direction = -1
+                new_idx = max(0, old_idx - 1)
+                if len(chain) == 1:
+                    new_idx = 0
+                debug_log("Pathfinding",
+                          f"'{mname}' ping_pong reverse at end of chain")
+            elif new_idx < 0:
+                direction = 1
+                new_idx = min(len(chain) - 1, old_idx + 1)
+                if len(chain) == 1:
+                    new_idx = 0
+                debug_log("Pathfinding",
+                          f"'{mname}' ping_pong reverse at start of chain")
+            state['patrol_chain_dir'] = direction
+
+        elif patrol_mode == 'once':
+            if new_idx >= len(chain) or new_idx < 0:
+                state['patrol_finished'] = True
+                debug_log("Pathfinding",
+                          f"'{mname}' completed 'once' patrol — "
+                          f"holding at '{old_name}'")
+                return
+
+        state['patrol_chain_idx'] = new_idx
+        next_name = chain[new_idx] if new_idx < len(chain) else ''
+        if next_name:
+            debug_log("Pathfinding",
+                      f"'{mname}' advancing → '{next_name}' "
+                      f"(chain idx {new_idx}/{len(chain)-1})")
+
+    def _update_monster_patrol(self, monster, state, mtype: str, delta: float):
+        """
+        Move a monster along a chain of PathNodes.
+
+        Called from _update_monsters' else-branch (player out of sight).
+        Sight / chase always overrides patrol — this function is a no-op
+        when patrol is disabled or the target is missing / rejected.
+
+        Chain traversal:
+          On first call (or when patrol_target changes), the chain is built
+          by following next_node links from the patrol_target node.  The
+          monster then walks through the chain respecting patrol_mode:
+
+            loop      — wraps index back to 0 at chain end
+            ping_pong — reverses direction at each end
+            once      — stops at last node
+
+        At each node:
+          - If wait_time > 0 the monster pauses for that many seconds,
+            firing OnWaitStart / OnWaitEnd on the node.
+          - patrol_speed on the target node scales MONSTER_MOVE_SPEED.
+          - OnMonsterArrived / OnMonsterLeft fire on node transitions.
+
+        Return-to-patrol:
+          When the player enters sight range, _update_monsters' in-sight
+          branch takes over (chase).  When the player leaves sight range
+          again, this function resumes.  The monster's patrol_chain_idx is
+          preserved so it picks up where it left off — but if it has moved
+          far from the chain during the chase, it first walks back to the
+          node it was heading toward before the interruption.
+        """
+        if not monster.properties.get('patrol', False):
+            if state.get('patrol_at_target'):
+                state['patrol_at_target'] = False
+                state['patrol_chain'] = []
+            return
+
+        target_name = monster.properties.get('patrol_target', '') or ''
+        if not target_name:
+            return
+
+        mname = monster.properties.get('name', '?')
+        patrol_mode = str(monster.properties.get('patrol_mode', 'loop')).lower()
+        if patrol_mode not in ('loop', 'ping_pong', 'once'):
+            patrol_mode = 'loop'
+
+        # --- Build / rebuild the chain when target changes ----------------
+        chain_built_from = state.get('patrol_chain_built_from', '')
+        if chain_built_from != target_name or not state.get('patrol_chain'):
+            chain = self._build_patrol_chain(target_name, mtype)
+            if not chain:
+                if state.get('patrol_warn_missing') != target_name:
+                    state['patrol_warn_missing'] = target_name
+                    node = self._find_path_node_by_name(target_name)
+                    if node is None:
+                        debug_log("Warning",
+                                  f"Monster '{mname}' patrol_target "
+                                  f"'{target_name}' not found.")
+                    else:
+                        debug_log("Warning",
+                                  f"Monster '{mname}' (type={mtype}) "
+                                  f"rejected by PathNode '{target_name}' "
+                                  f"(affects_type={node.get_affects_type()}).")
+                return
+            state['patrol_chain'] = chain
+            state['patrol_chain_built_from'] = target_name
+            state['patrol_chain_idx'] = 0
+            state['patrol_chain_dir'] = 1
+            state['patrol_at_target'] = False
+            state['patrol_waiting'] = False
+            state['patrol_wait_remaining'] = 0.0
+            state['patrol_finished'] = False
+            state['patrol_warn_missing'] = ''
+            state['patrol_warn_mismatch'] = ''
+            state['patrol_walking_to'] = ''
+            debug_log("Pathfinding",
+                      f"'{mname}' patrol chain built: "
+                      f"{' -> '.join(chain)}  (mode={patrol_mode})")
+
+        chain = state.get('patrol_chain', [])
+        if not chain:
+            return
+
+        if state.get('patrol_finished'):
+            return
+
+        idx = state.get('patrol_chain_idx', 0)
+        if idx < 0 or idx >= len(chain):
+            idx = 0
+            state['patrol_chain_idx'] = 0
+
+        current_node_name = chain[idx]
+        node = self._find_path_node_by_name(current_node_name)
+        if node is None:
+            state['patrol_chain'] = []
+            return
+
+        # --- Waiting at node? ---------------------------------------------
+        if state.get('patrol_waiting'):
+            remaining = state.get('patrol_wait_remaining', 0.0) - delta
+            if remaining > 0.0:
+                state['patrol_wait_remaining'] = remaining
+                return
+            state['patrol_waiting'] = False
+            state['patrol_wait_remaining'] = 0.0
+            if self.io_manager:
+                self.io_manager.fire_output(node, 'OnWaitEnd')
+            debug_log("Pathfinding",
+                      f"'{mname}' finished waiting at '{current_node_name}'")
+            self._advance_patrol_index(monster, state, chain, patrol_mode, mname)
+
+            # Re-resolve the new target so we start walking this tick
+            if state.get('patrol_finished'):
+                return
+            idx = state.get('patrol_chain_idx', 0)
+            if idx < 0 or idx >= len(chain):
+                return
+            current_node_name = chain[idx]
+            node = self._find_path_node_by_name(current_node_name)
+            if node is None:
+                state['patrol_chain'] = []
+                return
+            # Fall through to distance-compute + movement below ↓
+
+        # --- Compute distance to current target node ----------------------
+        m_pos = glm.vec3(monster.pos)
+        n_pos = glm.vec3(node.pos)
+
+        if mtype == 'flying':
+            to_node = n_pos - m_pos
+            dist_to_node = glm.length(to_node)
+        else:
+            flat = glm.vec3(n_pos.x - m_pos.x, 0.0, n_pos.z - m_pos.z)
+            dist_to_node = glm.length(flat)
+            to_node = flat
+
+        radius = node.get_radius()
+
+        # --- Arrived at current node? -------------------------------------
+        # When the monster is inside the node's radius, handle arrival and
+        # advance.  Critically, do NOT return after advancing — re-resolve
+        # the new target and fall through to the movement code so the
+        # monster starts walking toward the next node on this same tick.
+        if dist_to_node <= radius:
+            if not state.get('patrol_at_target'):
+                state['patrol_at_target'] = True
+                if self.io_manager:
+                    self.io_manager.fire_output(node, 'OnMonsterArrived')
+                debug_log("Pathfinding",
+                          f"'{mname}' arrived at '{current_node_name}' "
+                          f"(dist={dist_to_node:.0f}, radius={radius:.0f})")
+
+            wait = node.get_wait_time()
+            if wait > 0.0 and not state.get('patrol_waiting'):
+                state['patrol_waiting'] = True
+                state['patrol_wait_remaining'] = wait
+                if self.io_manager:
+                    self.io_manager.fire_output(node, 'OnWaitStart')
+                debug_log("Pathfinding",
+                          f"'{mname}' waiting {wait:.1f}s at "
+                          f"'{current_node_name}'")
+                return
+
+            # Advance to next node in the chain
+            self._advance_patrol_index(monster, state, chain, patrol_mode, mname)
+
+            # If advance ended the patrol (once-mode finished), stop
+            if state.get('patrol_finished'):
+                return
+
+            # Re-resolve the NEW target so we can start moving immediately
+            idx = state.get('patrol_chain_idx', 0)
+            if idx < 0 or idx >= len(chain):
+                return
+            current_node_name = chain[idx]
+            node = self._find_path_node_by_name(current_node_name)
+            if node is None:
+                state['patrol_chain'] = []
+                return
+
+            # Re-read position (hasn't changed) and compute vector to NEW node
+            n_pos = glm.vec3(node.pos)
+            if mtype == 'flying':
+                to_node = n_pos - m_pos
+                dist_to_node = glm.length(to_node)
+            else:
+                flat = glm.vec3(n_pos.x - m_pos.x, 0.0, n_pos.z - m_pos.z)
+                dist_to_node = glm.length(flat)
+                to_node = flat
+            radius = node.get_radius()
+
+            # If the new target also contains the monster (overlapping radii),
+            # handle that on the NEXT tick to avoid infinite recursion.
+            if dist_to_node <= radius:
+                return
+            # Otherwise fall through to movement below ↓
+
+        # --- Left a node we were previously at? ---------------------------
+        if state.get('patrol_at_target'):
+            prev_name = chain[state.get('patrol_chain_idx', 0)]
+            prev_node = self._find_path_node_by_name(prev_name)
+            if prev_node is not None and self.io_manager:
+                self.io_manager.fire_output(prev_node, 'OnMonsterLeft')
+            state['patrol_at_target'] = False
+            debug_log("Pathfinding",
+                      f"'{mname}' left radius of '{prev_name}'")
+
+        # --- Announce patrol walk (once per leg) --------------------------
+        if state.get('patrol_walking_to') != current_node_name:
+            state['patrol_walking_to'] = current_node_name
+            debug_log("Pathfinding",
+                      f"'{mname}' patrolling -> '{current_node_name}' "
+                      f"(dist={dist_to_node:.0f})")
+
+        # --- Movement toward node -----------------------------------------
+        speed_mult = node.get_patrol_speed()
+        dir_len = glm.length(to_node)
+        if dir_len <= 0.001:
+            return
+        direction = to_node / dir_len
+        if mtype != 'flying':
+            direction = glm.normalize(glm.vec3(direction.x, 0.0, direction.z))
+
+        step = direction * MONSTER_MOVE_SPEED * speed_mult * delta
+        new_pos = m_pos + step
+
+        if not self._monster_overlaps_wall(new_pos.x, new_pos.y, new_pos.z, MONSTER_WALL_MARGIN):
+            monster.pos = [new_pos.x, new_pos.y, new_pos.z]
+        else:
+            slide_x = glm.vec3(m_pos.x + step.x, m_pos.y, m_pos.z)
+            slide_z = glm.vec3(m_pos.x, m_pos.y, m_pos.z + step.z)
+            if not self._monster_overlaps_wall(slide_x.x, slide_x.y, slide_x.z, MONSTER_WALL_MARGIN):
+                monster.pos = [slide_x.x, slide_x.y, slide_x.z]
+            elif not self._monster_overlaps_wall(slide_z.x, slide_z.y, slide_z.z, MONSTER_WALL_MARGIN):
+                monster.pos = [slide_z.x, slide_z.y, slide_z.z]
+            else:
+                # Blocked on both axes — log it so designers can diagnose
+                # tight spaces that stall patrol routes.
+                blocked_count = state.get('patrol_blocked_count', 0) + 1
+                state['patrol_blocked_count'] = blocked_count
+                # Log once, then every 120 ticks (~2 sec at 60fps)
+                if blocked_count == 1 or blocked_count % 120 == 0:
+                    debug_log("Pathfinding",
+                              f"'{mname}' blocked by wall collision "
+                              f"en route to '{current_node_name}' "
+                              f"(stuck for {blocked_count} ticks)")
+                return
+
+        # Movement succeeded — reset blocked counter
+        state['patrol_blocked_count'] = 0
+
     def _update_monsters(self, delta: float):
         """
         Monster AI update — runs every play-mode tick.
@@ -1600,6 +1946,11 @@ class LogicThread(threading.Thread):
                 thing.properties['is_shooting'] = False
                 state['anim_timer'] = 0.0
 
+                # ---- Patrol behaviour (runs only when player is not in
+                # sight — sight/chase always overrides patrol) ---------------
+                self._update_monster_patrol(thing, state, mtype, delta)
+                # -------------------------------------------------------------
+
         # ---- Player death check ---------------------------------------------
         if self.player_health <= 0 and not self.player_dead:
             self.player_dead = True
@@ -1779,6 +2130,8 @@ class LogicThread(threading.Thread):
 
         write_state.visible_things = visible_things
         write_state.timestamp = time.perf_counter()
+
+
 
 
 
