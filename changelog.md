@@ -71,7 +71,7 @@ _Hidden brushes have **zero** render calls_
 ### v1.0.14.0
 
 * Engine optimisations for ARM CPUs
-* Optimised all shaders for `#version 330 core`
+* All shaders are `#version 330 core`
 
 ---------------
 
