@@ -18,21 +18,26 @@
 
  ------------------------
 
-* **Build a level, hit play, and walk around instantly** — no compile or lightmap baking
-* Compact and lightweight (target: Snapdragon 8CX, OpenGL 3.3)
-* Targets Windows-on-ARM
-* Dockable UI for multi monitor workflow
-* Real-time lighting with stencil shadows
-* Unified Forward Renderer
-* Classic brush-based workflow
-* **Fog, glass & water shaders** with configurable surface parms
-* **Entity I/O system** _inspired by Half-Life 2_ (logic, triggers, lights, speakers)
-* Visual scripting (with 25 examples)
-* Terrain generation
-* OBJ model support
-* Monsters/NPCs (actively being worked on)
-* JSON level format
-* Supports Quake-style nodraw surfaces
+### Core Workflow
+- Build a level, hit play, and walk around instantly
+- No compile or lightmap baking
+- Classic brush-based editing
+
+### Logic & Gameplay
+- Entity I/O system (Half-Life 2–style)
+- Visual scripting (25 examples)
+- NPCs/monsters (WIP)
+
+### Rendering
+- Real-time lighting with stencil shadows
+- Unified forward renderer
+- Fog, glass, and water shaders
+
+### Technical
+- JSON level format
+- OBJ model support
+- OpenGL 3.3 target
+- Optimized for Snapdragon 8CX / Windows-on-ARM
 
 🗎 Fully modular and open source (MIT License)
 
