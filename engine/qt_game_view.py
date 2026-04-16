@@ -632,7 +632,7 @@ class QtGameView(QOpenGLWidget):
         if not self.play_mode and getattr(self.editor, 'show_logic_links', False):
             painter.setPen(QColor(255, 255, 0))
             painter.setFont(QFont("Arial", 10, QFont.Bold))
-            painter.drawText(10, self.height() - 40, "LINKS VISIBLE [F1]")
+            #painter.drawText(10, self.height() - 40, "LINKS VISIBLE [F1]")
 
         # Draw Face Mode UI Text
         if self.face_mode_active:
