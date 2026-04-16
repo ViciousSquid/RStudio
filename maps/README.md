@@ -13,3 +13,4 @@ Hub map with doors, one of them leads to `map_test_Extended` - _demonstrates the
 ### `Simple_Map_Test_Extended.json`
 
 Playable level with multiple rooms, pickups, a moving platform and a light that can be triggered
+
