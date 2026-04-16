@@ -42,7 +42,7 @@ class ProgressSplashScreen(QWidget):
                 text-align: center;
             }
             QProgressBar::chunk {
-                background-color: #007acc;
+                background-color: #174f18;
             }
         """)
         layout.addWidget(self.progress_bar)
