@@ -4,7 +4,7 @@
 * NEW: monster debugging in console
 * NEW: Moving lights (see `maps/dLight_Test.json`)
 * NEW: mouse-sculpting mode for Terrain
-* FIXED: Broken I/O import
+* FIXED: Broken I/O imports
 * FIXED: Glow brushes
 * Added second weapon type (shotgun)
 * Improved property editor flags, pickup types
