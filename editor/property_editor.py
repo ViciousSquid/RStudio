@@ -1709,6 +1709,7 @@ class PropertyEditor(QWidget):
 
         for key, value in sorted(thing.properties.items()):
             if key == 'name': continue
+            if key == 'id': continue
             if key == '_io_connections': continue
             if key == 'type': continue
             if isinstance(thing, Light) and key in ['colour', 'parent_mover', 'parent_offset']: continue
