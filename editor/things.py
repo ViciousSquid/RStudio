@@ -29,6 +29,46 @@ def find_subclasses(cls):
         all_subclasses.extend(find_subclasses(subclass))
     return all_subclasses
 
+def update_all_counters_from_entities(entities):
+    """
+    Update the class-level _counters for Thing subclasses based on existing entity names.
+    entities: list of brushes (dict) and Thing instances.
+    For brushes, they have a 'name' key; for Things, they have a 'name' property.
+    The counter for each class is set to the highest numeric suffix found + 1.
+    """
+    import re
+    from collections import defaultdict
+
+    # Map class name to highest numeric index found
+    max_indices = defaultdict(int)
+
+    for entity in entities:
+        # Get name
+        if isinstance(entity, dict):
+            name = entity.get('name', '')
+        else:
+            name = entity.properties.get('name', '')
+
+        if not name:
+            continue
+
+        # Names are typically "ClassName_number" (e.g., "Monster_5", "Light_12")
+        match = re.match(r'^([A-Za-z]+)_(\d+)$', name)
+        if match:
+            class_name = match.group(1)
+            num = int(match.group(2))
+            if num > max_indices[class_name]:
+                max_indices[class_name] = num
+
+    # Update counters for all Thing subclasses
+    for cls in find_subclasses(Thing):
+        class_name = cls.__name__
+        if class_name in max_indices:
+            cls._counters[class_name] = max_indices[class_name]
+        else:
+            # Ensure counter exists, starting at 0 (next created gets 1)
+            cls._counters[class_name] = 0
+
 
 class Thing:
     """Base class for all placeable entities."""

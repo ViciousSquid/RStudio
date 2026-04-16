@@ -197,7 +197,7 @@ class MainWindow(QMainWindow):
             self.view_3d.debug_mode_active = True
             self.view_3d.sysmon_expanded = True
 
-        self.show_logic_links = False
+        self.show_logic_links = True
         
         # Tooltips
         self.camera_movement_learned = self.config.getboolean('Tooltips', 'camera_movement_learned', fallback=False)
@@ -1463,17 +1463,14 @@ class MainWindow(QMainWindow):
         if not self.check_unsaved_changes():
             return
 
-        # Clear terrain completely before resetting the scene
         self._clear_terrain()
-
-        # Clear the rest of the scene (brushes, things, etc.)
         self.state.clear_scene()
+        update_all_counters_from_entities([])
+        
         self.file_path = None
         self.unsaved_changes = False
         self.update_title()
         self.update_all_ui()
-
-        # Keep the Logic Graph in sync with the cleared scene
         self._refresh_logic_graph()
 
     def perform_subtraction(self):

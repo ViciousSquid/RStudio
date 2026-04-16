@@ -13,6 +13,7 @@ import json
 import copy
 import uuid
 from .things import Thing, Model
+from editor.things import update_all_counters_from_entities
 
 # Import I/O system for serialization
 try:
@@ -239,6 +240,9 @@ class EditorState:
                     new_things.append(thing)
 
         self.things = new_things
+
+        # ===== NEW: Reset class counters based on loaded entity names =====
+        update_all_counters_from_entities(self.brushes + self.things)
 
         self.selected_object = None
         self.undo_stack.clear()
