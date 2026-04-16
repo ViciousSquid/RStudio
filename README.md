@@ -43,6 +43,8 @@
   ------------------------------
 
  #### 🚀 Quickstart:
+
+ Python 3.10+ is required
  
  1. Clone and Enter the Directory:
 ```bash
