@@ -794,7 +794,9 @@ class Renderer:
             
         # PathNode cubes — solid opaque geometry, drawn before the
         # transparency pass so they are proper depth-tested objects.
-        self.draw_path_node_cubes(projection, view, things)
+        # Never shown during play mode — they are editor-only helpers.
+        if not config.get('play_mode', False):
+            self.draw_path_node_cubes(projection, view, things)
 
         gl.glEnable(gl.GL_BLEND)
         gl.glDepthMask(gl.GL_FALSE)
@@ -1579,6 +1581,67 @@ class Renderer:
         gl.glBindVertexArray(0)
         gl.glUseProgram(0)
 
+    def draw_connection_lines(self, projection, view, connections):
+        """Draw connection lines between entities in the 3D viewport.
+
+        *connections* is a list of dicts, each with:
+            'src':   [x, y, z]      — source entity position
+            'dst':   [x, y, z]      — target entity position
+            'color': (r, g, b)      — line colour as 0-1 floats
+
+        Uses the 'simple' shader to draw GL_LINES with depth-testing disabled
+        so the lines are always visible (like the gizmo).
+        """
+        if not connections or 'simple' not in self.shaders:
+            return
+
+        # Build vertex data:  6 floats per line  (src xyz, dst xyz)
+        line_data = []
+        line_colors = []   # parallel list of (r, g, b) per line
+        for conn in connections:
+            sx, sy, sz = conn['src']
+            dx, dy, dz = conn['dst']
+            line_data.extend([float(sx), float(sy), float(sz),
+                              float(dx), float(dy), float(dz)])
+            line_colors.append(conn.get('color', (0.0, 1.0, 1.0)))
+
+        if not line_data:
+            return
+
+        vertices = np.array(line_data, dtype=np.float32)
+
+        # Lazy-create a reusable dynamic VAO/VBO for connection lines
+        if not hasattr(self, '_conn_line_vao') or self._conn_line_vao is None:
+            self._conn_line_vao = gl.glGenVertexArrays(1)
+            self._conn_line_vbo = gl.glGenBuffers(1)
+            gl.glBindVertexArray(self._conn_line_vao)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._conn_line_vbo)
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, 1024 * 1024, None, gl.GL_DYNAMIC_DRAW)
+            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+            gl.glEnableVertexAttribArray(0)
+            gl.glBindVertexArray(0)
+
+        shader, uniforms = self.shaders['simple'], self.uniforms['simple']
+        gl.glUseProgram(shader)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
+        gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE,
+                              glm.value_ptr(self._identity_mat4))
+        gl.glUniform1f(uniforms['alpha'], 1.0)
+
+        # Depth test stays enabled so lines are occluded by walls
+        gl.glBindVertexArray(self._conn_line_vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._conn_line_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, vertices.nbytes, vertices)
+
+        color_loc = uniforms['color']
+        for i, (r, g, b) in enumerate(line_colors):
+            gl.glUniform3f(color_loc, r, g, b)
+            gl.glDrawArrays(gl.GL_LINES, i * 2, 2)
+
+        gl.glBindVertexArray(0)
+        gl.glUseProgram(0)
+
     def draw_sprites(self, projection, view, things_to_draw, sprite_textures, instance_textures=None):
         if not things_to_draw or 'sprite' not in self.shaders:
             return
@@ -1923,3 +1986,6 @@ class Renderer:
             gl.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
         gl.glBindVertexArray(0)
+
+
+
