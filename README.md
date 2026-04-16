@@ -8,7 +8,7 @@
 ### _A real-time liminal Quake/Hammer-style level editor and game engine_
 
 * For rapid block-out, logic wiring, and gameplay testing.
-* Built because modern tools lost the immediacy of Radiant/Worldcraft
+* Designed to bring back the immediacy of classic Radiant/Worldcraft workflows.
 
 ### [Download for Windows and MacOS](https://github.com/ViciousSquid/Fio/releases) | [📄Getting started guide](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) 
 #### Linux users: use the included Dockerfile or follow [these quick steps](https://github.com/ViciousSquid/Fio#-quickstart)
