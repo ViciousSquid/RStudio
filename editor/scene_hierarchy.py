@@ -84,7 +84,7 @@ class SceneHierarchy(QWidget):
                 color: black;
             }
             QTreeWidget::item:selected:!active {
-                background-color: #B1B97D;
+                background-color: #c87c2a;
             }
         """)
 
@@ -339,6 +339,11 @@ class SceneHierarchy(QWidget):
                 item.setSelected(True)
                 
         self.tree.blockSignals(False)
+
+        # Scroll to the first selected item
+        first_selected = self.tree.selectedItems()
+        if first_selected:
+            self.tree.scrollToItem(first_selected[0], QAbstractItemView.EnsureVisible)
 
     def highlight_item(self, obj):
         """Highlight an object in the hierarchy without selecting it.

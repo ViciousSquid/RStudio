@@ -1374,10 +1374,9 @@ class MainWindow(QMainWindow):
 
     def set_grid_size(self, size):
         snapped_size = self._snap_to_power_of_two(size)
-        if snapped_size != size:
-            self.grid_size_spinbox.blockSignals(True)
-            self.grid_size_spinbox.setValue(snapped_size)
-            self.grid_size_spinbox.blockSignals(False)
+        self.grid_size_spinbox.blockSignals(True)       # sync the spinbox
+        self.grid_size_spinbox.setValue(snapped_size)
+        self.grid_size_spinbox.blockSignals(False)
         for view in [self.view_top, self.view_side, self.view_front, self.view_3d]:
             view.grid_size = snapped_size
         self.view_3d.update_grid()
