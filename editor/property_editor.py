@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFrame, QDoubleSpinBox, QSizePolicy)
 from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QFont
-from editor.things import Thing, Light, Pickup, Monster, Model, Speaker, LogicGate
+from editor.things import Thing, Light, Pickup, Monster, Model, Speaker, LogicGate, PathNode
 
 # I/O System imports
 try:
@@ -1704,7 +1704,8 @@ class PropertyEditor(QWidget):
         self._pickup_sprite_widgets = []
 
         _MONSTER_ONLY_KEYS = {'awake', 'damage', 'health', 'monster_type',
-                               'triggered', 'wake_on_sight', 'dead', 'non_hostile', 'sight'}
+                               'triggered', 'wake_on_sight', 'dead', 'non_hostile', 'sight',
+                               'patrol', 'patrol_target', 'patrol_mode'}
 
         for key, value in sorted(thing.properties.items()):
             if key == 'name': continue
@@ -1713,7 +1714,8 @@ class PropertyEditor(QWidget):
             if isinstance(thing, Light) and key in ['colour', 'parent_mover', 'parent_offset']: continue
             if isinstance(thing, Model) and key in ['model_path', 'scale', 'rotation']: continue
             if not isinstance(thing, Monster) and key in _MONSTER_ONLY_KEYS: continue
-            if isinstance(thing, Monster) and key in ('triggered', 'wake_on_sight', 'dead', 'non_hostile', 'sight'): continue
+            if isinstance(thing, Monster) and key in ('triggered', 'wake_on_sight', 'dead', 'non_hostile', 'sight', 'patrol', 'patrol_target', 'patrol_mode'): continue
+            if isinstance(thing, PathNode) and key in ('radius', 'show_radius', 'affects_type', 'next_node', 'wait_time', 'patrol_speed'): continue
             if is_pickup and key in ['key_name', 'custom_sprite', 'respawns', 'respawn_time']: continue
 
             label_text = key.replace('_', ' ').title() + ":"
@@ -1916,6 +1918,210 @@ class PropertyEditor(QWidget):
 
         tab_layout.addLayout(layout)
 
+        # === PATH NODE PROPERTIES ===
+        if isinstance(thing, PathNode):
+            thing.properties.setdefault('radius', 256.0)
+            thing.properties.setdefault('show_radius', False)
+            thing.properties.setdefault('affects_type', 'both')
+
+            _pn_group_style = """
+                QGroupBox {
+                    font-weight: bold;
+                    color: #26A69A;
+                    border: 1px solid #26A69A;
+                    border-radius: 4px;
+                    margin-top: 12px;
+                    padding-top: 8px;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    subcontrol-position: top left;
+                    left: 8px;
+                    padding: 0 4px;
+                    background-color: #1a2f2d;
+                }
+            """
+
+            pn_group = QGroupBox("Path Node")
+            pn_group.setStyleSheet(_pn_group_style)
+            pn_form = QFormLayout(pn_group)
+            pn_form.setSpacing(6)
+            pn_form.setContentsMargins(8, 8, 8, 8)
+
+            # --- Radius row (spinbox + show-circle toggle) -------------------
+            radius_row = QWidget()
+            radius_row_layout = QHBoxLayout(radius_row)
+            radius_row_layout.setContentsMargins(0, 0, 0, 0)
+            radius_row_layout.setSpacing(6)
+
+            radius_spin = QDoubleSpinBox()
+            radius_spin.setRange(1.0, 99999.0)
+            radius_spin.setDecimals(1)
+            radius_spin.setSingleStep(16.0)
+            radius_spin.setValue(float(thing.properties.get('radius', 256.0)))
+            radius_spin.setSuffix(" u")
+            radius_spin.setToolTip(
+                "Radius (in world units) within which a patrolling monster\n"
+                "is considered to have 'arrived' at this node."
+            )
+            self._widgets['pathnode_radius_spin'] = radius_spin
+
+            show_radius_btn = QToolButton()
+            show_radius_btn.setText("⊙")
+            show_radius_btn.setCheckable(True)
+            show_radius_btn.setChecked(bool(thing.properties.get('show_radius', False)))
+            show_radius_btn.setToolTip("Visualise radius circle in 2D viewports")
+            show_radius_btn.setStyleSheet("""
+                QToolButton {
+                    background-color: #425f5d;
+                    color: white;
+                    border-radius: 4px;
+                    padding: 3px 8px;
+                    font-size: 14px;
+                    border: 1px solid #555;
+                }
+                QToolButton:checked { background-color: #26A69A; border-color: #26A69A; }
+                QToolButton:hover   { background-color: #5a7a82; }
+            """)
+            self._widgets['pathnode_show_radius_btn'] = show_radius_btn
+
+            def _on_pn_radius_changed(v, _thing=thing):
+                _thing.properties['radius'] = float(v)
+                if hasattr(self.editor, 'mark_dirty'):
+                    self.editor.mark_dirty()
+                if _thing.properties.get('show_radius', False):
+                    self._repaint_viewport()
+
+            def _on_pn_show_radius_toggled(checked, _thing=thing):
+                _thing.properties['show_radius'] = bool(checked)
+                if hasattr(self.editor, 'mark_dirty'):
+                    self.editor.mark_dirty()
+                self._repaint_viewport()
+
+            radius_spin.valueChanged.connect(_on_pn_radius_changed)
+            show_radius_btn.toggled.connect(_on_pn_show_radius_toggled)
+
+            radius_row_layout.addWidget(radius_spin)
+            radius_row_layout.addWidget(show_radius_btn)
+            radius_row_layout.addStretch()
+            pn_form.addRow("Radius:", radius_row)
+
+            # --- Affects Type dropdown --------------------------------------
+            affects_combo = QComboBox()
+            for affects in PathNode.AFFECTS_TYPES:
+                affects_combo.addItem(affects)
+            current_affects = str(thing.properties.get('affects_type', 'both')).lower()
+            if current_affects not in PathNode.AFFECTS_TYPES:
+                current_affects = 'both'
+            idx = affects_combo.findText(current_affects)
+            if idx >= 0:
+                affects_combo.setCurrentIndex(idx)
+            affects_combo.setToolTip(
+                "Which monster types may use this node as a patrol target:\n"
+                "  human  — only ground-type monsters will patrol here\n"
+                "  flying — only flying monsters will patrol here\n"
+                "  both   — any monster may patrol here"
+            )
+            self._widgets['pathnode_affects_combo'] = affects_combo
+
+            def _on_pn_affects_changed(text, _thing=thing):
+                _thing.properties['affects_type'] = text
+                if hasattr(self.editor, 'mark_dirty'):
+                    self.editor.mark_dirty()
+                if _thing.properties.get('show_radius', False):
+                    self._repaint_viewport()
+
+            affects_combo.currentTextChanged.connect(_on_pn_affects_changed)
+            pn_form.addRow("Affects Type:", affects_combo)
+
+            # --- Next Node dropdown (chain of waypoints) --------------------
+            thing.properties.setdefault('next_node', '')
+            next_combo = QComboBox()
+            next_combo.addItem("(none)")
+
+            # Populate with all other PathNodes in the level
+            my_name = thing.properties.get('name', '') or ''
+            try:
+                for t in self.editor.state.things:
+                    if isinstance(t, PathNode):
+                        n_name = t.properties.get('name', '') or ''
+                        if n_name and n_name != my_name:
+                            next_combo.addItem(n_name)
+            except Exception:
+                pass
+
+            current_next = thing.properties.get('next_node', '') or ''
+            if current_next:
+                tidx = next_combo.findText(current_next)
+                if tidx >= 0:
+                    next_combo.setCurrentIndex(tidx)
+                else:
+                    next_combo.addItem(current_next + "  (missing)")
+                    next_combo.setCurrentIndex(next_combo.count() - 1)
+
+            next_combo.setToolTip(
+                "Next PathNode in the patrol chain.\n"
+                "Leave as (none) for a dead-end node."
+            )
+            self._widgets['pathnode_next_combo'] = next_combo
+
+            def _on_pn_next_changed(text, _thing=thing):
+                clean = (text or '').replace("  (missing)", "").strip()
+                _thing.properties['next_node'] = '' if clean == '(none)' else clean
+                if hasattr(self.editor, 'mark_dirty'):
+                    self.editor.mark_dirty()
+                self._repaint_viewport()
+
+            next_combo.currentTextChanged.connect(_on_pn_next_changed)
+            pn_form.addRow("Next Node:", next_combo)
+
+            # --- Wait Time --------------------------------------------------
+            thing.properties.setdefault('wait_time', 0.0)
+            wait_spin = QDoubleSpinBox()
+            wait_spin.setRange(0.0, 9999.0)
+            wait_spin.setDecimals(1)
+            wait_spin.setSingleStep(0.5)
+            wait_spin.setValue(float(thing.properties.get('wait_time', 0.0)))
+            wait_spin.setSuffix(" sec")
+            wait_spin.setToolTip(
+                "How long a monster pauses at this node before\n"
+                "advancing to the next node in the chain.\n"
+                "0 = pass through immediately."
+            )
+            self._widgets['pathnode_wait_spin'] = wait_spin
+
+            def _on_pn_wait_changed(v, _thing=thing):
+                _thing.properties['wait_time'] = float(v)
+                if hasattr(self.editor, 'mark_dirty'):
+                    self.editor.mark_dirty()
+
+            wait_spin.valueChanged.connect(_on_pn_wait_changed)
+            pn_form.addRow("Wait Time:", wait_spin)
+
+            # --- Patrol Speed Multiplier ------------------------------------
+            thing.properties.setdefault('patrol_speed', 1.0)
+            speed_spin = QDoubleSpinBox()
+            speed_spin.setRange(0.01, 10.0)
+            speed_spin.setDecimals(2)
+            speed_spin.setSingleStep(0.25)
+            speed_spin.setValue(float(thing.properties.get('patrol_speed', 1.0)))
+            speed_spin.setSuffix("×")
+            speed_spin.setToolTip(
+                "Speed multiplier for monsters heading toward this node.\n"
+                "1.0 = normal speed, 0.5 = half speed, 2.0 = double, etc."
+            )
+            self._widgets['pathnode_speed_spin'] = speed_spin
+
+            def _on_pn_speed_changed(v, _thing=thing):
+                _thing.properties['patrol_speed'] = float(v)
+                if hasattr(self.editor, 'mark_dirty'):
+                    self.editor.mark_dirty()
+
+            speed_spin.valueChanged.connect(_on_pn_speed_changed)
+            pn_form.addRow("Patrol Speed:", speed_spin)
+
+            tab_layout.addWidget(pn_group)
+
         # === MONSTER AI + FLAGS ===
         if isinstance(thing, Monster):
             thing.properties.setdefault('sight', 512)
@@ -1997,6 +2203,153 @@ class PropertyEditor(QWidget):
             sight_row_layout.addWidget(sight_preview_btn)
             sight_row_layout.addStretch()
             ai_form.addRow("Sight:", sight_row)
+
+            # --- Patrol: checkbox + conditional path-node dropdown ----------
+            thing.properties.setdefault('patrol', False)
+            thing.properties.setdefault('patrol_target', '')
+
+            patrol_cb = QCheckBox("Patrol")
+            patrol_cb.setChecked(bool(thing.properties.get('patrol', False)))
+            patrol_cb.setStyleSheet(self._checkbox_style())
+            patrol_cb.setToolTip(
+                "When enabled, the monster will walk toward the selected\n"
+                "PathNode whenever the player is not in sight range.\n"
+                "Sight / chase always overrides patrol behaviour."
+            )
+            self._widgets['monster_patrol_cb'] = patrol_cb
+
+            # Populate dropdown with all PathNodes in the current level.
+            patrol_combo = QComboBox()
+            patrol_combo.addItem("(none)")
+
+            # Only offer nodes whose affects_type accepts this monster's type.
+            # Nodes set to 'both' always appear; matching specific types appear
+            # when they agree with this monster. Mismatched nodes are shown
+            # greyed-out with an annotation so the designer understands why
+            # they can't pick them.
+            mtype = str(thing.properties.get('monster_type', 'human')).lower()
+            available_nodes = []
+            try:
+                for t in self.editor.state.things:
+                    if isinstance(t, PathNode):
+                        available_nodes.append(t)
+            except Exception:
+                pass
+
+            for node in available_nodes:
+                node_name = node.properties.get('name', '') or ''
+                if not node_name:
+                    continue
+                if node.accepts_monster_type(mtype):
+                    patrol_combo.addItem(node_name)
+                else:
+                    # Show but disable mismatched entries
+                    affects = node.get_affects_type()
+                    patrol_combo.addItem(f"{node_name}  (wants {affects})")
+                    # Disable the just-added item
+                    from PyQt5.QtCore import Qt as _Qt
+                    idx = patrol_combo.count() - 1
+                    item = patrol_combo.model().item(idx)
+                    if item is not None:
+                        item.setFlags(item.flags() & ~_Qt.ItemIsEnabled)
+
+            current_target = thing.properties.get('patrol_target', '') or ''
+            if current_target:
+                tidx = patrol_combo.findText(current_target)
+                if tidx >= 0:
+                    patrol_combo.setCurrentIndex(tidx)
+                else:
+                    # Target name in file but node was deleted or renamed
+                    patrol_combo.addItem(current_target + "  (missing)")
+                    patrol_combo.setCurrentIndex(patrol_combo.count() - 1)
+
+            patrol_combo.setToolTip(
+                "Target PathNode for patrol behaviour.\n"
+                "Only nodes whose 'Affects Type' matches this monster are selectable."
+            )
+            self._widgets['monster_patrol_combo'] = patrol_combo
+
+            # Helper label matches other conditional rows in this editor
+            patrol_label = QLabel("Target Node:")
+            is_patrolling = bool(thing.properties.get('patrol', False))
+            patrol_label.setVisible(is_patrolling)
+            patrol_combo.setVisible(is_patrolling)
+
+            def _on_patrol_toggled(checked, _thing=thing,
+                                   _lbl=patrol_label, _combo=patrol_combo):
+                _thing.properties['patrol'] = bool(checked)
+                _lbl.setVisible(checked)
+                _combo.setVisible(checked)
+                if not checked:
+                    # Clearing target when disabling avoids stale references
+                    _thing.properties['patrol_target'] = ''
+                    _combo.setCurrentIndex(0)
+                if hasattr(self.editor, 'mark_dirty'):
+                    self.editor.mark_dirty()
+
+            def _on_patrol_target_changed(text, _thing=thing):
+                clean = (text or '').replace("  (missing)", "")
+                # Strip the "(wants …)" annotation from disabled items —
+                # they can't actually be selected, but be defensive anyway.
+                if "  (wants " in clean:
+                    clean = clean.split("  (wants ")[0]
+                if clean == "(none)":
+                    _thing.properties['patrol_target'] = ''
+                else:
+                    _thing.properties['patrol_target'] = clean
+                if hasattr(self.editor, 'mark_dirty'):
+                    self.editor.mark_dirty()
+
+            patrol_cb.toggled.connect(_on_patrol_toggled)
+            patrol_combo.currentTextChanged.connect(_on_patrol_target_changed)
+
+            # --- Patrol Mode dropdown (loop / ping_pong / once) ----------
+            thing.properties.setdefault('patrol_mode', 'loop')
+            patrol_mode_combo = QComboBox()
+            for mode in ('loop', 'ping_pong', 'once'):
+                patrol_mode_combo.addItem(mode)
+            current_mode = str(thing.properties.get('patrol_mode', 'loop')).lower()
+            midx = patrol_mode_combo.findText(current_mode)
+            if midx >= 0:
+                patrol_mode_combo.setCurrentIndex(midx)
+            patrol_mode_combo.setToolTip(
+                "How the monster traverses the patrol chain:\n"
+                "  loop      — A → B → C → A → B → C …\n"
+                "  ping_pong — A → B → C → B → A → B …\n"
+                "  once      — A → B → C  then holds at last node"
+            )
+            self._widgets['monster_patrol_mode_combo'] = patrol_mode_combo
+
+            patrol_mode_label = QLabel("Patrol Mode:")
+            patrol_mode_label.setVisible(is_patrolling)
+            patrol_mode_combo.setVisible(is_patrolling)
+
+            def _on_patrol_mode_changed(text, _thing=thing):
+                _thing.properties['patrol_mode'] = text
+                if hasattr(self.editor, 'mark_dirty'):
+                    self.editor.mark_dirty()
+
+            patrol_mode_combo.currentTextChanged.connect(_on_patrol_mode_changed)
+
+            # Wire patrol_mode visibility to patrol checkbox
+            _orig_on_patrol_toggled = _on_patrol_toggled
+            def _on_patrol_toggled_ext(checked, _thing=thing,
+                                        _lbl=patrol_label, _combo=patrol_combo,
+                                        _mlbl=patrol_mode_label, _mcombo=patrol_mode_combo):
+                _orig_on_patrol_toggled(checked)
+                _mlbl.setVisible(checked)
+                _mcombo.setVisible(checked)
+
+            # Rebind with extended version
+            try:
+                patrol_cb.toggled.disconnect(_on_patrol_toggled)
+            except Exception:
+                pass
+            patrol_cb.toggled.connect(_on_patrol_toggled_ext)
+
+            ai_form.addRow("", patrol_cb)
+            ai_form.addRow(patrol_label, patrol_combo)
+            ai_form.addRow(patrol_mode_label, patrol_mode_combo)
 
             tab_layout.addWidget(ai_group)
 
@@ -2313,6 +2666,8 @@ class PropertyEditor(QWidget):
         # This prevents infinite recursion when populate calls update_object_prop
         if not self._populating:
             self.editor.update_all_ui()
+
+
 
 
 

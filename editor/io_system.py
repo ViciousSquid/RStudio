@@ -673,6 +673,23 @@ def register_default_io():
         outputs=[]
     )
 
+    # === PATH NODE ===
+    # Navigation waypoint for monster patrol. Can be enabled/disabled so
+    # designers can dynamically re-route patrols from a trigger/relay.
+    register_io('path_node',
+        inputs=[
+            IODef('Enable',  'Allow monsters to patrol to this node'),
+            IODef('Disable', 'Prevent monsters from patrolling to this node'),
+            IODef('Toggle',  'Toggle whether this node accepts patrolling monsters'),
+        ],
+        outputs=[
+            IODef('OnMonsterArrived', 'Fires when a patrolling monster enters this node\'s radius'),
+            IODef('OnMonsterLeft',    'Fires when a patrolling monster leaves this node\'s radius'),
+            IODef('OnWaitStart',      'Fires when a monster begins waiting at this node'),
+            IODef('OnWaitEnd',        'Fires when a monster finishes waiting and advances to next node'),
+        ]
+    )
+
 
 # =============================================================================
 # HELPER FUNCTIONS
@@ -754,3 +771,5 @@ def reset_all_connections(entities):
 
 # Initialize default I/O definitions when module is imported
 register_default_io()
+
+

@@ -320,6 +320,18 @@ class Monster(Thing):
         self.properties.setdefault('wake_on_sight', True)
         self.properties.setdefault('awake', False)
 
+        # --- Patrol behaviour (requires a PathNode as patrol_target) ---
+        # When patrol=True and patrol_target names a valid PathNode, the
+        # monster will walk toward that node whenever the player is NOT in
+        # sight range. Sight/chase always overrides patrol.
+        self.properties.setdefault('patrol', False)
+        self.properties.setdefault('patrol_target', '')
+        # patrol_mode: how the monster traverses a chain of nodes:
+        #   'loop'      — A→B→C→A→B→C (wraps via first node in chain)
+        #   'ping_pong' — A→B→C→B→A→B→C (reverses at each dead-end)
+        #   'once'      — A→B→C  then holds at the last node
+        self.properties.setdefault('patrol_mode', 'loop')
+
         # --- Set default sprite dimensions based on monster_type ---
         from engine.monster_constants import MONSTER_SPRITE_SIZES, MONSTER_SPRITE_SIZE_DEFAULT
         mtype = self.properties.get('monster_type', 'human')
@@ -769,6 +781,95 @@ class LevelChanger(Thing):
 
 
 # =============================================================================
+# AI / NAVIGATION ENTITIES
+# =============================================================================
+
+class PathNode(Thing):
+    """
+    Navigation waypoint for monster AI patrol behaviour.
+
+    Combines the role of Source's `path_corner` (a point monsters navigate to)
+    with `info_node` (a hint that says "this is a valid AI position").
+
+    Properties:
+      - radius (float, world units): monsters try to stay within this distance
+        of the node once they arrive. Shown as a preview circle in 2D views
+        when `show_radius` is toggled on, identical in behaviour to how Light
+        and Speaker expose their influence radius.
+      - show_radius (bool): toggle the preview circle in the 2D viewport.
+      - affects_type (str): which monster types can use this node as a patrol
+        target. One of 'human', 'flying', 'both'. Monsters whose monster_type
+        does not match are rejected at pathfinding time (and the rejection is
+        logged to the debug console under the 'Pathfinding' category).
+      - next_node (str): name of the next PathNode in the patrol chain.
+        Leave empty for a dead-end node (the monster will hold position
+        or reverse direction depending on the monster's patrol_mode).
+      - wait_time (float, seconds): how long a monster pauses at this node
+        before moving to next_node. 0 = no wait (pass through immediately).
+      - patrol_speed (float, multiplier): speed factor applied while a
+        monster is heading toward this node.  1.0 = normal speed,
+        0.5 = half speed, 2.0 = double, etc.
+
+    PathNodes are invisible at runtime — they are editor-only aids that the
+    monster AI consults during _update_monsters in the logic thread.
+    """
+    # No billboard sprite — PathNodes render as small orange cubes in 3D
+    # and as filled orange squares in 2D viewports.
+    pixmap_path = None
+
+    AFFECTS_TYPES = ('human', 'flying', 'both')
+
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties['type'] = 'path_node'
+        self.properties.setdefault('radius', 256.0)
+        self.properties.setdefault('show_radius', False)
+        self.properties.setdefault('affects_type', 'both')
+        self.properties.setdefault('next_node', '')
+        self.properties.setdefault('wait_time', 0.0)
+        self.properties.setdefault('patrol_speed', 1.0)
+
+    def get_radius(self) -> float:
+        """Radius in world units — read by the 2D preview and the monster AI."""
+        try:
+            return float(self.properties.get('radius', 256.0))
+        except (TypeError, ValueError):
+            return 256.0
+
+    def get_affects_type(self) -> str:
+        """Normalised affects_type string. Invalid values fall back to 'both'."""
+        val = str(self.properties.get('affects_type', 'both')).lower().strip()
+        if val not in PathNode.AFFECTS_TYPES:
+            return 'both'
+        return val
+
+    def get_wait_time(self) -> float:
+        """Wait time in seconds at this node."""
+        try:
+            return max(0.0, float(self.properties.get('wait_time', 0.0)))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def get_patrol_speed(self) -> float:
+        """Speed multiplier for monsters approaching this node."""
+        try:
+            return max(0.01, float(self.properties.get('patrol_speed', 1.0)))
+        except (TypeError, ValueError):
+            return 1.0
+
+    def get_next_node_name(self) -> str:
+        """Return the name of the next node in the chain, or ''."""
+        return str(self.properties.get('next_node', '') or '').strip()
+
+    def accepts_monster_type(self, monster_type: str) -> bool:
+        """Return True if a monster of *monster_type* may patrol to this node."""
+        affects = self.get_affects_type()
+        if affects == 'both':
+            return True
+        return affects == (monster_type or '').lower()
+
+
+# =============================================================================
 # ENTITY REGISTRY
 # =============================================================================
 
@@ -784,6 +885,7 @@ ENTITY_TYPES = {
     'LogicGate': LogicGate,
     'LogicTimer': LogicTimer,
     'LevelChanger': LevelChanger,
+    'PathNode': PathNode,
 }
 
 # Categories for editor UI
@@ -791,7 +893,10 @@ ENTITY_CATEGORIES = {
     'Gameplay': ['PlayerStart', 'Monster', 'Pickup', 'LevelChanger'],
     'Environment': ['Light', 'Speaker', 'Model'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer'],
+    'AI': ['PathNode'],
 }
+
+
 
 
 
