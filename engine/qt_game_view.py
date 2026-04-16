@@ -380,7 +380,10 @@ class QtGameView(QOpenGLWidget):
             # ONLY repaint when logic thread gave us new data
             if self.game_state.try_swap():          # peek
                 self.game_state.try_swap()          # consume
-                self.update()                       # request paintGL
+                self.update()                       # request paintGL for 3D view
+                # Also update the 2D views in play mode so monster positions are shown moving
+                if self.play_mode:
+                    self.editor.update_views()
             # else: do nothing — Qt will keep showing the last good frame
         else:
             self.update()
