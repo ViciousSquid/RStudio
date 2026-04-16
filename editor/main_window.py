@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import QShortcut
 from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, QRect, QPoint, pyqtSignal
 from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor
 
-from editor.things import Light, PlayerStart, Thing, Pickup, Monster, Model
+from editor.things import Light, PlayerStart, Thing, Pickup, Monster, Model, update_all_counters_from_entities
 from editor.SettingsWindow import SettingsWindow
 from editor.ui import Ui_MainWindow, GenerateTilemapDialog
 from engine.constants import TILE_SIZE, WALL_TILE, FLOOR_TILE
