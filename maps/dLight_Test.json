@@ -212,7 +212,7 @@
                 "radius": 1024.0,
                 "state": "on",
                 "show_radius": false,
-                "casts_shadows": true,
+                "casts_shadows": false,
                 "id": "903958e5-f84a-47d1-b363-3ba597237e44",
                 "parent_mover": "",
                 "parent_offset": [
