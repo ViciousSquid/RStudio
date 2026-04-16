@@ -11,7 +11,7 @@
 * Built because modern tools lost the immediacy of Radiant/Worldcraft
 
 ### [Download for Windows and MacOS](https://github.com/ViciousSquid/Fio/releases) | [📄Getting started guide](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) 
-#### Linux users: use the included Dockerfile of follow [these quick steps](https://github.com/ViciousSquid/Fio#-quickstart)
+#### Linux users: use the included Dockerfile or follow [these quick steps](https://github.com/ViciousSquid/Fio#-quickstart)
  <img width="2039" height="1171" alt="image" src="https://github.com/user-attachments/assets/0422c267-5131-4306-a25d-cc2f716e5eae" />
 
 
