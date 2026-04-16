@@ -165,7 +165,7 @@ class Thing:
 
         thing = None
         for cls in find_subclasses(Thing):
-            if cls.__name__.lower() == thing_type:
+            if cls.__name__.lower() == thing_type.replace('_', ''):
                 thing = cls(pos=data.get('pos'), properties=properties)
                 break
         
