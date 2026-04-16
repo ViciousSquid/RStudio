@@ -9,6 +9,9 @@ Shared constants (tile size, etc.).
 ### `logic_thread.py`
 Game logic - runs in separate thread
 
+### `monster_ai.py`
+Monster Behaviour, Movement, Pathfinding
+
 ### `obj_loader.py`
 Runtime OBJ loader.
 
