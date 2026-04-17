@@ -2131,7 +2131,7 @@
                 "item_type": "gun1",
                 "value": 25,
                 "activation": "walk_over",
-                "collected": true,
+                "collected": false,
                 "respawns": false,
                 "respawn_time": 20.0,
                 "key_name": "blue_key",
@@ -2192,9 +2192,9 @@
         {
             "type": "monster",
             "pos": [
-                716.7604370117188,
+                663.0323486328125,
                 160.0,
-                77.63485717773438
+                188.75906372070312
             ],
             "properties": {
                 "type": "monster",
@@ -2213,9 +2213,8 @@
                 "monster_id": 0,
                 "patrol": true,
                 "patrol_target": "PathNode_2",
-                "patrol_mode": "ping_pong",
-                "variant": "<None>",
-                "dead": true
+                "patrol_mode": "loop",
+                "variant": "<None>"
             },
             "io_connections": []
         },
@@ -2235,7 +2234,7 @@
                 "affects_type": "both",
                 "next_node": "PathNode_3",
                 "wait_time": 0.0,
-                "patrol_speed": 1.0
+                "speed": 1.0
             },
             "io_connections": []
         },
@@ -2255,7 +2254,7 @@
                 "affects_type": "both",
                 "next_node": "PathNode_1",
                 "wait_time": 0.0,
-                "patrol_speed": 1.0
+                "speed": 1.0
             },
             "io_connections": []
         },
@@ -2275,7 +2274,7 @@
                 "affects_type": "both",
                 "next_node": "PathNode_4",
                 "wait_time": 0.0,
-                "patrol_speed": 1.0
+                "speed": 1.0
             },
             "io_connections": []
         },
@@ -2295,7 +2294,7 @@
                 "affects_type": "both",
                 "next_node": "PathNode_5",
                 "wait_time": 0.0,
-                "patrol_speed": 1.0
+                "speed": 1.0
             },
             "io_connections": []
         },
@@ -2315,7 +2314,7 @@
                 "affects_type": "both",
                 "next_node": "",
                 "wait_time": 0.0,
-                "patrol_speed": 1.0
+                "speed": 1.0
             },
             "io_connections": []
         }
