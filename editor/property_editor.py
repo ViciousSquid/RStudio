@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFrame, QDoubleSpinBox, QSizePolicy)
 from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QFont
-from editor.things import Thing, Light, Pickup, Monster, Model, Speaker, LogicGate, PathNode
+from editor.things import Thing, Light, Pickup, Monster, Model, Speaker, LogicGate, PathNode, LogicCamera, LogicSpawner
 
 # I/O System imports
 try:
@@ -463,6 +463,26 @@ class PropertyEditor(QWidget):
         door_cb.toggled.connect(self.on_door_changed)
         type_layout.addWidget(door_cb)
         self._widgets['door_cb'] = door_cb
+
+        # Brush Group (compound doors/movers)
+        type_layout.addWidget(self._create_section_header("Grouping"))
+
+        group_row = QHBoxLayout()
+        group_label = QLabel("Brush Group:")
+        group_input = QLineEdit(brush.get('brush_group', ''))
+        group_input.setPlaceholderText("e.g. front_door")
+        group_input.setToolTip(
+            "Assign the same group name to a door/mover and\n"
+            "its companion brushes (e.g. a glass panel, trim).\n"
+            "The door/mover is the leader — all other brushes\n"
+            "in the group move in lockstep with it."
+        )
+        group_input.editingFinished.connect(
+            lambda: self.update_object_prop('brush_group', group_input.text().strip()))
+        group_row.addWidget(group_label)
+        group_row.addWidget(group_input)
+        type_layout.addLayout(group_row)
+        self._widgets['brush_group_input'] = group_input
         
         layout.addWidget(type_group)
         layout.addStretch()
@@ -484,6 +504,66 @@ class PropertyEditor(QWidget):
         type_combo.currentTextChanged.connect(lambda t: self.update_object_prop('trigger_type', t))
         form.addRow("Trigger Type:", type_combo)
         self._widgets['trigger_type_combo'] = type_combo
+
+        # Trigger action
+        action_combo = QComboBox()
+        action_combo.addItems(['target', 'hurt', 'teleport'])
+        action_combo.setCurrentText(brush.get('trigger_action', 'target'))
+        action_combo.setToolTip(
+            "target — fire I/O outputs (OnTrigger, OnStartTouch)\n"
+            "hurt — damage the player on contact\n"
+            "teleport — move the player to a PathNode"
+        )
+        form.addRow("Action:", action_combo)
+        self._widgets['trigger_action_combo'] = action_combo
+
+        # Target PathNode (for teleport action)
+        target_node_label = QLabel("Target Node:")
+        target_node_combo = QComboBox()
+        target_node_combo.setEditable(True)
+        target_node_combo.addItem("(none)")
+        try:
+            for t in self.editor.state.things:
+                if isinstance(t, PathNode):
+                    n_name = t.properties.get('name', '')
+                    if n_name:
+                        target_node_combo.addItem(n_name)
+        except Exception:
+            pass
+        current_target = brush.get('target_node', '')
+        if current_target:
+            tidx = target_node_combo.findText(current_target)
+            if tidx >= 0:
+                target_node_combo.setCurrentIndex(tidx)
+            else:
+                target_node_combo.setEditText(current_target)
+        target_node_combo.setToolTip("PathNode to teleport the player to.")
+
+        def _on_target_node_changed(text):
+            clean = text.strip()
+            self.update_object_prop('target_node', '' if clean == '(none)' else clean)
+        target_node_combo.currentTextChanged.connect(_on_target_node_changed)
+
+        # Show/hide target_node based on action
+        is_teleport = brush.get('trigger_action', 'target') == 'teleport'
+        target_node_label.setVisible(is_teleport)
+        target_node_combo.setVisible(is_teleport)
+
+        form.addRow(target_node_label, target_node_combo)
+        self._widgets['trigger_target_node_label'] = target_node_label
+        self._widgets['trigger_target_node_combo'] = target_node_combo
+
+        def _on_action_changed(action_text):
+            self.update_object_prop('trigger_action', action_text)
+            show_node = (action_text == 'teleport')
+            target_node_label.setVisible(show_node)
+            target_node_combo.setVisible(show_node)
+            # Auto-set hurt key for backwards compatibility
+            if action_text == 'hurt':
+                self.update_object_prop('hurt', True)
+            elif brush.get('trigger_action') == 'hurt':
+                self.update_object_prop('hurt', False)
+        action_combo.currentTextChanged.connect(_on_action_changed)
         
         # Damage section
         damage_group = QGroupBox("Damage")
@@ -586,14 +666,14 @@ class PropertyEditor(QWidget):
         self._widgets['dir_z'] = dir_z
         
         layout.addLayout(form)
-        
-        # Options
-        options_group = QGroupBox("Options")
-        options_group.setStyleSheet("""
-            QGroupBox { 
-                font-weight: bold; 
-                color: #F08000; 
-                border: 1px solid #F08000;
+
+        # PathNode waypoint section
+        path_group = QGroupBox("PathNode Waypoint")
+        path_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                color: #26A69A;
+                border: 1px solid #26A69A;
                 border-radius: 4px;
                 margin-top: 12px;
                 padding-top: 8px;
@@ -603,56 +683,46 @@ class PropertyEditor(QWidget):
                 subcontrol-position: top left;
                 left: 8px;
                 padding: 0 4px;
-                background-color: #2b3d3b;
+                background-color: #1a2f2d;
             }
         """)
-        options_layout = QVBoxLayout(options_group)
-        
-        start_on_cb = QCheckBox("Start moving immediately")
-        start_on_cb.setStyleSheet(self._checkbox_style())
-        start_on_cb.setChecked(brush.get('start_on', False))
-        start_on_cb.toggled.connect(lambda checked: self.update_object_prop('start_on', checked))
-        options_layout.addWidget(start_on_cb)
-        self._widgets['start_on_cb'] = start_on_cb
-        
-        layout.addWidget(options_group)
-        
-        # Preview button
-        preview_btn = QPushButton("▶ Preview Movement")
-        preview_btn.setCheckable(True)
-        preview_btn.setStyleSheet("""
-            QPushButton { background-color: #425F5D; color: white; border-radius: 4px; padding: 8px; font-weight: bold; }
-            QPushButton:checked { background-color: #0056b3; }
-            QPushButton:hover { background-color: #5a7a82; }
-        """)
-        preview_btn.toggled.connect(self.toggle_mover_preview)
-        layout.addWidget(preview_btn)
-        self._widgets['mover_preview_btn'] = preview_btn
-        
-        layout.addStretch()
-        return widget
-        
-        def update_direction():
-            try:
-                d = [float(dir_x.text()), float(dir_y.text()), float(dir_z.text())]
-                self.update_object_prop('direction', d)
-            except ValueError: pass
-        
-        dir_x.editingFinished.connect(update_direction)
-        dir_y.editingFinished.connect(update_direction)
-        dir_z.editingFinished.connect(update_direction)
-        
-        dir_layout.addWidget(QLabel("X:")); dir_layout.addWidget(dir_x)
-        dir_layout.addWidget(QLabel("Y:")); dir_layout.addWidget(dir_y)
-        dir_layout.addWidget(QLabel("Z:")); dir_layout.addWidget(dir_z)
-        dir_layout.addStretch()
-        form.addRow("Direction:", dir_widget)
-        self._widgets['dir_x'] = dir_x
-        self._widgets['dir_y'] = dir_y
-        self._widgets['dir_z'] = dir_z
-        
-        layout.addLayout(form)
-        
+        path_form = QFormLayout(path_group)
+        path_form.setSpacing(6)
+
+        path_target_combo = QComboBox()
+        path_target_combo.setEditable(True)
+        path_target_combo.addItem("(none)")
+        try:
+            for t in self.editor.state.things:
+                if isinstance(t, PathNode):
+                    n_name = t.properties.get('name', '')
+                    if n_name:
+                        path_target_combo.addItem(n_name)
+        except Exception:
+            pass
+        current_path = brush.get('path_target', '')
+        if current_path:
+            tidx = path_target_combo.findText(current_path)
+            if tidx >= 0:
+                path_target_combo.setCurrentIndex(tidx)
+            else:
+                path_target_combo.setEditText(current_path)
+        path_target_combo.setToolTip(
+            "First PathNode in a waypoint chain.\n"
+            "When set (and Start On is checked), the mover\n"
+            "follows PathNodes instead of using Direction/Distance.\n"
+            "Leave as (none) for traditional direction-based movement."
+        )
+
+        def _on_path_target_changed(text):
+            clean = text.strip()
+            self.update_object_prop('path_target', '' if clean == '(none)' else clean)
+        path_target_combo.currentTextChanged.connect(_on_path_target_changed)
+        path_form.addRow("Path Target:", path_target_combo)
+        self._widgets['mover_path_target_combo'] = path_target_combo
+
+        layout.addWidget(path_group)
+
         # Options
         options_group = QGroupBox("Options")
         options_group.setStyleSheet("""
@@ -1716,7 +1786,9 @@ class PropertyEditor(QWidget):
             if isinstance(thing, Model) and key in ['model_path', 'scale', 'rotation']: continue
             if not isinstance(thing, Monster) and key in _MONSTER_ONLY_KEYS: continue
             if isinstance(thing, Monster) and key in ('triggered', 'wake_on_sight', 'dead', 'non_hostile', 'sight', 'patrol', 'patrol_target', 'patrol_mode', 'variant'): continue
-            if isinstance(thing, PathNode) and key in ('radius', 'show_radius', 'affects_type', 'next_node', 'wait_time', 'patrol_speed'): continue
+            if isinstance(thing, PathNode) and key in ('radius', 'show_radius', 'affects_type', 'next_node', 'wait_time', 'speed', 'patrol_speed'): continue
+            if isinstance(thing, LogicCamera) and key in ('path_target', 'speed', 'fov_override', 'look_ahead'): continue
+            if isinstance(thing, LogicSpawner) and key in ('spawn_type', 'target_node', 'max_spawn', 'spawn_properties'): continue
             if is_pickup and key in ['key_name', 'custom_sprite', 'respawns', 'respawn_time']: continue
 
             label_text = key.replace('_', ' ').title() + ":"
@@ -2145,29 +2217,201 @@ class PropertyEditor(QWidget):
             wait_spin.valueChanged.connect(_on_pn_wait_changed)
             pn_form.addRow("Wait Time:", wait_spin)
 
-            # --- Patrol Speed Multiplier ------------------------------------
-            thing.properties.setdefault('patrol_speed', 1.0)
+            # --- Speed Multiplier -------------------------------------------
+            thing.properties.setdefault('speed', 1.0)
             speed_spin = QDoubleSpinBox()
             speed_spin.setRange(0.01, 10.0)
             speed_spin.setDecimals(2)
             speed_spin.setSingleStep(0.25)
-            speed_spin.setValue(float(thing.properties.get('patrol_speed', 1.0)))
+            speed_spin.setValue(float(thing.properties.get('speed',
+                                      thing.properties.get('patrol_speed', 1.0))))
             speed_spin.setSuffix("×")
             speed_spin.setToolTip(
-                "Speed multiplier for monsters heading toward this node.\n"
-                "1.0 = normal speed, 0.5 = half speed, 2.0 = double, etc."
+                "Speed multiplier for entities heading toward this node.\n"
+                "1.0 = normal speed, 0.5 = half speed, 2.0 = double, etc.\n"
+                "Applies to monster patrols, mover waypoints, and camera paths."
             )
             self._widgets['pathnode_speed_spin'] = speed_spin
 
             def _on_pn_speed_changed(v, _thing=thing):
-                _thing.properties['patrol_speed'] = float(v)
+                _thing.properties['speed'] = float(v)
                 if hasattr(self.editor, 'mark_dirty'):
                     self.editor.mark_dirty()
 
             speed_spin.valueChanged.connect(_on_pn_speed_changed)
-            pn_form.addRow("Patrol Speed:", speed_spin)
+            pn_form.addRow("Speed:", speed_spin)
 
             tab_layout.addWidget(pn_group)
+
+        # === LOGIC CAMERA ===
+        if isinstance(thing, LogicCamera):
+            _cam_group_style = """
+                QGroupBox {
+                    font-weight: bold;
+                    color: #42A5F5;
+                    border: 1px solid #42A5F5;
+                    border-radius: 4px;
+                    margin-top: 12px;
+                    padding-top: 8px;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    subcontrol-position: top left;
+                    left: 8px;
+                    padding: 0 4px;
+                    background-color: #1a2a3d;
+                }
+            """
+            cam_group = QGroupBox("Cinematic Camera")
+            cam_group.setStyleSheet(_cam_group_style)
+            cam_form = QFormLayout(cam_group)
+            cam_form.setSpacing(6)
+            cam_form.setContentsMargins(8, 8, 8, 8)
+
+            # Path target dropdown
+            cam_path_combo = QComboBox()
+            cam_path_combo.setEditable(True)
+            cam_path_combo.addItem("(none)")
+            try:
+                for t in self.editor.state.things:
+                    if isinstance(t, PathNode):
+                        n_name = t.properties.get('name', '')
+                        if n_name:
+                            cam_path_combo.addItem(n_name)
+            except Exception:
+                pass
+            current_cam_path = thing.properties.get('path_target', '')
+            if current_cam_path:
+                cidx = cam_path_combo.findText(current_cam_path)
+                if cidx >= 0:
+                    cam_path_combo.setCurrentIndex(cidx)
+                else:
+                    cam_path_combo.setEditText(current_cam_path)
+            cam_path_combo.setToolTip("First PathNode in the camera's travel chain.")
+
+            def _on_cam_path_changed(text, _thing=thing):
+                clean = text.strip()
+                _thing.properties['path_target'] = '' if clean == '(none)' else clean
+                if hasattr(self.editor, 'mark_dirty'):
+                    self.editor.mark_dirty()
+            cam_path_combo.currentTextChanged.connect(_on_cam_path_changed)
+            cam_form.addRow("Path Target:", cam_path_combo)
+
+            # Speed
+            cam_speed = QDoubleSpinBox()
+            cam_speed.setRange(1.0, 9999.0)
+            cam_speed.setDecimals(1)
+            cam_speed.setSingleStep(10.0)
+            cam_speed.setValue(float(thing.properties.get('speed', 200.0)))
+            cam_speed.setSuffix(" u/s")
+            cam_speed.setToolTip("Travel speed in world-units per second.")
+            def _on_cam_speed(v, _thing=thing):
+                _thing.properties['speed'] = float(v)
+            cam_speed.valueChanged.connect(_on_cam_speed)
+            cam_form.addRow("Speed:", cam_speed)
+
+            # FOV override
+            cam_fov = QDoubleSpinBox()
+            cam_fov.setRange(0.0, 179.0)
+            cam_fov.setDecimals(1)
+            cam_fov.setSingleStep(5.0)
+            cam_fov.setValue(float(thing.properties.get('fov_override', 0.0)))
+            cam_fov.setSuffix("°")
+            cam_fov.setToolTip("Override FOV during sequence.\n0 = use the player's default FOV.")
+            def _on_cam_fov(v, _thing=thing):
+                _thing.properties['fov_override'] = float(v)
+            cam_fov.valueChanged.connect(_on_cam_fov)
+            cam_form.addRow("FOV Override:", cam_fov)
+
+            # Look ahead
+            cam_look = QCheckBox("Look at next node")
+            cam_look.setStyleSheet(self._checkbox_style())
+            cam_look.setChecked(bool(thing.properties.get('look_ahead', True)))
+            cam_look.setToolTip(
+                "When checked, the camera faces the next PathNode.\n"
+                "When unchecked, the camera faces forward along its travel direction."
+            )
+            def _on_cam_look(checked, _thing=thing):
+                _thing.properties['look_ahead'] = bool(checked)
+            cam_look.toggled.connect(_on_cam_look)
+            cam_form.addRow("", cam_look)
+
+            tab_layout.addWidget(cam_group)
+
+        # === LOGIC SPAWNER ===
+        if isinstance(thing, LogicSpawner):
+            _spn_group_style = """
+                QGroupBox {
+                    font-weight: bold;
+                    color: #AB47BC;
+                    border: 1px solid #AB47BC;
+                    border-radius: 4px;
+                    margin-top: 12px;
+                    padding-top: 8px;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    subcontrol-position: top left;
+                    left: 8px;
+                    padding: 0 4px;
+                    background-color: #2a1a3d;
+                }
+            """
+            spn_group = QGroupBox("Spawner")
+            spn_group.setStyleSheet(_spn_group_style)
+            spn_form = QFormLayout(spn_group)
+            spn_form.setSpacing(6)
+            spn_form.setContentsMargins(8, 8, 8, 8)
+
+            # Spawn type dropdown (from ENTITY_TYPES keys)
+            from editor.things import ENTITY_TYPES
+            spawn_combo = QComboBox()
+            for etype in sorted(ENTITY_TYPES.keys()):
+                spawn_combo.addItem(etype)
+            spawn_combo.setCurrentText(thing.properties.get('spawn_type', 'Monster'))
+            spawn_combo.setToolTip("Entity class to instantiate when Spawn is fired.")
+            def _on_spawn_type(text, _thing=thing):
+                _thing.properties['spawn_type'] = text
+            spawn_combo.currentTextChanged.connect(_on_spawn_type)
+            spn_form.addRow("Spawn Type:", spawn_combo)
+
+            # Target node dropdown
+            spn_node_combo = QComboBox()
+            spn_node_combo.setEditable(True)
+            spn_node_combo.addItem("(none)")
+            try:
+                for t in self.editor.state.things:
+                    if isinstance(t, PathNode):
+                        n_name = t.properties.get('name', '')
+                        if n_name:
+                            spn_node_combo.addItem(n_name)
+            except Exception:
+                pass
+            current_spn_node = thing.properties.get('target_node', '')
+            if current_spn_node:
+                sidx = spn_node_combo.findText(current_spn_node)
+                if sidx >= 0:
+                    spn_node_combo.setCurrentIndex(sidx)
+                else:
+                    spn_node_combo.setEditText(current_spn_node)
+            spn_node_combo.setToolTip("PathNode whose position is used as the spawn point.")
+            def _on_spn_node(text, _thing=thing):
+                clean = text.strip()
+                _thing.properties['target_node'] = '' if clean == '(none)' else clean
+            spn_node_combo.currentTextChanged.connect(_on_spn_node)
+            spn_form.addRow("Target Node:", spn_node_combo)
+
+            # Max spawn
+            max_spin = QSpinBox()
+            max_spin.setRange(0, 9999)
+            max_spin.setValue(int(thing.properties.get('max_spawn', 0)))
+            max_spin.setToolTip("Maximum entities this spawner will create.\n0 = unlimited.")
+            def _on_max_spawn(v, _thing=thing):
+                _thing.properties['max_spawn'] = int(v)
+            max_spin.valueChanged.connect(_on_max_spawn)
+            spn_form.addRow("Max Spawn:", max_spin)
+
+            tab_layout.addWidget(spn_group)
 
         # === MONSTER AI + FLAGS ===
         if isinstance(thing, Monster):

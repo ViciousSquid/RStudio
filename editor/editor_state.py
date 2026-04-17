@@ -53,6 +53,7 @@ class EditorState:
     # LIGHTMAP HELPERS
     # =========================================================================
 
+
     def mark_lighting_dirty(self) -> None:
         """
         Call whenever static geometry or static lights change so the next

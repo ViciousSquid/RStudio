@@ -124,6 +124,16 @@ class DebugConsole(QWidget):
     FONT_SIZE_MAX = 24
     FONT_SIZE_DEFAULT = 9
 
+    # Pre-compiled regex patterns (avoids re.compile on every _append_message call)
+    _RE_IO_ENTITY    = re.compile(r'^\[IO\]\s+([a-zA-Z0-9_]+)\.')
+    _RE_ENTITY_DOT   = re.compile(r'(?<!=)\b([a-zA-Z0-9_]+)(?=\.)')
+    _RE_ENTITY_TYPE  = re.compile(r'\b([a-zA-Z0-9_]+)(?=\s+\(type=)')
+    _RE_ENTITY_QUOTE = re.compile(r"'([a-zA-Z0-9_]+)'")
+    _RE_FIRE_OUTPUT  = re.compile(r'\b(fire_output)\b')
+    _RE_NO_CONNS     = re.compile(r'(no connections|0 connections)')
+    _RE_DELAYED      = re.compile(r'\[Delayed\]')
+    _RE_ARROW        = re.compile(r' -> ')
+
     _instance = None
 
     @classmethod
@@ -581,7 +591,7 @@ class DebugConsole(QWidget):
 
         # 2. Filter specific entity types (Movers, Triggers, Doors)
         if self.hide_movers_cb.isChecked() or self.hide_triggers_cb.isChecked() or self.hide_doors_cb.isChecked():
-            match = re.match(r'^\[IO\]\s+([a-zA-Z0-9_]+)\.', message)
+            match = self._RE_IO_ENTITY.match(message)
             if match:
                 entity_name = match.group(1)
                 if self.hide_movers_cb.isChecked() and entity_name.startswith('Mover'):
@@ -626,49 +636,43 @@ class DebugConsole(QWidget):
         def get_link_html(name):
             return f'<a href="filter:{name}" style="{ENT_STYLE}" title="Click to filter by {name}">{name}</a>'
 
-        # Apply Regex substitutions
+        # Apply Regex substitutions (using pre-compiled patterns)
         
         # A. Entity Names: "Name.Input"
-        # We use a lambda to insert the captured name into the HTML format
-        message = re.sub(
-            r'(?<!=)\b([a-zA-Z0-9_]+)(?=\.)', 
+        message = self._RE_ENTITY_DOT.sub(
             lambda m: get_link_html(m.group(1)),
             message
         )
         
         # B. Entity Names: "Name (type=...)"
-        message = re.sub(
-            r'\b([a-zA-Z0-9_]+)(?=\s+\(type=)', 
+        message = self._RE_ENTITY_TYPE.sub(
             lambda m: get_link_html(m.group(1)),
             message
         )
         
         # C. Entity Names: "'Name'"
-        message = re.sub(
-            r"'([a-zA-Z0-9_]+)'", 
+        message = self._RE_ENTITY_QUOTE.sub(
             lambda m: f"'{get_link_html(m.group(1))}'", 
             message
         )
 
         # D. "fire_output" -> Green
-        message = re.sub(
-            r'\b(fire_output)\b',
+        message = self._RE_FIRE_OUTPUT.sub(
             f'<span style="{FIRE_STYLE}">\\1</span>',
             message
         )
 
         # E. "no connections" -> Red/Orange
-        message = re.sub(
-            r'(no connections|0 connections)',
+        message = self._RE_NO_CONNS.sub(
             f'<span style="{EMPTY_STYLE}">\\1</span>',
             message
         )
 
         # F. Style [Delayed] prefix (orange)
-        message = re.sub(r'\[Delayed\]', '<span style="color: #FFB74D;">[Delayed]</span>', message)
+        message = self._RE_DELAYED.sub('<span style="color: #FFB74D;">[Delayed]</span>', message)
 
         # G. Style arrow -> as green arrow character
-        message = re.sub(r' -> ', ' <span style="color: #66BB6A;">→</span> ', message)
+        message = self._RE_ARROW.sub(' <span style="color: #66BB6A;">→</span> ', message)
         
         # ---------------------------
         
@@ -761,5 +765,3 @@ class DebugConsole(QWidget):
         """Handle close - just hide instead of destroying."""
         self.hide()
         event.ignore()
-
-

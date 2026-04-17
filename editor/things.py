@@ -853,7 +853,9 @@ class LevelChanger(Thing):
 
 class PathNode(Thing):
     """
-    Navigation waypoint for monster AI patrol behaviour.
+    Navigation waypoint for monster AI patrol behaviour and general-purpose
+    path chains (mover waypoints, cinematic cameras, teleport destinations,
+    spawn points).
 
     Combines the role of Source's `path_corner` (a point monsters navigate to)
     with `info_node` (a hint that says "this is a valid AI position").
@@ -873,9 +875,9 @@ class PathNode(Thing):
         or reverse direction depending on the monster's patrol_mode).
       - wait_time (float, seconds): how long a monster pauses at this node
         before moving to next_node. 0 = no wait (pass through immediately).
-      - patrol_speed (float, multiplier): speed factor applied while a
-        monster is heading toward this node.  1.0 = normal speed,
-        0.5 = half speed, 2.0 = double, etc.
+      - speed (float, multiplier): speed factor applied while an entity is
+        heading toward this node.  1.0 = normal speed, 0.5 = half speed,
+        2.0 = double, etc.  (Renamed from legacy 'patrol_speed'.)
 
     PathNodes are invisible at runtime — they are editor-only aids that the
     monster AI consults during _update_monsters in the logic thread.
@@ -894,7 +896,13 @@ class PathNode(Thing):
         self.properties.setdefault('affects_type', 'both')
         self.properties.setdefault('next_node', '')
         self.properties.setdefault('wait_time', 0.0)
-        self.properties.setdefault('patrol_speed', 1.0)
+        self.properties.setdefault('speed', 1.0)
+
+        # Migrate legacy key transparently on load
+        if 'patrol_speed' in self.properties and 'speed' not in self.properties:
+            self.properties['speed'] = self.properties.pop('patrol_speed')
+        elif 'patrol_speed' in self.properties:
+            self.properties.pop('patrol_speed', None)
 
     def get_radius(self) -> float:
         """Radius in world units — read by the 2D preview and the monster AI."""
@@ -917,12 +925,18 @@ class PathNode(Thing):
         except (TypeError, ValueError):
             return 0.0
 
-    def get_patrol_speed(self) -> float:
-        """Speed multiplier for monsters approaching this node."""
+    def get_speed(self) -> float:
+        """Speed multiplier for entities approaching this node."""
         try:
-            return max(0.01, float(self.properties.get('patrol_speed', 1.0)))
+            # Accept legacy 'patrol_speed' key transparently
+            raw = self.properties.get('speed',
+                    self.properties.get('patrol_speed', 1.0))
+            return max(0.01, float(raw))
         except (TypeError, ValueError):
             return 1.0
+
+    # Keep old name as alias so MonsterAI still works without changes
+    get_patrol_speed = get_speed
 
     def get_next_node_name(self) -> str:
         """Return the name of the next node in the chain, or ''."""
@@ -934,6 +948,50 @@ class PathNode(Thing):
         if affects == 'both':
             return True
         return affects == (monster_type or '').lower()
+
+
+# =============================================================================
+# CINEMATIC / SPAWNING ENTITIES
+# =============================================================================
+
+class LogicCamera(Thing):
+    """
+    Cinematic camera that lerps along a PathNode chain when triggered.
+    Player input is suppressed for the duration of the sequence.
+    """
+    pixmap_path = "assets/sprites/logic_camera.png"
+
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties['type'] = 'logic_camera'
+        # Name of the first PathNode in the chain
+        self.properties.setdefault('path_target', '')
+        # World-units per second along the chain
+        self.properties.setdefault('speed', 200.0)
+        # If set, overrides the player's FOV during the sequence
+        self.properties.setdefault('fov_override', 0.0)
+        # If True the camera looks at the *next* node; if False it
+        # follows the tangent of the spline (forward direction).
+        self.properties.setdefault('look_ahead', True)
+
+
+class LogicSpawner(Thing):
+    """
+    Instantiates a new entity at a PathNode's coordinates when triggered.
+    """
+    pixmap_path = "assets/sprites/logic_spawner.png"
+
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties['type'] = 'logic_spawner'
+        # Entity class name to spawn (key into ENTITY_TYPES)
+        self.properties.setdefault('spawn_type', 'Monster')
+        # PathNode whose position is used as the spawn point
+        self.properties.setdefault('target_node', '')
+        # Max entities this spawner will ever create (0 = unlimited)
+        self.properties.setdefault('max_spawn', 0)
+        # Extra properties merged into the spawned entity
+        self.properties.setdefault('spawn_properties', {})
 
 
 # =============================================================================
@@ -953,12 +1011,14 @@ ENTITY_TYPES = {
     'LogicTimer': LogicTimer,
     'LevelChanger': LevelChanger,
     'PathNode': PathNode,
+    'LogicCamera': LogicCamera,
+    'LogicSpawner': LogicSpawner,
 }
 
 # Categories for editor UI
 ENTITY_CATEGORIES = {
     'Gameplay': ['PlayerStart', 'Monster', 'Pickup', 'LevelChanger'],
     'Environment': ['Light', 'Speaker', 'Model'],
-    'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer'],
+    'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCamera', 'LogicSpawner'],
     'AI': ['PathNode'],
 }

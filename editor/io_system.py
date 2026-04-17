@@ -450,6 +450,8 @@ def register_default_io():
             IODef('Disable', 'Disable this trigger'),
             IODef('Toggle', 'Toggle enabled state'),
             IODef('TouchTest', 'Fire OnTrigger if player is inside'),
+            IODef('Teleport', 'Teleport the touching player to target_node'),
+            IODef('SetTargetNode', 'Change the target PathNode name', 'string'),
             IODef('Hide', 'Hide this trigger'),
             IODef('Show', 'Show this trigger'),
             IODef('ToggleVisibility', 'Toggle visibility'),
@@ -460,6 +462,7 @@ def register_default_io():
             IODef('OnTrigger', 'Fired when activated'),
             IODef('OnStartTouch', 'Fired when player enters'),
             IODef('OnEndTouch', 'Fired when player exits'),
+            IODef('OnTeleport', 'Fired after a player is teleported'),
         ]
     )
     
@@ -497,6 +500,9 @@ def register_default_io():
             IODef('SetSpeed', 'Set movement speed', 'float'),
             IODef('Enable', 'Enable movement'),
             IODef('Disable', 'Disable movement'),
+            IODef('FollowPath', 'Start following a PathNode chain (param = node name)', 'string'),
+            IODef('StopPath', 'Stop PathNode following and hold position'),
+            IODef('SetPathTarget', 'Set PathNode name to follow', 'string'),
             IODef('Hide', 'Hide this mover'),
             IODef('Show', 'Show this mover'),
             IODef('ToggleVisibility', 'Toggle visibility'),
@@ -506,6 +512,7 @@ def register_default_io():
         outputs=[
             IODef('OnFullyOpen', 'Fired when reaching end position'),
             IODef('OnFullyClosed', 'Fired when reaching start position'),
+            IODef('OnPathNodeReached', 'Fired each time mover arrives at a PathNode'),
         ]
     )
     
@@ -690,6 +697,38 @@ def register_default_io():
         ]
     )
 
+    # === LOGIC CAMERA ===
+    # Cinematic camera that lerps along a PathNode chain.
+    register_io('logic_camera',
+        inputs=[
+            IODef('Start',    'Begin the cinematic camera sequence'),
+            IODef('Stop',     'Abort and return camera to the player'),
+            IODef('Pause',    'Freeze camera at current chain position'),
+            IODef('Resume',   'Continue a paused sequence'),
+            IODef('SetSpeed', 'Override travel speed', 'float'),
+        ],
+        outputs=[
+            IODef('OnStart',       'Fired when sequence begins'),
+            IODef('OnReachNode',   'Fired each time the camera arrives at a PathNode'),
+            IODef('OnFinished',    'Fired when the camera reaches the last node'),
+        ]
+    )
+
+    # === LOGIC SPAWNER ===
+    # Instantiates entities at a PathNode when triggered.
+    register_io('logic_spawner',
+        inputs=[
+            IODef('Spawn',         'Spawn one entity at the target PathNode'),
+            IODef('Enable',        'Allow spawning'),
+            IODef('Disable',       'Prevent spawning'),
+            IODef('SetTargetNode', 'Change spawn location to a different PathNode', 'string'),
+        ],
+        outputs=[
+            IODef('OnSpawn',       'Fired each time an entity is spawned'),
+            IODef('OnMaxReached',  'Fired when max_spawn limit is hit'),
+        ]
+    )
+
 
 # =============================================================================
 # HELPER FUNCTIONS
@@ -771,5 +810,3 @@ def reset_all_connections(entities):
 
 # Initialize default I/O definitions when module is imported
 register_default_io()
-
-

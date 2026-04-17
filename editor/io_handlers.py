@@ -178,7 +178,47 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('mover', 'setposition', mover_set_position)
     io_manager.register_input_handler('mover', 'enable', mover_enable)
     io_manager.register_input_handler('mover', 'disable', mover_disable)
-    
+
+    # ==========================================================================
+    # MOVER — PathNode waypoint inputs
+    # ==========================================================================
+
+    def mover_follow_path(entity, param, logic):
+        """Switch a mover from direction-based to PathNode chain movement."""
+        idx = _get_brush_index(entity, logic)
+        if idx < 0:
+            return
+        target = param or entity.get('path_target', '')
+        if not target:
+            return
+        entity['path_target'] = target
+        entity['start_on'] = True
+        if idx not in logic.mover_path_states:
+            logic.mover_path_states[idx] = {
+                'current_node': target,
+                'lerp_t':       0.0,
+                'origin':       list(entity['pos']),
+                'waiting':      False,
+                'wait_remaining': 0.0,
+            }
+        # Remove from direction-based state if present
+        logic.mover_states.pop(idx, None)
+
+    def mover_stop_path(entity, param, logic):
+        """Stop PathNode following and hold position."""
+        idx = _get_brush_index(entity, logic)
+        if idx >= 0:
+            logic.mover_path_states.pop(idx, None)
+
+    def mover_set_path_target(entity, param, logic):
+        """Change the target PathNode name for this mover."""
+        if param:
+            entity['path_target'] = param
+
+    io_manager.register_input_handler('mover', 'followpath',    mover_follow_path)
+    io_manager.register_input_handler('mover', 'stoppath',      mover_stop_path)
+    io_manager.register_input_handler('mover', 'setpathtarget', mover_set_path_target)
+
     # ==========================================================================
     # TRIGGER INPUTS
     # ==========================================================================
@@ -214,7 +254,34 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('trigger', 'disable', trigger_disable)
     io_manager.register_input_handler('trigger', 'toggle', trigger_toggle)
     io_manager.register_input_handler('trigger', 'touchtest', trigger_touch_test)
-    
+
+    # ==========================================================================
+    # TRIGGER — teleport inputs
+    # ==========================================================================
+
+    def trigger_teleport(entity, param, logic):
+        """Teleport the player to the named PathNode."""
+        target_name = param or entity.get('target_node', '')
+        node = logic._find_path_node_by_name(target_name)
+        if not node or not logic.player:
+            return
+        dest = glm.vec3(node.pos[0], node.pos[1], node.pos[2])
+        logic.player.pos = dest
+        # Zero velocity to prevent carry-over momentum
+        if hasattr(logic.player, 'vel_y'):
+            logic.player.vel_y = 0.0
+        if logic.io_manager:
+            logic.io_manager.fire_output(entity, 'OnTeleport')
+        debug_log("IO", f"Trigger teleported player → '{target_name}' ({dest.x:.0f}, {dest.y:.0f}, {dest.z:.0f})")
+
+    def trigger_set_target_node(entity, param, logic):
+        """Change the target PathNode name for this trigger."""
+        if param:
+            entity['target_node'] = param
+
+    io_manager.register_input_handler('trigger', 'teleport',      trigger_teleport)
+    io_manager.register_input_handler('trigger', 'settargetnode', trigger_set_target_node)
+
     # ==========================================================================
     # SPEAKER INPUTS
     # ==========================================================================
@@ -580,7 +647,126 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('levelchanger', 'changelevel', levelchanger_changelevel)
     io_manager.register_input_handler('levelchanger', 'trigger', levelchanger_changelevel)
 
-    # Log summary
+    # ==========================================================================
+    # LOGIC CAMERA INPUTS
+    # ==========================================================================
+
+    def camera_start(entity, param, logic):
+        """Begin the cinematic camera sequence along a PathNode chain."""
+        target = entity.properties.get('path_target', '')
+        node = logic._find_path_node_by_name(target)
+        if not node:
+            debug_log("IO", f"LogicCamera '{entity.name}': path_target "
+                      f"'{target}' not found — aborting start.")
+            return
+        speed = float(entity.properties.get('speed', 200.0))
+        fov   = float(entity.properties.get('fov_override', 0.0))
+        logic.cinematic_state = {
+            'active':       True,
+            'paused':       False,
+            'entity':       entity,
+            'current_node': target,
+            'lerp_t':       0.0,
+            'origin':       list(node.pos),
+            'speed':        speed,
+            'fov':          fov if fov > 0 else None,
+            'look_ahead':   entity.properties.get('look_ahead', True),
+        }
+        if logic.io_manager:
+            logic.io_manager.fire_output(entity, 'OnStart')
+
+    def camera_stop(entity, param, logic):
+        """Abort and return camera to the player."""
+        logic.cinematic_state = None
+
+    def camera_pause(entity, param, logic):
+        """Freeze camera at current chain position."""
+        if logic.cinematic_state:
+            logic.cinematic_state['paused'] = True
+
+    def camera_resume(entity, param, logic):
+        """Continue a paused sequence."""
+        if logic.cinematic_state:
+            logic.cinematic_state['paused'] = False
+
+    def camera_set_speed(entity, param, logic):
+        """Override travel speed."""
+        if logic.cinematic_state:
+            try:
+                logic.cinematic_state['speed'] = max(1.0, float(param))
+            except (TypeError, ValueError):
+                pass
+
+    io_manager.register_input_handler('logic_camera', 'start',    camera_start)
+    io_manager.register_input_handler('logic_camera', 'stop',     camera_stop)
+    io_manager.register_input_handler('logic_camera', 'pause',    camera_pause)
+    io_manager.register_input_handler('logic_camera', 'resume',   camera_resume)
+    io_manager.register_input_handler('logic_camera', 'setspeed', camera_set_speed)
+
+    # ==========================================================================
+    # LOGIC SPAWNER INPUTS
+    # ==========================================================================
+
+    def spawner_spawn(entity, param, logic):
+        """Spawn one entity at the target PathNode."""
+        if entity.properties.get('disabled', False):
+            return
+
+        target_name = entity.properties.get('target_node', '')
+        node = logic._find_path_node_by_name(target_name)
+        if not node:
+            debug_log("IO", f"LogicSpawner '{entity.name}': "
+                      f"target_node '{target_name}' not found.")
+            return
+
+        max_spawn   = int(entity.properties.get('max_spawn', 0))
+        spawn_count = entity.properties.get('_spawn_count', 0)
+        if max_spawn > 0 and spawn_count >= max_spawn:
+            if logic.io_manager:
+                logic.io_manager.fire_output(entity, 'OnMaxReached')
+            return
+
+        spawn_type = entity.properties.get('spawn_type', 'Monster')
+        from editor.things import ENTITY_TYPES
+        cls = ENTITY_TYPES.get(spawn_type)
+        if cls is None:
+            debug_log("IO", f"LogicSpawner: unknown spawn_type '{spawn_type}'")
+            return
+
+        extra_props = dict(entity.properties.get('spawn_properties', {}))
+        new_thing = cls(pos=list(node.pos), properties=extra_props)
+        logic.editor_state.things.append(new_thing)
+        entity.properties['_spawn_count'] = spawn_count + 1
+
+        # Rebuild entity caches so the new thing is findable by name/id
+        if hasattr(logic, '_build_entity_caches'):
+            logic._build_entity_caches()
+
+        if logic.io_manager:
+            logic.io_manager.fire_output(entity, 'OnSpawn')
+        debug_log("IO", f"LogicSpawner '{entity.name}' spawned "
+                  f"'{spawn_type}' at PathNode '{target_name}'")
+
+    def spawner_enable(entity, param, logic):
+        entity.properties['disabled'] = False
+
+    def spawner_disable(entity, param, logic):
+        entity.properties['disabled'] = True
+
+    def spawner_set_target(entity, param, logic):
+        """Change spawn location to a different PathNode."""
+        if param:
+            entity.properties['target_node'] = param
+
+    io_manager.register_input_handler('logic_spawner', 'spawn',         spawner_spawn)
+    io_manager.register_input_handler('logic_spawner', 'enable',        spawner_enable)
+    io_manager.register_input_handler('logic_spawner', 'disable',       spawner_disable)
+    io_manager.register_input_handler('logic_spawner', 'settargetnode', spawner_set_target)
+
+    # ==========================================================================
+    # LOG SUMMARY
+    # ==========================================================================
+
     # Retrieve version from version.txt in the same directory
     version_str = "Unknown"
     try:
