@@ -108,6 +108,10 @@ class ConsoleCommandHandler:
             'hide': self.cmd_hide,
             'show': self.cmd_show,
             'tint': self.cmd_tint,
+
+            # Play Mode cheats / debug
+            'notarget': self.cmd_notarget,
+            'sg': self.cmd_spatial_grid,
         }
 
     def handle_command(self, cmd_string):
@@ -433,8 +437,11 @@ class ConsoleCommandHandler:
 <b style="color:orange;">noclip</b> — Toggle noclip<br>
 <b style="color:orange;">god</b> — Toggle invincibility<br>
 <b style="color:orange;">buddha</b> — Toggle buddha mode (health cannot go below 2)<br>
+<b style="color:orange;">notarget</b> — Toggle notarget (monsters ignore the player)<br>
 <b style="color:orange;">physics</b> on/off/toggle<br>
 <b style="color:orange;">setpos</b>{sep}<b style="color:orange;">teleport</b> x y z<br>
+<b style="color:cyan;">=== Debug ===</b><br>
+<b style="color:orange;">sg</b> — Toggle spatial grid visualisation<br>
 """
         debug_log("Info", help_text)
 
@@ -967,6 +974,26 @@ class ConsoleCommandHandler:
             lt.god_mode = False
         self.main_window.show_toast(f"Buddha mode: {state}")
         debug_log("Info", f"Buddha mode set to {state}")
+
+    def cmd_notarget(self, args):
+        """Toggle notarget mode — monsters ignore the player."""
+        if not self._require_play_mode("notarget"):
+            return
+        lt = self.main_window.view_3d.logic_thread
+        lt.notarget = not lt.notarget
+        state = "ON" if lt.notarget else "OFF"
+        self.main_window.show_toast(f"Notarget: {state}")
+        debug_log("Info", f"Notarget set to {state}")
+
+    def cmd_spatial_grid(self, args):
+        """Toggle spatial grid debug visualisation in the 3D view."""
+        if not self._require_play_mode("sg"):
+            return
+        view_3d = self.main_window.view_3d
+        view_3d.show_spatial_grid = not getattr(view_3d, 'show_spatial_grid', False)
+        state = "ON" if view_3d.show_spatial_grid else "OFF"
+        self.main_window.show_toast(f"Spatial Grid: {state}")
+        debug_log("Info", f"Spatial grid display set to {state}")
 
     def cmd_physics(self, args):
         if not self._require_play_mode("physics"):

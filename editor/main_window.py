@@ -156,6 +156,7 @@ class MainWindow(QMainWindow):
             self.state.selected_object = None
             
         self.keys_pressed = set()
+        self._brush_clipboard = None  # For Ctrl+C / Ctrl+V brush copy-paste
         self.grid_visible = True
         self.preview_timer = QTimer()
         self.preview_timer.timeout.connect(self.update_mover_preview)
@@ -219,6 +220,7 @@ class MainWindow(QMainWindow):
             "F4: Toggle sprite visibility",
             "F1: Toggle connection lines",
             "Ctrl+Click: Multi-select",
+            "Ctrl+C/V: Copy & Paste brushes",
             "T: Toggle Asset Browser",
         ]
         self.last_tooltip_time = 0
@@ -1884,6 +1886,63 @@ class MainWindow(QMainWindow):
                 self.set_selected_object(None)
                 return
 
+        # Ctrl+C: Copy selected brush/entity
+        if event.key() == Qt.Key_C and event.modifiers() == Qt.ControlModifier:
+            if self.state.selected_object:
+                self._brush_clipboard = copy.deepcopy(self.state.selected_object)
+                name = ''
+                if isinstance(self._brush_clipboard, dict):
+                    name = self._brush_clipboard.get('name', 'Brush')
+                else:
+                    name = self._brush_clipboard.properties.get('name', 'Entity')
+                self.show_toast(f"Copied: {name}")
+            return
+
+        # Ctrl+V: Paste copied brush/entity
+        if event.key() == Qt.Key_V and event.modifiers() == Qt.ControlModifier:
+            if self._brush_clipboard is not None:
+                self.save_state()
+                pasted = copy.deepcopy(self._brush_clipboard)
+
+                # Offset the pasted object so it doesn't sit exactly on top
+                offset = self.grid_size_spinbox.value()
+                if isinstance(pasted, dict):
+                    # Give it a unique name
+                    base_name = pasted.get('name', 'Brush')
+                    pasted['name'] = f"{base_name}_copy"
+                    pasted['pos'] = [
+                        pasted['pos'][0] + offset,
+                        pasted['pos'][1],
+                        pasted['pos'][2] + offset,
+                    ]
+                    # Clear I/O connections on the copy so wires don't duplicate
+                    pasted.pop('_io_connections', None)
+                    pasted.pop('io_connections', None)
+                    self.state.brushes.append(pasted)
+                else:
+                    base_name = pasted.properties.get('name', 'Entity')
+                    pasted.properties['name'] = f"{base_name}_copy"
+                    pasted.pos = [
+                        pasted.pos[0] + offset,
+                        pasted.pos[1],
+                        pasted.pos[2] + offset,
+                    ]
+                    pasted.properties.pop('_io_connections', None)
+                    pasted.properties.pop('io_connections', None)
+                    self.state.things.append(pasted)
+
+                self.set_selected_object(pasted)
+                self.show_toast(f"Pasted: {base_name}")
+
+                # Flash effect for brushes
+                if isinstance(pasted, dict):
+                    import time as _time
+                    pasted['_flash_until'] = _time.time() + 0.5
+                    QTimer.singleShot(500, lambda: self._clear_flash(pasted))
+            else:
+                self.show_toast("Nothing to paste", is_error=True)
+            return
+
         # Delete key
         if self.state.selected_object and event.key() == Qt.Key_Delete:
             self.save_state()
@@ -2309,6 +2368,3 @@ class MainWindow(QMainWindow):
             self.view_3d.logic_thread.join(timeout=1.0)
         
         super().closeEvent(event)
-
-
-
