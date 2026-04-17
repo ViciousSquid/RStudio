@@ -320,6 +320,12 @@ class LogicThread(threading.Thread):
             # Build entity caches
             self._build_entity_caches()
 
+            # Build spatial grid for fast collision queries (monsters + player)
+            from .physics import SpatialGrid
+            self._spatial_grid = SpatialGrid(cell_size=512.0)
+            self._spatial_grid.populate(self.brushes)
+            self.monster_ai.set_spatial_grid(self._spatial_grid)
+
             # Fire OnPlayerSpawn
             self._fire_player_spawn_outputs()
             
@@ -344,6 +350,12 @@ class LogicThread(threading.Thread):
             self.bullet_marks = []
             self.player_dead = False
             self.muzzle_flash_active = False
+
+            # Clear spatial grid
+            self.monster_ai.set_spatial_grid(None)
+            if hasattr(self, '_spatial_grid'):
+                self._spatial_grid.clear()
+                self._spatial_grid = None
 
             # Reset monster AI state
             self.monster_ai.monster_states = {}
@@ -572,7 +584,8 @@ class LogicThread(threading.Thread):
         
         # Physics update
         self.player.update(delta, move_dir, jump, crouch, self.brushes, 
-                          self.movers, self.doors, self.terrain)
+                          self.movers, self.doors, self.terrain,
+                          spatial_grid=getattr(self, '_spatial_grid', None))
         
         # Gameplay
         self._handle_interactions(use_key)
@@ -1237,3 +1250,5 @@ class LogicThread(threading.Thread):
 
         write_state.visible_things = visible_things
         write_state.timestamp = time.perf_counter()
+
+

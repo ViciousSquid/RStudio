@@ -36,12 +36,25 @@ class Player:
         )
         return glm.lookAt(cam_pos, cam_pos + direction, glm.vec3(0, 1, 0))
 
-    def update(self, delta, move_input, jump, crouch, brushes, movers=None, doors=None, terrain=None):
+    def update(self, delta, move_input, jump, crouch, brushes, movers=None, doors=None, terrain=None, spatial_grid=None):
         """
         Update player physics.
+
+        PERF: If spatial_grid is provided, static brush colliders are fetched
+        from the grid (only nearby cells) instead of iterating every brush.
+        Movers and doors are always included since they're dynamic.
         """
-        # FIX: Build collider list with extend() instead of repeated + (avoids two full-list copies)
-        colliders = list(brushes)
+        # --- Build collider list ---
+        if spatial_grid:
+            # Use the grid to get only nearby static brushes
+            half = self._half
+            player_min = self.pos - half - glm.vec3(self.speed * delta + 32)  # pad for movement
+            player_max = self.pos + half + glm.vec3(self.speed * delta + 32)
+            colliders = spatial_grid.get_potential_colliders(player_min, player_max)
+        else:
+            # Fallback: all brushes (old behaviour)
+            colliders = list(brushes)
+
         if movers:
             colliders.extend(movers)
         if doors:

@@ -1,6 +1,9 @@
 """
 Monster AI – all enemy behaviour, patrol logic, sight, shooting, and physics.
 Extracted from LogicThread for easier maintenance and extension.
+
+PERF: All brush collision/raycast methods now delegate to SpatialGrid,
+reducing per-monster cost from O(all_brushes) to O(nearby_brushes).
 """
 
 import glm
@@ -36,6 +39,11 @@ class MonsterAI:
         self.monster_states: Dict[int, Dict[str, Any]] = {}
         self._debug_rays: List[Dict[str, Any]] = []   # for F7 debug lines
         self.monster_debug_active = False
+        self._grid = None                          # SpatialGrid, set by LogicThread
+
+    def set_spatial_grid(self, grid):
+        """Called by LogicThread after populating the grid."""
+        self._grid = grid
 
     # -------------------------------------------------------------------------
     # Main update entry point
@@ -265,7 +273,7 @@ class MonsterAI:
             debug_log("MonsterAI", "Player has died.")
 
     # -------------------------------------------------------------------------
-    # Patrol system (PathNode navigation)
+    # Patrol system (PathNode navigation) — UNCHANGED
     # -------------------------------------------------------------------------
 
     def _update_monster_patrol(self, monster, state: Dict, mtype: str, delta: float):
@@ -601,11 +609,15 @@ class MonsterAI:
         return best_name
 
     # -------------------------------------------------------------------------
-    # Helper methods (collision, line of sight, raycast, etc.)
+    # Helper methods — NOW DELEGATE TO SPATIAL GRID
     # -------------------------------------------------------------------------
 
     def _has_line_of_sight(self, start: glm.vec3, end: glm.vec3) -> bool:
         """Return True if ray from start to end hits no solid wall brush."""
+        if self._grid:
+            return self._grid.has_line_of_sight(start, end, self.lt.intersect_ray_aabb)
+
+        # Fallback: full brush scan (should not happen in play mode)
         ray_dir = end - start
         ray_len = glm.length(ray_dir)
         if ray_len < 0.001:
@@ -628,6 +640,10 @@ class MonsterAI:
 
     def _monster_raycast_down(self, x: float, z: float, start_y: float = 10000.0) -> Optional[float]:
         """Return Y of the highest solid brush surface below (x, z), or None."""
+        if self._grid:
+            return self._grid.raycast_down(x, z, start_y)
+
+        # Fallback
         best_y = None
         for brush in self.lt.brushes:
             if brush.get('hidden') or brush.get('is_water') or brush.get('is_fog'):
@@ -640,7 +656,6 @@ class MonsterAI:
             bx_max = pos[0] + size[0] * 0.5
             bz_min = pos[2] - size[2] * 0.5
             bz_max = pos[2] + size[2] * 0.5
-            by_min = pos[1] - size[1] * 0.5
             by_max = pos[1] + size[1] * 0.5
 
             if bx_min <= x <= bx_max and bz_min <= z <= bz_max:
@@ -651,6 +666,10 @@ class MonsterAI:
 
     def _monster_overlaps_wall(self, mx: float, my: float, mz: float, margin: float) -> bool:
         """Check if a monster-sized box at (mx, my, mz) overlaps any solid wall brush."""
+        if self._grid:
+            return self._grid.overlaps_wall(mx, my, mz, margin)
+
+        # Fallback
         for brush in self.lt.brushes:
             if brush.get('hidden') or brush.get('is_water') or brush.get('is_fog'):
                 continue
