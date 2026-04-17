@@ -104,6 +104,7 @@ class QtGameView(QOpenGLWidget):
         self.gun_hud_pixmaps = {}
         self.gun_flash_pixmaps = {}  # gunxHUD_flash.png muzzle flash overlays
         self.monster_debug_active = False  # F7 toggle
+        self.show_spatial_grid = False     # 'sg' console command toggle
         self.renderer = None
 
         # Debug Rendering Resources
@@ -586,6 +587,10 @@ class QtGameView(QOpenGLWidget):
         if render_state and getattr(render_state, 'monster_debug_active', False):
             self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []))
 
+        # Render spatial grid cells ('sg' console command)
+        if self.play_mode and getattr(self, 'show_spatial_grid', False):
+            self._render_spatial_grid()
+
         # 3D I/O connection lines (editor only — never in play mode)
         if not self.play_mode and getattr(self.editor, 'show_logic_links', False):
             conn_lines = self._gather_io_connections()
@@ -763,6 +768,53 @@ class QtGameView(QOpenGLWidget):
             data = np.array([s[0], s[1], s[2], e[0], e[1], e[2]], dtype=np.float32)
             gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data.nbytes, data)
             gl.glDrawArrays(gl.GL_LINES, 0, 2)
+
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
+        gl.glBindVertexArray(0)
+
+    def _render_spatial_grid(self):
+        """Draw the spatial grid cell boundaries as wireframe quads.
+
+        Each populated cell in the SpatialGrid is drawn as a rectangle
+        at Y=0 using the debug shader so the player can see the
+        partitioning structure used by monster AI and physics.
+        """
+        if not self.debug_shader or not self.logic_thread:
+            return
+        grid = getattr(self.logic_thread, '_spatial_grid', None)
+        if grid is None:
+            return
+
+        gl.glUseProgram(self.debug_shader)
+        proj_loc  = gl.glGetUniformLocation(self.debug_shader, 'projection')
+        view_loc  = gl.glGetUniformLocation(self.debug_shader, 'view')
+        color_loc = gl.glGetUniformLocation(self.debug_shader, 'color')
+        gl.glUniformMatrix4fv(proj_loc, 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(view_loc, 1, gl.GL_FALSE, self._view_ptr)
+        gl.glUniform3f(color_loc, 0.0, 0.8, 1.0)  # cyan
+
+        gl.glBindVertexArray(self.debug_vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.debug_vbo)
+
+        cs = grid.cell_size
+        draw_y = 1.0  # slightly above ground to avoid z-fight
+
+        for (cx, cz) in grid.cells:
+            x0 = cx * cs
+            z0 = cz * cs
+            x1 = x0 + cs
+            z1 = z0 + cs
+            # Four edges of the cell
+            edges = [
+                (x0, draw_y, z0, x1, draw_y, z0),
+                (x1, draw_y, z0, x1, draw_y, z1),
+                (x1, draw_y, z1, x0, draw_y, z1),
+                (x0, draw_y, z1, x0, draw_y, z0),
+            ]
+            for e in edges:
+                data = np.array(e, dtype=np.float32)
+                gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data.nbytes, data)
+                gl.glDrawArrays(gl.GL_LINES, 0, 2)
 
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
         gl.glBindVertexArray(0)
@@ -1273,6 +1325,7 @@ class QtGameView(QOpenGLWidget):
 
             # Reset monster debug overlay
             self.monster_debug_active = False
+            self.show_spatial_grid = False
             if self.logic_thread:
                 self.logic_thread.monster_debug_active = False
 
@@ -1796,13 +1849,3 @@ class QtGameView(QOpenGLWidget):
             self.debug_console_window.command_input.setText(cmd)
             self.debug_console_window._on_command_entered()
         self._close_console_overlay()
-
-
-
-
-
-
-
-
-
-

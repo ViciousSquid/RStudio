@@ -163,33 +163,61 @@ class MonsterAI:
                         vel_y = 0.0
                 state['vel_y'] = vel_y
 
+            # ---- Notarget: skip all player-targeting when cheat is active ----
+            #      Monsters still gravity-fall and patrol, just don't chase/attack.
+            if self.lt.notarget:
+                thing.properties['is_shooting'] = False
+                if mid in self.monster_states:
+                    self.monster_states[mid]['anim_timer'] = 0.0
+                self._update_monster_patrol(thing, state, mtype, delta)
+                continue
+
+            # ---- Resolve target (player or aggro monster for infighting) ----
+            aggro_id = thing.properties.get('_aggro_target', None)
+            aggro_monster = None
+            if aggro_id is not None:
+                aggro_monster = self._find_monster_by_id(aggro_id)
+                if aggro_monster is None or aggro_monster.properties.get('dead', False):
+                    # Aggro target gone — revert to player
+                    thing.properties.pop('_aggro_target', None)
+                    aggro_monster = None
+
+            if aggro_monster is not None:
+                target_pos = glm.vec3(aggro_monster.pos)
+            else:
+                target_pos = player_pos
+
             # ---- Line of sight check ----
             monster_eye = glm.vec3(thing_pos.x, thing_pos.y + 64.0, thing_pos.z)
-            player_eye = glm.vec3(player_pos.x, player_pos.y + self.lt.player.camera_height, player_pos.z)
-            has_los = self._has_line_of_sight(monster_eye, player_eye)
+            if aggro_monster is not None:
+                target_eye = glm.vec3(target_pos.x, target_pos.y + 64.0, target_pos.z)
+            else:
+                target_eye = glm.vec3(player_pos.x, player_pos.y + self.lt.player.camera_height, player_pos.z)
+            has_los = self._has_line_of_sight(monster_eye, target_eye)
 
             if self.monster_debug_active:
                 self._debug_rays.append({
                     'start': [monster_eye.x, monster_eye.y, monster_eye.z],
-                    'end':   [player_eye.x, player_eye.y, player_eye.z],
+                    'end':   [target_eye.x, target_eye.y, target_eye.z],
                     'color': 'green' if has_los else 'red',
                 })
 
-            distance = glm.distance(thing_pos, player_pos)
+            distance = glm.distance(thing_pos, target_pos)
 
             if distance <= MONSTER_SIGHT_RANGE:
                 # ---- Entered sight range ----
                 if not state['in_sight']:
                     state['in_sight'] = True
-                    if self.lt.io_manager:
+                    if aggro_monster is None and self.lt.io_manager:
                         self.lt.io_manager.fire_output(thing, 'OnSeePlayer')
                     if self.monster_debug_active:
                         name = thing.properties.get('name', '?')
-                        debug_log("MonsterAI", f"{name} sees player (dist={distance:.0f})")
+                        tgt = aggro_monster.properties.get('name', '?') if aggro_monster else 'player'
+                        debug_log("MonsterAI", f"{name} sees {tgt} (dist={distance:.0f})")
 
-                # ---- Move toward player ----
+                # ---- Move toward target ----
                 if distance > MONSTER_STOP_DISTANCE:
-                    direction = player_pos - thing_pos
+                    direction = target_pos - thing_pos
                     dir_len = glm.length(direction)
                     if dir_len > 0.001:
                         direction = direction / dir_len
@@ -217,7 +245,24 @@ class MonsterAI:
                     state['anim_timer'] = MONSTER_SHOOT_ANIM_TIME
 
                     damage = int(thing.properties.get('damage', 10))
-                    self.lt._apply_player_damage(damage)
+
+                    if aggro_monster is not None:
+                        # ---- Infighting: damage the aggro target monster ----
+                        self._apply_monster_damage(aggro_monster, damage, attacker=thing)
+                    else:
+                        # ---- Check for crossfire (Doom-style infighting) ----
+                        crossfire_victim = self._find_monster_in_crossfire(
+                            thing, monster_eye, target_eye)
+                        if crossfire_victim is not None:
+                            self._apply_monster_damage(
+                                crossfire_victim, damage, attacker=thing)
+                            if self.monster_debug_active:
+                                v_name = crossfire_victim.properties.get('name', '?')
+                                a_name = thing.properties.get('name', '?')
+                                debug_log("MonsterAI",
+                                          f"CROSSFIRE: {a_name} hit {v_name} — infighting!")
+                        else:
+                            self.lt._apply_player_damage(damage)
 
                     if hasattr(self.lt.game_state, 'sound_queue'):
                         self.lt.game_state.sound_queue.append({
@@ -231,7 +276,8 @@ class MonsterAI:
 
                     if self.monster_debug_active:
                         name = thing.properties.get('name', '?')
-                        debug_log("MonsterAI", f"{name} attacks player for {damage} damage (LOS clear)")
+                        tgt = aggro_monster.properties.get('name', '?') if aggro_monster else 'player'
+                        debug_log("MonsterAI", f"{name} attacks {tgt} for {damage} damage (LOS clear)")
 
                 elif state['shoot_timer'] <= 0.0 and not has_los:
                     state['shoot_timer'] = 0.1   # re-check soon
@@ -246,16 +292,20 @@ class MonsterAI:
                 # ---- Out of sight ----
                 if state['in_sight']:
                     state['in_sight'] = False
-                    if self.lt.io_manager:
+                    if aggro_monster is None and self.lt.io_manager:
                         self.lt.io_manager.fire_output(thing, 'OnLostPlayer')
                     if self.monster_debug_active:
                         name = thing.properties.get('name', '?')
-                        debug_log("MonsterAI", f"{name} lost player (dist={distance:.0f})")
+                        debug_log("MonsterAI", f"{name} lost target (dist={distance:.0f})")
 
                 thing.properties['is_shooting'] = False
                 state['anim_timer'] = 0.0
 
-                # ---- Patrol behaviour (only when player not in sight) ----
+                # If we had an aggro target but it's out of range, drop it
+                if aggro_monster is not None:
+                    thing.properties.pop('_aggro_target', None)
+
+                # ---- Patrol behaviour (only when target not in sight) ----
                 self._update_monster_patrol(thing, state, mtype, delta)
 
         # ---- Player death check (after all monsters processed) ----
@@ -271,6 +321,88 @@ class MonsterAI:
                 except ImportError:
                     pass
             debug_log("MonsterAI", "Player has died.")
+
+    # -------------------------------------------------------------------------
+    # Monster infighting helpers
+    # -------------------------------------------------------------------------
+
+    def _find_monster_by_id(self, monster_id: int):
+        """Return a living Monster thing by Python id, or None."""
+        for t in self.lt.things:
+            if isinstance(t, MonsterThing) and id(t) == monster_id:
+                return t
+        return None
+
+    def _find_monster_in_crossfire(self, shooter, ray_start: glm.vec3,
+                                    ray_end: glm.vec3):
+        """Check if a living monster (other than the shooter) intersects
+        the ray from ray_start to ray_end.  Returns the closest hit monster
+        or None.  Used for Doom-style infighting — when monster A fires at
+        the player and monster B is in the way, B takes the hit instead."""
+        ray_dir = ray_end - ray_start
+        ray_len = glm.length(ray_dir)
+        if ray_len < 1.0:
+            return None
+        ray_dir = ray_dir / ray_len
+
+        best_t = ray_len
+        best_victim = None
+
+        for t in self.lt.things:
+            if not isinstance(t, MonsterThing):
+                continue
+            if t is shooter:
+                continue
+            if t.properties.get('dead', False) or t.properties.get('hidden', False):
+                continue
+
+            # Sphere intersection (same radius used by player shooting)
+            radius = 64.0
+            center = glm.vec3(t.pos[0], t.pos[1] + 64.0, t.pos[2])
+            oc = ray_start - center
+            a = glm.dot(ray_dir, ray_dir)
+            b = 2.0 * glm.dot(oc, ray_dir)
+            c = glm.dot(oc, oc) - radius * radius
+            disc = b * b - 4.0 * a * c
+            if disc < 0.0:
+                continue
+            hit_t = (-b - math.sqrt(disc)) / (2.0 * a)
+            if 0.0 < hit_t < best_t:
+                best_t = hit_t
+                best_victim = t
+
+        return best_victim
+
+    def _apply_monster_damage(self, victim, damage: int, attacker=None):
+        """Deal damage to a monster from another monster (infighting).
+        Sets the victim's aggro target to the attacker so it retaliates."""
+        health_raw = victim.properties.get('health', 100)
+        try:
+            health = int(health_raw)
+        except (ValueError, TypeError):
+            health = 100
+
+        new_health = health - damage
+        victim.properties['health'] = new_health
+
+        if self.monster_debug_active:
+            v_name = victim.properties.get('name', '?')
+            a_name = attacker.properties.get('name', '?') if attacker else '?'
+            debug_log("MonsterAI",
+                       f"Infighting: {v_name} took {damage} dmg from {a_name} "
+                       f"(health {health} -> {new_health})")
+
+        if new_health <= 0:
+            victim.properties['dead'] = True
+            victim.properties.pop('is_shooting', None)
+            victim.properties.pop('_aggro_target', None)
+            if self.lt.io_manager:
+                self.lt.io_manager.fire_output(victim, 'OnDeath')
+        elif attacker is not None:
+            # Retaliate — set aggro toward the attacker
+            victim.properties['_aggro_target'] = id(attacker)
+            # Wake the victim if it was asleep
+            victim.properties['awake'] = True
 
     # -------------------------------------------------------------------------
     # Patrol system (PathNode navigation) — UNCHANGED

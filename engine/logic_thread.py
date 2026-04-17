@@ -132,6 +132,7 @@ class LogicThread(threading.Thread):
         self.player_dead = False
         self.god_mode = False
         self.buddha_mode = False
+        self.notarget = False
         
         # I/O System
         self.io_manager = None
@@ -265,6 +266,7 @@ class LogicThread(threading.Thread):
             self.player_dead = False
             self.god_mode = False
             self.buddha_mode = False
+            self.notarget = False
             
             # Reset pickup state
             self.collected_pickups.clear()
@@ -1250,5 +1252,3 @@ class LogicThread(threading.Thread):
 
         write_state.visible_things = visible_things
         write_state.timestamp = time.perf_counter()
-
-
