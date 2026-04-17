@@ -394,12 +394,12 @@
         {
             "pos": [
                 -832.0,
-                224.0,
+                352.0,
                 -1216.0
             ],
             "size": [
                 2944.0,
-                576.0,
+                832.0,
                 128.0
             ],
             "textures": {
@@ -625,13 +625,13 @@
         {
             "pos": [
                 -1248.0,
-                224.0,
-                512.0
+                352.0,
+                552.0
             ],
             "size": [
                 832.0,
-                576.0,
-                256.0
+                832.0,
+                336.0
             ],
             "textures": {
                 "north": "default.png",
@@ -646,12 +646,12 @@
         {
             "pos": [
                 -1464.0,
-                376.0,
+                504.0,
                 -304.0
             ],
             "size": [
                 400.0,
-                272.0,
+                528.0,
                 384.0
             ],
             "textures": {
@@ -711,12 +711,12 @@
         {
             "pos": [
                 -792.0,
-                176.0,
+                96.0,
                 112.0
             ],
             "size": [
                 80.0,
-                160.0,
+                320.0,
                 352.0
             ],
             "textures": {
@@ -765,14 +765,14 @@
         },
         {
             "pos": [
-                -2240.0,
-                224.0,
-                320.0
+                -2496.0,
+                352.0,
+                -608.0
             ],
             "size": [
-                128.0,
-                576.0,
-                2944.0
+                640.0,
+                832.0,
+                1088.0
             ],
             "textures": {
                 "north": "default.png",
@@ -933,14 +933,14 @@
         },
         {
             "pos": [
-                -1920.0,
+                -1984.0,
                 -56.0,
-                112.0
+                688.0
             ],
             "size": [
-                512.0,
+                1664.0,
                 16.0,
-                544.0
+                1696.0
             ],
             "textures": {
                 "north": "default.png",
@@ -951,6 +951,343 @@
                 "down": "default.png"
             },
             "id": "5ecf8340-076c-4b09-ac68-bf7ed4ad6953"
+        },
+        {
+            "pos": [
+                -1496.0,
+                248.0,
+                136.0
+            ],
+            "size": [
+                48.0,
+                16.0,
+                496.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "9a39b6a1-cb91-4425-a4e2-b6a729e4572f"
+        },
+        {
+            "pos": [
+                -1544.0,
+                256.0,
+                136.0
+            ],
+            "size": [
+                48.0,
+                32.0,
+                496.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "5acbb354-f3b2-42d0-a2e7-eede16887f62"
+        },
+        {
+            "pos": [
+                -1592.0,
+                264.0,
+                136.0
+            ],
+            "size": [
+                48.0,
+                48.0,
+                496.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "605ed589-c79a-4e0d-bc23-28ea1303ef3d"
+        },
+        {
+            "pos": [
+                -1640.0,
+                272.0,
+                136.0
+            ],
+            "size": [
+                48.0,
+                64.0,
+                496.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "0b9170a4-24f7-4779-9936-914ea875b26a"
+        },
+        {
+            "pos": [
+                -1920.0,
+                304.0,
+                136.0
+            ],
+            "size": [
+                512.0,
+                32.0,
+                496.0
+            ],
+            "textures": {
+                "north": "Metal_08-512x512.png",
+                "south": "Metal_08-512x512.png",
+                "east": "Metal_08-512x512.png",
+                "west": "Metal_08-512x512.png",
+                "top": "Metal_08-512x512.png",
+                "down": "Metal_08-512x512.png"
+            },
+            "texture_tiling": true,
+            "id": "90c4e0ce-ba59-4321-bfd3-8019be6f5017"
+        },
+        {
+            "pos": [
+                -1648.0,
+                352.0,
+                408.0
+            ],
+            "size": [
+                64.0,
+                832.0,
+                80.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "0633eca5-0aac-434c-8aaa-3c3631dffd4f"
+        },
+        {
+            "pos": [
+                -1648.0,
+                352.0,
+                -136.0
+            ],
+            "size": [
+                64.0,
+                832.0,
+                80.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "935b22d8-64bd-48a2-ac10-6c648816fc71"
+        },
+        {
+            "pos": [
+                -1936.0,
+                728.0,
+                -136.0
+            ],
+            "size": [
+                512.0,
+                80.0,
+                80.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "87b8c75a-0edf-44d4-b85e-479e6b452830"
+        },
+        {
+            "pos": [
+                -1936.0,
+                728.0,
+                408.0
+            ],
+            "size": [
+                512.0,
+                80.0,
+                80.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "f93e8edb-4a5f-4573-8359-c5bc20d11168"
+        },
+        {
+            "pos": [
+                -160.0,
+                648.0,
+                -224.0
+            ],
+            "size": [
+                1344.0,
+                240.0,
+                1888.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "00d992fe-9b03-40d8-80ae-639e7ccb0672"
+        },
+        {
+            "pos": [
+                -2240.0,
+                352.0,
+                672.0
+            ],
+            "size": [
+                128.0,
+                832.0,
+                704.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "aa956ec9-d1fc-4da0-9512-be52fe28f127"
+        },
+        {
+            "pos": [
+                -2728.0,
+                352.0,
+                736.0
+            ],
+            "size": [
+                176.0,
+                832.0,
+                1600.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "aa956ec9-d1fc-4da0-9512-be52fe28f127"
+        },
+        {
+            "pos": [
+                -2496.0,
+                120.0,
+                160.0
+            ],
+            "size": [
+                640.0,
+                368.0,
+                448.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "03deeb1e-52d8-4a61-9fe5-72b8b5c8721d"
+        },
+        {
+            "pos": [
+                -1320.0,
+                352.0,
+                1440.0
+            ],
+            "size": [
+                2640.0,
+                832.0,
+                192.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "9c8f2a20-2892-4cc4-a696-4b881cf21aa5"
+        },
+        {
+            "pos": [
+                -1248.0,
+                352.0,
+                1304.0
+            ],
+            "size": [
+                832.0,
+                832.0,
+                464.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "690b26ee-154c-4be6-8a95-e8e257b3abbb"
+        },
+        {
+            "pos": [
+                -1048.0,
+                352.0,
+                896.0
+            ],
+            "size": [
+                464.0,
+                832.0,
+                352.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "52cac55f-03ab-4ac2-8fb9-140b1ae50c38"
         }
     ],
     "things": [
@@ -1198,7 +1535,7 @@
             "type": "light",
             "pos": [
                 -1600.0,
-                432.0,
+                480.0,
                 112.0
             ],
             "properties": {
@@ -1326,6 +1663,126 @@
                 "name": "PlayerStart_1",
                 "id": "5c3a0f3e-5c76-474c-ae05-192cdd30259e",
                 "angle": 0.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                -2256.0,
+                448.0,
+                128.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_13",
+                "id": "065e0e89-06e5-4c77-95e9-940d2e096ac5",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 768.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                -2464.0,
+                224.0,
+                736.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_15",
+                "id": "22d5a936-cfda-45e5-9d9c-3832408098e0",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                -2144.0,
+                272.0,
+                1184.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_16",
+                "id": "551a329b-ce6b-481e-b5e0-8c80cfb9b0cf",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                -1888.0,
+                192.0,
+                784.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_17",
+                "id": "09c21079-85e1-4356-8f0f-eda36c52d5f4",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
             },
             "io_connections": []
         }
