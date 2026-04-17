@@ -661,7 +661,16 @@ class View2D(QWidget):
     def draw_mover_arrow(self, painter, brush, ax1, ax2, ax_map):
         direction = brush.get('direction', [0, 1, 0])
         distance = brush.get('distance', 128.0)
-        start_3d = brush['pos']
+
+        # In play mode, anchor arrow at the mover's starting position
+        # so the brush visually travels along the arrow path.
+        # In edit mode, use current pos so the arrow follows the brush when repositioned.
+        play_mode = getattr(self.main_window.view_3d, 'play_mode', False)
+        if play_mode and 'original_pos' in brush:
+            start_3d = brush['original_pos']
+        else:
+            start_3d = brush['pos']
+
         d_vec = np.array(direction, dtype=float)
         norm = np.linalg.norm(d_vec)
         if norm == 0: return 
@@ -2332,4 +2341,3 @@ class View2D(QWidget):
     def zoom_out(self):
         self.zoom_factor *= 0.8
         self.update()
-
