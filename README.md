@@ -5,7 +5,7 @@
 
 <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="MIT License">  <img src="https://img.shields.io/badge/status-Active%20Development-orange?style=for-the-badge" alt="Status">
 
-### _A real-time liminal Quake/Hammer-style level editor and game engine_
+### _A real-time liminal Quake/Hammer-style CSG level editor and game engine_
 
 * For rapid block-out, logic wiring, and gameplay testing.
 * Designed to bring back the immediacy of classic Radiant/Worldcraft workflows.
