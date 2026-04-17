@@ -12,7 +12,7 @@
 
 ### [Download for Windows and MacOS](https://github.com/ViciousSquid/Fio/releases) | [📄Getting started guide](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) 
 #### Linux users: use the included Dockerfile or follow [these quick steps](https://github.com/ViciousSquid/Fio#-quickstart)
- <img width="2039" height="1171" alt="image" src="https://github.com/user-attachments/assets/0422c267-5131-4306-a25d-cc2f716e5eae" />
+<img src="https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExaXV6dnBteGgwOXZrbHE2MWh1a20zdDE4cWVvdDAwYjNoeWFpNmg0OCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/rgEZ1KmY48KpQD0Azw/giphy.gif" width="1024" alt="description">
 
 
 
