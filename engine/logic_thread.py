@@ -23,13 +23,16 @@ from .camera import Camera
 
 # Import Thing subclasses for type checking
 try:
-    from editor.things import Speaker, Pickup, Light, Monster as MonsterThing, PathNode
+    from editor.things import (Speaker, Pickup, Light, Monster as MonsterThing,
+                               PathNode, LogicTimer, PlayerStart)
 except ImportError:
     Speaker = None
     Pickup = None
     Light = None
     MonsterThing = None
     PathNode = None
+    LogicTimer = None
+    PlayerStart = None
 
 # Import I/O system
 try:
@@ -197,6 +200,16 @@ class LogicThread(threading.Thread):
         # Monster AI (delegated to separate class)
         self.monster_ai = MonsterAI(self)
 
+        # Mover PathNode waypoint state (used by io_handlers FollowPath)
+        self.mover_path_states = {}
+
+        # Cinematic camera state (used by io_handlers LogicCamera)
+        self.cinematic_state = None
+
+        # Entity lookup caches — built on play-mode enter
+        self._name_cache = {}
+        self._id_cache = {}
+
         # Performance Monitoring
         self.actual_tps = 0.0
         self._tick_count = 0
@@ -244,6 +257,21 @@ class LogicThread(threading.Thread):
         if not entity_id:
             return None
         return self._id_cache.get(entity_id)
+
+    def _find_path_node_by_name(self, name: str):
+        """Return PathNode thing with given name, or None.
+        Used by io_handlers (trigger_teleport, camera_start, spawner_spawn).
+        Delegates to the name cache for O(1) lookup."""
+        if not name or PathNode is None:
+            return None
+        entity = self._name_cache.get(name)
+        if entity is not None and isinstance(entity, PathNode):
+            return entity
+        # Fallback: linear scan (in case cache is stale)
+        for t in self.things:
+            if isinstance(t, PathNode) and t.properties.get('name', '') == name:
+                return t
+        return None
 
     # =========================================================================
     # PLAYER & MODE MANAGEMENT
@@ -295,19 +323,7 @@ class LogicThread(threading.Thread):
             self.muzzle_flash_active = False
 
             # Reset monster AI state (delegated)
-            self.monster_ai.monster_states = {}
-            if MonsterThing:
-                for thing in self.things:
-                    if isinstance(thing, MonsterThing):
-                        thing.properties.pop('is_shooting', None)
-                        thing.properties.pop('dead', None)
-                        thing.properties.pop('_vel_y', None)
-                        triggered   = thing.properties.get('triggered', False)
-                        wake_sight  = thing.properties.get('wake_on_sight', True)
-                        if triggered or wake_sight:
-                            thing.properties['awake'] = False
-                        else:
-                            thing.properties['awake'] = True
+            self._reset_all_monsters(clear_dead=True)
             
             # Reset I/O system
             if self.io_manager:
@@ -327,6 +343,9 @@ class LogicThread(threading.Thread):
             self._spatial_grid = SpatialGrid(cell_size=512.0)
             self._spatial_grid.populate(self.brushes)
             self.monster_ai.set_spatial_grid(self._spatial_grid)
+
+            # Reset cinematic state (mover_path_states already reset by _init_movers)
+            self.cinematic_state = None
 
             # Fire OnPlayerSpawn
             self._fire_player_spawn_outputs()
@@ -359,33 +378,45 @@ class LogicThread(threading.Thread):
                 self._spatial_grid.clear()
                 self._spatial_grid = None
 
+            # Reset mover path / cinematic state
+            self.mover_path_states = {}
+            self.cinematic_state = None
+
             # Reset monster AI state
-            self.monster_ai.monster_states = {}
-            if MonsterThing:
-                for thing in self.things:
-                    if isinstance(thing, MonsterThing):
-                        thing.properties.pop('is_shooting', None)
-                        thing.properties.pop('_vel_y', None)
-                        triggered  = thing.properties.get('triggered', False)
-                        wake_sight = thing.properties.get('wake_on_sight', True)
-                        if triggered or wake_sight:
-                            thing.properties['awake'] = False
-                        else:
-                            thing.properties['awake'] = True
+            self._reset_all_monsters(clear_dead=False)
     
+    def _reset_all_monsters(self, clear_dead=True):
+        """Reset all monster AI state. Called when entering or exiting play mode.
+        clear_dead: if True, also clear the 'dead' property (entering play mode)."""
+        self.monster_ai.monster_states = {}
+        if not MonsterThing:
+            return
+        for thing in self.things:
+            if not isinstance(thing, MonsterThing):
+                continue
+            thing.properties.pop('is_shooting', None)
+            thing.properties.pop('_vel_y', None)
+            if clear_dead:
+                thing.properties.pop('dead', None)
+            triggered  = thing.properties.get('triggered', False)
+            wake_sight = thing.properties.get('wake_on_sight', True)
+            if triggered or wake_sight:
+                thing.properties['awake'] = False
+            else:
+                thing.properties['awake'] = True
+
     def _fire_player_spawn_outputs(self):
         if not self.io_manager:
             return
-        from editor.things import PlayerStart
+        if not PlayerStart:
+            return
         for thing in self.things:
             if isinstance(thing, PlayerStart):
                 self.io_manager.fire_output(thing, 'OnPlayerSpawn')
                 break
     
     def _init_logic_timers(self):
-        try:
-            from editor.things import LogicTimer
-        except ImportError:
+        if not LogicTimer:
             return
         for thing in self.things:
             if isinstance(thing, LogicTimer):
@@ -419,13 +450,25 @@ class LogicThread(threading.Thread):
 
     def _init_movers(self):
         self.mover_states = {}
+        self.mover_path_states = {}
         self.movers = []
         for i, brush in enumerate(self.brushes):
             if brush.get('is_mover'):
-                self.movers.append(brush)
-                if not brush.get('move_once', False):
-                    if 'original_pos' not in brush:
-                        brush['original_pos'] = list(brush['pos'])
+                self.movers.append((i, brush))
+                if 'original_pos' not in brush:
+                    brush['original_pos'] = list(brush['pos'])
+
+                # Auto-init PathNode-following if path_target is set
+                path_target = brush.get('path_target', '')
+                if path_target and brush.get('start_on', False):
+                    self.mover_path_states[i] = {
+                        'current_node': path_target,
+                        'lerp_t':       0.0,
+                        'origin':       list(brush['pos']),
+                        'waiting':      False,
+                        'wait_remaining': 0.0,
+                    }
+                elif not brush.get('move_once', False):
                     self.mover_states[i] = {'progress': 0.0, 'forward': True}
 
     def _reset_movers(self):
@@ -440,7 +483,7 @@ class LogicThread(threading.Thread):
         self.doors = []
         for i, brush in enumerate(self.brushes):
             if brush.get('is_door'):
-                self.doors.append(brush)
+                self.doors.append((i, brush))
                 if 'original_pos' not in brush:
                     brush['original_pos'] = list(brush['pos'])
                 self.door_states[i] = {
@@ -584,9 +627,11 @@ class LogicThread(threading.Thread):
         jump = Key_Space in keys
         crouch = Key_C in keys
         
-        # Physics update
+        # Physics update — extract brush dicts from (index, brush) tuples
+        mover_brushes = [b for _, b in self.movers]
+        door_brushes = [b for _, b in self.doors]
         self.player.update(delta, move_dir, jump, crouch, self.brushes, 
-                          self.movers, self.doors, self.terrain,
+                          mover_brushes, door_brushes, self.terrain,
                           spatial_grid=getattr(self, '_spatial_grid', None))
         
         # Gameplay
@@ -608,9 +653,7 @@ class LogicThread(threading.Thread):
     # =========================================================================
     
     def _update_logic_timers(self, delta: float):
-        try:
-            from editor.things import LogicTimer
-        except ImportError:
+        if not LogicTimer:
             return
         
         for thing in self.things:
@@ -658,19 +701,25 @@ class LogicThread(threading.Thread):
                      min_b.y <= player_pos.y <= max_b.y and
                      min_b.z <= player_pos.z <= max_b.z)
             
+            bid = id(brush)
             if inside:
-                currently_in.add(i)
-                if i not in self.player_in_triggers:
-                    self._on_trigger_enter(brush, i)
+                currently_in.add(bid)
+                if bid not in self.player_in_triggers:
+                    self._on_trigger_enter(brush, bid)
                 else:
                     if brush.get('trigger_action') == 'hurt':
-                        self._process_hurt_trigger(brush, i)
+                        self._process_hurt_trigger(brush, bid)
         
-        for i in self.player_in_triggers:
-            if i not in currently_in:
-                brush = self.brushes[i] if i < len(self.brushes) else None
+        for bid in self.player_in_triggers:
+            if bid not in currently_in:
+                # Find the brush by id — safe even if list order changed
+                brush = None
+                for b in self.brushes:
+                    if id(b) == bid:
+                        brush = b
+                        break
                 if brush:
-                    self._on_trigger_exit(brush, i)
+                    self._on_trigger_exit(brush, bid)
         
         self.player_in_triggers = currently_in
 
@@ -866,11 +915,18 @@ class LogicThread(threading.Thread):
     # =========================================================================
 
     def _update_movers(self, delta: float):
-        for i, brush in enumerate(self.brushes):
-            if not brush.get('is_mover') or brush.get('move_once', False):
+        for i, brush in self.movers:
+            if brush.get('move_once', False):
                 continue
             if not brush.get('start_on', False):
                 continue
+
+            # ---- PathNode-following movers ----
+            if i in self.mover_path_states:
+                self._update_mover_path(i, brush, delta)
+                continue
+
+            # ---- Direction-based oscillation (default) ----
             if i not in self.mover_states:
                 if 'original_pos' not in brush:
                     brush['original_pos'] = list(brush['pos'])
@@ -909,10 +965,93 @@ class LogicThread(threading.Thread):
             if self.player and self.player.ground_object == brush:
                 self.player.pos += glm.vec3(move_delta[0], move_delta[1], move_delta[2])
 
+    def _update_mover_path(self, idx: int, brush: dict, delta: float):
+        """Move a mover along a PathNode chain."""
+        state = self.mover_path_states[idx]
+        node_name = state['current_node']
+        if not node_name:
+            return
+
+        node = self._find_path_node_by_name(node_name)
+        if node is None:
+            debug_log("IO", f"Mover path: node '{node_name}' not found — stopping")
+            self.mover_path_states.pop(idx, None)
+            return
+
+        # ---- Waiting at a node ----
+        if state['waiting']:
+            state['wait_remaining'] -= delta
+            if state['wait_remaining'] <= 0.0:
+                state['waiting'] = False
+                # Advance to next node in chain
+                next_name = node.get_next_node_name()
+                if next_name:
+                    state['origin'] = list(brush['pos'])
+                    state['current_node'] = next_name
+                    state['lerp_t'] = 0.0
+                else:
+                     # End of chain — hold position
+                    brush['start_on'] = False
+                    if self.io_manager:
+                        self.io_manager.fire_output(brush, 'OnFullyClosed')
+                    self.mover_path_states.pop(idx, None)
+            return
+
+        # ---- Lerp toward target node ----
+        origin = np.array(state['origin'], dtype=float)
+        target = np.array(node.pos, dtype=float)
+        segment_vec = target - origin
+        segment_len = np.linalg.norm(segment_vec)
+
+        if segment_len < 1.0:
+            # Already at target — snap and start waiting
+            state['lerp_t'] = 1.0
+        else:
+            speed = brush.get('speed', 64.0) * node.get_speed()
+            state['lerp_t'] += (speed * delta) / segment_len
+
+        if state['lerp_t'] >= 1.0:
+            state['lerp_t'] = 1.0
+            new_pos = target
+            move_delta = new_pos - np.array(brush['pos'])
+            brush['pos'] = new_pos.tolist()
+
+            # Carry player on platform
+            if self.player and self.player.ground_object == brush:
+                self.player.pos += glm.vec3(float(move_delta[0]), float(move_delta[1]), float(move_delta[2]))
+
+            # Fire arrival output
+            if self.io_manager:
+                self.io_manager.fire_output(brush, 'OnFullyOpen')
+
+            # Start waiting (or advance immediately if wait_time == 0)
+            wait_time = node.get_wait_time()
+            if wait_time > 0.0:
+                state['waiting'] = True
+                state['wait_remaining'] = wait_time
+            else:
+                next_name = node.get_next_node_name()
+                if next_name:
+                    state['origin'] = list(brush['pos'])
+                    state['current_node'] = next_name
+                    state['lerp_t'] = 0.0
+                else:
+                    if self.io_manager:
+                        self.io_manager.fire_output(brush, 'OnFullyClosed')
+                    self.mover_path_states.pop(idx, None)
+        else:
+            # Smooth cubic easing
+            t = state['lerp_t']
+            eased = 4 * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 3) / 2
+            new_pos = origin + segment_vec * eased
+            move_delta = new_pos - np.array(brush['pos'])
+            brush['pos'] = new_pos.tolist()
+
+            if self.player and self.player.ground_object == brush:
+                self.player.pos += glm.vec3(float(move_delta[0]), float(move_delta[1]), float(move_delta[2]))
+
     def _update_doors(self, delta: float):
-        for i, brush in enumerate(self.brushes):
-            if not brush.get('is_door'):
-                continue
+        for i, brush in self.doors:
             if i not in self.door_states:
                 continue
             state = self.door_states[i]
@@ -1033,9 +1172,8 @@ class LogicThread(threading.Thread):
                 closest_brush_hit = ray_origin + ray_dir * dist
         closest_monster = None
         closest_monster_dist = float('inf')
-        from editor.things import Monster
         for thing in self.things:
-            if not isinstance(thing, Monster):
+            if not isinstance(thing, MonsterThing):
                 continue
             if thing.properties.get('dead', False) or thing.properties.get('hidden', False):
                 continue
@@ -1062,12 +1200,11 @@ class LogicThread(threading.Thread):
             new_health = health - damage
             closest_monster.properties['health'] = new_health
             debug_log("MonsterAI", f"Monster {closest_monster.properties.get('name')} health: {health} -> {new_health} (weapon={self.active_weapon}, dmg={damage})")
-            if hasattr(self.game_state, 'sound_queue'):
-                self.game_state.sound_queue.append({
-                    'file': 'hit.wav',
-                    'volume': 1.0,
-                    'entity_id': id(closest_monster)
-                })
+            self.game_state.queue_sound({
+                'file': 'hit.wav',
+                'volume': 1.0,
+                'entity_id': id(closest_monster)
+            })
             if new_health <= 0:
                 closest_monster.properties['dead'] = True
                 closest_monster.properties.pop('is_shooting', None)

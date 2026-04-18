@@ -2,6 +2,7 @@ import threading
 import glm
 import time
 from typing import List, Any, Dict, Optional
+from collections import deque
 
 class RenderState:
     """
@@ -25,6 +26,7 @@ class RenderState:
         self.player_pitch = 0.0
         self.player_health = 100
         self.player_max_health = 100
+        self.player_dead = False
         self.active_weapon = None
         
         # Scene Data
@@ -54,6 +56,36 @@ class RenderState:
         self.culled_brushes = 0
         self.timestamp = 0.0
 
+    def reset(self):
+        """Reset all fields to defaults for reuse (avoids per-frame allocation)."""
+        self.camera_view_matrix = glm.mat4(1.0)
+        self.projection_matrix = glm.mat4(1.0)
+        self.is_play_mode = False
+        self.editor_camera_pos = glm.vec3(0, 0, 0)
+        self.editor_camera_yaw = 0.0
+        self.editor_camera_pitch = 0.0
+        self.editor_camera_fov = 90.0
+        self.player_pos = glm.vec3(0, 0, 0)
+        self.player_angle = 0.0
+        self.player_pitch = 0.0
+        self.player_health = 100
+        self.player_max_health = 100
+        self.player_dead = False
+        self.active_weapon = None
+        self.visible_brushes = []
+        self.all_brushes = []
+        self.visible_things = []
+        self.collected_keys = set()
+        self.hud_message = ""
+        self.bullet_marks = []
+        self.projectiles = []
+        self.muzzle_flash_active = False
+        self.monster_debug_active = False
+        self.monster_debug_rays = []
+        self.total_brushes = 0
+        self.culled_brushes = 0
+        self.timestamp = 0.0
+
 
 class ThreadedGameState:
     """
@@ -73,11 +105,18 @@ class ThreadedGameState:
         self._mouse_lock = threading.Lock()
         self._mouse_delta = (0.0, 0.0)
         
-        # Shot Queue
+        # Shot Queue — deque for O(1) popleft
         self._shot_lock = threading.Lock()
-        self._shot_queue = []
+        self._shot_queue = deque()
+
+        # Use key — protected by its own lock
+        self._use_key_lock = threading.Lock()
         self._use_key_pressed = False
-        
+
+        # Sound queue — thread-safe, accessed from logic and render threads
+        self._sound_lock = threading.Lock()
+        self.sound_queue = deque()
+
     def get_render_state(self) -> RenderState:
         """Called by RenderThread (Qt) to get the latest frame data."""
         with self._render_state_lock:
@@ -95,10 +134,12 @@ class ThreadedGameState:
     def request_swap(self):
         """Called by LogicThread when a frame is completely written."""
         with self._render_state_lock:
-            # Swap: write becomes read
+            # Swap: write becomes read, old read becomes next write buffer
+            old_read = self._read_state
             self._read_state = self._write_state
-            # Create fresh state for next write to avoid race conditions
-            self._write_state = RenderState()
+            # Reuse the old read state instead of allocating a new RenderState
+            old_read.reset()
+            self._write_state = old_read
             self._has_new_frame = True
 
     def try_swap(self) -> bool:
@@ -131,17 +172,20 @@ class ThreadedGameState:
 
     def set_use_key(self, pressed: bool):
         """Sets the state of the use key explicitly (True/False)."""
-        self._use_key_pressed = pressed
+        with self._use_key_lock:
+            self._use_key_pressed = pressed
     
     def set_use_key_pressed(self):
         """Convenience method called by main_window.py to trigger the use key."""
-        self._use_key_pressed = True
+        with self._use_key_lock:
+            self._use_key_pressed = True
         
     def consume_use_key(self) -> bool:
-        if self._use_key_pressed:
-            self._use_key_pressed = False
-            return True
-        return False
+        with self._use_key_lock:
+            if self._use_key_pressed:
+                self._use_key_pressed = False
+                return True
+            return False
 
     # --- Shooting Handling ---
 
@@ -152,6 +196,22 @@ class ThreadedGameState:
     def consume_shot(self):
         with self._shot_lock:
             if self._shot_queue:
-                self._shot_queue.pop(0)
+                self._shot_queue.popleft()
                 return True
             return False
+
+    # --- Sound Queue ---
+
+    def queue_sound(self, request: dict):
+        """Thread-safe: enqueue a sound request from any thread."""
+        with self._sound_lock:
+            self.sound_queue.append(request)
+
+    def consume_sounds(self) -> list:
+        """Thread-safe: drain all pending sound requests (called from render thread)."""
+        with self._sound_lock:
+            if not self.sound_queue:
+                return []
+            result = list(self.sound_queue)
+            self.sound_queue.clear()
+            return result

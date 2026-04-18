@@ -264,12 +264,11 @@ class MonsterAI:
                         else:
                             self.lt._apply_player_damage(damage)
 
-                    if hasattr(self.lt.game_state, 'sound_queue'):
-                        self.lt.game_state.sound_queue.append({
-                            'file': 'shoot.wav',
-                            'volume': 0.6,
-                            'entity_id': mid,
-                        })
+                    self.lt.game_state.queue_sound({
+                        'file': 'shoot.wav',
+                        'volume': 0.6,
+                        'entity_id': mid,
+                    })
 
                     if self.lt.io_manager:
                         self.lt.io_manager.fire_output(thing, 'OnAttack')
@@ -688,12 +687,14 @@ class MonsterAI:
         return chain
 
     def _find_path_node_by_name(self, name: str):
-        """Return PathNode thing with given name, or None."""
+        """Return PathNode thing with given name, or None.
+        Uses LogicThread's name cache for O(1) lookup."""
         if not name or PathNode is None:
             return None
-        for t in self.lt.things:
-            if isinstance(t, PathNode) and t.properties.get('name', '') == name:
-                return t
+        # Use the O(1) name cache on the parent LogicThread
+        entity = self.lt._name_cache.get(name)
+        if entity is not None and isinstance(entity, PathNode):
+            return entity
         return None
 
     def _find_nearby_detour_node(self, m_pos: glm.vec3, blocked_node_name: str, mtype: str) -> str:
@@ -727,8 +728,6 @@ class MonsterAI:
                 continue
 
             direction = diff / dist
-            if mtype != 'flying':
-                direction = glm.normalize(glm.vec3(direction.x, 0.0, direction.z))
             test_pos = m_pos + direction * MONSTER_MOVE_SPEED * 0.016
             if self._monster_overlaps_wall(test_pos.x, test_pos.y, test_pos.z, MONSTER_WALL_MARGIN):
                 continue

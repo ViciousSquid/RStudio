@@ -78,7 +78,6 @@ class QtGameView(QOpenGLWidget):
 
         # Threading Initialization
         self.game_state = ThreadedGameState()
-        self.game_state.sound_queue = []
 
         self.logic_thread: Optional[LogicThread] = None
         self.use_threading = True
@@ -399,11 +398,7 @@ class QtGameView(QOpenGLWidget):
 
     def _process_sound_queue(self):
         """Checks the game state for new sound requests and plays them using pooled objects."""
-        if not hasattr(self.game_state, 'sound_queue'):
-            return
-
-        while self.game_state.sound_queue:
-            request = self.game_state.sound_queue.pop(0)
+        for request in self.game_state.consume_sounds():
             sound_file = request.get('file')
             volume = request.get('volume', 1.0)
 
