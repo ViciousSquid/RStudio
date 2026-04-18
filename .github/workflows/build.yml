@@ -94,7 +94,7 @@ jobs:
             --output-filename=Fio \
             --assume-yes-for-downloads \
             --plugin-enable=pyqt5 \
-            --include-qt-plugins=sensible,platforms,styles,imageformats \
+            --include-qt-plugins=sensible,platforms,imageformats \
             --include-package=engine \
             --include-package=editor \
             --include-package=PIL \
@@ -168,7 +168,7 @@ jobs:
             --output-filename=Fio \
             --assume-yes-for-downloads \
             --plugin-enable=pyqt5 \
-            --include-qt-plugins=sensible,platforms,styles,imageformats \
+            --include-qt-plugins=sensible,platforms,imageformats \
             --include-package=engine \
             --include-package=editor \
             --include-package=PIL \
