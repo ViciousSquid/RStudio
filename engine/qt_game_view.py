@@ -667,6 +667,27 @@ class QtGameView(QOpenGLWidget):
             box_w = max(wt, wb) + (padding_x * 2)
             box_h = total_text_h + (padding_y * 2)
 
+            # FIX: the box geometry above was previously computed but never
+            # drawn — so entering face mode produced no visible UI at all.
+            # Draw the translucent background box plus the two lines of text
+            # centred horizontally at the bottom of the viewport.
+            box_x = cx - box_w // 2
+            box_y = self.height() - margin_bottom - box_h
+
+            painter.fillRect(box_x, box_y, box_w, box_h, QColor(0, 0, 0, 180))
+            painter.setPen(QPen(QColor(240, 128, 0), 2))  # orange border (theme accent)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(box_x, box_y, box_w, box_h)
+
+            painter.setPen(QColor(255, 255, 255))
+            painter.setFont(font_top)
+            top_baseline = box_y + padding_y + mt.ascent()
+            painter.drawText(cx - wt // 2, top_baseline, msg_top)
+
+            painter.setFont(font_bot)
+            bot_baseline = top_baseline + (ht - mt.ascent()) + spacing + mb.ascent()
+            painter.drawText(cx - wb // 2, bot_baseline, msg_bot)
+
         painter.end()
 
     def _render_bullet_marks(self, marks):
@@ -690,6 +711,11 @@ class QtGameView(QOpenGLWidget):
             alpha = mark['alpha']
 
             gl.glUniform3f(uniforms['color'], 0.0, 0.0, 0.0)
+            # FIX: the 'simple' fragment shader uses a separate 'alpha' uniform
+            # (FragColor = vec4(color, alpha); see engine/shaders.py). Previously
+            # this value was left at whatever the last caller set, so bullet-mark
+            # fade-out never worked. Set it explicitly per mark.
+            gl.glUniform1f(uniforms['alpha'], alpha)
 
             mat = glm.translate(glm.mat4(1.0), glm.vec3(pos[0], pos[1], pos[2]))
             mat = glm.scale(mat, glm.vec3(2.0, 2.0, 2.0))
@@ -1849,6 +1875,3 @@ class QtGameView(QOpenGLWidget):
             self.debug_console_window.command_input.setText(cmd)
             self.debug_console_window._on_command_entered()
         self._close_console_overlay()
-
-
-
