@@ -10,7 +10,7 @@
 * For rapid block-out, logic wiring, and gameplay testing.
 * Designed to bring back the immediacy of classic Radiant/Worldcraft workflows.
 
-### [Download for Windows, macOS and Linux](https://github.com/ViciousSquid/Fio/releases) | [📄Getting started guide](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) 
+### [Download binaries for Windows, macOS and Linux](https://github.com/ViciousSquid/Fio/releases) | [📄Getting started guide](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) 
 #### Or use the included Dockerfile or [compile and run from source](https://github.com/ViciousSquid/Fio#-quickstart)
 <img src="https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExaXV6dnBteGgwOXZrbHE2MWh1a20zdDE4cWVvdDAwYjNoeWFpNmg0OCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/rgEZ1KmY48KpQD0Azw/giphy.gif" width="700" alt="description">
 
