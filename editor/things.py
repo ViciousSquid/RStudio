@@ -347,6 +347,22 @@ class Monster(Thing):
     pixmap_path = "assets/sprites/monsters/human/idle.png"   # fallback
     _subtype_sprites = {}  # cache keyed by full sprite path (includes dead/alive state)
 
+    # PERF: get_sprite_path used to run up to 5 os.path.isfile() calls every
+    # time it was called — and it is called per-Monster per-frame from
+    # qt_game_view.update_instance_textures. This cache memoises the resolved
+    # (idle, dead, shoot) default paths by (monster_type, variant) so the
+    # filesystem only sees the stats once per distinct monster configuration.
+    # Keyed tuple: (mtype, variant)
+    # Stored tuple: (default_idle, default_dead, default_shoot)
+    _default_path_cache = {}
+    # Separate cache for custom-path validity — the Customise dialog can set
+    # arbitrary paths per-monster. Caches the result of the existence check so
+    # subsequent frames don't re-stat the file.
+    # Keyed tuple: (abs_path,) -> bool
+    _custom_path_exists_cache = {}
+    # Cache the project_root lookup once per class; it never changes at runtime.
+    _cached_project_root = None
+
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'monster')
@@ -384,15 +400,78 @@ class Monster(Thing):
         self.properties.setdefault('sprite_width', default_w)
         self.properties.setdefault('sprite_height', default_h)
 
+    @classmethod
+    def _get_project_root(cls) -> str:
+        """Return the project root path, computed once per process."""
+        if cls._cached_project_root is None:
+            try:
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                cls._cached_project_root = os.path.abspath(
+                    os.path.join(script_dir, os.pardir))
+            except Exception:
+                cls._cached_project_root = os.getcwd()
+        return cls._cached_project_root
+
+    @classmethod
+    def _path_exists_cached(cls, abs_path: str) -> bool:
+        """os.path.isfile wrapper that memoises the result. Call
+        invalidate_sprite_caches() if sprite files change on disk at runtime."""
+        cached = cls._custom_path_exists_cache.get(abs_path)
+        if cached is None:
+            cached = os.path.isfile(abs_path)
+            cls._custom_path_exists_cache[abs_path] = cached
+        return cached
+
+    @classmethod
+    def _get_default_paths(cls, mtype: str, variant: str):
+        """Return (idle, dead, shoot) default sprite paths for this
+        (monster_type, variant) pair. Filesystem stats happen only on the
+        first call per unique key; results are cached thereafter."""
+        key = (mtype, variant)
+        cached = cls._default_path_cache.get(key)
+        if cached is not None:
+            return cached
+
+        project_root = cls._get_project_root()
+
+        base_idle  = f"assets/sprites/monsters/{mtype}/idle.png"
+        base_dead  = f"assets/sprites/monsters/{mtype}/dead.png"
+        base_shoot = f"assets/sprites/monsters/{mtype}/shoot.png"
+
+        if variant and variant != '<None>':
+            var_idle  = f"assets/sprites/monsters/{mtype}/{variant}/idle.png"
+            var_dead  = f"assets/sprites/monsters/{mtype}/{variant}/dead.png"
+            var_shoot = f"assets/sprites/monsters/{mtype}/{variant}/shoot.png"
+            default_idle  = var_idle  if cls._path_exists_cached(os.path.join(project_root, var_idle))  else base_idle
+            default_dead  = var_dead  if cls._path_exists_cached(os.path.join(project_root, var_dead))  else base_dead
+            default_shoot = var_shoot if cls._path_exists_cached(os.path.join(project_root, var_shoot)) else base_shoot
+        else:
+            default_idle  = base_idle
+            default_dead  = base_dead
+            default_shoot = base_shoot
+
+        # Verify default dead/shoot files exist; fall back to idle if not
+        if not cls._path_exists_cached(os.path.join(project_root, default_dead)):
+            default_dead = default_idle
+        if not cls._path_exists_cached(os.path.join(project_root, default_shoot)):
+            default_shoot = default_idle
+
+        result = (default_idle, default_dead, default_shoot)
+        cls._default_path_cache[key] = result
+        return result
+
     @staticmethod
     def _resolve_sprite(custom_path: str, default_path: str, project_root: str) -> str:
         """
         Return *custom_path* when the file exists on disk, otherwise return
         *default_path*.  Falls back silently — the caller guarantees the
         default path is the safest possible choice.
+
+        Uses the class-level existence cache so repeated calls don't re-stat.
         """
         if custom_path:
-            if os.path.isfile(os.path.join(project_root, custom_path)):
+            abs_custom = os.path.join(project_root, custom_path)
+            if Monster._path_exists_cached(abs_custom):
                 return custom_path
             print(f"[Monster] Custom sprite not found, using default: {custom_path}")
         return default_path
@@ -426,41 +505,20 @@ class Monster(Thing):
         Custom sprites set via the Customise dialog are tried first.
         Any missing custom file is logged once and falls back to the
         appropriate default sprite for this monster_type automatically.
+
+        PERF: this used to do up to 5 os.path.isfile() calls every time, on a
+        hot path (called per-Monster per-frame). The default path resolution
+        is now memoised in the class-level _default_path_cache keyed by
+        (monster_type, variant), and custom-path existence is memoised in
+        _custom_path_exists_cache.
         """
         mtype       = self.properties.get('monster_type', 'human')
         variant     = self.properties.get('variant', '<None>')
         is_dead     = self.properties.get('dead', False)
         is_shooting = self.properties.get('is_shooting', False)
 
-        try:
-            script_dir   = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
-        except Exception:
-            project_root = os.getcwd()
-
-        # Build base and variant default paths
-        base_idle  = f"assets/sprites/monsters/{mtype}/idle.png"
-        base_dead  = f"assets/sprites/monsters/{mtype}/dead.png"
-        base_shoot = f"assets/sprites/monsters/{mtype}/shoot.png"
-
-        if variant and variant != '<None>':
-            var_idle  = f"assets/sprites/monsters/{mtype}/{variant}/idle.png"
-            var_dead  = f"assets/sprites/monsters/{mtype}/{variant}/dead.png"
-            var_shoot = f"assets/sprites/monsters/{mtype}/{variant}/shoot.png"
-            # Use variant path if the file exists, otherwise fall back to base
-            default_idle  = var_idle  if os.path.isfile(os.path.join(project_root, var_idle))  else base_idle
-            default_dead  = var_dead  if os.path.isfile(os.path.join(project_root, var_dead))  else base_dead
-            default_shoot = var_shoot if os.path.isfile(os.path.join(project_root, var_shoot)) else base_shoot
-        else:
-            default_idle  = base_idle
-            default_dead  = base_dead
-            default_shoot = base_shoot
-
-        # Verify default dead/shoot files exist; fall back to idle if not
-        if not os.path.isfile(os.path.join(project_root, default_dead)):
-            default_dead = default_idle
-        if not os.path.isfile(os.path.join(project_root, default_shoot)):
-            default_shoot = default_idle
+        project_root = Monster._get_project_root()
+        default_idle, default_dead, default_shoot = Monster._get_default_paths(mtype, variant)
 
         if is_dead:
             return self._resolve_sprite(
@@ -527,7 +585,15 @@ class Monster(Thing):
 
     @classmethod
     def clear_sprite_cache(cls):
+        """Clear all sprite-related caches.
+
+        Called when assets have been modified on disk (e.g., after asset
+        hot-reload or variant additions). Also resets the default-path and
+        custom-path existence caches introduced for the per-frame perf fix.
+        """
         cls._subtype_sprites.clear()
+        cls._default_path_cache.clear()
+        cls._custom_path_exists_cache.clear()
 
 
 class Pickup(Thing):
