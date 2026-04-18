@@ -1258,11 +1258,18 @@ class TerrainEditorWindow(QDialog):
         super().closeEvent(event)
 
     def hideEvent(self, event):
-        """Disable sculpt painting when the terrain editor is hidden."""
+        """Cleanup on hide: disable sculpt painting and stop the stats timer.
+
+        NOTE: This used to be two separate hideEvent methods on the class — the
+        second silently overrode the first, so the sculpt-painting disable was
+        never running. They're now merged.
+        """
         if self.sculpt_paint_btn.isChecked():
             self.sculpt_paint_btn.setChecked(False)
+        if hasattr(self, '_stats_timer'):
+            self._stats_timer.stop()
         super().hideEvent(event)
-    
+
     def regenerate_terrain(self):
         self.show_progress("Regenerating terrain...")
         self.terrain.mark_all_dirty()
@@ -1298,11 +1305,3 @@ class TerrainEditorWindow(QDialog):
             self._stats_timer = QTimer(self)
             self._stats_timer.timeout.connect(self.update_stats)
         self._stats_timer.start(500)
-    
-    def hideEvent(self, event):
-        super().hideEvent(event)
-        if hasattr(self, '_stats_timer'):
-            self._stats_timer.stop()
-
-
-
