@@ -1874,7 +1874,7 @@ class View2D(QWidget):
         add_logic_gate_action = logic_menu.addAction("LogicGate")
 
         # AI Menu Sub-section (navigation waypoints and AI hints)
-        ai_menu = menu.addMenu("AI")
+        ai_menu = menu.addMenu("Nodes")
         add_path_node_action = ai_menu.addAction("PathNode")
 
         # Open the menu using the captured position

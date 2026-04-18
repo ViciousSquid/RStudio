@@ -12,6 +12,7 @@ Manages all the data for the current level being edited, including:
 import json
 import copy
 import uuid
+from collections import deque
 from .things import Thing, Model
 from editor.things import update_all_counters_from_entities
 
@@ -40,7 +41,7 @@ class EditorState:
         self.selected_object = None
         self.terrain_data = None
         self._logic_graph_positions = {}  # Persisted node positions for the logic graph
-        self.undo_stack = []
+        self.undo_stack = deque(maxlen=50)
         self.redo_stack = []
 
         # Lightmap bake state — always present, even if baking is unavailable
@@ -351,9 +352,6 @@ class EditorState:
         }
         self.undo_stack.append(json.dumps(state))
         self.redo_stack.clear()
-
-        if len(self.undo_stack) > 50:
-            self.undo_stack.pop(0)
 
     def _serialize_brushes_for_undo(self):
         """Serialize brushes for undo stack (deep copy with I/O)."""

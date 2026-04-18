@@ -59,7 +59,6 @@ def render_obj_thumbnail(filepath, width, height):
     if scale == 0: scale = 1
     
     # 3D Transformation (isometric-ish view)
-    import math
     angle_y = math.radians(45)
     angle_x = math.radians(30)
     

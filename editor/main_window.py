@@ -957,91 +957,221 @@ class MainWindow(QMainWindow):
         if not brush or not isinstance(brush, dict):
             return
         
-        # Support both movers and doors
         is_mover = brush.get('is_mover', False)
         is_door = brush.get('is_door', False)
-        
         if not is_mover and not is_door:
             return
 
+        # Check for path-following preview
+        path_target = brush.get('path_target', '')
+        if path_target:
+            # Build chain of PathNodes
+            chain = []
+            visited = set()
+            current = path_target
+            while current and current not in visited:
+                node = self._find_path_node_by_name(current)
+                if not node:
+                    break
+                visited.add(current)
+                chain.append(node)
+                current = node.properties.get('next_node', '')
+            if not chain:
+                # No valid chain – fall back to oscillation preview
+                self._start_oscillation_preview(brush)
+                return
+
+            self.preview_data = {
+                'obj': brush,
+                'is_path': True,
+                'chain': chain,
+                'current_idx': 0,
+                'lerp_t': 0.0,
+                'speed': brush.get('speed', 64.0),
+                'origin': np.array(chain[0].pos, dtype=float),
+                'target': np.array(chain[0].pos, dtype=float),
+                'waiting': False,
+                'wait_remaining': 0.0,
+                'time': 0.0,
+            }
+            # Position the brush at the first node to start
+            brush['pos'] = list(chain[0].pos)
+            self.preview_timer.start(16)
+            return
+
+        # No path – use oscillation preview (original behaviour)
+        self._start_oscillation_preview(brush)
+
+    def _start_oscillation_preview(self, brush):
+        """Original sine-wave oscillation preview."""
         self.preview_data = {
             'obj': brush,
-            'original_pos': list(brush['pos']), # Deep copy coordinate
+            'is_path': False,
+            'original_pos': list(brush['pos']),
             'direction': np.array(brush.get('direction', [0, 1, 0]), dtype=float),
             'distance': brush.get('distance', 128.0),
             'speed': brush.get('speed', 64.0),
             'time': 0.0,
-            'is_door': is_door
+            'is_door': brush.get('is_door', False)
         }
-        
-        # Normalize direction
         norm = np.linalg.norm(self.preview_data['direction'])
         if norm > 0:
             self.preview_data['direction'] /= norm
+        self.preview_timer.start(16)
 
-        self.preview_timer.start(16) # ~60 FPS
+    def _find_path_node_by_name(self, name):
+        """Helper to locate a PathNode by name."""
+        for t in self.state.things:
+            from editor.things import PathNode
+            if isinstance(t, PathNode) and t.properties.get('name') == name:
+                return t
+        return None
 
     def stop_mover_preview(self):
         if self.preview_timer.isActive():
             self.preview_timer.stop()
             if self.preview_data and self.preview_data.get('obj'):
-                self.preview_data['obj']['pos'] = self.preview_data['original_pos']
-            self.preview_data = {}
-            self.update_views()
-            
-            # Check for Mover button
-            m_btn = self.property_editor._widgets.get('mover_preview_btn')
-            if m_btn:
-                m_btn.blockSignals(True)
-                m_btn.setChecked(False)
-                m_btn.setText("▶ Preview Movement")
-                m_btn.blockSignals(False)
+                if self.preview_data.get('is_path'):
+                    # Reset to the first node's position (or original)
+                    chain = self.preview_data.get('chain', [])
+                    if chain:
+                        self.preview_data['obj']['pos'] = list(chain[0].pos)
+                    else:
+                        self.preview_data['obj']['pos'] = self.preview_data.get('original_pos', [0,0,0])
+                else:
+                    self.preview_data['obj']['pos'] = self.preview_data['original_pos']
+                self.preview_data = {}
+                self.update_views()
                 
-            # Check for Door button
-            d_btn = self.property_editor._widgets.get('door_preview_btn')
-            if d_btn:
-                d_btn.blockSignals(True)
-                d_btn.setChecked(False)
-                d_btn.setText("▶ Preview Door")
-                d_btn.blockSignals(False)
+                # Reset buttons
+                m_btn = self.property_editor._widgets.get('mover_preview_btn')
+                if m_btn:
+                    m_btn.blockSignals(True)
+                    m_btn.setChecked(False)
+                    m_btn.setText("▶ Preview Movement")
+                    m_btn.blockSignals(False)
+                d_btn = self.property_editor._widgets.get('door_preview_btn')
+                if d_btn:
+                    d_btn.blockSignals(True)
+                    d_btn.setChecked(False)
+                    d_btn.setText("▶ Preview Door")
+                    d_btn.blockSignals(False)
 
     def update_mover_preview(self):
         if not self.preview_data:
             return
 
-        dt = 0.016 # 16ms
-        self.preview_data['time'] += dt
-        
-        # Calculate sine wave movement (0 -> 1 -> 0)
-        # Using speed to determine frequency
-        speed = self.preview_data['speed']
-        distance = self.preview_data['distance']
-        
-        # Simple Ping-Pong logic
-        # d = speed * time
-        # We want to oscillate between 0 and distance
-        
-        if distance == 0: return
+        dt = 0.016  # ~60 FPS
+        data = self.preview_data
+        brush = data['obj']
 
-        # Cycle duration = (Distance / Speed) * 2
-        cycle_duration = (distance / speed) * 2 if speed > 0 else 1.0
-        
-        # Triangle wave or Sine wave? Mover code in game engines varies.
-        # Let's use a Sine wave for smooth preview: 0 to 1
-        # sin(t) goes -1 to 1. We want 0 to 1.
-        # (sin(t) + 1) / 2
-        
-        progress = (math.sin(self.preview_data['time'] * (speed / distance) * math.pi - (math.pi/2)) + 1) / 2
-        
-        current_offset = progress * distance
-        
-        movement_vector = self.preview_data['direction'] * current_offset
-        original_pos = np.array(self.preview_data['original_pos'])
-        
-        new_pos = original_pos + movement_vector
-        
-        self.preview_data['obj']['pos'] = new_pos.tolist()
-        self.update_views()
+        # ------------------------------------------------------------------
+        #  Path‑following preview (when is_path is True)
+        # ------------------------------------------------------------------
+        if data.get('is_path'):
+            chain = data['chain']
+            idx = data['current_idx']
+            if idx >= len(chain):
+                self.stop_mover_preview()
+                return
+
+            current_node = chain[idx]
+            target_pos = np.array(current_node.pos, dtype=float)
+
+            # If waiting at a node, count down and then advance
+            if data['waiting']:
+                data['wait_remaining'] -= dt
+                if data['wait_remaining'] <= 0.0:
+                    data['waiting'] = False
+                    idx += 1
+                    data['current_idx'] = idx
+                    if idx < len(chain):
+                        data['origin'] = target_pos.copy()
+                        data['target'] = np.array(chain[idx].pos, dtype=float)
+                        data['lerp_t'] = 0.0
+                    else:
+                        # End of chain reached
+                        brush['pos'] = target_pos.tolist()
+                        self.update_views()
+                        self.stop_mover_preview()
+                        return
+                else:
+                    # Still waiting, no movement
+                    return
+
+            # Move toward the current target node
+            origin = data['origin']
+            target = data['target']
+            segment_vec = target - origin
+            segment_len = np.linalg.norm(segment_vec)
+
+            if segment_len < 1.0:
+                # Already at the node – snap and start waiting (or advance immediately)
+                data['lerp_t'] = 1.0
+                brush['pos'] = target.tolist()
+                wait_time = current_node.properties.get('wait_time', 0.0)
+                if wait_time > 0.0:
+                    data['waiting'] = True
+                    data['wait_remaining'] = wait_time
+                else:
+                    idx += 1
+                    data['current_idx'] = idx
+                    if idx < len(chain):
+                        data['origin'] = target.copy()
+                        data['target'] = np.array(chain[idx].pos, dtype=float)
+                        data['lerp_t'] = 0.0
+                    else:
+                        brush['pos'] = target.tolist()
+                        self.update_views()
+                        self.stop_mover_preview()
+                        return
+            else:
+                # Linear interpolation with speed multiplier
+                speed = data['speed'] * current_node.properties.get('speed', 1.0)
+                data['lerp_t'] += (speed * dt) / segment_len
+                t = min(data['lerp_t'], 1.0)
+                new_pos = origin + segment_vec * t
+                brush['pos'] = new_pos.tolist()
+
+                if t >= 1.0:
+                    # Arrived at the node
+                    wait_time = current_node.properties.get('wait_time', 0.0)
+                    if wait_time > 0.0:
+                        data['waiting'] = True
+                        data['wait_remaining'] = wait_time
+                    else:
+                        idx += 1
+                        data['current_idx'] = idx
+                        if idx < len(chain):
+                            data['origin'] = target.copy()
+                            data['target'] = np.array(chain[idx].pos, dtype=float)
+                            data['lerp_t'] = 0.0
+                        else:
+                            brush['pos'] = target.tolist()
+                            self.update_views()
+                            self.stop_mover_preview()
+                            return
+
+            self.update_views()
+
+        # ------------------------------------------------------------------
+        #  Original oscillation preview (direction‑based)
+        # ------------------------------------------------------------------
+        else:
+            data['time'] += dt
+            speed = data['speed']
+            distance = data['distance']
+            if distance == 0:
+                return
+
+            # Sine wave between 0 and distance
+            progress = (math.sin(data['time'] * (speed / distance) * math.pi - (math.pi / 2)) + 1) / 2
+            current_offset = progress * distance
+            movement_vector = data['direction'] * current_offset
+            original_pos = np.array(data['original_pos'])
+            new_pos = original_pos + movement_vector
+            brush['pos'] = new_pos.tolist()
+            self.update_views()
 
     def load_config(self):
         self.config.read(self.config_path)

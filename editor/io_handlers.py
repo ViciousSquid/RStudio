@@ -268,8 +268,7 @@ def register_all_input_handlers(io_manager: IOManager):
         dest = glm.vec3(node.pos[0], node.pos[1], node.pos[2])
         logic.player.pos = dest
         # Zero velocity to prevent carry-over momentum
-        if hasattr(logic.player, 'vel_y'):
-            logic.player.vel_y = 0.0
+        logic.player.velocity = glm.vec3(0, 0, 0)
         if logic.io_manager:
             logic.io_manager.fire_output(entity, 'OnTeleport')
         debug_log("IO", f"Trigger teleported player → '{target_name}' ({dest.x:.0f}, {dest.y:.0f}, {dest.z:.0f})")
@@ -322,18 +321,13 @@ def register_all_input_handlers(io_manager: IOManager):
             debug_log('Error', f"Could not find game_state for speaker '{entity_name}'!")
             return
         
-        # Ensure sound_queue exists
-        if not hasattr(game_state, 'sound_queue'):
-            debug_log('Speaker', f"  Creating sound_queue on game_state")
-            game_state.sound_queue = []
-        
-        # Queue the sound for the main thread to play
-        game_state.sound_queue.append({
+        # Queue the sound for the main thread to play (thread-safe)
+        game_state.queue_sound({
             'file': sound_file,
             'volume': volume,
             'entity_id': speaker_id
         })
-        debug_log('Speaker', f"  Queued '{sound_file}' (queue size: {len(game_state.sound_queue)})")
+        debug_log('Speaker', f"  Queued '{sound_file}'")
         
         # Fire output event
         logic.io_manager.fire_output(entity, 'OnSoundStarted')
