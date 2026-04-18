@@ -149,7 +149,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb libgl1-mesa-glx libegl1-mesa libxkbcommon-x11-0 libdbus-1-3 libxcb-xinerama0 libxcb-cursor0 libglib2.0-0 patchelf
+          sudo apt-get install -y xvfb libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-xinerama0 libxcb-cursor0 libglib2.0-0 patchelf
 
       - uses: actions/setup-python@v5
         with:
