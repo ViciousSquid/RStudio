@@ -117,10 +117,27 @@ jobs:
             exit 1
           fi
 
+      - name: Prepare app bundle for distribution
+        run: |
+          # Inject qt.conf so Qt resolves plugin paths without
+          # falling back to CFBundleGetMainBundle() (which returns
+          # NULL when the .app wrapper is missing or malformed).
+          mkdir -p build/main.app/Contents/Resources
+          cat > build/main.app/Contents/Resources/qt.conf << 'EOF'
+          [Paths]
+          Plugins = ../MacOS/PyQt5/Qt5/plugins
+          EOF
+
+          # Rename to final app name and zip so the .app directory
+          # structure survives the artifact upload/download round-trip.
+          cd build
+          mv main.app Fio.app
+          zip -r -y Fio-macOS.zip Fio.app
+
       - uses: actions/upload-artifact@v4
         with:
           name: fio-macos
-          path: build/main.app/
+          path: build/Fio-macOS.zip
 
 
   build-linux:
