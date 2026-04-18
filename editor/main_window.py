@@ -2350,21 +2350,28 @@ class MainWindow(QMainWindow):
             )
 
     def closeEvent(self, event):
-        # NEW: Check for unsaved changes
-        if not self.check_unsaved_changes():
-            event.ignore()
-            return
-            
-        # Stop timers
-        if hasattr(self, 'tooltip_timer'):
-            self.tooltip_timer.stop()
-        if hasattr(self, 'autosave_timer'):
-            self.autosave_timer.stop()
-        
-        self.save_layout()
+        try:
+            if not self.check_unsaved_changes():
+                event.ignore()
+                return
 
-        if hasattr(self, 'view_3d') and self.view_3d.logic_thread:
-            self.view_3d.logic_thread.stop()
-            self.view_3d.logic_thread.join(timeout=1.0)
-        
-        super().closeEvent(event)
+            # Stop timers
+            if hasattr(self, 'tooltip_timer'):
+                self.tooltip_timer.stop()
+            if hasattr(self, 'autosave_timer'):
+                self.autosave_timer.stop()
+
+            try:
+                self.save_layout()
+            except Exception as e:
+                print(f"save_layout failed: {e}")
+
+            if hasattr(self, 'view_3d') and self.view_3d and self.view_3d.logic_thread:
+                self.view_3d.logic_thread.stop()
+                self.view_3d.logic_thread.join(timeout=1.0)
+
+            event.accept()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            event.accept()
