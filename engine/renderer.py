@@ -336,6 +336,21 @@ class Renderer:
         self._batch_matrices = []
         self._batch_colors = []
 
+        # FIX: Initialise vaos/post-shader state BEFORE the try block so they
+        # always exist even when shader compilation fails (e.g. macOS ARM
+        # framebuffer-validation error).  The real VAOs are created below only
+        # when shaders succeed, but having safe defaults prevents the
+        # AttributeError crash in paintGL → update_grid_buffers.
+        self._shader_init_failed = False
+        self.vaos = {'cube': None, 'sprite': None, 'grid': None}
+        self.grid_indices_count = 0
+        self.sprite_textures = {}
+        self.instance_textures = {}
+        self._proj_ptr = None
+        self._view_ptr = None
+        self._edge_vao = None
+        self.use_deferred = False  # Reserved for future deferred rendering implementation
+
         try:
             self.shader_loader = ShaderLoader()
             self.shaders = {}
@@ -398,22 +413,19 @@ class Renderer:
             print(f"ARM Mode: {self.arm_mode}, Shadows: {self.shadows_enabled}")
         except Exception as e:
             print(f"FATAL: Shader Error: {e}")
-            return
+            self._shader_init_failed = True
         
-        self.vaos = {'cube': self._create_cube_vao(), 'sprite': self._create_sprite_vao(), 'grid': None}
-        self.grid_indices_count = 0
-        self._create_gizmo_buffers()
-        self.update_grid_buffers(initial_world_size, initial_grid_size)
-        self.noise_texture_id = self._load_3d_texture('assets/noise_3d.bin')
-        self.sprite_textures = {}
-        self.instance_textures = {}
-        self.load_texture('default.png', 'textures')
-        self.load_texture('caulk', 'textures')
-        self._proj_ptr = None
-        self._view_ptr = None
-        self._edge_vao = None
-
-        self.use_deferred = False  # Reserved for future deferred rendering implementation
+        # Create GPU resources only when shaders compiled successfully
+        if not self._shader_init_failed:
+            self.vaos = {'cube': self._create_cube_vao(), 'sprite': self._create_sprite_vao(), 'grid': None}
+            self.grid_indices_count = 0
+            self._create_gizmo_buffers()
+            self.update_grid_buffers(initial_world_size, initial_grid_size)
+            self.noise_texture_id = self._load_3d_texture('assets/noise_3d.bin')
+            self.sprite_textures = {}
+            self.instance_textures = {}
+            self.load_texture('default.png', 'textures')
+            self.load_texture('caulk', 'textures')
 
     def _detect_arm_platform(self):
         """Detect if running on ARM or under x64 emulation."""
@@ -503,6 +515,14 @@ class Renderer:
     # =========================================================================
 
     def update_grid_buffers(self, world_size, grid_size):
+        # FIX: Guard against vaos not being fully initialised (shader init failure)
+        if self.vaos.get('grid') is None and self.vaos.get('cube') is None:
+            # Shaders failed — no GPU resources available, skip silently
+            if grid_size <= 0:
+                return
+            # Can't create grid VAO without a working GL context, bail out
+            if self._shader_init_failed:
+                return
         if grid_size <= 0:
             if self.vaos['grid']: 
                 gl.glDeleteVertexArrays(1, [self.vaos['grid']])
@@ -1986,6 +2006,9 @@ class Renderer:
             gl.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
         gl.glBindVertexArray(0)
+
+
+
 
 
 

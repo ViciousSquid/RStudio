@@ -506,7 +506,7 @@ class QtGameView(QOpenGLWidget):
         return lines
 
     def paintGL(self):
-        if not self.renderer:
+        if not self.renderer or getattr(self.renderer, '_shader_init_failed', False):
             return
 
         # Rebuild 3D grid VBO when grid/world size changed
@@ -1849,3 +1849,6 @@ class QtGameView(QOpenGLWidget):
             self.debug_console_window.command_input.setText(cmd)
             self.debug_console_window._on_command_entered()
         self._close_console_overlay()
+
+
+
