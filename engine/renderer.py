@@ -212,9 +212,9 @@ class ShaderLoader:
             if geometry_file:
                 geometry_src = self._read_source(geometry_file)
                 gs = compileShader(geometry_src, gl.GL_GEOMETRY_SHADER)
-                program = compileProgram(vs, fs, gs)
+                program = compileProgram(vs, fs, gs, validate=False)
             else:
-                program = compileProgram(vs, fs)
+                program = compileProgram(vs, fs, validate=False)
             return program
         except Exception as e:
             print(f"Error compiling shader ({vertex_file}, {fragment_file}): {e}")
@@ -225,7 +225,7 @@ class ShaderLoader:
         try:
             vs = compileShader(vertex_src, gl.GL_VERTEX_SHADER)
             fs = compileShader(fragment_src, gl.GL_FRAGMENT_SHADER)
-            return compileProgram(vs, fs)
+            return compileProgram(vs, fs, validate=False)
         except Exception as e:
             print(f"Error compiling shader from source: {e}")
             raise
@@ -391,7 +391,7 @@ class Renderer:
             try:
                 terrain_vs = compileShader(TERRAIN_VERTEX_SHADER, gl.GL_VERTEX_SHADER)
                 terrain_fs = compileShader(TERRAIN_FRAGMENT_SHADER, gl.GL_FRAGMENT_SHADER)
-                terrain_program = compileProgram(terrain_vs, terrain_fs)
+                terrain_program = compileProgram(terrain_vs, terrain_fs, validate=False)
                 self.shaders['terrain'] = terrain_program
                 self.uniforms['terrain'] = UniformCache(terrain_program)
                 self.uniforms['terrain'].preload([
@@ -2006,9 +2006,3 @@ class Renderer:
             gl.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
         gl.glBindVertexArray(0)
-
-
-
-
-
-

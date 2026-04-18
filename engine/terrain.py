@@ -427,7 +427,7 @@ class Terrain:
             fragment_code = shaders.DEFAULT_SHADERS['terrain.frag']
             vertex_shader = compileShader(vertex_code, gl.GL_VERTEX_SHADER)
             fragment_shader = compileShader(fragment_code, gl.GL_FRAGMENT_SHADER)
-            self.shader_program = compileProgram(vertex_shader, fragment_shader)
+            self.shader_program = compileProgram(vertex_shader, fragment_shader, validate=False)
             if not self.shader_program:
                 print("ERROR: Failed to compile terrain shader program!")
                 self.shader_program = 0
