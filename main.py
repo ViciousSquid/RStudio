@@ -95,7 +95,7 @@ dark_stylesheet = """
         text-align: center;
     }
     QProgressBar::chunk {
-        background-color: #007acc;
+        background-color: #2b6132;
     }
     QFrame {
         border: 1px solid #555;
