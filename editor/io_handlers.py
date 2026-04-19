@@ -369,10 +369,8 @@ def register_all_input_handlers(io_manager: IOManager):
     
     def pickup_respawn(entity, param, logic):
         entity.properties['collected'] = False
-        for i, thing in enumerate(logic.things):
-            if thing is entity:
-                logic.collected_pickups.discard(i)
-                break
+        # FIX#3: use id(entity) — matches new collected_pickups key scheme
+        logic.collected_pickups.discard(id(entity))
         logic.io_manager.fire_output(entity, 'OnRespawn')
     
     def pickup_set_value(entity, param, logic):
@@ -787,3 +785,6 @@ def _get_brush_index(brush: dict, logic) -> int:
         return logic.brushes.index(brush)
     except ValueError:
         return -1
+
+
+

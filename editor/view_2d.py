@@ -6,7 +6,8 @@ from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
 from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Monster, 
-                          LogicGate, LogicRelay, LogicTimer, LevelChanger, PathNode)
+                          LogicGate, LogicRelay, LogicTimer, LevelChanger, PathNode,
+                          LogicCamera, LogicSpawner)
 from editor.scene_hierarchy import SceneHierarchy
 # I/O System imports for drawing connections
 try:
@@ -1920,6 +1921,7 @@ class View2D(QWidget):
         add_pickup_action = menu.addAction("Pickup")
         add_monster_action = menu.addAction("Monster")
         add_speaker_action = menu.addAction("Speaker")
+        add_logic_spawner_action = menu.addAction("Spawner")
         add_levelchanger_action = menu.addAction("LevelChanger")
         
         menu.addSeparator()
@@ -1934,8 +1936,9 @@ class View2D(QWidget):
         add_logic_timer_action = logic_menu.addAction("LogicTimer")
         add_logic_gate_action = logic_menu.addAction("LogicGate")
 
-        # AI Menu Sub-section (navigation waypoints and AI hints)
+        # Node submenu
         ai_menu = menu.addMenu("Nodes")
+        add_logic_camera_action = ai_menu.addAction("_Camera")
         add_path_node_action = ai_menu.addAction("PathNode")
 
         # Open the menu using the captured position
@@ -1982,6 +1985,10 @@ class View2D(QWidget):
         elif action == add_logic_gate_action:
             new_thing = LogicGate(pos=pos_3d)
             new_thing.properties['logic_type'] = 'AND' 
+        elif action == add_logic_camera_action:
+            new_thing = LogicCamera(pos=pos_3d)
+        elif action == add_logic_spawner_action:
+            new_thing = LogicSpawner(pos=pos_3d)
 
         # AI / Navigation entities
         elif action == add_path_node_action:
@@ -1995,7 +2002,7 @@ class View2D(QWidget):
                     rel_path = os.path.relpath(filepath, "assets")
                     if rel_path.startswith(".."): rel_path = filepath
                     else: rel_path = os.path.join("assets", rel_path)
-                except:
+                except Exception:
                     rel_path = filepath
                 
                 new_thing = Model(pos=pos_3d)
@@ -2402,3 +2409,6 @@ class View2D(QWidget):
     def zoom_out(self):
         self.zoom_factor *= 0.8
         self.update()
+
+
+

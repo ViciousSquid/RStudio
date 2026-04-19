@@ -652,7 +652,9 @@ class SettingsWindow(QDialog):
             try:
                 self.main_window.closeEvent = lambda e: e.accept()
                 self.main_window.close()
-            except:
+            except Exception:
                 pass
         
         os.execl(python, python, script, *args)
+
+

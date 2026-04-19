@@ -1002,15 +1002,40 @@ class MainWindow(QMainWindow):
         # No path – use oscillation preview (original behaviour)
         self._start_oscillation_preview(brush)
 
+    # FIX: Map door_direction strings to vectors for preview
+    _DOOR_DIR_MAP = {
+        'up': [0, 1, 0], 'down': [0, -1, 0],
+        'north': [0, 0, 1], 'south': [0, 0, -1],
+        'east': [1, 0, 0], 'west': [-1, 0, 0],
+    }
+
     def _start_oscillation_preview(self, brush):
-        """Original sine-wave oscillation preview."""
+        """Sine-wave oscillation preview.  Reads door_* properties and
+        translates them so the preview matches what _update_doors uses."""
+        # For doors, the editor stores door_speed/door_distance/door_direction.
+        # Translate to the engine-expected keys for the preview.
+        if brush.get('is_door'):
+            speed = brush.get('door_speed', brush.get('speed', 64.0))
+            distance = brush.get('door_distance', brush.get('distance', 128.0))
+            lip = float(brush.get('door_lip', 0.0))
+            distance = max(1.0, distance - lip)
+            dir_val = brush.get('door_direction', brush.get('direction', [0, 1, 0]))
+            if isinstance(dir_val, str):
+                direction = self._DOOR_DIR_MAP.get(dir_val, [0, 1, 0])
+            else:
+                direction = dir_val
+        else:
+            speed = brush.get('speed', 64.0)
+            distance = brush.get('distance', 128.0)
+            direction = brush.get('direction', [0, 1, 0])
+
         self.preview_data = {
             'obj': brush,
             'is_path': False,
             'original_pos': list(brush['pos']),
-            'direction': np.array(brush.get('direction', [0, 1, 0]), dtype=float),
-            'distance': brush.get('distance', 128.0),
-            'speed': brush.get('speed', 64.0),
+            'direction': np.array(direction, dtype=float),
+            'distance': distance,
+            'speed': speed,
             'time': 0.0,
             'is_door': brush.get('is_door', False)
         }
@@ -2505,3 +2530,6 @@ class MainWindow(QMainWindow):
             import traceback
             traceback.print_exc()
             event.accept()
+
+
+
