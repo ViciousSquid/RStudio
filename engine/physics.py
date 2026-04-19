@@ -170,14 +170,17 @@ class SpatialGrid:
 
     def has_line_of_sight(self, start, end, intersect_ray_aabb_fn):
         """Return True if ray from start to end hits no solid wall brush.
-        Uses the grid to only test brushes in cells the ray passes through."""
+        Uses the grid to only test brushes in cells the ray passes through.
+
+        FIX#11: Now checks neighbouring cells at each sample point to avoid
+        missing brushes that straddle cell boundaries on diagonal rays."""
         ray_dir = end - start
         ray_len = glm.length(ray_dir)
         if ray_len < 0.001:
             return True
         ray_dir = ray_dir / ray_len
 
-        # Gather cells along the ray path
+        # Gather cells along the ray path + neighbours
         steps = max(1, int(ray_len / self.cell_size) + 2)
         seen = set()
         candidates = []
@@ -186,13 +189,17 @@ class SpatialGrid:
             pt = start + ray_dir * t
             cx = int(math.floor(pt.x / self.cell_size))
             cz = int(math.floor(pt.z / self.cell_size))
-            cell = (cx, cz)
-            if cell in self.cells:
-                for brush in self.cells[cell]:
-                    bid = id(brush)
-                    if bid not in seen:
-                        seen.add(bid)
-                        candidates.append(brush)
+            # FIX#11: Check the cell AND its 8 neighbours to catch brushes
+            # that straddle cell boundaries on diagonal rays
+            for dx in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    cell = (cx + dx, cz + dz)
+                    if cell in self.cells:
+                        for brush in self.cells[cell]:
+                            bid = id(brush)
+                            if bid not in seen:
+                                seen.add(bid)
+                                candidates.append(brush)
 
         for brush in candidates:
             pos = glm.vec3(brush['pos'])

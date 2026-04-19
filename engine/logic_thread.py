@@ -81,6 +81,16 @@ from .monster_constants import (
 # Import the extracted MonsterAI class
 from .monster_ai import MonsterAI
 
+# FIX#1: Map door_direction editor strings to movement vectors
+DOOR_DIRECTION_MAP = {
+    'up':    [0,  1,  0],
+    'down':  [0, -1,  0],
+    'north': [0,  0,  1],
+    'south': [0,  0, -1],
+    'east':  [1,  0,  0],
+    'west':  [-1, 0,  0],
+}
+
 # Qt key constants
 Key_W = 0x57
 Key_S = 0x53
@@ -482,6 +492,25 @@ class LogicThread(threading.Thread):
         self.doors = []
         for i, brush in enumerate(self.brushes):
             if brush.get('is_door'):
+                # FIX#1: Translate editor property names → engine property names.
+                # The property editor stores 'door_speed', 'door_distance',
+                # 'door_direction' but _update_doors reads 'speed', 'distance',
+                # 'direction'.  Also convert the direction string to a vector.
+                if 'door_speed' in brush:
+                    brush['speed'] = brush['door_speed']
+                if 'door_distance' in brush:
+                    brush['distance'] = brush['door_distance']
+                if 'door_direction' in brush:
+                    dir_str = brush['door_direction']
+                    brush['direction'] = DOOR_DIRECTION_MAP.get(
+                        dir_str, [0, 1, 0])
+                # Apply door_lip: reduce effective distance by the lip value
+                if 'door_lip' in brush:
+                    lip = float(brush.get('door_lip', 0.0))
+                    base_dist = float(brush.get('distance',
+                                                brush.get('door_distance', 128.0)))
+                    brush['distance'] = max(1.0, base_dist - lip)
+
                 self.doors.append((i, brush))
                 if 'original_pos' not in brush:
                     brush['original_pos'] = list(brush['pos'])
@@ -593,6 +622,15 @@ class LogicThread(threading.Thread):
         # Update logic timers
         self._update_logic_timers(delta)
 
+        # ---- Cinematic camera: suppress player input while active ----
+        self._update_cinematic_camera(delta)
+        if self.cinematic_state:
+            self.game_state.consume_mouse_delta()
+            self.game_state.consume_use_key()
+            self.game_state.consume_shot()
+            self.monster_ai.update(delta)
+            return
+
         # ---- Player dead: freeze all gameplay input ----
         if self.player_dead:
             self.game_state.consume_mouse_delta()
@@ -700,7 +738,9 @@ class LogicThread(threading.Thread):
                      min_b.y <= player_pos.y <= max_b.y and
                      min_b.z <= player_pos.z <= max_b.z)
             
-            bid = id(brush)
+            # FIX#6: Use brush 'id' if available, otherwise enumerate index
+            # (which is stable since the brush list doesn't change in play mode)
+            bid = brush.get('id') or i
             if inside:
                 currently_in.add(bid)
                 if bid not in self.player_in_triggers:
@@ -711,10 +751,11 @@ class LogicThread(threading.Thread):
         
         for bid in self.player_in_triggers:
             if bid not in currently_in:
-                # Find the brush by id — safe even if list order changed
+                # FIX#6: Find the brush by its stable id
                 brush = None
-                for b in self.brushes:
-                    if id(b) == bid:
+                for j, b in enumerate(self.brushes):
+                    b_bid = b.get('id') or j
+                    if b_bid == bid:
                         brush = b
                         break
                 if brush:
@@ -813,40 +854,52 @@ class LogicThread(threading.Thread):
                 found_door_brush = brush
                 break
 
+        # --- Door interaction (FIX#7: no longer returns early, so pickup
+        #     check below is always reachable) ---
+        door_consumed_use = False
         if found_door_brush:
             door_state = self.door_states.get(found_door_idx, {}).get('state', 'closed')
-            if door_state != 'closed':
-                return
-            if found_door_brush.get('door_auto_open', False):
-                return
-            
-            is_locked = found_door_brush.get('door_locked', False)
-            needs_key = found_door_brush.get('door_needs_key', False)
-            key_name = found_door_brush.get('door_key_name', '')
-            
-            if is_locked:
-                self.current_hud_message = "This door is locked remotely"
-                if use_key_pressed and self.io_manager:
-                    self.io_manager.fire_output(found_door_brush, 'OnLockedUse')
-            elif needs_key:
-                has_key = key_name in self.collected_keys
-                pretty_key_name = key_name.replace('_', ' ').title() if key_name else "Key"
-                if has_key:
-                    self.current_hud_message = f"Press E to unlock ({pretty_key_name})"
-                    if use_key_pressed:
-                        self._trigger_door_open(found_door_idx, found_door_brush)
-                else:
-                    self.current_hud_message = f"You need the {pretty_key_name}"
-            else:
-                self.current_hud_message = "Press E to open"
-                if use_key_pressed:
-                    self._trigger_door_open(found_door_idx, found_door_brush)
-            return
 
-        if Pickup:
+            if door_state == 'closed':
+                # FIX#2: Auto-open doors trigger automatically on proximity
+                if found_door_brush.get('door_auto_open', False):
+                    is_locked = found_door_brush.get('door_locked', False)
+                    needs_key = found_door_brush.get('door_needs_key', False)
+                    if not is_locked and not needs_key:
+                        self._trigger_door_open(found_door_idx, found_door_brush)
+                    # Auto-open doors don't show HUD prompts — fall through
+                    # to pickup check below
+                else:
+                    is_locked = found_door_brush.get('door_locked', False)
+                    needs_key = found_door_brush.get('door_needs_key', False)
+                    key_name = found_door_brush.get('door_key_name', '')
+                    
+                    if is_locked:
+                        self.current_hud_message = "This door is locked remotely"
+                        if use_key_pressed and self.io_manager:
+                            self.io_manager.fire_output(found_door_brush, 'OnLockedUse')
+                        door_consumed_use = use_key_pressed
+                    elif needs_key:
+                        has_key = key_name in self.collected_keys
+                        pretty_key_name = key_name.replace('_', ' ').title() if key_name else "Key"
+                        if has_key:
+                            self.current_hud_message = f"Press E to unlock ({pretty_key_name})"
+                            if use_key_pressed:
+                                self._trigger_door_open(found_door_idx, found_door_brush)
+                                door_consumed_use = True
+                        else:
+                            self.current_hud_message = f"You need the {pretty_key_name}"
+                    else:
+                        self.current_hud_message = "Press E to open"
+                        if use_key_pressed:
+                            self._trigger_door_open(found_door_idx, found_door_brush)
+                            door_consumed_use = True
+
+        # --- Use-activated pickup check (FIX#7: always reachable now) ---
+        if Pickup and not door_consumed_use:
             p_pos = glm.vec3(px, py, pz)
             p_forward = glm.vec3(math.sin(self.player.angle), 0, math.cos(self.player.angle))
-            for i, thing in enumerate(self.things):
+            for thing in self.things:
                 if not isinstance(thing, Pickup):
                     continue
                 if thing.properties.get('collected', False):
@@ -854,6 +907,9 @@ class LogicThread(threading.Thread):
                 if thing.properties.get('activation') != 'use':
                     continue
                 if thing.properties.get('disabled', False):
+                    continue
+                # FIX#3: use id(thing) instead of enumerate index
+                if id(thing) in self.collected_pickups:
                     continue
                 t_pos = glm.vec3(thing.pos)
                 dist = glm.distance(p_pos, t_pos)
@@ -863,7 +919,7 @@ class LogicThread(threading.Thread):
                         item_name = thing.properties.get('item_type', 'Item').replace('_', ' ').title()
                         self.current_hud_message = f"[E] Pick up {item_name}"
                         if use_key_pressed:
-                            self._collect_pickup(thing, i)
+                            self._collect_pickup(thing)
                         return
 
     def _trigger_door_open(self, door_idx: int, door_brush: dict = None):
@@ -887,21 +943,23 @@ class LogicThread(threading.Thread):
         player_pos = self.player.pos
         pickup_radius = 32.0
         
-        for i, thing in enumerate(self.things):
+        # FIX#3: use id(thing) instead of enumerate index
+        for thing in self.things:
             if not isinstance(thing, Pickup):
                 continue
             if thing.properties.get('collected', False):
                 continue
-            if i in self.collected_pickups:
+            if id(thing) in self.collected_pickups:
                 continue
             if thing.properties.get('disabled', False):
                 continue
             thing_pos = glm.vec3(thing.pos)
             distance = glm.distance(player_pos, thing_pos)
             if thing.properties.get('activation') == 'walk_over' and distance <= pickup_radius:
-                self._collect_pickup(thing, i)
+                self._collect_pickup(thing)
     
-    def _collect_pickup(self, pickup, pickup_id: int):
+    # FIX#3: signature changed — no longer takes pickup_id; uses id(pickup)
+    def _collect_pickup(self, pickup):
         item_type = pickup.properties.get('item_type', 'health')
         value = pickup.properties.get('value', 25)
         if item_type == 'health':
@@ -914,30 +972,36 @@ class LogicThread(threading.Thread):
             self.active_weapon = item_type
             self.current_hud_message = f"Picked up {item_type.upper()}"
         pickup.properties['collected'] = True
-        self.collected_pickups.add(pickup_id)
+        # FIX#3: use id(pickup) as the stable identity key
+        pid = id(pickup)
+        self.collected_pickups.add(pid)
         if self.io_manager:
             self.io_manager.fire_output(pickup, 'OnPickedUp')
         if pickup.properties.get('respawns', False):
             respawn_time = pickup.properties.get('respawn_time', 20.0)
-            self.respawn_timers[pickup_id] = respawn_time
+            # FIX#3: store entity reference for reliable respawn lookup
+            self.respawn_timers[pid] = {
+                'remaining': respawn_time,
+                'entity': pickup,
+            }
     
+    # FIX#3: Use stored entity reference instead of list index
     def _update_respawns(self, delta: float):
         if not Pickup:
             return
         to_respawn = []
-        for pickup_id, time_remaining in list(self.respawn_timers.items()):
-            self.respawn_timers[pickup_id] = time_remaining - delta
-            if self.respawn_timers[pickup_id] <= 0:
-                to_respawn.append(pickup_id)
-        for pickup_id in to_respawn:
-            del self.respawn_timers[pickup_id]
-            if pickup_id < len(self.things):
-                thing = self.things[pickup_id]
-                if isinstance(thing, Pickup):
-                    thing.properties['collected'] = False
-                    self.collected_pickups.discard(pickup_id)
-                    if self.io_manager:
-                        self.io_manager.fire_output(thing, 'OnRespawn')
+        for pid, timer_data in list(self.respawn_timers.items()):
+            timer_data['remaining'] -= delta
+            if timer_data['remaining'] <= 0:
+                to_respawn.append(pid)
+        for pid in to_respawn:
+            timer_data = self.respawn_timers.pop(pid)
+            entity = timer_data.get('entity')
+            if entity is not None and isinstance(entity, Pickup):
+                entity.properties['collected'] = False
+                self.collected_pickups.discard(pid)
+                if self.io_manager:
+                    self.io_manager.fire_output(entity, 'OnRespawn')
     
     # =========================================================================
     # MOVER/DOOR UPDATES
@@ -993,6 +1057,71 @@ class LogicThread(threading.Thread):
             brush['pos'] = new_pos.tolist()
             if self.player and self.player.ground_object == brush:
                 self.player.pos += glm.vec3(move_delta[0], move_delta[1], move_delta[2])
+
+    def _update_cinematic_camera(self, delta: float):
+        """Advance the cinematic camera along its PathNode chain."""
+        cs = self.cinematic_state
+        if not cs or not cs.get('active') or cs.get('paused'):
+            return
+
+        node_name = cs['current_node']
+        node = self._find_path_node_by_name(node_name)
+        if node is None:
+            debug_log("IO", f"CinematicCamera: node '{node_name}' not found — aborting")
+            entity = cs.get('entity')
+            self.cinematic_state = None
+            if entity and self.io_manager:
+                self.io_manager.fire_output(entity, 'OnFinished')
+            return
+
+        # Lerp from origin toward the current target node
+        origin = np.array(cs['origin'], dtype=float)
+        target = np.array(node.pos, dtype=float)
+        segment_vec = target - origin
+        segment_len = np.linalg.norm(segment_vec)
+
+        if segment_len < 1.0:
+            cs['lerp_t'] = 1.0
+        else:
+            cs['lerp_t'] += (cs['speed'] * delta) / segment_len
+
+        t = min(cs['lerp_t'], 1.0)
+        current_pos = origin + segment_vec * t
+
+        # Write camera position for _prepare_render_state to pick up
+        cs['cam_pos'] = current_pos.tolist()
+
+        # Calculate look direction
+        if cs.get('look_ahead'):
+            next_name = node.get_next_node_name()
+            look_node = self._find_path_node_by_name(next_name) if next_name else node
+            look_target = np.array(look_node.pos if look_node else node.pos, dtype=float)
+        else:
+            look_target = target  # follow the segment tangent
+
+        diff = look_target - current_pos
+        dist = np.linalg.norm(diff)
+        if dist > 0.01:
+            cs['cam_angle'] = math.atan2(diff[0], diff[2])
+            cs['cam_pitch'] = math.asin(np.clip(diff[1] / dist, -1.0, 1.0))
+
+        # Arrived at node?
+        if cs['lerp_t'] >= 1.0:
+            if self.io_manager:
+                self.io_manager.fire_output(cs['entity'], 'OnReachNode')
+
+            next_name = node.get_next_node_name()
+            if next_name:
+                # Advance to next segment
+                cs['origin'] = list(node.pos)
+                cs['current_node'] = next_name
+                cs['lerp_t'] = 0.0
+            else:
+                # End of chain
+                entity = cs['entity']
+                self.cinematic_state = None
+                if self.io_manager:
+                    self.io_manager.fire_output(entity, 'OnFinished')
 
     def _update_mover_path(self, idx: int, brush: dict, delta: float):
         """Move a mover along a PathNode chain."""
@@ -1317,21 +1446,39 @@ class LogicThread(threading.Thread):
         write_state.is_play_mode = self.play_mode
 
         if self.play_mode and self.player:
-            player_pos = glm.vec3(self.player.pos.x, self.player.pos.y, self.player.pos.z)
-            player_angle = self.player.angle
-            player_pitch = self.player.pitch
-            camera_height = self.player.camera_height
-            cam_pos = player_pos + glm.vec3(0, camera_height, 0)
-            direction = glm.vec3(
-                math.sin(player_angle) * math.cos(player_pitch),
-                math.sin(player_pitch),
-                math.cos(player_angle) * math.cos(player_pitch),
-            )
-            view_matrix = glm.lookAt(cam_pos, cam_pos + direction, glm.vec3(0, 1, 0))
-            write_state.player_pos = player_pos
-            write_state.player_angle = player_angle
-            write_state.player_pitch = player_pitch
-            fov = 90.0
+            # --- Cinematic camera override ---
+            cs = self.cinematic_state
+            if cs and 'cam_pos' in cs:
+                cam_pos = glm.vec3(*cs['cam_pos'])
+                cam_angle = cs.get('cam_angle', 0.0)
+                cam_pitch = cs.get('cam_pitch', 0.0)
+                direction = glm.vec3(
+                    math.sin(cam_angle) * math.cos(cam_pitch),
+                    math.sin(cam_pitch),
+                    math.cos(cam_angle) * math.cos(cam_pitch),
+                )
+                view_matrix = glm.lookAt(cam_pos, cam_pos + direction, glm.vec3(0, 1, 0))
+                write_state.player_pos = cam_pos
+                write_state.player_angle = cam_angle
+                write_state.player_pitch = cam_pitch
+                fov = cs['fov'] if cs.get('fov') else 90.0
+            else:
+                # Normal player camera
+                player_pos = glm.vec3(self.player.pos.x, self.player.pos.y, self.player.pos.z)
+                player_angle = self.player.angle
+                player_pitch = self.player.pitch
+                camera_height = self.player.camera_height
+                cam_pos = player_pos + glm.vec3(0, camera_height, 0)
+                direction = glm.vec3(
+                    math.sin(player_angle) * math.cos(player_pitch),
+                    math.sin(player_pitch),
+                    math.cos(player_angle) * math.cos(player_pitch),
+                )
+                view_matrix = glm.lookAt(cam_pos, cam_pos + direction, glm.vec3(0, 1, 0))
+                write_state.player_pos = player_pos
+                write_state.player_angle = player_angle
+                write_state.player_pitch = player_pitch
+                fov = 90.0
         else:
             write_state.editor_camera_pos = glm.vec3(self.editor_camera.pos)
             write_state.editor_camera_yaw = self.editor_camera.yaw
@@ -1406,8 +1553,9 @@ class LogicThread(threading.Thread):
 
         # Things (including monster snapshots)
         visible_things = []
-        for i, thing in enumerate(self.things):
-            if self.play_mode and Pickup and isinstance(thing, Pickup) and i in self.collected_pickups:
+        # FIX#3: use id(thing) for collected_pickups check
+        for thing in self.things:
+            if self.play_mode and Pickup and isinstance(thing, Pickup) and id(thing) in self.collected_pickups:
                 continue
             if hasattr(thing.pos, 'x'):
                 thing.pos = [thing.pos.x, thing.pos.y, thing.pos.z]

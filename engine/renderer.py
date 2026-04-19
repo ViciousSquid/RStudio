@@ -2,11 +2,16 @@ import glm
 import numpy as np
 import OpenGL.GL as gl
 import ctypes 
-from editor.things import Thing, Light, Model
+from editor.things import Thing, Light, Model, LogicSpawner, LogicCamera
 try:
     from editor.things import PathNode
 except ImportError:
     PathNode = None
+
+try:
+    from editor.things import Pickup, Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger
+except ImportError:
+    Pickup = Monster = LogicGate = LogicRelay = LogicTimer = LevelChanger = None
 from OpenGL.GL.shaders import compileProgram, compileShader 
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from engine.monster_constants import MONSTER_SPRITE_SIZES, MONSTER_SPRITE_SIZE_DEFAULT 
@@ -21,6 +26,18 @@ try:
     from .obj_loader import OBJ
 except ImportError:
     OBJ = None
+
+
+def normalize_color(rgb, default=None):
+    """Normalise an RGB colour to 0.0-1.0 floats.
+    Accepts [0-255] int or [0.0-1.0] float components.
+    Returns *default* (or [0.8, 0.8, 0.8]) if rgb is None or malformed.
+    """
+    if default is None:
+        default = [0.8, 0.8, 0.8]
+    if not rgb or not isinstance(rgb, (list, tuple)) or len(rgb) < 3:
+        return list(default)
+    return [c / 255.0 if c > 1.0 else c for c in rgb[:3]]
 
 
 
@@ -507,7 +524,7 @@ class Renderer:
         # For non-uniform scaling, we need the full inverse transpose
         try:
             return glm.transpose(glm.inverse(mat3))
-        except:
+        except Exception:
             return self._identity_mat3
 
     # =========================================================================
@@ -526,6 +543,10 @@ class Renderer:
         if grid_size <= 0:
             if self.vaos['grid']: 
                 gl.glDeleteVertexArrays(1, [self.vaos['grid']])
+                # FIX#4: also delete the VBO
+                if hasattr(self, '_grid_vbo') and self._grid_vbo:
+                    gl.glDeleteBuffers(1, [self._grid_vbo])
+                    self._grid_vbo = None
                 self.vaos['grid'] = None
             return
         s, g = world_size, grid_size
@@ -534,6 +555,9 @@ class Renderer:
         self.grid_indices_count = len(grid_vertices) // 3
         if self.vaos['grid']: 
             gl.glDeleteVertexArrays(1, [self.vaos['grid']])
+        # FIX#4: Delete old VBO before creating new one to prevent GPU memory leak
+        if hasattr(self, '_grid_vbo') and self._grid_vbo:
+            gl.glDeleteBuffers(1, [self._grid_vbo])
         vao = gl.glGenVertexArrays(1)
         gl.glBindVertexArray(vao)
         vbo = gl.glGenBuffers(1)
@@ -542,7 +566,7 @@ class Renderer:
         gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
         gl.glEnableVertexAttribArray(0)
         gl.glBindVertexArray(0)
-        self._grid_vbo = vbo  # FIX: store to prevent GPU memory leak on each grid rebuild
+        self._grid_vbo = vbo
         self.vaos['grid'] = vao
     
     def set_sprite_textures(self, textures): 
@@ -632,7 +656,7 @@ class Renderer:
                 gl.glTexParameteri(gl.GL_TEXTURE_3D, *param)
             gl.glTexImage3D(gl.GL_TEXTURE_3D, 0, gl.GL_R8, size, size, size, 0, gl.GL_RED, gl.GL_UNSIGNED_BYTE, data)
             return texture_id
-        except: 
+        except Exception: 
             return 0
 
     # =========================================================================
@@ -920,16 +944,11 @@ class Renderer:
             elif brush.get('operation') == 'subtract': 
                 color, alpha = [1.0, 0.0, 0.0], 1.0
             else:
+                # FIX#13: Use shared normalize_color helper
                 # Tint overrides colour when set via I/O (SetTint input)
                 brush_tint = brush.get('tint')
-                if brush_tint and isinstance(brush_tint, (list, tuple)) and len(brush_tint) >= 3:
-                    color = [c / 255.0 if c > 1.0 else c for c in brush_tint[:3]]
-                else:
-                    brush_colour = brush.get('colour')
-                    if brush_colour and isinstance(brush_colour, (list, tuple)) and len(brush_colour) >= 3:
-                        color = [c / 255.0 if c > 1.0 else c for c in brush_colour[:3]]
-                    else: 
-                        color = [0.8, 0.8, 0.8]
+                brush_colour = brush.get('colour')
+                color = normalize_color(brush_tint) if brush_tint else normalize_color(brush_colour)
                 alpha = 1.0
             
             gl.glUniform3fv(color_loc, 1, color)
@@ -1200,12 +1219,9 @@ class Renderer:
                 normal_mat = self._compute_normal_matrix(model_matrix)
                 gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
 
-            # Use brush tint colour, or white if none set
+            # FIX#13: Use shared normalize_color helper
             tint = brush.get('tint') or brush.get('colour')
-            if tint and isinstance(tint, (list, tuple)) and len(tint) >= 3:
-                base_color = [c / 255.0 if c > 1.0 else c for c in tint[:3]]
-            else:
-                base_color = [1.0, 1.0, 1.0]
+            base_color = normalize_color(tint, default=[1.0, 1.0, 1.0])
 
             intensity = float(brush.get('glow_intensity', 10.0))
             overbright = [min(c * intensity, 10.0) for c in base_color]
@@ -1373,11 +1389,7 @@ class Renderer:
             sprites = [t for t in things if (isinstance(t, Thing) or (isinstance(t, dict) and 'monster_type' in t))
                        and not (PathNode is not None and isinstance(t, PathNode))]
         else:
-            # FIX: types imported at module level; local names ensure graceful fallback
-            try:
-                from editor.things import Pickup, Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger
-            except ImportError:
-                pass
+            # FIX#5: entity classes now imported at module level — no per-frame import
             for t in things:
                 # PathNode entities are never rendered as sprites
                 if PathNode is not None and isinstance(t, PathNode):
@@ -1675,7 +1687,7 @@ class Renderer:
         pos_loc, size_loc = uniforms['sprite_pos_world'], uniforms['sprite_size']
         gl.glBindVertexArray(self.vaos['sprite'])
 
-        from editor.things import Monster
+        from editor.things import Monster, Light, LogicSpawner, LogicCamera
 
         current_tex = None
         for thing in things_to_draw:
@@ -1727,22 +1739,43 @@ class Renderer:
                 gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
                 continue
 
-            # ---- REGULAR THINGS (Light, Pickup, etc.) ----
+            # ---- REGULAR THINGS (Light, Pickup, LogicSpawner, etc.) ----
             tex_id = None
             if instance_textures:
                 tex_id = instance_textures.get(id(thing))
+            
             if tex_id is None:
-                tex_id = sprite_textures.get(thing.__class__.__name__)
+                # Check for cached texture by class name
+                class_name = thing.__class__.__name__
+                tex_id = self.sprite_textures.get(class_name)
+                
+                # If not cached, load specifically for the new logic types
+                if tex_id is None:
+                    if isinstance(thing, LogicSpawner):
+                        tex_id = self.load_texture('logic_spawner.png', 'sprites')
+                        if tex_id: self.sprite_textures['LogicSpawner'] = tex_id
+                    elif isinstance(thing, LogicCamera):
+                        tex_id = self.load_texture('logic_camera.png', 'sprites')
+                        if tex_id: self.sprite_textures['LogicCamera'] = tex_id
+                    else:
+                        # Fallback for other standard things
+                        tex_id = sprite_textures.get(class_name)
+
             if tex_id:
                 if tex_id != current_tex:
                     gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                     current_tex = tex_id
+                
                 gl.glUniform3fv(pos_loc, 1, thing.pos)
-                # Sprite size for non‑monsters
+                
+                # Assign appropriate sizes for editor icons
                 if isinstance(thing, Light):
                     gl.glUniform2f(size_loc, 16.0, 16.0)
+                elif isinstance(thing, (LogicSpawner, LogicCamera)):
+                    gl.glUniform2f(size_loc, 32.0, 32.0)
                 else:
                     gl.glUniform2f(size_loc, 32.0, 32.0)
+                
                 gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
 
         gl.glBindVertexArray(0)
@@ -2006,3 +2039,6 @@ class Renderer:
             gl.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
         gl.glBindVertexArray(0)
+
+
+

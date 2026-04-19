@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import ctypes
-from OpenGL.GL import *
+import OpenGL.GL as gl   # FIX#9: no wildcard import
 
 
 class OBJ:
@@ -150,22 +150,22 @@ class OBJ:
             self.vertex_count = len(faces)
 
             # OpenGL Setup
-            self.vao = glGenVertexArrays(1)
-            glBindVertexArray(self.vao)
+            self.vao = gl.glGenVertexArrays(1)
+            gl.glBindVertexArray(self.vao)
 
-            self.vbo = glGenBuffers(1)
-            glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
-            glBufferData(GL_ARRAY_BUFFER, vertex_data.nbytes, vertex_data, GL_STATIC_DRAW)
+            self.vbo = gl.glGenBuffers(1)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.vbo)
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, vertex_data.nbytes, vertex_data, gl.GL_STATIC_DRAW)
 
             stride = 8 * 4
-            glEnableVertexAttribArray(0)
-            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(0))
-            glEnableVertexAttribArray(1)
-            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(12))
-            glEnableVertexAttribArray(2)
-            glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(24))
+            gl.glEnableVertexAttribArray(0)
+            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(0))
+            gl.glEnableVertexAttribArray(1)
+            gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(12))
+            gl.glEnableVertexAttribArray(2)
+            gl.glVertexAttribPointer(2, 2, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(24))
 
-            glBindVertexArray(0)
+            gl.glBindVertexArray(0)
             self.is_loaded = True
             print(f"Loaded OBJ: {filename} ({self.vertex_count} vertices, {len(self.groups)} material groups)")
 
@@ -207,6 +207,6 @@ class OBJ:
 
     def cleanup(self):
         if self.vao:
-            glDeleteVertexArrays(1, [self.vao])
+            gl.glDeleteVertexArrays(1, [self.vao])
         if self.vbo:
-            glDeleteBuffers(1, [self.vbo])
+            gl.glDeleteBuffers(1, [self.vbo])

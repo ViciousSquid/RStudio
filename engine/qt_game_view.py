@@ -1221,7 +1221,13 @@ class QtGameView(QOpenGLWidget):
         from PyQt5.QtGui import QImage
         image = pixmap.toImage().convertToFormat(QImage.Format_RGBA8888)
         width, height = image.width(), image.height()
-        data = image.bits().asstring(image.byteCount())
+        # FIX#10: Use constBits + sizeInBytes (Qt 5.10+) with fallback
+        ptr = image.constBits()
+        try:
+            nbytes = image.sizeInBytes()
+        except AttributeError:
+            nbytes = image.byteCount()
+        data = ptr.asstring(nbytes)
         tex_id = gl.glGenTextures(1)
         gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
         gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
@@ -1875,3 +1881,6 @@ class QtGameView(QOpenGLWidget):
             self.debug_console_window.command_input.setText(cmd)
             self.debug_console_window._on_command_entered()
         self._close_console_overlay()
+
+
+
