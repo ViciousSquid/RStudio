@@ -499,6 +499,36 @@ class QtGameView(QOpenGLWidget):
                 if dst:
                     lines.append({'src': t.pos, 'dst': dst, 'color': COLOR_PATROL})
 
+        # --- 4. Teleporter connections (Action=teleport with target_node) ---
+        COLOR_TELEPORT = (0.78, 0.39, 1.0)  # Purple-ish (RGB 200,100,255)
+        try:
+            from editor.things import PathNode
+            # Build node lookup by name
+            node_lookup = {}
+            for t in self.editor.state.things:
+                if isinstance(t, PathNode):
+                    n = t.properties.get('name', '') or ''
+                    if n:
+                        node_lookup[n] = t
+
+            for brush in self.editor.state.brushes:
+                if not brush.get('is_trigger', False):
+                    continue
+                if brush.get('trigger_action') != 'teleport':
+                    continue
+                target_name = brush.get('target_node', '')
+                if not target_name:
+                    continue
+                dst_node = node_lookup.get(target_name)
+                if dst_node:
+                    lines.append({
+                        'src': brush['pos'],
+                        'dst': dst_node.pos,
+                        'color': COLOR_TELEPORT
+                    })
+        except ImportError:
+            pass
+
         return lines
 
     def paintGL(self):

@@ -259,15 +259,14 @@ class LogicThread(threading.Thread):
         return self._id_cache.get(entity_id)
 
     def _find_path_node_by_name(self, name: str):
-        """Return PathNode thing with given name, or None.
-        Used by io_handlers (trigger_teleport, camera_start, spawner_spawn).
-        Delegates to the name cache for O(1) lookup."""
+        """Return PathNode thing with given name, or None."""
         if not name or PathNode is None:
             return None
+        # Use the name cache for O(1) lookup
         entity = self._name_cache.get(name)
         if entity is not None and isinstance(entity, PathNode):
             return entity
-        # Fallback: linear scan (in case cache is stale)
+        # Fallback linear scan (should rarely happen)
         for t in self.things:
             if isinstance(t, PathNode) and t.properties.get('name', '') == name:
                 return t
@@ -734,15 +733,45 @@ class LogicThread(threading.Thread):
         trigger_type = brush.get('trigger_type', 'multiple')
         if trigger_type == 'once' and trigger_id in self.fired_once_triggers:
             return
+
         action = brush.get('trigger_action', 'target')
-        if action == 'hurt':
+
+        # ------------------------------------------------------------------
+        # 1. Direct Teleport
+        # ------------------------------------------------------------------
+        if action == 'teleport':
+            target_node_name = brush.get('target_node', '')
+            if target_node_name:
+                node = self._find_path_node_by_name(target_node_name)
+                if node and self.player:
+                    # Move player to node position
+                    self.player.pos = glm.vec3(node.pos[0], node.pos[1], node.pos[2])
+                    self.player.velocity = glm.vec3(0, 0, 0)  # Kill momentum
+
+                    if self.io_manager:
+                        self.io_manager.fire_output(brush, 'OnTeleport')
+
+                    debug_log("IO", f"Trigger teleported player → '{target_node_name}' "
+                                     f"({node.pos[0]:.0f}, {node.pos[1]:.0f}, {node.pos[2]:.0f})")
+            else:
+                debug_log("Warning", "Trigger action 'teleport' used but no target_node set.")
+
+        # ------------------------------------------------------------------
+        # 2. Damage trigger (hurt)
+        # ------------------------------------------------------------------
+        elif action == 'hurt':
             damage = brush.get('damage', 10)
             self._apply_player_damage(damage)
             self.hurt_trigger_timers[trigger_id] = self.HURT_INTERVAL
+
+        # ------------------------------------------------------------------
+        # 3. Standard I/O trigger (target)
+        # ------------------------------------------------------------------
         elif action == 'target':
             if self.io_manager:
                 self.io_manager.fire_output(brush, 'OnStartTouch')
                 self.io_manager.fire_output(brush, 'OnTrigger')
+
         if trigger_type == 'once':
             self.fired_once_triggers.add(trigger_id)
     
