@@ -313,6 +313,67 @@ class View2D(QWidget):
             self.draw_logic_connections(painter, visible_bounds)
             self.draw_patrol_paths(painter, visible_bounds)
 
+            # Teleporter connections (Action=teleport with target_node) ---
+            ax1, ax2 = self.get_axes()
+            if not ax1 or not ax2:
+                return
+            ax_map = {'x': 0, 'y': 1, 'z': 2}
+            a1 = ax_map[ax1]
+            a2 = ax_map[ax2]
+
+            # Build node lookup once
+            node_lookup = {}
+            for t in self.editor.state.things:
+                if isinstance(t, PathNode):
+                    n = t.properties.get('name', '') or ''
+                    if n:
+                        node_lookup[n] = t
+
+            teleporter_color = QColor(200, 100, 255, 200)  # Purple-ish
+            teleporter_pen = QPen(teleporter_color, 2, Qt.DashLine)
+
+            for brush in self.editor.state.brushes:
+                if not brush.get('is_trigger', False):
+                    continue
+                if brush.get('trigger_action') != 'teleport':
+                    continue
+                target_name = brush.get('target_node', '')
+                if not target_name:
+                    continue
+                target_node = node_lookup.get(target_name)
+                if target_node is None:
+                    continue
+
+                src_w = QPointF(brush['pos'][a1], brush['pos'][a2])
+                dst_w = QPointF(target_node.pos[a1], target_node.pos[a2])
+
+                # Culling
+                margin = 100.0
+                sr = QRectF(src_w.x() - margin, src_w.y() - margin, margin * 2, margin * 2)
+                dr = QRectF(dst_w.x() - margin, dst_w.y() - margin, margin * 2, margin * 2)
+                if not (visible_bounds.intersects(sr) or visible_bounds.intersects(dr)):
+                    continue
+
+                p1 = self.world_to_screen(src_w)
+                p2 = self.world_to_screen(dst_w)
+
+                painter.setPen(teleporter_pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawLine(p1, p2)
+
+                # Draw an arrowhead at the destination
+                self._draw_connection_arrow(painter, p1, p2, teleporter_color)
+
+                # Optional: small "teleport" label at midpoint
+                mid = QPointF((p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2)
+                painter.save()
+                painter.setPen(QPen(teleporter_color.lighter(150)))
+                font = QFont()
+                font.setPointSize(7)
+                painter.setFont(font)
+                painter.drawText(mid + QPointF(4, -4), "teleport")
+            painter.restore()
+
         if self.is_drawing_brush:
             pen = QPen(QColor(255, 255, 0), 1, Qt.DashLine)
             painter.setPen(pen)
