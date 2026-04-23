@@ -32,7 +32,7 @@
 ### Rendering
 - Real-time lighting with stencil shadows
 - Forward renderer with Frustum culling
-- Fog, glass, and water shaders
+- Fog, glass, water and overbright shaders
 
 ### Technical
 - JSON level format
