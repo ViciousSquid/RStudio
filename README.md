@@ -31,7 +31,7 @@
 
 ### Rendering
 - Real-time lighting with stencil shadows
-- Unified forward renderer
+- Forward renderer with Frustum culling
 - Fog, glass, and water shaders
 
 ### Technical
