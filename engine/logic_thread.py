@@ -515,17 +515,15 @@ class LogicThread(threading.Thread):
         self.doors = []
         for i, brush in enumerate(self.brushes):
             if brush.get('is_door'):
-                if 'door_speed' in brush:
-                    brush['speed'] = brush['door_speed']
-                if 'door_distance' in brush:
-                    brush['distance'] = brush['door_distance']
-                if 'door_direction' in brush:
-                    dir_str = brush['door_direction']
-                    brush['direction'] = DOOR_DIRECTION_MAP.get(dir_str, [0, 1, 0])
+                # Resolve runtime parameters from editor properties without mutating the source brush
+                speed = float(brush.get('door_speed', brush.get('speed', 128.0)))
+                distance = float(brush.get('door_distance', brush.get('distance', 128.0)))
+                dir_str = brush.get('door_direction', '')
+                direction = DOOR_DIRECTION_MAP.get(dir_str, [0, 1, 0])
+
                 if 'door_lip' in brush:
                     lip = float(brush.get('door_lip', 0.0))
-                    base_dist = float(brush.get('distance', brush.get('door_distance', 128.0)))
-                    brush['distance'] = max(1.0, base_dist - lip)
+                    distance = max(1.0, distance - lip)
 
                 self.doors.append((i, brush))
                 if 'original_pos' not in brush:
@@ -534,6 +532,9 @@ class LogicThread(threading.Thread):
                     'progress': 0.0,
                     'state': 'closed',
                     'open_timer': 0.0,
+                    'speed': speed,
+                    'distance': distance,
+                    'direction': direction,
                 }
 
     def _reset_doors(self):
@@ -1360,10 +1361,10 @@ class LogicThread(threading.Thread):
             if i not in self.door_states:
                 continue
             state = self.door_states[i]
-            speed = brush.get('speed', 128.0)
-            distance = brush.get('distance', 128.0)
+            speed = state.get('speed', 128.0)
+            distance = state.get('distance', 128.0)
             open_time = brush.get('open_time', 3.0)
-            direction = np.array(brush.get('direction', [0, 1, 0]), dtype=float)
+            direction = np.array(state.get('direction', [0, 1, 0]), dtype=float)
             dir_length = np.linalg.norm(direction)
             if dir_length > 0:
                 direction = direction / dir_length
@@ -1446,7 +1447,7 @@ class LogicThread(threading.Thread):
 
 
     # =========================================================================
-    # PARENTED PORTALS (mirrors the light parenting system)
+    # PARENTED PORTALS
     # =========================================================================
 
     def _init_parented_portals(self):
@@ -1533,8 +1534,11 @@ class LogicThread(threading.Thread):
                 continue
             if thing.properties.get('dead', False) or thing.properties.get('hidden', False):
                 continue
-            radius = 64.0
-            center = glm.vec3(thing.pos[0], thing.pos[1] + 64.0, thing.pos[2])
+            # Dynamic hitbox based on actual sprite dimensions
+            sprite_width = float(thing.properties.get('sprite_width', 64.0))
+            sprite_height = float(thing.properties.get('sprite_height', 128.0))
+            radius = max(sprite_width, sprite_height) / 2.0
+            center = glm.vec3(thing.pos[0], thing.pos[1] + sprite_height / 2.0, thing.pos[2])
             oc = ray_origin - center
             a = glm.dot(ray_dir, ray_dir)
             b = 2.0 * glm.dot(oc, ray_dir)
