@@ -5,6 +5,7 @@ the event-driven entity communication system.
 """
 
 import os
+import math
 import uuid
 from PyQt5.QtGui import QPixmap, QColor
 from PyQt5.QtCore import Qt   # Needed for scaling flags in get_icon_pixmap
@@ -1061,6 +1062,174 @@ class LogicSpawner(Thing):
 
 
 # =============================================================================
+# PORTAL ENTITY
+# =============================================================================
+
+class Portal(Thing):
+    """
+    A rectangular world portal for non-Euclidean environmental design,
+    inspired by Prey (2006).
+
+    Two Portal entities are linked by name via the portal_target property.
+    When the player looks through Portal A they see the world rendered from
+    the perspective of Portal B (using stencil-buffer masking in the
+    renderer).  Walking through A teleports the player to B with position,
+    velocity, and view-angle all correctly transformed by the rotational
+    delta between the two portal normals.
+
+    Properties
+    ----------
+    portal_target  (str)   Name of the paired Portal entity.
+    width          (float) Aperture width in world units.  Default 128.
+    height         (float) Aperture height in world units.  Default 256.
+    rotation       (list)  [yaw_degrees, pitch_degrees, roll_degrees].
+                           Only yaw is used for the portal normal; pitch
+                           and roll are reserved for future use.
+    active         (bool)  When False the portal acts as a solid wall.
+                           Toggle at runtime via Enable/Disable/Toggle inputs.
+    color          (list)  [r, g, b] 0-255 rim/glow tint.  Default white.
+    show_rim       (bool)  Draw the glowing aperture rim in play mode.
+
+    I/O outputs
+    -----------
+    OnPlayerEnter  Fired once per transit when the player passes through.
+    OnActivate     Fired when the portal is enabled.
+    OnDeactivate   Fired when the portal is disabled.
+
+    I/O inputs
+    ----------
+    Enable         Sets active = True  and fires OnActivate.
+    Disable        Sets active = False and fires OnDeactivate.
+    Toggle         Flips the active state.
+
+    Non-Euclidean design tips
+    -------------------------
+    * Infinite corridor  — face both portals toward each other in a short
+      hallway.
+    * Gravity flip       — rotate portal_b's yaw by 180° and place it on the
+      ceiling; the player emerges walking on what was the ceiling.
+    * Loop room          — four portals forming a closed square so exiting any
+      wall re-enters the opposite one.
+    * Size distortion    — make the apertures different sizes; the scene
+      appears scaled when viewed through the smaller end.
+    """
+
+    pixmap_path = "assets/sprites/portal.png"
+
+    DEFAULT_WIDTH  = 128.0
+    DEFAULT_HEIGHT = 256.0
+
+    # Transit cooldown prevents rapid back-and-forth oscillation (seconds).
+    TRANSIT_COOLDOWN = 0.5
+
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties['type'] = 'portal'
+
+        # Link to the other portal half
+        self.properties.setdefault('portal_target', '')
+
+        # Aperture geometry
+        self.properties.setdefault('width',  self.DEFAULT_WIDTH)
+        self.properties.setdefault('height', self.DEFAULT_HEIGHT)
+
+        # Orientation — [yaw_degrees, pitch_degrees, roll_degrees]
+        self.properties.setdefault('rotation', [0.0, 0.0, 0.0])
+        self.properties.setdefault('angle', 0.0)
+
+        # Runtime state
+        self.properties.setdefault('active', True)
+
+        # Visual rim
+        self.properties.setdefault('color',    [255, 255, 255])
+        self.properties.setdefault('show_rim', True)
+
+        # Internal transit cooldown (not saved to map file)
+        self._transit_cooldown = 0.0
+        # Last signed distance of player from this portal's plane (for edge detection)
+        self._last_player_side = None
+
+    # ── Geometry helpers ──────────────────────────────────────────────────────
+
+    def get_width(self) -> float:
+        try:
+            return max(16.0, float(self.properties.get('width', self.DEFAULT_WIDTH)))
+        except (TypeError, ValueError):
+            return self.DEFAULT_WIDTH
+
+    def get_height(self) -> float:
+        try:
+            return max(16.0, float(self.properties.get('height', self.DEFAULT_HEIGHT)))
+        except (TypeError, ValueError):
+            return self.DEFAULT_HEIGHT
+
+    def get_yaw_radians(self) -> float:
+        """Return the portal's yaw (facing direction) in radians."""
+        rot = self.properties.get('rotation', [0.0, 0.0, 0.0])
+        try:
+            return math.radians(float(rot[0]))
+        except (TypeError, ValueError, IndexError):
+            return 0.0
+
+    def get_normal(self):
+        """
+        Return the outward-facing unit normal of this portal as a 3-tuple
+        (x, y, z).  The normal points toward the viewer side of the portal
+        (the face the player approaches from).
+        """
+        yaw = self.get_yaw_radians()
+        return (math.sin(yaw), 0.0, math.cos(yaw))
+
+    def get_corners_world(self):
+        """
+        Return the four world-space corners of the portal aperture as a list
+        of [x, y, z] triples, winding counter-clockwise when viewed from the
+        front:  [bottom-left, bottom-right, top-right, top-left].
+        Used by the renderer to build the stencil mask quad.
+        """
+        px, py, pz = self.pos
+        w2 = self.get_width()  / 2.0
+        h2 = self.get_height() / 2.0
+        yaw = self.get_yaw_radians()
+
+        # Right vector (perpendicular to normal in the XZ plane)
+        rx =  math.cos(yaw)
+        rz = -math.sin(yaw)
+
+        return [
+            [px - rx * w2, py - h2, pz - rz * w2],
+            [px + rx * w2, py - h2, pz + rz * w2],
+            [px + rx * w2, py + h2, pz + rz * w2],
+            [px - rx * w2, py + h2, pz - rz * w2],
+        ]
+
+    def is_active(self) -> bool:
+        v = self.properties.get('active', True)
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() not in ('false', '0', 'no')
+
+    # ── I/O interface ─────────────────────────────────────────────────────────
+
+    def on_input(self, input_name: str, param=None, logic=None):
+        """Handle Enable / Disable / Toggle inputs from the I/O system."""
+        name = (input_name or '').lower().strip()
+        if name == 'enable':
+            self.properties['active'] = True
+            if logic and logic.io_manager:
+                logic.io_manager.fire_output(self, 'OnActivate')
+        elif name == 'disable':
+            self.properties['active'] = False
+            if logic and logic.io_manager:
+                logic.io_manager.fire_output(self, 'OnDeactivate')
+        elif name == 'toggle':
+            self.properties['active'] = not self.is_active()
+            ev = 'OnActivate' if self.is_active() else 'OnDeactivate'
+            if logic and logic.io_manager:
+                logic.io_manager.fire_output(self, ev)
+
+
+# =============================================================================
 # ENTITY REGISTRY
 # =============================================================================
 
@@ -1079,12 +1248,13 @@ ENTITY_TYPES = {
     'PathNode': PathNode,
     'LogicCamera': LogicCamera,
     'LogicSpawner': LogicSpawner,
+    'Portal': Portal,
 }
 
 # Categories for editor UI
 ENTITY_CATEGORIES = {
     'Gameplay': ['PlayerStart', 'Monster', 'Pickup', 'LevelChanger'],
-    'Environment': ['Light', 'Speaker', 'Model'],
+    'Environment': ['Light', 'Speaker', 'Model', 'Portal'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCamera', 'LogicSpawner'],
     'AI': ['PathNode'],
 }

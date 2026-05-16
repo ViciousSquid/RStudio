@@ -5,9 +5,9 @@ import os
 from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
-from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Monster, 
+from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Monster,
                           LogicGate, LogicRelay, LogicTimer, LevelChanger, PathNode,
-                          LogicCamera, LogicSpawner)
+                          LogicCamera, LogicSpawner, Portal)
 from editor.scene_hierarchy import SceneHierarchy
 # I/O System imports for drawing connections
 try:
@@ -724,9 +724,6 @@ class View2D(QWidget):
         direction = brush.get('direction', [0, 1, 0])
         distance = brush.get('distance', 128.0)
 
-        # In play mode, anchor arrow at the mover's starting position
-        # so the brush visually travels along the arrow path.
-        # In edit mode, use current pos so the arrow follows the brush when repositioned.
         play_mode = getattr(self.main_window.view_3d, 'play_mode', False)
         if play_mode and 'original_pos' in brush:
             start_3d = brush['original_pos']
@@ -887,10 +884,6 @@ class View2D(QWidget):
             
         renderer = self.main_window.view_3d.renderer
         
-        # Check if loaded (don't force load during hit test to prevent lag)
-        # But ensure loaded for draw. 
-        # Since this helper is used by both, we might need to handle load triggering externally or check context.
-        # For now, if not loaded, return None. 
         if model_path not in renderer.loaded_models:
             return None
             
@@ -1020,6 +1013,10 @@ class View2D(QWidget):
                 # Selection box for models
                 draw_rect = QRectF(s_pos.x() - 16, s_pos.y() - 16, 32, 32)
 
+            # --- PORTAL RENDERING ---
+            elif isinstance(thing, Portal):
+                draw_rect = self._draw_portal_gizmo(painter, thing, s_pos, axis1_idx, axis2_idx, ax_map, ax1, ax2, visible_bounds)
+
             # --- SPRITE RENDERING ---
             else:
                 # 1. Draw Radius
@@ -1050,16 +1047,12 @@ class View2D(QWidget):
                     painter.drawText(QPointF(s_pos.x() + sight_px + 4, s_pos.y() + 4), f"{sight} u")
                     painter.restore()
 
-                # 1c. Draw PathNode Radius (teal, dashed — mirrors Light's
-                # show_radius toggle but uses a distinct colour so patrol
-                # areas are unambiguous when stacked over light radii)
+                # 1c. Draw PathNode Radius
                 if isinstance(thing, PathNode) and thing.properties.get('show_radius', False):
                     radius = thing.get_radius() * self.zoom_factor
-                    # Translucent teal fill
                     painter.setBrush(QBrush(QColor(38, 166, 154, 30)))
                     painter.setPen(QPen(QColor(38, 166, 154, 220), 1, Qt.DashLine))
                     painter.drawEllipse(s_pos, radius, radius)
-                    # Label with radius value and affects_type
                     painter.save()
                     painter.setPen(QPen(QColor(77, 208, 196)))
                     font = QFont()
@@ -1140,7 +1133,7 @@ class View2D(QWidget):
                     painter.drawPolygon(QPolygonF([s_end, p1, p2]))
                     painter.restore()
 
-            # 4. Overlays
+            # 4. Overlays (selection highlight + color tag)
             if draw_rect:
                 self.draw_thing_color_tag(painter, thing, draw_rect)
                 is_selected = thing in getattr(self.editor.state, 'selected_objects', []) or thing == self.editor.state.selected_object
@@ -1148,6 +1141,203 @@ class View2D(QWidget):
                     painter.setPen(QPen(QColor(255, 255, 0), 2, Qt.DotLine))
                     painter.setBrush(Qt.NoBrush)
                     painter.drawRect(draw_rect.adjusted(-2, -2, 2, 2))
+
+        # Draw portal pair link lines on top of all things (F1 toggle respects this too)
+        self._draw_portal_links(painter, axis1_idx, axis2_idx, visible_bounds)
+
+    def _draw_portal_gizmo(self, painter, thing, s_pos, axis1_idx, axis2_idx, ax_map, ax1, ax2, visible_bounds):
+        """
+        Draw the Portal aperture as a thick line segment in the 2D view,
+        with a small normal arrow showing the facing direction and the portal name.
+        Returns the bounding QRectF used for selection/hit-testing.
+        """
+        # ---- Color handling (FIXED) ----
+        raw_col = thing.properties.get('color', [255, 255, 255])
+
+        # Handle string values that may come from property editor text fields
+        if isinstance(raw_col, str):
+            try:
+                import ast
+                raw_col = ast.literal_eval(raw_col)
+            except (ValueError, SyntaxError):
+                raw_col = [255, 255, 255]
+
+        # Ensure valid list/tuple with at least 3 numeric components
+        if not isinstance(raw_col, (list, tuple)) or len(raw_col) < 3:
+            raw_col = [255, 255, 255]
+
+        # Safely convert each component to 0-255 int
+        def _to_color_int(val, default=255):
+            try:
+                return max(0, min(255, int(float(val))))
+            except (TypeError, ValueError):
+                return default
+
+        r = _to_color_int(raw_col[0] if len(raw_col) > 0 else 255)
+        g = _to_color_int(raw_col[1] if len(raw_col) > 1 else 255)
+        b = _to_color_int(raw_col[2] if len(raw_col) > 2 else 255)
+
+        # Dim inactive portals
+        if not thing.is_active():
+            r, g, b = int(r * 0.4), int(g * 0.4), int(b * 0.4)
+
+        portal_color = QColor(r, g, b, 220)
+        dim_color    = QColor(r, g, b, 80)
+
+        is_active = thing.is_active()
+
+        # Top view: aperture is a horizontal line (X axis), normal points along Z.
+        # Front/side views: aperture is a vertical line (Y axis), normal shows as a dot.
+        # For the top view we can show a proper line + normal; for other views a square.
+        yaw = thing.get_yaw_radians()
+        w2  = thing.get_width() / 2.0
+
+        if ax1 == 'x' and ax2 == 'z':
+            # Top view — draw full aperture line and normal arrow
+            rx =  math.cos(yaw)   # right vector X
+            rz = -math.sin(yaw)   # right vector Z (Z is our screen-Y in top view)
+            nx =  math.sin(yaw)   # normal X
+            nz =  math.cos(yaw)   # normal Z
+
+            ox, oz = float(thing.pos[0]), float(thing.pos[2])
+
+            left_w  = QPointF(ox - rx * w2, oz - rz * w2)
+            right_w = QPointF(ox + rx * w2, oz + rz * w2)
+            left_s  = self.world_to_screen(left_w)
+            right_s = self.world_to_screen(right_w)
+
+            # Aperture line
+            pen_style = Qt.SolidLine if is_active else Qt.DashLine
+            painter.save()
+            painter.setPen(QPen(portal_color, 3, pen_style))
+            painter.drawLine(left_s, right_s)
+
+            # Normal arrow (shows facing direction)
+            normal_len = 24.0  # screen pixels
+            mid_s = QPointF((left_s.x() + right_s.x()) / 2,
+                            (left_s.y() + right_s.y()) / 2)
+            # In top view, Z maps to screen-Y (downward positive in Qt)
+            tip_s = QPointF(mid_s.x() + nx * normal_len,
+                            mid_s.y() + nz * normal_len)
+            painter.setPen(QPen(portal_color, 2))
+            painter.drawLine(mid_s, tip_s)
+            # Arrowhead
+            angle = math.atan2(tip_s.y() - mid_s.y(), tip_s.x() - mid_s.x())
+            hs = 8
+            ah1 = tip_s - QPointF(math.cos(angle - math.pi/6)*hs, math.sin(angle - math.pi/6)*hs)
+            ah2 = tip_s - QPointF(math.cos(angle + math.pi/6)*hs, math.sin(angle + math.pi/6)*hs)
+            painter.setBrush(QBrush(portal_color))
+            painter.drawPolygon(QPolygonF([tip_s, ah1, ah2]))
+
+            # Name label
+            painter.setPen(QPen(portal_color.lighter(150)))
+            font = QFont()
+            font.setPointSize(8)
+            painter.setFont(font)
+            painter.drawText(right_s + QPointF(5, 4), thing.properties.get('name', ''))
+
+            painter.restore()
+
+            # Bounding rect for selection — INCREASED margin for easier selection
+            xs = [left_s.x(), right_s.x(), tip_s.x()]
+            ys = [left_s.y(), right_s.y(), tip_s.y()]
+            margin = 24
+            draw_rect = QRectF(min(xs) - margin, min(ys) - margin,
+                            max(xs) - min(xs) + margin*2,
+                            max(ys) - min(ys) + margin*2)
+
+        else:
+            # Front / side view — draw as a tall rectangle indicating the aperture
+            h2 = thing.get_height() / 2.0
+            # In front view ax1=x, ax2=y;  in side view ax1=z, ax2=y
+            px = float(thing.pos[axis1_idx])
+            py = float(thing.pos[axis2_idx])
+
+            # Width in this projection depends on the view:
+            # front view: portal width is along X, so project w2 onto X
+            # side view:  portal width is along Z, project onto Z
+            if ax1 == 'x':
+                proj_half_w = w2 * abs(math.cos(yaw))
+            else:
+                proj_half_w = w2 * abs(math.sin(yaw))
+            proj_half_w = max(4.0, proj_half_w)
+
+            top_left_w  = QPointF(px - proj_half_w, py + h2)
+            bot_right_w = QPointF(px + proj_half_w, py - h2)
+            tl_s = self.world_to_screen(top_left_w)
+            br_s = self.world_to_screen(bot_right_w)
+            rect_s = QRectF(tl_s, br_s).normalized()
+
+            pen_style = Qt.SolidLine if is_active else Qt.DashLine
+            painter.save()
+            painter.setPen(QPen(portal_color, 2, pen_style))
+            painter.setBrush(QBrush(dim_color))
+            painter.drawRect(rect_s)
+
+            # Name label
+            painter.setPen(QPen(portal_color.lighter(150)))
+            font = QFont()
+            font.setPointSize(8)
+            painter.setFont(font)
+            painter.drawText(rect_s.topRight() + QPointF(4, 12), thing.properties.get('name', ''))
+
+            painter.restore()
+            # INCREASED margin for easier selection in front/side views
+            draw_rect = rect_s.adjusted(-20, -20, 20, 20)
+
+        return draw_rect
+
+    def _draw_portal_links(self, painter, axis1_idx, axis2_idx, visible_bounds):
+        """
+        Draw a dashed cyan line between each linked portal pair
+        """
+        portals_by_name = {}
+        for t in self.editor.state.things:
+            if isinstance(t, Portal):
+                name = t.properties.get('name', '')
+                if name:
+                    portals_by_name[name] = t
+
+        drawn_pairs = set()
+        link_pen = QPen(QColor(0, 200, 255, 140), 1, Qt.DashLine)
+
+        for name, pa in portals_by_name.items():
+            target = pa.properties.get('portal_target', '')
+            if not target or target not in portals_by_name:
+                continue
+            pair = frozenset({name, target})
+            if pair in drawn_pairs:
+                continue
+            drawn_pairs.add(pair)
+
+            pb = portals_by_name[target]
+
+            ax_w = QPointF(float(pa.pos[axis1_idx]), float(pa.pos[axis2_idx]))
+            bx_w = QPointF(float(pb.pos[axis1_idx]), float(pb.pos[axis2_idx]))
+
+            # Cull if both endpoints out of view
+            margin = 80.0
+            ar = QRectF(ax_w.x()-margin, ax_w.y()-margin, margin*2, margin*2)
+            br = QRectF(bx_w.x()-margin, bx_w.y()-margin, margin*2, margin*2)
+            if not (visible_bounds.intersects(ar) or visible_bounds.intersects(br)):
+                continue
+
+            p1 = self.world_to_screen(ax_w)
+            p2 = self.world_to_screen(bx_w)
+
+            painter.setPen(link_pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawLine(p1, p2)
+
+            # Small label at midpoint
+            mid = QPointF((p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2)
+            painter.save()
+            painter.setPen(QPen(QColor(0, 200, 255, 100)))
+            font = QFont()
+            font.setPointSize(8)
+            painter.setFont(font)
+            painter.drawText(mid + QPointF(4, -4), "portal link")
+            painter.restore()
 
     def draw_terrain(self, painter, visible_bounds):
         """Draw terrain outline/profile in 2D view."""
@@ -1936,10 +2126,14 @@ class View2D(QWidget):
         add_logic_timer_action = logic_menu.addAction("LogicTimer")
         add_logic_gate_action = logic_menu.addAction("LogicGate")
 
-        # Node submenu
+        # Node / Special submenu
         ai_menu = menu.addMenu("Nodes")
         add_logic_camera_action = ai_menu.addAction("_Camera")
         add_path_node_action = ai_menu.addAction("PathNode")
+
+        # Portal submenu
+        portal_menu = menu.addMenu("Portal")
+        add_portal_action = portal_menu.addAction("Portal")
 
         # Open the menu using the captured position
         action = menu.exec_(self.mapToGlobal(click_pos))
@@ -1993,6 +2187,11 @@ class View2D(QWidget):
         # AI / Navigation entities
         elif action == add_path_node_action:
             new_thing = PathNode(pos=pos_3d)
+
+        # Portal
+        elif action == add_portal_action:
+            new_thing = Portal(pos=pos_3d)
+            new_thing.properties['rotation'] = [0.0, 0.0, 0.0]
         
         # Model
         elif action == add_model_action:
@@ -2409,6 +2608,3 @@ class View2D(QWidget):
     def zoom_out(self):
         self.zoom_factor *= 0.8
         self.update()
-
-
-
