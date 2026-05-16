@@ -1766,6 +1766,67 @@ class PropertyEditor(QWidget):
             mover_combo.currentTextChanged.connect(on_parent_mover_changed)
             layout.addRow(mover_label, mover_combo)
 
+        # --- Portal: Attach to Mover (same system as Light) ---
+        if isinstance(thing, Portal):
+            current_parent = thing.properties.get('parent_mover', '')
+            is_attached = bool(current_parent)
+
+            portal_attach_cb = QCheckBox("Attach to Mover")
+            portal_attach_cb.setChecked(is_attached)
+            layout.addRow("", portal_attach_cb)
+
+            portal_mover_combo = QComboBox()
+            portal_mover_combo.addItem("(none)")
+            for brush in self.editor.state.brushes:
+                if brush.get('is_mover'):
+                    mover_name = brush.get('name', '')
+                    if mover_name:
+                        portal_mover_combo.addItem(mover_name)
+
+            if current_parent:
+                idx = portal_mover_combo.findText(current_parent)
+                if idx >= 0:
+                    portal_mover_combo.setCurrentIndex(idx)
+                else:
+                    portal_mover_combo.addItem(current_parent + " (missing)")
+                    portal_mover_combo.setCurrentIndex(portal_mover_combo.count() - 1)
+
+            portal_mover_label = QLabel("Parent Mover:")
+            portal_mover_label.setVisible(is_attached)
+            portal_mover_combo.setVisible(is_attached)
+
+            def on_portal_attach_toggled(checked):
+                portal_mover_label.setVisible(checked)
+                portal_mover_combo.setVisible(checked)
+                if not checked:
+                    thing.properties['parent_mover'] = ''
+                    thing.properties['parent_offset'] = [0.0, 0.0, 0.0]
+                    portal_mover_combo.setCurrentIndex(0)
+                    self.editor.update_all_ui()
+
+            portal_attach_cb.toggled.connect(on_portal_attach_toggled)
+
+            def on_portal_parent_mover_changed(text):
+                clean = text.replace(" (missing)", "")
+                if clean == "(none)":
+                    thing.properties['parent_mover'] = ''
+                    thing.properties['parent_offset'] = [0.0, 0.0, 0.0]
+                else:
+                    thing.properties['parent_mover'] = clean
+                    # Compute offset = portal pos − mover pos
+                    for b in self.editor.state.brushes:
+                        if b.get('is_mover') and b.get('name') == clean:
+                            thing.properties['parent_offset'] = [
+                                thing.pos[0] - b['pos'][0],
+                                thing.pos[1] - b['pos'][1],
+                                thing.pos[2] - b['pos'][2],
+                            ]
+                            break
+                self.editor.update_all_ui()
+
+            portal_mover_combo.currentTextChanged.connect(on_portal_parent_mover_changed)
+            layout.addRow(portal_mover_label, portal_mover_combo)
+
         is_pickup = isinstance(thing, Pickup)
         current_item_type = thing.properties.get('item_type', 'health') if is_pickup else None
 
