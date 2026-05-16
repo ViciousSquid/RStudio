@@ -2,7 +2,7 @@
 Monster AI – all enemy behaviour, patrol logic, sight, shooting, and physics.
 Extracted from LogicThread for easier maintenance and extension.
 
-PERF: All brush collision/raycast methods now delegate to SpatialGrid,
+PERF: All brush collision/raycast methods delegate to SpatialGrid,
 reducing per-monster cost from O(all_brushes) to O(nearby_brushes).
 """
 
@@ -172,20 +172,41 @@ class MonsterAI:
                 self._update_monster_patrol(thing, state, mtype, delta)
                 continue
 
-            # ---- Resolve target (player or aggro monster for infighting) ----
-            aggro_id = thing.properties.get('_aggro_target', None)
-            aggro_monster = None
-            if aggro_id is not None:
-                aggro_monster = self._find_monster_by_id(aggro_id)
-                if aggro_monster is None or aggro_monster.properties.get('dead', False):
-                    # Aggro target gone — revert to player
-                    thing.properties.pop('_aggro_target', None)
-                    aggro_monster = None
+            # ---- Target name override (set via I/O settarget input) ----
+            target_name = thing.properties.get('target_name', None)
+            override_target_pos = None
+            if target_name is not None:
+                if target_name == '':
+                    # Empty string: clear override and fall back to normal logic
+                    thing.properties.pop('target_name', None)
+                else:
+                    target_entity = self.lt._find_entity_by_name(target_name)
+                    if target_entity is not None and hasattr(target_entity, 'pos'):
+                        # Valid named target found — use its position
+                        override_target_pos = glm.vec3(target_entity.pos)
+                    else:
+                        # Missing or invalid name: clear override and fall back
+                        thing.properties.pop('target_name', None)
 
-            if aggro_monster is not None:
-                target_pos = glm.vec3(aggro_monster.pos)
+            # ---- Resolve target (player or aggro monster for infighting) ----
+            if override_target_pos is not None:
+                # Bypass normal target selection when a valid override is active
+                target_pos = override_target_pos
+                aggro_monster = None
             else:
-                target_pos = player_pos
+                aggro_id = thing.properties.get('_aggro_target', None)
+                aggro_monster = None
+                if aggro_id is not None:
+                    aggro_monster = self._find_monster_by_id(aggro_id)
+                    if aggro_monster is None or aggro_monster.properties.get('dead', False):
+                        # Aggro target gone — revert to player
+                        thing.properties.pop('_aggro_target', None)
+                        aggro_monster = None
+
+                if aggro_monster is not None:
+                    target_pos = glm.vec3(aggro_monster.pos)
+                else:
+                    target_pos = player_pos
 
             # ---- Line of sight check ----
             monster_eye = glm.vec3(thing_pos.x, thing_pos.y + 64.0, thing_pos.z)
@@ -233,7 +254,7 @@ class MonsterAI:
                             slide_x = glm.vec3(thing_pos.x + step.x, thing_pos.y, thing_pos.z)
                             slide_z = glm.vec3(thing_pos.x, thing_pos.y, thing_pos.z + step.z)
                             if not self._monster_overlaps_wall(slide_x.x, slide_x.y, slide_x.z, MONSTER_WALL_MARGIN):
-                                thing.pos = [slide_x.x, slide_x.y, slide_x.z]
+                                thing.pos = [slide_x.x, slide_x.y, slide_z.z]
                             elif not self._monster_overlaps_wall(slide_z.x, slide_z.y, slide_z.z, MONSTER_WALL_MARGIN):
                                 thing.pos = [slide_z.x, slide_z.y, slide_z.z]
                             # else: blocked on both axes – no movement
