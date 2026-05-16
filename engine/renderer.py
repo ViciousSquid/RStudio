@@ -1157,10 +1157,22 @@ class Renderer:
                         else:
                             # FIX: Also use full list in the fallback branch
                             self.draw_lit_brushes_optimized(proj, vw, cam, all_br, _lights, cfg)
-                        # Sprites (monsters, pickups etc.) in the virtual view
-                        _sprites = [t for t in th
-                                    if not (PathNode is not None and isinstance(t, PathNode))
-                                    and not (Portal is not None and isinstance(t, Portal))]
+                        # Sprites visible through portals: only gameplay entities
+                        # (monsters, pickups). Editor helpers (lights, speakers,
+                        # player start, logic entities, path nodes, models) are
+                        # hidden so they don't clutter the immersive portal view.
+                        _sprites = []
+                        for t in th:
+                            if PathNode is not None and isinstance(t, PathNode):
+                                continue
+                            if Portal is not None and isinstance(t, Portal):
+                                continue
+                            if isinstance(t, dict) and 'monster_type' in t:
+                                _sprites.append(t)  # Monster snapshot
+                            elif Pickup is not None and isinstance(t, Pickup):
+                                _sprites.append(t)  # Pickup
+                            elif Monster is not None and isinstance(t, Monster):
+                                _sprites.append(t)  # Live monster
                         self.draw_sprites(proj, vw, _sprites,
                                           self.sprite_textures, self.instance_textures)
 
@@ -2014,21 +2026,13 @@ class Renderer:
         Draw every Portal entity as a coloured rectangle outline in the 3D
         view using the 'simple' shader.
 
-        In play mode: outlines are NOT drawn — the stencil pass (draw_portals)
-        renders the actual portal view, and we don't want editor-only visuals
-        cluttering the immersive view.
-
-        In editor mode: the stencil pass is skipped, but this outline is drawn
-        so portals are never invisible and remain selectable.
+        Outlines are only drawn when the portal's 'show_rim' property is True.
+        This applies both in editor mode and play mode.
         """
         if Portal is None or 'simple' not in self.shaders:
             return
 
-        # Skip all portal outlines and angle indicators during play mode
-        if play_mode:
-            return
-
-        portal_things = [t for t in things if isinstance(t, Portal)]
+        portal_things = [t for t in things if isinstance(t, Portal) and t.properties.get('show_rim', True)]
         if not portal_things:
             return
 

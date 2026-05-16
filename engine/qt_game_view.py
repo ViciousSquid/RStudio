@@ -574,6 +574,18 @@ class QtGameView(QOpenGLWidget):
                 self.camera.yaw = render_state.editor_camera_yaw
                 self.camera.pitch = render_state.editor_camera_pitch
                 self.camera.fov = render_state.editor_camera_fov
+            else:
+                # In play mode, sync editor camera with player position so
+                # the 2D views show the moving player camera cone.
+                # NOTE: player_angle/pitch are in RADIANS but camera.yaw/pitch
+                # expect DEGREES, so we convert.
+                # CRITICAL: Player angle convention (0=+Z/south, π/2=+X/east)
+                # differs from Camera yaw convention (0=+X/east, 90=+Z/south).
+                # The correct mapping is: camera.yaw = 90° - player_angle_deg
+                import math
+                self.camera.pos = glm.vec3(render_state.player_pos)
+                self.camera.yaw = 90.0 - math.degrees(render_state.player_angle)
+                self.camera.pitch = math.degrees(render_state.player_pitch)
         else:
             # Non-threaded fallback (editor only)
             self.view_matrix = self.camera.get_view_matrix()
