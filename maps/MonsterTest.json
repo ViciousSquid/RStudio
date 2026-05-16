@@ -2192,9 +2192,9 @@
         {
             "type": "monster",
             "pos": [
-                663.0323486328125,
+                695.8739013671875,
                 160.0,
-                188.75906372070312
+                -11.180965423583984
             ],
             "properties": {
                 "type": "monster",
@@ -2214,7 +2214,8 @@
                 "patrol": true,
                 "patrol_target": "PathNode_2",
                 "patrol_mode": "loop",
-                "variant": "<None>"
+                "variant": "variant1",
+                "dead": false
             },
             "io_connections": []
         },
