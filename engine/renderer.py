@@ -818,6 +818,13 @@ class Renderer:
         """
         Build a virtual camera view matrix for rendering through portal_b
         as seen from portal_a.
+
+        Portals are doorways — the player's offset and view direction are
+        rotated by the difference in portal orientations. The key insight is
+        that when viewing a portal from its FRONT (the side its normal points
+        toward), the virtual camera must look OUT from the paired portal,
+        not IN at it. This requires an additional 180° rotation when the
+        player is on the front side of portal_a.
         """
         yaw_a = portal_a.get_yaw_radians()
         yaw_b = portal_b.get_yaw_radians()
@@ -832,15 +839,15 @@ class Renderer:
         player_side = glm.dot(to_player, normal_a)  # positive = front, negative = back
 
         # ---- Delta yaw ----
-        # Base rotation: difference between portal orientations.
-        # When viewing from the FRONT of portal A, we need to look OUT of
-        # portal B's front face. This requires an extra 180° flip because
-        # the player is looking INTO portal A but needs to see what comes
-        # OUT of portal B.
+        # Base rotation: difference between portal orientations
         delta_yaw = yaw_a - yaw_b
+
+        # When viewing from the FRONT of portal A, we need to flip the
+        # virtual camera by 180° so it looks OUT from portal B instead of
+        # IN at it. When viewing from the BACK, the current relative
+        # rotation is already correct.
         if player_side >= 0:
-            # Front side: flip 180° so we look out of portal B, not into it
-            delta_yaw += math.pi
+            delta_yaw += math.pi  # +180° for front-side viewing
 
         cos_d = math.cos(delta_yaw)
         sin_d = math.sin(delta_yaw)
@@ -855,8 +862,12 @@ class Renderer:
         virtual_cam = pos_b + rotated_pos
 
         # ---- Direction ----
+        # Extract world-space forward from the view matrix.
+        # In a lookAt matrix the negative forward is stored in the Z-components
+        # of the first three columns.
         fwd = -glm.vec3(current_view[0][2], current_view[1][2], current_view[2][2])
 
+        # Apply the same doorway rotation (including the 180° flip if front-side)
         new_fwd = glm.vec3(
             fwd.x * cos_d - fwd.z * sin_d,
             fwd.y,
