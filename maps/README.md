@@ -14,3 +14,11 @@ Hub map with doors, one of them leads to `map_test_Extended` - _demonstrates the
 
 Playable level with multiple rooms, pickups, a moving platform and a light that can be triggered
 
+### `MonsterTest.json`
+
+Demonstrates how a monster can follow a path
+
+### `Portal_Test.json`
+
+Demonstrates the new World Portals added with v1.2.6.0
+
