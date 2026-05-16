@@ -127,6 +127,24 @@ if __name__ == "__main__":
     except FileNotFoundError:
         print("Version file not found")
 
+    # ---------------------------------------------------------
+    # ✅ FIX: Configure OpenGL BEFORE QApplication is created
+    # ---------------------------------------------------------
+    fmt = QSurfaceFormat()
+    fmt.setVersion(3, 3)
+    fmt.setProfile(QSurfaceFormat.CoreProfile)
+    fmt.setDepthBufferSize(24)
+    fmt.setStencilBufferSize(8)
+
+    import configparser
+    config = configparser.ConfigParser()
+    config.read('settings.ini')
+    vsync = config.getboolean('Display', 'vsync', fallback=True)
+    fmt.setSwapInterval(1 if vsync else 0)
+
+    QSurfaceFormat.setDefaultFormat(fmt)
+    # ---------------------------------------------------------
+
     # Splash class defined AFTER Qt import
     class ProgressSplashScreen(QWidget):
         def __init__(self, pixmap_path):
@@ -173,21 +191,6 @@ if __name__ == "__main__":
     splash = ProgressSplashScreen('assets/splash.png')
     splash.show()
     splash.set_progress(5, "Configuring OpenGL...")
-
-    # OpenGL format
-    fmt = QSurfaceFormat()
-    fmt.setVersion(3, 3)
-    fmt.setProfile(QSurfaceFormat.CoreProfile)
-    fmt.setDepthBufferSize(24)
-    fmt.setStencilBufferSize(8)
-
-    import configparser
-    config = configparser.ConfigParser()
-    config.read('settings.ini')
-    vsync = config.getboolean('Display', 'vsync', fallback=True)
-    fmt.setSwapInterval(1 if vsync else 0)
-
-    QSurfaceFormat.setDefaultFormat(fmt)
 
     splash.set_progress(25, "Building editor UI...")
 
