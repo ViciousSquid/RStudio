@@ -1,0 +1,377 @@
+{
+    "version": 3,
+    "brushes": [
+        {
+            "pos": [
+                -776.0,
+                144.0,
+                40.0
+            ],
+            "size": [
+                16.0,
+                512.0,
+                784.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "dff1b1a6-a07c-4ef4-8fd4-c0bbe230850c"
+        },
+        {
+            "pos": [
+                552.0,
+                144.0,
+                40.0
+            ],
+            "size": [
+                16.0,
+                512.0,
+                784.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "dd4343fd-16f4-477b-a868-2a26b6157bd6"
+        },
+        {
+            "pos": [
+                -112.0,
+                -104.0,
+                40.0
+            ],
+            "size": [
+                1312.0,
+                16.0,
+                784.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "155913f2-baa9-4872-b853-17ca2492a01f"
+        },
+        {
+            "pos": [
+                -112.0,
+                392.0,
+                48.0
+            ],
+            "size": [
+                1312.0,
+                16.0,
+                784.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "4d369f2d-88fd-4cc4-968f-5d58e295e73e"
+        },
+        {
+            "pos": [
+                -112.0,
+                136.0,
+                -344.0
+            ],
+            "size": [
+                1312.0,
+                496.0,
+                16.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "b211012c-f025-42ed-a1a2-ef60c47a559d"
+        },
+        {
+            "pos": [
+                -112.0,
+                136.0,
+                424.0
+            ],
+            "size": [
+                1312.0,
+                496.0,
+                16.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "hidden": false,
+            "id": "166fa50b-5b0c-405a-a610-0e9f05c9e09b"
+        },
+        {
+            "pos": [
+                -560.0,
+                0,
+                92.0
+            ],
+            "size": [
+                144.0,
+                128,
+                152.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "1fc19f34-9a28-4975-83f4-5af9be7ae346"
+        },
+        {
+            "pos": [
+                262.0,
+                28.0,
+                20.0
+            ],
+            "size": [
+                44.0,
+                280.0,
+                24.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "166811df-aaa1-40b9-b2c2-a51c6c706eca"
+        },
+        {
+            "pos": [
+                442.0,
+                28.0,
+                20.0
+            ],
+            "size": [
+                44.0,
+                280.0,
+                24.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "166811df-aaa1-40b9-b2c2-a51c6c706eca"
+        },
+        {
+            "pos": [
+                352.0,
+                192.0,
+                20.0
+            ],
+            "size": [
+                224.0,
+                48.0,
+                24.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "89332513-b3d4-41e3-897a-4c8212a2ab1b"
+        }
+    ],
+    "things": [
+        {
+            "type": "light",
+            "pos": [
+                -560.0,
+                184.0,
+                -48.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "id": "1ac830c0-d8e2-43f0-be83-9fce738935f5",
+                "colour": [
+                    183,
+                    255,
+                    144
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                216.0,
+                184.0,
+                40.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_2",
+                "id": "4d065405-390e-4eed-b588-6a6a634201de",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "portal",
+            "pos": [
+                352.0,
+                40,
+                16.0
+            ],
+            "properties": {
+                "type": "portal",
+                "name": "Portal_2",
+                "id": "4a281f1a-3861-4de1-b7ce-29ed11ea63ab",
+                "portal_target": "Portal_4",
+                "width": 128.0,
+                "height": 256.0,
+                "rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "active": true,
+                "color": "(255, 255, 255)",
+                "show_rim": true,
+                "angle": 0.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "portal",
+            "pos": [
+                -576.0,
+                40,
+                -160.0
+            ],
+            "properties": {
+                "type": "portal",
+                "name": "Portal_4",
+                "id": "6e3c2701-e4e6-43dc-99bf-3ca7ea7c2d72",
+                "portal_target": "Portal_2",
+                "width": 128.0,
+                "height": 256.0,
+                "rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "active": true,
+                "color": [
+                    0,
+                    220,
+                    255
+                ],
+                "show_rim": true,
+                "angle": 0.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "playerstart",
+            "pos": [
+                -128.0,
+                40,
+                96.0
+            ],
+            "properties": {
+                "type": "playerstart",
+                "name": "PlayerStart_1",
+                "id": "1f0a7bdb-cd68-4637-b7c3-097674d0d4e2",
+                "angle": 0.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "pickup",
+            "pos": [
+                -576.0,
+                -16.0,
+                -64.0
+            ],
+            "properties": {
+                "type": "pickup",
+                "name": "Pickup_1",
+                "id": "5d2a958e-2baa-41d1-bbb0-f1581f6dcec9",
+                "item_type": "key",
+                "value": 25,
+                "activation": "walk_over",
+                "collected": false,
+                "respawns": false,
+                "respawn_time": 20.0,
+                "key_name": "red_key",
+                "custom_sprite": ""
+            },
+            "io_connections": []
+        }
+    ]
+}
