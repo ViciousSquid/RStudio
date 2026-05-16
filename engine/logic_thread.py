@@ -8,6 +8,7 @@ This thread runs game logic at a fixed timestep (60 Hz), handling:
 - Mover and door animations
 - Pickup collection
 - Player death detection
+- Portal transit (Prey 2006-style world portals)
 """
 
 import threading
@@ -24,7 +25,7 @@ from .camera import Camera
 # Import Thing subclasses for type checking
 try:
     from editor.things import (Speaker, Pickup, Light, Monster as MonsterThing,
-                               PathNode, LogicTimer, PlayerStart)
+                               PathNode, LogicTimer, PlayerStart, Portal)
 except ImportError:
     Speaker = None
     Pickup = None
@@ -33,6 +34,7 @@ except ImportError:
     PathNode = None
     LogicTimer = None
     PlayerStart = None
+    Portal = None
 
 # Import I/O system
 try:
@@ -42,7 +44,7 @@ try:
     )
     from editor.io_handlers import register_all_input_handlers
     IO_AVAILABLE = True
-    print("[LogicThread] I/O System loaded successfully.") 
+    print("[LogicThread] I/O System loaded successfully.")
 except ImportError as e:
     print(f"################################################")
     print(f"CRITICAL ERROR: I/O SYSTEM FAILED TO LOAD")
@@ -100,6 +102,10 @@ Key_Space = 0x20
 Key_C = 0x43
 Key_Shift = 0x01000020
 Key_Control = 0x01000021
+
+# Portal transit cooldown — prevents the player from oscillating back and
+# forth between two portals if they are very close together (seconds).
+_PORTAL_TRANSIT_COOLDOWN = 0.5
 
 
 class LogicThread(threading.Thread):
@@ -220,6 +226,14 @@ class LogicThread(threading.Thread):
         self._name_cache = {}
         self._id_cache = {}
 
+        # ── Portal transit state ───────────────────────────────────────────
+        # Keyed by id(portal): last signed distance of the player from the
+        # portal's plane.  Used by the crossing-the-plane edge-detection test.
+        self._portal_last_side: Dict[int, float] = {}
+        # Keyed by id(portal): cooldown seconds remaining before this portal
+        # may fire another transit.  Prevents rapid back-and-forth bouncing.
+        self._portal_cooldowns: Dict[int, float] = {}
+
         # Performance Monitoring
         self.actual_tps = 0.0
         self._tick_count = 0
@@ -272,11 +286,9 @@ class LogicThread(threading.Thread):
         """Return PathNode thing with given name, or None."""
         if not name or PathNode is None:
             return None
-        # Use the name cache for O(1) lookup
         entity = self._name_cache.get(name)
         if entity is not None and isinstance(entity, PathNode):
             return entity
-        # Fallback linear scan (should rarely happen)
         for t in self.things:
             if isinstance(t, PathNode) and t.properties.get('name', '') == name:
                 return t
@@ -356,6 +368,10 @@ class LogicThread(threading.Thread):
             # Reset cinematic state (mover_path_states already reset by _init_movers)
             self.cinematic_state = None
 
+            # Reset portal transit state
+            self._portal_last_side.clear()
+            self._portal_cooldowns.clear()
+
             # Fire OnPlayerSpawn
             self._fire_player_spawn_outputs()
             
@@ -391,12 +407,15 @@ class LogicThread(threading.Thread):
             self.mover_path_states = {}
             self.cinematic_state = None
 
+            # Reset portal transit state
+            self._portal_last_side.clear()
+            self._portal_cooldowns.clear()
+
             # Reset monster AI state
             self._reset_all_monsters(clear_dead=False)
     
     def _reset_all_monsters(self, clear_dead=True):
-        """Reset all monster AI state. Called when entering or exiting play mode.
-        clear_dead: if True, also clear the 'dead' property (entering play mode)."""
+        """Reset all monster AI state. Called when entering or exiting play mode."""
         self.monster_ai.monster_states = {}
         if not MonsterThing:
             return
@@ -467,7 +486,6 @@ class LogicThread(threading.Thread):
                 if 'original_pos' not in brush:
                     brush['original_pos'] = list(brush['pos'])
 
-                # Auto-init PathNode-following if path_target is set
                 path_target = brush.get('path_target', '')
                 if path_target and brush.get('start_on', False):
                     self.mover_path_states[i] = {
@@ -492,23 +510,16 @@ class LogicThread(threading.Thread):
         self.doors = []
         for i, brush in enumerate(self.brushes):
             if brush.get('is_door'):
-                # FIX#1: Translate editor property names → engine property names.
-                # The property editor stores 'door_speed', 'door_distance',
-                # 'door_direction' but _update_doors reads 'speed', 'distance',
-                # 'direction'.  Also convert the direction string to a vector.
                 if 'door_speed' in brush:
                     brush['speed'] = brush['door_speed']
                 if 'door_distance' in brush:
                     brush['distance'] = brush['door_distance']
                 if 'door_direction' in brush:
                     dir_str = brush['door_direction']
-                    brush['direction'] = DOOR_DIRECTION_MAP.get(
-                        dir_str, [0, 1, 0])
-                # Apply door_lip: reduce effective distance by the lip value
+                    brush['direction'] = DOOR_DIRECTION_MAP.get(dir_str, [0, 1, 0])
                 if 'door_lip' in brush:
                     lip = float(brush.get('door_lip', 0.0))
-                    base_dist = float(brush.get('distance',
-                                                brush.get('door_distance', 128.0)))
+                    base_dist = float(brush.get('distance', brush.get('door_distance', 128.0)))
                     brush['distance'] = max(1.0, base_dist - lip)
 
                 self.doors.append((i, brush))
@@ -636,7 +647,6 @@ class LogicThread(threading.Thread):
             self.game_state.consume_mouse_delta()
             self.game_state.consume_use_key()
             self.game_state.consume_shot()
-            # Monsters still tick so their anim state is correct
             self.monster_ai.update(delta)
             return
         
@@ -664,7 +674,7 @@ class LogicThread(threading.Thread):
         jump = Key_Space in keys
         crouch = Key_C in keys
         
-        # Physics update — extract brush dicts from (index, brush) tuples
+        # Physics update
         mover_brushes = [b for _, b in self.movers]
         door_brushes = [b for _, b in self.doors]
         self.player.update(delta, move_dir, jump, crouch, self.brushes, 
@@ -675,6 +685,10 @@ class LogicThread(threading.Thread):
         self._handle_interactions(use_key)
         self._check_pickups()
         self._handle_triggers(use_key)
+
+        # Portal transit detection — must run AFTER player physics so the
+        # post-physics position is the one tested against portal planes.
+        self._update_portals(delta)
         
         # Player shooting
         if self.game_state.consume_shot():
@@ -684,6 +698,177 @@ class LogicThread(threading.Thread):
 
         # Monster AI (delegated)
         self.monster_ai.update(delta)
+
+    # =========================================================================
+    # PORTAL TRANSIT
+    # =========================================================================
+
+    def _update_portals(self, delta: float):
+        """
+        Detect and execute player transit through active portal pairs.
+
+        Called once per logic tick from _tick_play_mode, after the player's
+        physics position has been updated for this tick.
+
+        Algorithm (crossing-the-plane test)
+        ------------------------------------
+        For each active portal A with a valid linked partner B:
+          1. Compute the signed distance of the player's foot-position from
+             portal A's plane (positive = front/viewer side, negative = back).
+          2. Compare with the value stored from the previous tick.
+          3. If the player transitioned from positive to negative this tick,
+             AND their foot projects inside the aperture rectangle (with a
+             generous 125 % margin to catch fast-moving players), fire a
+             transit: teleport the player to portal B's exit point, rotate
+             their velocity and view-angle by (yaw_B - yaw_A + π), and start
+             a cooldown on both portals so we don't immediately re-trigger.
+          4. Fire the OnPlayerEnter I/O output on portal A.
+
+        The plane-crossing approach is more robust than an AABB volume test
+        for thin portals — it handles any player speed and doesn't require
+        the portal to have a physical thickness.
+        """
+        if Portal is None or not self.player:
+            return
+
+        # Decay all active cooldowns
+        for pid in list(self._portal_cooldowns):
+            self._portal_cooldowns[pid] -= delta
+            if self._portal_cooldowns[pid] <= 0.0:
+                del self._portal_cooldowns[pid]
+
+        # Build a name → Portal lookup (cheap linear scan over things, which
+        # is a small list at runtime; caching by id is intentionally not used
+        # here because portal active-state can change via I/O mid-level)
+        portals_by_name: Dict[str, object] = {}
+        for t in self.things:
+            if isinstance(t, Portal):
+                name = t.properties.get('name', '')
+                if name:
+                    portals_by_name[name] = t
+
+        player_pos = self.player.pos  # glm.vec3
+
+        for portal_a in list(portals_by_name.values()):
+            if not portal_a.is_active():
+                continue
+            target_name = portal_a.properties.get('portal_target', '')
+            if not target_name:
+                continue
+            portal_b = portals_by_name.get(target_name)
+            if portal_b is None or not portal_b.is_active():
+                continue
+
+            pid_a = id(portal_a)
+            if pid_a in self._portal_cooldowns:
+                continue
+
+            # ── Signed distance from portal A's plane ────────────────────────
+            nx, ny, nz = portal_a.get_normal()
+            ox, oy, oz = portal_a.pos
+            ppx = float(player_pos.x)
+            ppy = float(player_pos.y)
+            ppz = float(player_pos.z)
+            signed = (ppx - ox) * nx + (ppy - oy) * ny + (ppz - oz) * nz
+
+            last = self._portal_last_side.get(pid_a, signed)
+            self._portal_last_side[pid_a] = signed
+
+            # Transit fires when the player crosses from front (+) to back (-)
+            if last >= 0.0 and signed < 0.0:
+                if self._player_within_aperture(portal_a, ppx, ppy, ppz):
+                    self._execute_portal_transit(portal_a, portal_b)
+                    # Apply cooldown to both ends so we don't re-trigger
+                    self._portal_cooldowns[id(portal_a)] = _PORTAL_TRANSIT_COOLDOWN
+                    self._portal_cooldowns[id(portal_b)] = _PORTAL_TRANSIT_COOLDOWN
+                    # Seed last_side for portal_b so the exit side doesn't
+                    # immediately trigger a reverse transit
+                    self._portal_last_side[id(portal_b)] = 0.1
+                    # Fire I/O output
+                    if self.io_manager:
+                        self.io_manager.fire_output(portal_a, 'OnPlayerEnter')
+                    debug_log(
+                        "Portal",
+                        f"Player transited '{portal_a.properties.get('name')}' "
+                        f"→ '{portal_b.properties.get('name')}'"
+                    )
+
+    @staticmethod
+    def _player_within_aperture(portal, px: float, py: float, pz: float) -> bool:
+        """
+        Return True if (px, py, pz) projects inside the portal aperture.
+
+        Projects the player's world position onto the portal's local right
+        axis and up axis, then checks whether the projected values fall within
+        ±width/2 and ±height/2 respectively.  A 125 % margin is applied to
+        avoid missing fast-moving players whose foot-centre passes through a
+        corner of the aperture.
+        """
+        ox, oy, oz = portal.pos
+        yaw = portal.get_yaw_radians()
+
+        # Right axis (perpendicular to normal in the XZ plane)
+        rx = math.cos(yaw)
+        rz = -math.sin(yaw)
+
+        dx = px - ox
+        dy = py - oy
+        dz = pz - oz
+
+        local_right = dx * rx + dz * rz
+        local_up    = dy
+
+        hw = portal.get_width()  / 2.0 * 1.25
+        hh = portal.get_height() / 2.0 * 1.25
+
+        return abs(local_right) <= hw and abs(local_up) <= hh
+
+    def _execute_portal_transit(self, portal_a, portal_b):
+        """
+        Teleport the player from portal_a's side to portal_b's exit.
+
+        Transforms:
+          position  — offset from A's origin is rotated by delta_yaw and
+                      re-applied to B's origin.
+          velocity  — rotated by the same delta_yaw in the XZ plane so
+                      momentum is conserved (walk through a portal sideways
+                      and emerge moving sideways).
+          angle     — incremented by delta_yaw so the player's view direction
+                      is seamlessly correct on the other side.
+
+        The player is also pushed slightly past portal B's plane to prevent
+        the exit-side transit test from triggering on the very next tick.
+        """
+        yaw_a = portal_a.get_yaw_radians()
+        yaw_b = portal_b.get_yaw_radians()
+        # The π flip ensures the player exits facing outward through portal B
+        delta_yaw = (yaw_b - yaw_a) + math.pi
+
+        pos_a = glm.vec3(*portal_a.pos)
+        pos_b = glm.vec3(*portal_b.pos)
+
+        # Rotate relative position
+        relative = self.player.pos - pos_a
+        cos_d = math.cos(delta_yaw)
+        sin_d = math.sin(delta_yaw)
+        rotated = glm.vec3(
+            relative.x * cos_d - relative.z * sin_d,
+            relative.y,
+            relative.x * sin_d + relative.z * cos_d,
+        )
+        self.player.pos = pos_b + rotated
+
+        # Push past portal B's plane so we don't re-trigger immediately
+        nx_b, ny_b, nz_b = portal_b.get_normal()
+        self.player.pos += glm.vec3(nx_b, ny_b, nz_b) * 8.0
+
+        # Rotate velocity in XZ
+        vx = self.player.velocity.x * cos_d - self.player.velocity.z * sin_d
+        vz = self.player.velocity.x * sin_d + self.player.velocity.z * cos_d
+        self.player.velocity = glm.vec3(vx, self.player.velocity.y, vz)
+
+        # Rotate view angle
+        self.player.angle = self.player.angle + delta_yaw
 
     # =========================================================================
     # LOGIC TIMER UPDATE
@@ -738,8 +923,6 @@ class LogicThread(threading.Thread):
                      min_b.y <= player_pos.y <= max_b.y and
                      min_b.z <= player_pos.z <= max_b.z)
             
-            # FIX#6: Use brush 'id' if available, otherwise enumerate index
-            # (which is stable since the brush list doesn't change in play mode)
             bid = brush.get('id') or i
             if inside:
                 currently_in.add(bid)
@@ -751,7 +934,6 @@ class LogicThread(threading.Thread):
         
         for bid in self.player_in_triggers:
             if bid not in currently_in:
-                # FIX#6: Find the brush by its stable id
                 brush = None
                 for j, b in enumerate(self.brushes):
                     b_bid = b.get('id') or j
@@ -777,37 +959,25 @@ class LogicThread(threading.Thread):
 
         action = brush.get('trigger_action', 'target')
 
-        # ------------------------------------------------------------------
-        # 1. Direct Teleport
-        # ------------------------------------------------------------------
         if action == 'teleport':
             target_node_name = brush.get('target_node', '')
             if target_node_name:
                 node = self._find_path_node_by_name(target_node_name)
                 if node and self.player:
-                    # Move player to node position
                     self.player.pos = glm.vec3(node.pos[0], node.pos[1], node.pos[2])
-                    self.player.velocity = glm.vec3(0, 0, 0)  # Kill momentum
-
+                    self.player.velocity = glm.vec3(0, 0, 0)
                     if self.io_manager:
                         self.io_manager.fire_output(brush, 'OnTeleport')
-
                     debug_log("IO", f"Trigger teleported player → '{target_node_name}' "
                                      f"({node.pos[0]:.0f}, {node.pos[1]:.0f}, {node.pos[2]:.0f})")
             else:
                 debug_log("Warning", "Trigger action 'teleport' used but no target_node set.")
 
-        # ------------------------------------------------------------------
-        # 2. Damage trigger (hurt)
-        # ------------------------------------------------------------------
         elif action == 'hurt':
             damage = brush.get('damage', 10)
             self._apply_player_damage(damage)
             self.hurt_trigger_timers[trigger_id] = self.HURT_INTERVAL
 
-        # ------------------------------------------------------------------
-        # 3. Standard I/O trigger (target)
-        # ------------------------------------------------------------------
         elif action == 'target':
             if self.io_manager:
                 self.io_manager.fire_output(brush, 'OnStartTouch')
@@ -854,21 +1024,16 @@ class LogicThread(threading.Thread):
                 found_door_brush = brush
                 break
 
-        # --- Door interaction (FIX#7: no longer returns early, so pickup
-        #     check below is always reachable) ---
         door_consumed_use = False
         if found_door_brush:
             door_state = self.door_states.get(found_door_idx, {}).get('state', 'closed')
 
             if door_state == 'closed':
-                # FIX#2: Auto-open doors trigger automatically on proximity
                 if found_door_brush.get('door_auto_open', False):
                     is_locked = found_door_brush.get('door_locked', False)
                     needs_key = found_door_brush.get('door_needs_key', False)
                     if not is_locked and not needs_key:
                         self._trigger_door_open(found_door_idx, found_door_brush)
-                    # Auto-open doors don't show HUD prompts — fall through
-                    # to pickup check below
                 else:
                     is_locked = found_door_brush.get('door_locked', False)
                     needs_key = found_door_brush.get('door_needs_key', False)
@@ -895,7 +1060,6 @@ class LogicThread(threading.Thread):
                             self._trigger_door_open(found_door_idx, found_door_brush)
                             door_consumed_use = True
 
-        # --- Use-activated pickup check (FIX#7: always reachable now) ---
         if Pickup and not door_consumed_use:
             p_pos = glm.vec3(px, py, pz)
             p_forward = glm.vec3(math.sin(self.player.angle), 0, math.cos(self.player.angle))
@@ -908,7 +1072,6 @@ class LogicThread(threading.Thread):
                     continue
                 if thing.properties.get('disabled', False):
                     continue
-                # FIX#3: use id(thing) instead of enumerate index
                 if id(thing) in self.collected_pickups:
                     continue
                 t_pos = glm.vec3(thing.pos)
@@ -943,7 +1106,6 @@ class LogicThread(threading.Thread):
         player_pos = self.player.pos
         pickup_radius = 32.0
         
-        # FIX#3: use id(thing) instead of enumerate index
         for thing in self.things:
             if not isinstance(thing, Pickup):
                 continue
@@ -958,7 +1120,6 @@ class LogicThread(threading.Thread):
             if thing.properties.get('activation') == 'walk_over' and distance <= pickup_radius:
                 self._collect_pickup(thing)
     
-    # FIX#3: signature changed — no longer takes pickup_id; uses id(pickup)
     def _collect_pickup(self, pickup):
         item_type = pickup.properties.get('item_type', 'health')
         value = pickup.properties.get('value', 25)
@@ -972,20 +1133,17 @@ class LogicThread(threading.Thread):
             self.active_weapon = item_type
             self.current_hud_message = f"Picked up {item_type.upper()}"
         pickup.properties['collected'] = True
-        # FIX#3: use id(pickup) as the stable identity key
         pid = id(pickup)
         self.collected_pickups.add(pid)
         if self.io_manager:
             self.io_manager.fire_output(pickup, 'OnPickedUp')
         if pickup.properties.get('respawns', False):
             respawn_time = pickup.properties.get('respawn_time', 20.0)
-            # FIX#3: store entity reference for reliable respawn lookup
             self.respawn_timers[pid] = {
                 'remaining': respawn_time,
                 'entity': pickup,
             }
     
-    # FIX#3: Use stored entity reference instead of list index
     def _update_respawns(self, delta: float):
         if not Pickup:
             return
@@ -1014,12 +1172,10 @@ class LogicThread(threading.Thread):
             if not brush.get('start_on', False):
                 continue
 
-            # ---- PathNode-following movers ----
             if i in self.mover_path_states:
                 self._update_mover_path(i, brush, delta)
                 continue
 
-            # ---- Direction-based oscillation (default) ----
             if i not in self.mover_states:
                 if 'original_pos' not in brush:
                     brush['original_pos'] = list(brush['pos'])
@@ -1074,7 +1230,6 @@ class LogicThread(threading.Thread):
                 self.io_manager.fire_output(entity, 'OnFinished')
             return
 
-        # Lerp from origin toward the current target node
         origin = np.array(cs['origin'], dtype=float)
         target = np.array(node.pos, dtype=float)
         segment_vec = target - origin
@@ -1088,16 +1243,14 @@ class LogicThread(threading.Thread):
         t = min(cs['lerp_t'], 1.0)
         current_pos = origin + segment_vec * t
 
-        # Write camera position for _prepare_render_state to pick up
         cs['cam_pos'] = current_pos.tolist()
 
-        # Calculate look direction
         if cs.get('look_ahead'):
             next_name = node.get_next_node_name()
             look_node = self._find_path_node_by_name(next_name) if next_name else node
             look_target = np.array(look_node.pos if look_node else node.pos, dtype=float)
         else:
-            look_target = target  # follow the segment tangent
+            look_target = target
 
         diff = look_target - current_pos
         dist = np.linalg.norm(diff)
@@ -1105,19 +1258,16 @@ class LogicThread(threading.Thread):
             cs['cam_angle'] = math.atan2(diff[0], diff[2])
             cs['cam_pitch'] = math.asin(np.clip(diff[1] / dist, -1.0, 1.0))
 
-        # Arrived at node?
         if cs['lerp_t'] >= 1.0:
             if self.io_manager:
                 self.io_manager.fire_output(cs['entity'], 'OnReachNode')
 
             next_name = node.get_next_node_name()
             if next_name:
-                # Advance to next segment
                 cs['origin'] = list(node.pos)
                 cs['current_node'] = next_name
                 cs['lerp_t'] = 0.0
             else:
-                # End of chain
                 entity = cs['entity']
                 self.cinematic_state = None
                 if self.io_manager:
@@ -1136,33 +1286,28 @@ class LogicThread(threading.Thread):
             self.mover_path_states.pop(idx, None)
             return
 
-        # ---- Waiting at a node ----
         if state['waiting']:
             state['wait_remaining'] -= delta
             if state['wait_remaining'] <= 0.0:
                 state['waiting'] = False
-                # Advance to next node in chain
                 next_name = node.get_next_node_name()
                 if next_name:
                     state['origin'] = list(brush['pos'])
                     state['current_node'] = next_name
                     state['lerp_t'] = 0.0
                 else:
-                     # End of chain — hold position
                     brush['start_on'] = False
                     if self.io_manager:
                         self.io_manager.fire_output(brush, 'OnFullyClosed')
                     self.mover_path_states.pop(idx, None)
             return
 
-        # ---- Lerp toward target node ----
         origin = np.array(state['origin'], dtype=float)
         target = np.array(node.pos, dtype=float)
         segment_vec = target - origin
         segment_len = np.linalg.norm(segment_vec)
 
         if segment_len < 1.0:
-            # Already at target — snap and start waiting
             state['lerp_t'] = 1.0
         else:
             speed = brush.get('speed', 64.0) * node.get_speed()
@@ -1174,15 +1319,12 @@ class LogicThread(threading.Thread):
             move_delta = new_pos - np.array(brush['pos'])
             brush['pos'] = new_pos.tolist()
 
-            # Carry player on platform
             if self.player and self.player.ground_object == brush:
                 self.player.pos += glm.vec3(float(move_delta[0]), float(move_delta[1]), float(move_delta[2]))
 
-            # Fire arrival output
             if self.io_manager:
                 self.io_manager.fire_output(brush, 'OnFullyOpen')
 
-            # Start waiting (or advance immediately if wait_time == 0)
             wait_time = node.get_wait_time()
             if wait_time > 0.0:
                 state['waiting'] = True
@@ -1198,7 +1340,6 @@ class LogicThread(threading.Thread):
                         self.io_manager.fire_output(brush, 'OnFullyClosed')
                     self.mover_path_states.pop(idx, None)
         else:
-            # Smooth cubic easing
             t = state['lerp_t']
             eased = 4 * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 3) / 2
             new_pos = origin + segment_vec * eased
@@ -1407,7 +1548,7 @@ class LogicThread(threading.Thread):
         ]
 
     # =========================================================================
-    # FRUSTUM CULLING (unchanged)
+    # FRUSTUM CULLING
     # =========================================================================
 
     def _extract_frustum_planes(self, proj_view: glm.mat4):
@@ -1446,7 +1587,6 @@ class LogicThread(threading.Thread):
         write_state.is_play_mode = self.play_mode
 
         if self.play_mode and self.player:
-            # --- Cinematic camera override ---
             cs = self.cinematic_state
             if cs and 'cam_pos' in cs:
                 cam_pos = glm.vec3(*cs['cam_pos'])
@@ -1463,7 +1603,6 @@ class LogicThread(threading.Thread):
                 write_state.player_pitch = cam_pitch
                 fov = cs['fov'] if cs.get('fov') else 90.0
             else:
-                # Normal player camera
                 player_pos = glm.vec3(self.player.pos.x, self.player.pos.y, self.player.pos.z)
                 player_angle = self.player.angle
                 player_pitch = self.player.pitch
@@ -1496,11 +1635,9 @@ class LogicThread(threading.Thread):
         write_state.active_weapon = self.active_weapon
         write_state.muzzle_flash_active = self.muzzle_flash_active
 
-        # Monster debug state (from AI)
         write_state.monster_debug_active = self.monster_ai.monster_debug_active
         write_state.monster_debug_rays = list(self.monster_ai._debug_rays)
 
-        # Bullet marks
         current_time = time.perf_counter()
         write_state.bullet_marks = [
             {'pos': [m['pos'].x, m['pos'].y, m['pos'].z],
@@ -1509,7 +1646,6 @@ class LogicThread(threading.Thread):
             if current_time - m['time'] < self.BULLET_FADE_TIME
         ]
 
-        # Frustum culling and visible brushes
         projection = glm.perspective(glm.radians(fov), self.frustum_aspect, 1.0, 10000.0)
         proj_view = projection * view_matrix
         frustum_planes = self._extract_frustum_planes(proj_view)
@@ -1551,9 +1687,7 @@ class LogicThread(threading.Thread):
         write_state.total_brushes = total_count
         write_state.culled_brushes = culled_count
 
-        # Things (including monster snapshots)
         visible_things = []
-        # FIX#3: use id(thing) for collected_pickups check
         for thing in self.things:
             if self.play_mode and Pickup and isinstance(thing, Pickup) and id(thing) in self.collected_pickups:
                 continue

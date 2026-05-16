@@ -1,4 +1,5 @@
 import glm
+import math
 import numpy as np
 import OpenGL.GL as gl
 import ctypes 
@@ -12,6 +13,12 @@ try:
     from editor.things import Pickup, Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger
 except ImportError:
     Pickup = Monster = LogicGate = LogicRelay = LogicTimer = LevelChanger = None
+
+try:
+    from editor.things import Portal
+except ImportError:
+    Portal = None
+
 from OpenGL.GL.shaders import compileProgram, compileShader 
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from engine.monster_constants import MONSTER_SPRITE_SIZES, MONSTER_SPRITE_SIZE_DEFAULT 
@@ -189,6 +196,39 @@ void main() {
     FragColor = accumulatedColor;
 }"""
 
+# ── Portal shaders ────────────────────────────────────────────────────────────
+# Minimal shaders used exclusively for the stencil-mask and rim-glow passes.
+# They declare only aPos (location 0) so they can share the portal quad VAO.
+
+_PORTAL_MASK_VERT = """#version 330 core
+layout(location = 0) in vec3 aPos;
+uniform mat4 projection;
+uniform mat4 view;
+void main() {
+    gl_Position = projection * view * vec4(aPos, 1.0);
+}"""
+
+_PORTAL_MASK_FRAG = """#version 330 core
+out vec4 FragColor;
+void main() {
+    FragColor = vec4(0.0);
+}"""
+
+_PORTAL_RIM_VERT = """#version 330 core
+layout(location = 0) in vec3 aPos;
+uniform mat4 projection;
+uniform mat4 view;
+void main() {
+    gl_Position = projection * view * vec4(aPos, 1.0);
+}"""
+
+_PORTAL_RIM_FRAG = """#version 330 core
+out vec4 FragColor;
+uniform vec4 rim_color;
+void main() {
+    FragColor = rim_color;
+}"""
+
 
 class ShaderLoader:
     def __init__(self, shader_dir='assets/shaders'):
@@ -316,6 +356,8 @@ class ShadowBatch:
 
 class Renderer:
     MAX_LIGHTS = 16
+    # Maximum portal pairs rendered per frame.  Keep low for ARM budget.
+    MAX_PORTALS = 8
     
     def __init__(self, texture_loader, initial_grid_size, initial_world_size, config=None):
         self.texture_manager = {}
@@ -367,6 +409,13 @@ class Renderer:
         self._view_ptr = None
         self._edge_vao = None
         self.use_deferred = False  # Reserved for future deferred rendering implementation
+
+        # Portal rendering state — initialised in _init_portal_gl()
+        self._portal_mask_shader  = None
+        self._portal_rim_shader   = None
+        self._portal_quad_vao     = None
+        self._portal_quad_vbo     = None
+        self._portal_gl_ready     = False
 
         try:
             self.shader_loader = ShaderLoader()
@@ -443,6 +492,8 @@ class Renderer:
             self.instance_textures = {}
             self.load_texture('default.png', 'textures')
             self.load_texture('caulk', 'textures')
+            # Compile portal-specific shaders after the main GL context is ready
+            self._init_portal_gl()
 
     def _detect_arm_platform(self):
         """Detect if running on ARM or under x64 emulation."""
@@ -725,9 +776,288 @@ class Renderer:
         terrain.update_and_render(projection, view, camera_pos, frustum_planes, lights, active_lights_count)
 
     # =========================================================================
-    # MAIN RENDER SCENE - OPTIMIZED
+    # PORTAL RENDERING  (stencil-buffer, Prey 2006-style)
     # =========================================================================
 
+    def _init_portal_gl(self):
+        """
+        Compile the portal mask/rim shaders and create the shared quad VAO.
+        Called once after the main GL context is ready.
+        Portal shaders are tiny (no lights, no textures) so compilation is fast.
+        """
+        try:
+            self._portal_mask_shader = self.shader_loader.compile_from_source(
+                _PORTAL_MASK_VERT, _PORTAL_MASK_FRAG)
+            self._portal_rim_shader = self.shader_loader.compile_from_source(
+                _PORTAL_RIM_VERT, _PORTAL_RIM_FRAG)
+        except Exception as e:
+            print(f"[Portal] Shader compile error: {e}")
+            return
+
+        self._portal_quad_vao = gl.glGenVertexArrays(1)
+        self._portal_quad_vbo = gl.glGenBuffers(1)
+        gl.glBindVertexArray(self._portal_quad_vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_quad_vbo)
+        # Reserve space for 4 vertices × 3 floats; updated per-portal each frame
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, 4 * 3 * 4, None, gl.GL_DYNAMIC_DRAW)
+        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
+        gl.glEnableVertexAttribArray(0)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
+        gl.glBindVertexArray(0)
+        self._portal_gl_ready = True
+        print("[Portal] GL resources initialised")
+
+    def _portal_upload_quad(self, corners):
+        """Upload 4 world-space corner positions to the dynamic portal quad VBO."""
+        vdata = np.array(corners, dtype=np.float32).flatten()
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_quad_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, vdata.nbytes, vdata)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
+
+    def _portal_build_virtual_view(self, portal_a, portal_b, current_view, camera_pos):
+        """
+        Build a virtual camera view matrix for rendering through portal_b
+        as seen from portal_a.
+        """
+        yaw_a = portal_a.get_yaw_radians()
+        yaw_b = portal_b.get_yaw_radians()
+
+        pos_a = glm.vec3(*portal_a.pos)
+        pos_b = glm.vec3(*portal_b.pos)
+        cam = glm.vec3(*camera_pos)
+
+        # Determine which side of portal A the player is on
+        normal_a = glm.vec3(*portal_a.get_normal())
+        to_player = cam - pos_a
+        player_side = glm.dot(to_player, normal_a)  # positive = front, negative = back
+
+        # ---- Delta yaw ----
+        # Base rotation: difference between portal orientations.
+        # When viewing from the FRONT of portal A, we need to look OUT of
+        # portal B's front face. This requires an extra 180° flip because
+        # the player is looking INTO portal A but needs to see what comes
+        # OUT of portal B.
+        delta_yaw = yaw_a - yaw_b
+        if player_side >= 0:
+            # Front side: flip 180° so we look out of portal B, not into it
+            delta_yaw += math.pi
+
+        cos_d = math.cos(delta_yaw)
+        sin_d = math.sin(delta_yaw)
+
+        # ---- Position ----
+        relative = cam - pos_a
+        rotated_pos = glm.vec3(
+            relative.x * cos_d - relative.z * sin_d,
+            relative.y,
+            relative.x * sin_d + relative.z * cos_d,
+        )
+        virtual_cam = pos_b + rotated_pos
+
+        # ---- Direction ----
+        fwd = -glm.vec3(current_view[0][2], current_view[1][2], current_view[2][2])
+
+        new_fwd = glm.vec3(
+            fwd.x * cos_d - fwd.z * sin_d,
+            fwd.y,
+            fwd.x * sin_d + fwd.z * cos_d,
+        )
+        new_fwd = glm.normalize(new_fwd)
+
+        return glm.lookAt(virtual_cam, virtual_cam + new_fwd, glm.vec3(0, 1, 0)), virtual_cam
+
+    def draw_portals(self, portal_things, projection, main_view, camera_pos,
+                     brushes, things, lights, config, draw_scene_fn):
+        """
+        Render all active portal pairs using the stencil buffer.
+
+        This must be called BEFORE the main scene draw in render_scene so that
+        the portal views are "behind" all this-side geometry.
+
+        Parameters
+        ----------
+        portal_things : list[Portal]
+            All Portal entities in the current frame's visible set.
+        projection    : glm.mat4
+        main_view     : glm.mat4
+        camera_pos    : sequence or glm.vec3
+        brushes, things, lights, config
+            Forwarded verbatim to draw_scene_fn.
+        draw_scene_fn : callable(proj, view, cam, brushes, things,
+                                  selected, config)
+            Renders the full scene (brushes + sprites).  The portal renderer
+            calls this once per visible portal pair to generate the other-side
+            view, masked by the stencil aperture.
+        """
+        if not self._portal_gl_ready or not portal_things:
+            return
+
+        # Build a name → Portal lookup for target resolution
+        by_name = {}
+        for p in portal_things:
+            name = p.properties.get('name', '')
+            if name:
+                by_name[name] = p
+
+        rendered_pairs = set()
+        proj_ptr = glm.value_ptr(projection)
+        stencil_id = 1
+
+        for portal_a in portal_things:
+            if not portal_a.is_active():
+                continue
+            target_name = portal_a.properties.get('portal_target', '')
+            if not target_name:
+                continue
+            portal_b = by_name.get(target_name)
+            if portal_b is None or not portal_b.is_active():
+                continue
+
+            pair_key = frozenset({id(portal_a), id(portal_b)})
+            if pair_key in rendered_pairs:
+                continue
+            rendered_pairs.add(pair_key)
+
+            if stencil_id > self.MAX_PORTALS:
+                break
+
+            self._draw_one_portal(
+                portal_a, portal_b,
+                projection, proj_ptr, main_view, camera_pos,
+                brushes, things, lights, config, draw_scene_fn,
+                stencil_id,
+            )
+            stencil_id += 1
+
+        # Guarantee clean state for the main scene pass that follows
+        gl.glDisable(gl.GL_STENCIL_TEST)
+        gl.glStencilMask(0xFF)
+        gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glClear(gl.GL_STENCIL_BUFFER_BIT)
+
+    def _draw_one_portal(self, portal_a, portal_b,
+                        projection, proj_ptr, main_view, camera_pos,
+                        brushes, things, lights, config, draw_scene_fn,
+                        stencil_id):
+        corners_a = portal_a.get_corners_world()
+        view_ptr = glm.value_ptr(main_view)
+
+        # FIX: Portal mask must render from both sides
+        gl.glDisable(gl.GL_CULL_FACE)
+
+        # Cache uniform locations once per call (avoids repeated string lookups)
+        mask_proj_loc = gl.glGetUniformLocation(self._portal_mask_shader, 'projection')
+        mask_view_loc = gl.glGetUniformLocation(self._portal_mask_shader, 'view')
+
+        # ----- Pass 1: write stencil mask (colour + depth writes OFF) -----
+        gl.glEnable(gl.GL_STENCIL_TEST)
+        gl.glStencilMask(0xFF)
+        gl.glClear(gl.GL_STENCIL_BUFFER_BIT)   # clear stencil before this portal
+
+        gl.glColorMask(gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE)
+        gl.glDepthMask(gl.GL_FALSE)
+
+        gl.glStencilFunc(gl.GL_ALWAYS, stencil_id, 0xFF)
+        gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_REPLACE)
+
+        self._portal_upload_quad(corners_a)
+        gl.glUseProgram(self._portal_mask_shader)
+        gl.glUniformMatrix4fv(mask_proj_loc, 1, gl.GL_FALSE, proj_ptr)
+        gl.glUniformMatrix4fv(mask_view_loc, 1, gl.GL_FALSE, view_ptr)
+        gl.glBindVertexArray(self._portal_quad_vao)
+        gl.glDrawArrays(gl.GL_TRIANGLE_FAN, 0, 4)
+
+        # ----- Pass 2: prime depth to FAR (1.0) inside aperture -----
+        # Write depth=1.0 into aperture pixels so Pass 3's GL_LESS test passes
+        # for all virtual scene geometry (any real depth < 1.0 wins).
+        # Old code wrote 0.0 (near plane) which made GL_LESS impossible to pass.
+        gl.glColorMask(gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glDepthFunc(gl.GL_ALWAYS)
+        gl.glStencilFunc(gl.GL_EQUAL, stencil_id, 0xFF)
+        gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
+
+        gl.glDepthRange(1.0, 1.0)          # collapse all depth output to 1.0 (far)
+        self._portal_upload_quad(corners_a)
+        gl.glUseProgram(self._portal_mask_shader)
+        gl.glUniformMatrix4fv(mask_proj_loc, 1, gl.GL_FALSE, proj_ptr)
+        gl.glUniformMatrix4fv(mask_view_loc, 1, gl.GL_FALSE, view_ptr)
+        gl.glBindVertexArray(self._portal_quad_vao)
+        gl.glDrawArrays(gl.GL_TRIANGLE_FAN, 0, 4)
+        gl.glDepthRange(0.0, 1.0)          # restore normal depth range
+
+        gl.glDepthFunc(gl.GL_LESS)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
+
+        # ----- Pass 3: render virtual scene through stencil aperture -----
+        virtual_view, virtual_cam = self._portal_build_virtual_view(
+            portal_a, portal_b, main_view, camera_pos)
+
+        # Pin virtual matrices on self before calling glm.value_ptr() so the
+        # matrix memory stays alive for the duration of the draw calls.
+        self._portal_virtual_view = virtual_view
+        self._portal_virtual_proj = projection
+
+        # Gate rendering to aperture pixels only; lock stencil writes so the
+        # virtual scene draw cannot corrupt the mask written in Pass 1.
+        gl.glStencilFunc(gl.GL_EQUAL, stencil_id, 0xFF)
+        gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
+        gl.glStencilMask(0x00)
+
+        # Override proj/view pointers so every draw path uses the virtual camera.
+        old_proj_ptr = self._proj_ptr
+        old_view_ptr = self._view_ptr
+        self._proj_ptr = glm.value_ptr(self._portal_virtual_proj)
+        self._view_ptr = glm.value_ptr(self._portal_virtual_view)
+        self._current_shader = None   # invalidate shader cache
+
+        draw_scene_fn(projection, virtual_view, virtual_cam, brushes, things, lights, config)
+
+        # Restore original pointers; re-open stencil writes for Pass 4 / next portal.
+        self._proj_ptr = old_proj_ptr
+        self._view_ptr = old_view_ptr
+        self._current_shader = None
+        gl.glStencilMask(0xFF)
+
+        # ----- Pass 4: rim glow -----
+        # The portal color ONLY affects this rim glow border.
+        if portal_a.properties.get('show_rim', True):
+            gl.glDisable(gl.GL_STENCIL_TEST)
+            gl.glEnable(gl.GL_BLEND)
+            gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE)
+
+            # FIX: Use normalize_color for safe parsing of int/float/string values
+            raw_col = portal_a.properties.get('color', [255, 255, 255])
+            color = normalize_color(raw_col, default=[1.0, 1.0, 1.0])
+            r, g, b = color
+
+            self._portal_upload_quad(corners_a)
+            gl.glUseProgram(self._portal_rim_shader)
+            gl.glUniformMatrix4fv(gl.glGetUniformLocation(self._portal_rim_shader, 'projection'),
+                                1, gl.GL_FALSE, proj_ptr)
+            gl.glUniformMatrix4fv(gl.glGetUniformLocation(self._portal_rim_shader, 'view'),
+                                1, gl.GL_FALSE, view_ptr)
+            gl.glUniform4f(gl.glGetUniformLocation(self._portal_rim_shader, 'rim_color'),
+                        r, g, b, 0.55)
+
+            gl.glBindVertexArray(self._portal_quad_vao)
+            # FIX: Only draw the border outline (LINE_LOOP), not a filled quad.
+            # The GL_TRIANGLE_FAN was filling the entire aperture with semi-transparent
+            # color, which tinted the scene rendered behind it in Pass 3.
+            gl.glDrawArrays(gl.GL_LINE_LOOP, 0, 4)      # border only
+            # REMOVED: gl.glDrawArrays(gl.GL_TRIANGLE_FAN, 0, 4) — this was causing the tint
+
+            gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+            gl.glDisable(gl.GL_BLEND)
+
+        gl.glDisable(gl.GL_STENCIL_TEST)
+        gl.glBindVertexArray(0)
+
+    # =========================================================================
+    # MAIN RENDER SCENE - OPTIMIZED
+    # =========================================================================
 
     # =========================================================================
     # BRUSH SPLIT HELPER
@@ -794,6 +1124,48 @@ class Renderer:
         if terrain and terrain.enabled:
             self.render_terrain(projection, view, camera_pos, terrain, lights)
 
+        # ── Portal pre-pass ──────────────────────────────────────────────────
+        # Must run before the main opaque pass so portal views are painted
+        # into the stencil apertures before this-side geometry occludes them.
+        # Only active in play mode (portals are editor-placed entities).
+        if config.get('play_mode', False) and Portal is not None and self._portal_gl_ready:
+            portal_things = [t for t in things if isinstance(t, Portal) and t.is_active()]
+            if portal_things:
+                try:
+                    def _portal_draw_scene(proj, vw, cam, br, th, sel, cfg):
+                        # FIX: Use the FULL brush list, not the main-camera-culled one
+                        all_br = cfg.get('all_brushes', br)
+                        _t_opaque, _solid = self._split_opaque(all_br)
+                        _t_brush_mode = cfg.get('brush_display_mode', 'Textured')
+                        _lights = [t for t in th
+                                   if isinstance(t, Light)
+                                   and t.properties.get('state', 'on') == 'on']
+                        if _t_brush_mode in ('Textured', 'Solid Lit'):
+                            self.draw_textured_brushes_optimized(proj, vw, cam, _t_opaque, _lights, cfg)
+                            self.draw_lit_brushes_optimized(proj, vw, cam, _solid, _lights, cfg)
+                        else:
+                            # FIX: Also use full list in the fallback branch
+                            self.draw_lit_brushes_optimized(proj, vw, cam, all_br, _lights, cfg)
+                        # Sprites (monsters, pickups etc.) in the virtual view
+                        _sprites = [t for t in th
+                                    if not (PathNode is not None and isinstance(t, PathNode))
+                                    and not (Portal is not None and isinstance(t, Portal))]
+                        self.draw_sprites(proj, vw, _sprites,
+                                          self.sprite_textures, self.instance_textures)
+
+                    self.draw_portals(
+                        portal_things,
+                        projection, view, camera_pos,
+                        brushes, things, lights, config,
+                        _portal_draw_scene,
+                    )
+                    # Restore our proj/view ptrs in case the portal pass clobbered them
+                    self._proj_ptr = glm.value_ptr(projection)
+                    self._view_ptr = glm.value_ptr(view)
+                except Exception as _pe:
+                    # Never let a portal error crash the main frame
+                    print(f"[Portal] render error: {_pe}")
+
         gl.glDepthMask(gl.GL_TRUE)
         gl.glDisable(gl.GL_BLEND)
         
@@ -842,6 +1214,11 @@ class Renderer:
         if not config.get('play_mode', False):
             self.draw_path_node_cubes(projection, view, things)
 
+        # Portal aperture outlines — always drawn in both editor and play mode
+        # so portals are always visible and selectable.  The stencil view-through
+        # pass (draw_portals) is separate and only fires in play mode.
+        self.draw_portal_wireframes(projection, view, things)
+
         gl.glEnable(gl.GL_BLEND)
         gl.glDepthMask(gl.GL_FALSE)
         
@@ -887,113 +1264,118 @@ class Renderer:
 
     def draw_lit_brushes_optimized(self, projection, view, camera_pos, brushes, lights, config, is_transparent_pass=False):
         """Optimized lit brush drawing - trusts pre-culled data, batches where possible."""
-        if not brushes or 'lit' not in self.shaders: 
+        if not brushes or 'lit' not in self.shaders:
             return
-        
+
         # OPTIMIZATION: Skip culling if data is pre-culled from logic thread
         visible = brushes  # Trust pre-culled data
         self.render_stats.visible_brushes += len(visible)
-        
-        if not visible: 
+
+        if not visible:
             return
-        
+
         shader, uniforms = self.shaders['lit'], self.uniforms['lit']
-        
-        # Always ensure correct shader is active (removed faulty caching)
+
+        # Always ensure correct shader is active
         gl.glUseProgram(shader)
         self._current_shader = shader
         self._upload_lights_once('lit', lights)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
-        
+
+        # FIX: Use the passed projection and view matrices, not the stale class pointers
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+
         gl.glBindVertexArray(self.vaos['cube'])
-        
+
         display_mode = config.get('brush_display_mode', 'Textured')
         show_triggers_solid = config.get('show_triggers_as_solid', False)
         selected = config.get('selected_object')
         model_loc, color_loc, alpha_loc = uniforms['model'], uniforms['object_color'], uniforms['alpha']
-        
-        # normalMatrix: upload unconditionally - all lit/ARM shaders declare it and
-        # computing it on the CPU is always cheaper than inverse() per vertex in the shader.
+
+        # normalMatrix: upload unconditionally - all lit/ARM shaders declare it
         normal_mat_loc = uniforms.get('normalMatrix', -1)
-        if normal_mat_loc is None: normal_mat_loc = -1
-        
+        if normal_mat_loc is None:
+            normal_mat_loc = -1
+
         fill_mode = (gl.GL_FILL if show_triggers_solid else gl.GL_LINE) if is_transparent_pass else \
-                   (gl.GL_FILL if display_mode != "Wireframe" else gl.GL_LINE)
+                    (gl.GL_FILL if display_mode != "Wireframe" else gl.GL_LINE)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
-        
+
         for brush in visible:
             self.render_stats.visible_tris += 12
-            
+
             # Build model matrix
             pos = brush.get('pos', [0, 0, 0])
             size = brush.get('size', [64, 64, 64])
             model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-            
-            # Upload pre-computed normal matrix (always, for all platforms)
+
+            # Upload pre-computed normal matrix
             if normal_mat_loc > 0:
                 normal_mat = self._compute_normal_matrix(model_matrix)
                 gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
-            
+
             # Determine color
-            if brush.get('is_trigger'): 
+            if brush.get('is_trigger'):
                 color, alpha = [0.0, 1.0, 1.0], 0.3
-            elif brush is selected: 
+            elif brush is selected:
                 color, alpha = [1.0, 1.0, 0.0], 1.0
-            elif brush.get('operation') == 'subtract': 
+            elif brush.get('operation') == 'subtract':
                 color, alpha = [1.0, 0.0, 0.0], 1.0
             else:
-                # FIX#13: Use shared normalize_color helper
-                # Tint overrides colour when set via I/O (SetTint input)
+                # Use shared normalize_color helper
                 brush_tint = brush.get('tint')
                 brush_colour = brush.get('colour')
                 color = normalize_color(brush_tint) if brush_tint else normalize_color(brush_colour)
                 alpha = 1.0
-            
+
             gl.glUniform3fv(color_loc, 1, color)
             gl.glUniform1f(alpha_loc, alpha)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
             self.render_stats.draw_calls += 1
-        
+
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         gl.glBindVertexArray(0)
 
     def draw_textured_brushes_optimized(self, projection, view, camera_pos, brushes, lights, config):
         """Optimized textured brush drawing with better batching."""
-        if not brushes or 'textured' not in self.shaders: 
+        if not brushes or 'textured' not in self.shaders:
             return
-        
+
         # OPTIMIZATION: Skip culling - trust pre-culled data
         visible = brushes
         self.render_stats.visible_brushes += len(visible)
-        
-        if not visible: 
+
+        if not visible:
             return
-        
+
         shader, uniforms = self.shaders['textured'], self.uniforms['textured']
-        
+
         # Always ensure correct shader is active
         gl.glUseProgram(shader)
         self._current_shader = shader
         self._upload_lights_once('textured', lights)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
+
+        # FIX: Use the passed projection and view matrices
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(uniforms['texture_diffuse'], 0)
-        
+
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         gl.glBindVertexArray(self.vaos['cube'])
-        
+
         model_loc = uniforms['model']
         tex_scale_loc = uniforms.get('tex_scale', -1)
         if tex_scale_loc == -1:
             tex_scale_loc = gl.glGetUniformLocation(shader, "tex_scale")
-        
-        # normalMatrix: upload unconditionally for all platforms.
+
+        # normalMatrix: upload unconditionally
         normal_mat_loc = uniforms.get('normalMatrix', -1)
-        if normal_mat_loc is None: normal_mat_loc = -1
-        
+        if normal_mat_loc is None:
+            normal_mat_loc = -1
+
         # OPTIMIZATION: Batch by texture to minimize state changes
         batches = defaultdict(list)
         is_play = config.get('play_mode', False)
@@ -1001,37 +1383,36 @@ class Renderer:
         for brush in visible:
             for i, key in enumerate(['south', 'north', 'west', 'east', 'down', 'top']):
                 tex_name = brush.get('textures', {}).get(key, 'default.png')
-                if tex_name == 'caulk.jpg': 
+                if tex_name == 'caulk.jpg':
                     continue
-                if is_play and tex_name == 'nodraw.jpg': 
+                if is_play and tex_name == 'nodraw.jpg':
                     continue
                 tex_id = self.texture_manager.get(os.path.join('textures', tex_name)) or \
                         self.load_texture_callback(tex_name, 'textures')
                 batches[tex_id].append((brush, i))
-        
+
         current_tex = None
         for tex_id, items in batches.items():
-            if tex_id != current_tex: 
+            if tex_id != current_tex:
                 gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                 current_tex = tex_id
                 self.render_stats.batched_draws += 1
-            
+
             for brush, face_idx in items:
                 self.render_stats.visible_tris += 2
-                
+
                 pos = brush.get('pos', [0, 0, 0])
                 size = brush.get('size', [64, 64, 64])
                 model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
                 gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-                
-                # Upload normal matrix for all platforms
+
                 if normal_mat_loc > 0:
                     normal_mat = self._compute_normal_matrix(model_matrix)
                     gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
-                
+
                 if tex_scale_loc != -1:
                     if brush.get('texture_tiling', False):
-                        tex_unit_size = 128.0 
+                        tex_unit_size = 128.0
                         if face_idx == 0 or face_idx == 1:
                             scale_x, scale_y = size[0] / tex_unit_size, size[1] / tex_unit_size
                         elif face_idx == 2 or face_idx == 3:
@@ -1041,10 +1422,10 @@ class Renderer:
                         gl.glUniform2f(tex_scale_loc, scale_x, scale_y)
                     else:
                         gl.glUniform2f(tex_scale_loc, 1.0, 1.0)
-                
+
                 gl.glDrawArrays(gl.GL_TRIANGLES, face_idx * 6, 6)
                 self.render_stats.draw_calls += 1
-        
+
         gl.glBindVertexArray(0)
 
     # =========================================================================
@@ -1394,6 +1775,11 @@ class Renderer:
                 # PathNode entities are never rendered as sprites
                 if PathNode is not None and isinstance(t, PathNode):
                     continue
+                # Portal entities are drawn by draw_portal_wireframes, not as billboards,
+                # but we still include them in visible_things so hit-testing works.
+                if Portal is not None and isinstance(t, Portal):
+                    sprites.append(t)
+                    continue
                 # Monster dict snapshots (from get_render_snapshot) — always visible
                 if isinstance(t, dict) and 'monster_type' in t:
                     sprites.append(t)
@@ -1613,6 +1999,113 @@ class Renderer:
         gl.glBindVertexArray(0)
         gl.glUseProgram(0)
 
+    def draw_portal_wireframes(self, projection, view, things):
+        """
+        Draw every Portal entity as a coloured rectangle outline in the 3D
+        view using the 'simple' shader.  Works in both editor and play mode —
+        this is purely a visual representation of the aperture so the level
+        designer can see, select and position portals.
+
+        In play mode the stencil pass (draw_portals) renders the actual portal
+        view.  In editor mode the stencil pass is skipped, but this outline is
+        always drawn so portals are never invisible.
+        """
+        if Portal is None or 'simple' not in self.shaders:
+            return
+
+        portal_things = [t for t in things if isinstance(t, Portal)]
+        if not portal_things:
+            return
+
+        shader   = self.shaders['simple']
+        uniforms = self.uniforms['simple']
+        gl.glUseProgram(shader)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'],       1, gl.GL_FALSE, self._view_ptr)
+        gl.glUniform1f(uniforms['alpha'], 1.0)
+
+        # Build a simple quad outline VAO on first use
+        if not hasattr(self, '_portal_outline_vao') or self._portal_outline_vao is None:
+            # 4 vertices of a unit quad, drawn as LINE_LOOP — updated per portal
+            self._portal_outline_vao = gl.glGenVertexArrays(1)
+            self._portal_outline_vbo = gl.glGenBuffers(1)
+            gl.glBindVertexArray(self._portal_outline_vao)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_outline_vbo)
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, 4 * 3 * 4, None, gl.GL_DYNAMIC_DRAW)
+            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
+            gl.glEnableVertexAttribArray(0)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
+            gl.glBindVertexArray(0)
+
+        # Also a cross-hair line for the normal direction (2 verts)
+        if not hasattr(self, '_portal_normal_vao') or self._portal_normal_vao is None:
+            self._portal_normal_vao = gl.glGenVertexArrays(1)
+            self._portal_normal_vbo = gl.glGenBuffers(1)
+            gl.glBindVertexArray(self._portal_normal_vao)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_normal_vbo)
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, 2 * 3 * 4, None, gl.GL_DYNAMIC_DRAW)
+            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
+            gl.glEnableVertexAttribArray(0)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
+            gl.glBindVertexArray(0)
+
+        gl.glLineWidth(1.0)
+        model_loc = uniforms['model']
+        color_loc = uniforms['color']
+
+        # Upload identity model matrix once — corners are already in world space
+        gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE,
+                              glm.value_ptr(self._identity_mat4))
+
+        for portal in portal_things:
+            # FIX: Use normalize_color helper to safely handle both [0-255] ints
+            # and [0.0-1.0] floats, as well as string values that may come from
+            # property editor text fields.
+            raw = portal.properties.get('color', [255, 255, 255])
+            color = normalize_color(raw, default=[1.0, 1.0, 1.0])
+            r, g, b = color
+
+            if not portal.is_active():
+                # Inactive portals drawn dimmed
+                r, g, b = r * 0.4, g * 0.4, b * 0.4
+
+            corners = portal.get_corners_world()   # 4 × [x,y,z], CCW from front
+            vdata = np.array(corners, dtype=np.float32).flatten()
+
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_outline_vbo)
+            gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, vdata.nbytes, vdata)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
+
+            gl.glUniform3f(color_loc, r, g, b)
+            gl.glBindVertexArray(self._portal_outline_vao)
+            gl.glDrawArrays(gl.GL_LINE_LOOP, 0, 4)
+
+            # Draw a short normal arrow from the centre so the facing direction
+            # is obvious in the editor
+            import math as _math
+            cx = float(portal.pos[0])
+            cy = float(portal.pos[1])
+            cz = float(portal.pos[2])
+            nx, ny, nz = portal.get_normal()
+            arrow_len = portal.get_width() * 0.4
+            nline = np.array([
+                cx, cy, cz,
+                cx + nx * arrow_len, cy + ny * arrow_len, cz + nz * arrow_len,
+            ], dtype=np.float32)
+
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_normal_vbo)
+            gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, nline.nbytes, nline)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
+
+            # Draw normal slightly brighter
+            gl.glUniform3f(color_loc, min(1.0, r * 1.6), min(1.0, g * 1.6), min(1.0, b * 1.6))
+            gl.glBindVertexArray(self._portal_normal_vao)
+            gl.glDrawArrays(gl.GL_LINES, 0, 2)
+
+        gl.glLineWidth(1.0)
+        gl.glBindVertexArray(0)
+        gl.glUseProgram(0)
+
     def draw_connection_lines(self, projection, view, connections):
         """Draw connection lines between entities in the 3D viewport.
 
@@ -1691,6 +2184,10 @@ class Renderer:
 
         current_tex = None
         for thing in things_to_draw:
+            # FIX: Do not draw Portal entities as flat billboard sprites
+            if Portal is not None and isinstance(thing, Portal):
+                continue
+                
             # ---- MONSTER SNAPSHOT (dictionary) ----
             if isinstance(thing, dict) and 'dead' in thing:
                 # Build a texture key from custom sprite paths and monster type
@@ -1973,6 +2470,9 @@ class Renderer:
                 self.shaders[name] = shader
                 self.uniforms[name] = UniformCache(shader)
 
+            # Recompile portal shaders
+            self._init_portal_gl()
+
             print("All shaders reloaded successfully.")
             return True
         except Exception as e:
@@ -2039,6 +2539,3 @@ class Renderer:
             gl.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
         gl.glBindVertexArray(0)
-
-
-

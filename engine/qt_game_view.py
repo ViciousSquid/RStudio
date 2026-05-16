@@ -6,7 +6,7 @@ from collections import deque
 from typing import Optional
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
 from PyQt5.QtCore import Qt, QTimer, QPoint, QUrl, QRect, QEvent
-from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QFontDatabase, QPen, QBrush, QPolygon, QKeySequence, QPixmap
+from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QFontDatabase, QPen, QBrush, QPolygon, QKeySequence, QPixmap, QSurfaceFormat
 from PyQt5.QtMultimedia import QSoundEffect
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
@@ -14,7 +14,7 @@ import glm
 from engine.camera import Camera
 from editor.things import (
     Thing, Light, PlayerStart, Monster, Pickup, Speaker,
-    LogicGate, LogicRelay, LogicTimer, LevelChanger
+    LogicGate, LogicRelay, LogicTimer, LevelChanger, Portal
 )
 from engine.player import Player
 from PIL import Image
@@ -34,7 +34,16 @@ def perspective_projection(fov, aspect, near, far):
 
 class QtGameView(QOpenGLWidget):
     def __init__(self, editor):
-        super().__init__(editor)
+        super().__init__(editor)  # MUST be first
+
+        fmt = QSurfaceFormat()
+        fmt.setVersion(3, 3)
+        fmt.setProfile(QSurfaceFormat.CoreProfile)
+        fmt.setDepthBufferSize(24)
+        fmt.setStencilBufferSize(8)
+
+        self.setFormat(fmt)  # now it's safe
+
         self.editor = editor
 
         # Rendering and view state
@@ -1200,11 +1209,31 @@ class QtGameView(QOpenGLWidget):
             'Monster': 'monster.png',
             'Pickup': 'pickup.png',
             'Speaker': 'speaker.png',
-            'LevelChanger': 'levelchanger.png'
+            'LevelChanger': 'levelchanger.png',
+            'Portal': 'portal.png',
         }
         for cls, fname in things.items():
             tid = self.load_texture(fname, 'sprites')
-            if tid: self.sprite_textures[cls] = tid
+            if tid:
+                self.sprite_textures[cls] = tid
+        # Portal fallback: if portal.png doesn't exist yet, generate a 16×16
+        # solid cyan texture so the entity is never completely invisible.
+        if 'Portal' not in self.sprite_textures and self.renderer:
+            try:
+                tex_id = gl.glGenTextures(1)
+                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                # 4 pixels of cyan (R=0 G=220 B=255 A=255)
+                cyan = (gl.GLubyte * (4 * 4))(
+                    0, 220, 255, 255,  0, 220, 255, 255,
+                    0, 220, 255, 255,  0, 220, 255, 255,
+                )
+                gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, 2, 2, 0,
+                                gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, cyan)
+                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
+                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
+                self.sprite_textures['Portal'] = tex_id
+            except Exception:
+                pass
         key_textures = {'blue_key': 'bluekey.png', 'red_key': 'redkey.png', 'yellow_key': 'yellowkey.png', 'green_key': 'greenkey.png'}
         for key_name, fname in key_textures.items():
             tid = self.load_texture(fname, 'sprites')
@@ -1312,6 +1341,15 @@ class QtGameView(QOpenGLWidget):
                     fallback_key = 'logic_relay'
                     if fallback_key in self.sprite_textures:
                         instance_textures[id(thing)] = self.sprite_textures[fallback_key]
+
+            # === PORTAL ===
+            # Portals are drawn as wireframe apertures by draw_portal_wireframes,
+            # but we still register a texture so draw_sprites doesn't skip them
+            # (which would break 3D hit-testing via the sprite VAO bounds).
+            elif isinstance(thing, Portal):
+                tex_key = 'Portal'
+                if tex_key in self.sprite_textures:
+                    instance_textures[id(thing)] = self.sprite_textures[tex_key]
 
         self.renderer.set_instance_textures(instance_textures)
 
@@ -1881,6 +1919,9 @@ class QtGameView(QOpenGLWidget):
             self.debug_console_window.command_input.setText(cmd)
             self.debug_console_window._on_command_entered()
         self._close_console_overlay()
+
+
+
 
 
 
