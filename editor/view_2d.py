@@ -1238,10 +1238,10 @@ class View2D(QWidget):
 
             painter.restore()
 
-            # Bounding rect for selection — INCREASED margin for easier selection
+            # Bounding rect for selection
             xs = [left_s.x(), right_s.x(), tip_s.x()]
             ys = [left_s.y(), right_s.y(), tip_s.y()]
-            margin = 24
+            margin = 6
             draw_rect = QRectF(min(xs) - margin, min(ys) - margin,
                             max(xs) - min(xs) + margin*2,
                             max(ys) - min(ys) + margin*2)
@@ -1282,8 +1282,7 @@ class View2D(QWidget):
             painter.drawText(rect_s.topRight() + QPointF(4, 12), thing.properties.get('name', ''))
 
             painter.restore()
-            # INCREASED margin for easier selection in front/side views
-            draw_rect = rect_s.adjusted(-20, -20, 20, 20)
+            draw_rect = rect_s
 
         return draw_rect
 
