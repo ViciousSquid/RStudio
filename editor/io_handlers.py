@@ -755,6 +755,83 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('logic_spawner', 'disable',       spawner_disable)
     io_manager.register_input_handler('logic_spawner', 'settargetnode', spawner_set_target)
 
+
+    # ==========================================================================
+    # PORTAL INPUTS
+    # ==========================================================================
+
+    def portal_enable(entity, param, logic):
+        """Activate the portal — it will render and teleport entities."""
+        entity.properties['active'] = True
+        name = entity.properties.get('name', 'unnamed')
+        debug_log('IO', f"Portal '{name}' enabled")
+        logic.io_manager.fire_output(entity, 'OnEnabled')
+
+    def portal_disable(entity, param, logic):
+        """Deactivate the portal."""
+        entity.properties['active'] = False
+        name = entity.properties.get('name', 'unnamed')
+        debug_log('IO', f"Portal '{name}' disabled")
+        logic.io_manager.fire_output(entity, 'OnDisabled')
+
+    def portal_toggle(entity, param, logic):
+        """Toggle portal active state."""
+        was_active = entity.properties.get('active', False)
+        entity.properties['active'] = not was_active
+        name = entity.properties.get('name', 'unnamed')
+        state = "enabled" if entity.properties['active'] else "disabled"
+        debug_log('IO', f"Portal '{name}' toggled → {state}")
+        logic.io_manager.fire_output(entity, 'OnToggled')
+
+    def portal_set_color(entity, param, logic):
+        """Set rim/glow color from 'R G B' string (0-255)."""
+        try:
+            parts = param.split()
+            if len(parts) >= 3:
+                r = max(0, min(255, int(parts[0])))
+                g = max(0, min(255, int(parts[1])))
+                b = max(0, min(255, int(parts[2])))
+                entity.properties['color'] = [r, g, b]
+                name = entity.properties.get('name', 'unnamed')
+                debug_log('IO', f"Portal '{name}' color set to ({r}, {g}, {b})")
+        except (ValueError, IndexError):
+            debug_log('Error', f"SetColor: bad parameter '{param}' — expected 'R G B'")
+
+    def portal_set_target(entity, param, logic):
+        """Change the paired portal target by name."""
+        if param:
+            entity.properties['portal_target'] = param.strip()
+            name = entity.properties.get('name', 'unnamed')
+            debug_log('IO', f"Portal '{name}' target set to '{param.strip()}'")
+
+    def portal_show_rim(entity, param, logic):
+        entity.properties['show_rim'] = True
+
+    def portal_hide_rim(entity, param, logic):
+        entity.properties['show_rim'] = False
+
+    def portal_set_width(entity, param, logic):
+        try:
+            entity.properties['width'] = max(16.0, float(param))
+        except (ValueError, TypeError):
+            pass
+
+    def portal_set_height(entity, param, logic):
+        try:
+            entity.properties['height'] = max(16.0, float(param))
+        except (ValueError, TypeError):
+            pass
+
+    io_manager.register_input_handler('portal', 'enable',    portal_enable)
+    io_manager.register_input_handler('portal', 'disable',   portal_disable)
+    io_manager.register_input_handler('portal', 'toggle',    portal_toggle)
+    io_manager.register_input_handler('portal', 'setcolor',  portal_set_color)
+    io_manager.register_input_handler('portal', 'settarget', portal_set_target)
+    io_manager.register_input_handler('portal', 'showrim',   portal_show_rim)
+    io_manager.register_input_handler('portal', 'hiderim',   portal_hide_rim)
+    io_manager.register_input_handler('portal', 'setwidth',  portal_set_width)
+    io_manager.register_input_handler('portal', 'setheight', portal_set_height)
+
     # ==========================================================================
     # LOG SUMMARY
     # ==========================================================================
