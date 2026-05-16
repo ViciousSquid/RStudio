@@ -130,17 +130,129 @@ class View2D(QWidget):
             # Toggle the global flag on the editor state
             current_state = getattr(self.editor, 'show_logic_links', False)
             self.editor.show_logic_links = not current_state
-            
+
             # Force redraw of both views (2D and 3D)
             self.editor.update_views()
-            
+
             # Show toast
             if hasattr(self.main_window, 'show_toast'):
                 status = "ON" if self.editor.show_logic_links else "OFF"
                 self.main_window.show_toast(f"Logic Links: {status}")
             return
 
+        # --- Arrow Key Nudging ---
+        # Only process arrow keys if we have a selected object and we're not in play mode
+        selected = self.editor.state.selected_object
+        if selected and not getattr(self.editor.view_3d, 'play_mode', False):
+            arrow_key = None
+            if event.key() == Qt.Key_Up:
+                arrow_key = 'up'
+            elif event.key() == Qt.Key_Down:
+                arrow_key = 'down'
+            elif event.key() == Qt.Key_Left:
+                arrow_key = 'left'
+            elif event.key() == Qt.Key_Right:
+                arrow_key = 'right'
+
+            if arrow_key:
+                # Determine move distance
+                # If grid is visible, use grid size; otherwise use a default of 16
+                if self.grid_visible:
+                    base_distance = self.grid_size
+                else:
+                    base_distance = 16
+
+                # Shift = 5x distance for bigger jumps
+                if event.modifiers() & Qt.ShiftModifier:
+                    distance = base_distance * 5
+                else:
+                    distance = base_distance
+
+                # Get the axes for this view
+                ax1, ax2 = self.get_axes()
+                if ax1 and ax2:
+                    ax_map = {'x': 0, 'y': 1, 'z': 2}
+                    a1_idx = ax_map[ax1]
+                    a2_idx = ax_map[ax2]
+
+                    # Determine direction multipliers based on view type
+                    # Top view: x right, z down (screen Y increases downward)
+                    # Front view: x right, y up (screen Y increases downward, so y decreases upward)
+                    # Side view: z right, y up
+                    if self.view_type == 'top':
+                        dx_map = {'left': -1, 'right': 1, 'up': 0, 'down': 0}
+                        dz_map = {'left': 0, 'right': 0, 'up': -1, 'down': 1}
+                        dy_map = {'left': 0, 'right': 0, 'up': 0, 'down': 0}
+                    elif self.view_type == 'front':
+                        dx_map = {'left': -1, 'right': 1, 'up': 0, 'down': 0}
+                        dy_map = {'left': 0, 'right': 0, 'up': 1, 'down': -1}
+                        dz_map = {'left': 0, 'right': 0, 'up': 0, 'down': 0}
+                    elif self.view_type == 'side':
+                        dz_map = {'left': -1, 'right': 1, 'up': 0, 'down': 0}
+                        dy_map = {'left': 0, 'right': 0, 'up': 1, 'down': -1}
+                        dx_map = {'left': 0, 'right': 0, 'up': 0, 'down': 0}
+                    else:
+                        dx_map = dy_map = dz_map = {'left': 0, 'right': 0, 'up': 0, 'down': 0}
+
+                    # Calculate delta for each axis
+                    delta_x = dx_map[arrow_key] * distance
+                    delta_y = dy_map[arrow_key] * distance
+                    delta_z = dz_map[arrow_key] * distance
+
+                    # Apply to selected object
+                    if isinstance(selected, dict):
+                        # It's a brush
+                        pos = selected['pos']
+                        # Save state on first arrow key press (we track if we're in a nudge sequence)
+                        if not getattr(self, '_nudge_in_progress', False):
+                            self.main_window.save_state()
+                            self._nudge_in_progress = True
+
+                        pos[0] += delta_x
+                        pos[1] += delta_y
+                        pos[2] += delta_z
+
+                        # Snap to grid if grid is visible
+                        if self.grid_visible:
+                            grid = self.grid_size
+                            pos[0] = round(pos[0] / grid) * grid
+                            pos[1] = round(pos[1] / grid) * grid
+                            pos[2] = round(pos[2] / grid) * grid
+                    else:
+                        # It's a Thing
+                        # Save state on first arrow key press
+                        if not getattr(self, '_nudge_in_progress', False):
+                            self.main_window.save_state()
+                            self._nudge_in_progress = True
+
+                        selected.pos[0] += delta_x
+                        selected.pos[1] += delta_y
+                        selected.pos[2] += delta_z
+
+                        # Snap to grid if grid is visible
+                        if self.grid_visible:
+                            grid = self.grid_size
+                            selected.pos[0] = round(selected.pos[0] / grid) * grid
+                            selected.pos[1] = round(selected.pos[1] / grid) * grid
+                            selected.pos[2] = round(selected.pos[2] / grid) * grid
+
+                    # Update views
+                    self.update()
+                    self.main_window.view_3d.update()
+
+                    # Update property editor to show new position
+                    if hasattr(self.main_window, 'property_editor'):
+                        self.main_window.property_editor.set_object(selected)
+
+                    return
+
         super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        """Reset nudge tracking when any key is released."""
+        if event.key() in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
+            self._nudge_in_progress = False
+        super().keyReleaseEvent(event)
 
     def _smooth_update_tick(self):
         """Check for camera changes and repaint only when needed."""

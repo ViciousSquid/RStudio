@@ -1793,7 +1793,10 @@ class PropertyEditor(QWidget):
             if isinstance(thing, LogicSpawner) and key in ('spawn_type', 'target_node', 'max_spawn', 'spawn_properties'): continue
             if is_pickup and key in ['key_name', 'custom_sprite', 'respawns', 'respawn_time']: continue
 
-            label_text = key.replace('_', ' ').title() + ":"
+            if key == 'show_rim':
+                label_text = "Visible:"
+            else:
+                label_text = key.replace('_', ' ').title() + ":"
 
             # Dropdown for angle (0°, 90°, 180°, 270°)
             if key == 'angle':

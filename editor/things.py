@@ -1088,7 +1088,7 @@ class Portal(Thing):
     active         (bool)  When False the portal acts as a solid wall.
                            Toggle at runtime via Enable/Disable/Toggle inputs.
     color          (list)  [r, g, b] 0-255 rim/glow tint.  Default white.
-    show_rim       (bool)  Draw the glowing aperture rim in play mode.
+    show_rim       (bool)  Draw outline.
 
     I/O outputs
     -----------
