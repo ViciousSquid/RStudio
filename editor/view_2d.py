@@ -485,7 +485,7 @@ class View2D(QWidget):
                 font.setPointSize(7)
                 painter.setFont(font)
                 painter.drawText(mid + QPointF(4, -4), "teleport")
-            painter.restore()
+                painter.restore()
 
         if self.is_drawing_brush:
             pen = QPen(QColor(255, 255, 0), 1, Qt.DashLine)
