@@ -327,8 +327,8 @@
                 ],
                 "active": true,
                 "color": [
-                    0,
-                    220,
+                    255,
+                    255,
                     255
                 ],
                 "show_rim": true,
