@@ -714,6 +714,28 @@ def register_default_io():
         ]
     )
 
+    # === PORTAL ===
+    # Prey 2006-style portal that links two named portal entities.
+    register_io('portal',
+        inputs=[
+            IODef('Enable',      'Activate the portal (renders and teleports)'),
+            IODef('Disable',     'Deactivate the portal'),
+            IODef('Toggle',      'Toggle active state'),
+            IODef('SetColor',    'Set rim/glow color (R G B, 0-255)', 'color'),
+            IODef('SetTarget',   'Change the paired portal target name', 'string'),
+            IODef('ShowRim',     'Show the rim glow border'),
+            IODef('HideRim',     'Hide the rim glow border'),
+            IODef('SetWidth',    'Set portal width in units', 'float'),
+            IODef('SetHeight',   'Set portal height in units', 'float'),
+        ],
+        outputs=[
+            IODef('OnEnabled',   'Fired when portal is activated'),
+            IODef('OnDisabled',  'Fired when portal is deactivated'),
+            IODef('OnToggled',   'Fired when portal is toggled'),
+            IODef('OnTeleport',  'Fired when an entity passes through'),
+        ]
+    )
+
     # === LOGIC SPAWNER ===
     # Instantiates entities at a PathNode when triggered.
     register_io('logic_spawner',
@@ -786,7 +808,11 @@ def get_entity_type_for_io(entity) -> str:
             return 'mover'
         return 'brush'
     elif hasattr(entity, 'properties'):
-        return entity.properties.get('type', 'thing')
+        # Check for Portal type first
+        etype = entity.properties.get('type', 'thing')
+        if etype == 'portal':
+            return 'portal'
+        return etype
     return 'unknown'
 
 

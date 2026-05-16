@@ -81,6 +81,26 @@ class MonsterCustomiseDialog(QDialog):
 
         root.addWidget(sprite_group)
 
+        # ── 2D View Sprite ──────────────────────────────────────────────
+        sprite_2d_group = QGroupBox("2D View Sprite")
+        sprite_2d_group.setStyleSheet(self._group_style())
+        sprite_2d_form = QFormLayout(sprite_2d_group)
+        sprite_2d_form.setSpacing(8)
+        sprite_2d_form.setContentsMargins(8, 12, 8, 8)
+
+        self._sprite_2d_edit = self._make_edit("Default  (assets/sprites/monser.png)")
+        sprite_2d_form.addRow("Sprite PNG:", self._make_row(self._sprite_2d_edit, "sprite_2d"))
+
+        sprite_2d_note = QLabel(
+            "Overrides the icon shown in the 2D editor views only.\n"
+            "Always displayed at 60×60 px. Does not affect the 3D billboard."
+        )
+        sprite_2d_note.setStyleSheet("QLabel { color: #999; font-size: 11px; margin-top: 2px; }")
+        sprite_2d_note.setWordWrap(True)
+        sprite_2d_form.addRow("", sprite_2d_note)
+
+        root.addWidget(sprite_2d_group)
+
         # ── Billboard size ──────────────────────────────────────────────
         size_group = QGroupBox("3D Billboard Size")
         size_group.setStyleSheet(self._group_style())
@@ -174,6 +194,7 @@ class MonsterCustomiseDialog(QDialog):
         self._idle_edit.setText(p.get("custom_idle", ""))
         self._shoot_edit.setText(p.get("custom_shoot", ""))
         self._dead_edit.setText(p.get("custom_dead", ""))
+        self._sprite_2d_edit.setText(p.get("sprite_2d", ""))
         # Use the subtype default from monster_constants when no override is stored
         mtype = p.get("monster_type", "human")
         default_w, default_h = MONSTER_SPRITE_SIZES.get(mtype, MONSTER_SPRITE_SIZE_DEFAULT)
@@ -187,6 +208,7 @@ class MonsterCustomiseDialog(QDialog):
             ("custom_idle",  self._idle_edit),
             ("custom_shoot", self._shoot_edit),
             ("custom_dead",  self._dead_edit),
+            ("sprite_2d",    self._sprite_2d_edit),
         ]
 
         for key, edit in slots:
@@ -217,6 +239,7 @@ class MonsterCustomiseDialog(QDialog):
         try:
             from editor.things import Monster
             Monster.clear_sprite_cache()
+            Monster.invalidate_2d_sprite_cache()
         except Exception:
             pass
 
@@ -227,6 +250,7 @@ class MonsterCustomiseDialog(QDialog):
         self._idle_edit.clear()
         self._shoot_edit.clear()
         self._dead_edit.clear()
+        self._sprite_2d_edit.clear()
         mtype = self.thing.properties.get("monster_type", "human")
         default_w, default_h = MONSTER_SPRITE_SIZES.get(mtype, MONSTER_SPRITE_SIZE_DEFAULT)
         self._width_spin.setValue(default_w)
@@ -237,6 +261,25 @@ class MonsterCustomiseDialog(QDialog):
     # ------------------------------------------------------------------ #
 
     def _browse(self, slot: str):
+        # The 2D sprite can come from anywhere under assets/sprites/
+        if slot == "sprite_2d":
+            start_dir = os.path.join(_project_root(), "assets", "sprites")
+            os.makedirs(start_dir, exist_ok=True)
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select 2D view sprite PNG  (any PNG inside assets/sprites/)",
+                start_dir,
+                "PNG Images (*.png)",
+            )
+            if not path:
+                return
+            try:
+                rel = os.path.relpath(path, _project_root())
+            except ValueError:
+                rel = path
+            self._sprite_2d_edit.setText(rel.replace("\\", "/"))
+            return
+
         start_dir = os.path.join(_project_root(), SPRITE_BASE)
         os.makedirs(start_dir, exist_ok=True)
 
@@ -280,9 +323,10 @@ class MonsterCustomiseDialog(QDialog):
         edit.setText(rel.replace("\\", "/"))
 
     def _clear(self, slot: str):
-        edit = {"idle": self._idle_edit,
-                "shoot": self._shoot_edit,
-                "dead": self._dead_edit}[slot]
+        edit = {"idle":     self._idle_edit,
+                "shoot":    self._shoot_edit,
+                "dead":     self._dead_edit,
+                "sprite_2d": self._sprite_2d_edit}[slot]
         edit.clear()
 
     # ------------------------------------------------------------------ #
@@ -308,3 +352,6 @@ class MonsterCustomiseDialog(QDialog):
                 background-color: #2b3d3b;
             }
         """
+
+
+

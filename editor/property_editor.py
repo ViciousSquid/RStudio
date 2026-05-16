@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFrame, QDoubleSpinBox, QSizePolicy)
 from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QFont
-from editor.things import Thing, Light, Pickup, Monster, Model, Speaker, LogicGate, PathNode, LogicCamera, LogicSpawner
+from editor.things import Thing, Light, Pickup, Monster, Model, Speaker, LogicGate, PathNode, LogicCamera, LogicSpawner, Portal
 
 # I/O System imports
 try:
@@ -1784,6 +1784,8 @@ class PropertyEditor(QWidget):
             if key == 'type': continue
             if isinstance(thing, Light) and key in ['colour', 'parent_mover', 'parent_offset']: continue
             if isinstance(thing, Model) and key in ['model_path', 'scale', 'rotation']: continue
+            # Hide rotation for Portals — angle controls yaw instead
+            if isinstance(thing, Portal) and key == 'rotation': continue
             if not isinstance(thing, Monster) and key in _MONSTER_ONLY_KEYS: continue
             if isinstance(thing, Monster) and key in ('triggered', 'wake_on_sight', 'dead', 'non_hostile', 'sight', 'patrol', 'patrol_target', 'patrol_mode', 'variant'): continue
             if isinstance(thing, PathNode) and key in ('radius', 'show_radius', 'affects_type', 'next_node', 'wait_time', 'speed', 'patrol_speed'): continue
@@ -1791,9 +1793,32 @@ class PropertyEditor(QWidget):
             if isinstance(thing, LogicSpawner) and key in ('spawn_type', 'target_node', 'max_spawn', 'spawn_properties'): continue
             if is_pickup and key in ['key_name', 'custom_sprite', 'respawns', 'respawn_time']: continue
 
-            label_text = key.replace('_', ' ').title() + ":"
+            if key == 'show_rim':
+                label_text = "Visible:"
+            else:
+                label_text = key.replace('_', ' ').title() + ":"
 
-            if isinstance(thing, Monster) and key == 'monster_type':
+            # Dropdown for angle (0°, 90°, 180°, 270°)
+            if key == 'angle':
+                widget_w = QComboBox()
+                widget_w.addItems(['0°', '90°', '180°', '270°'])
+                # Convert stored value to display text
+                try:
+                    angle_val = int(float(value)) % 360
+                    display_text = f"{angle_val}°"
+                except (ValueError, TypeError):
+                    display_text = '0°'
+                idx = widget_w.findText(display_text)
+                widget_w.setCurrentIndex(idx if idx >= 0 else 0)
+                def _on_angle_changed(text, _thing=thing):
+                    try:
+                        new_angle = int(text.replace('°', ''))
+                    except ValueError:
+                        new_angle = 0
+                    self.update_object_prop('angle', new_angle)
+                widget_w.currentTextChanged.connect(_on_angle_changed)
+                layout.addRow(label_text, widget_w)
+            elif isinstance(thing, Monster) and key == 'monster_type':
                 widget_w = QComboBox()
                 widget_w.addItems(['human', 'flying'])
                 widget_w.setCurrentText(value)
@@ -2699,6 +2724,14 @@ class PropertyEditor(QWidget):
                         self.editor.view_3d.update()
                     except Exception:
                         pass
+                    # Repaint all 2D views so the new sprite_2d is visible immediately
+                    for attr in ('view_top', 'view_front', 'view_side', 'view_2d'):
+                        widget = getattr(self.editor, attr, None)
+                        if widget is not None:
+                            try:
+                                widget.update()
+                            except Exception:
+                                pass
 
             customise_btn.clicked.connect(_open_customise)
             customise_btn_row = QHBoxLayout()
@@ -2953,7 +2986,12 @@ class PropertyEditor(QWidget):
                     except (ValueError, TypeError): value = 0.0
             self.current_object.properties[key] = value
         
+        # Keep Portal rotation in sync with angle
+        if isinstance(self.current_object, Portal) and key == 'angle':
+            rot = self.current_object.properties.get('rotation', [0.0, 0.0, 0.0])
+            if isinstance(rot, list) and len(rot) > 0:
+                rot[0] = float(value)
+        
         # Only update UI if we're not in the middle of populating
-        # This prevents infinite recursion when populate calls update_object_prop
         if not self._populating:
             self.editor.update_all_ui()

@@ -112,6 +112,15 @@ class ConsoleCommandHandler:
             # Play Mode cheats / debug
             'notarget': self.cmd_notarget,
             'sg': self.cmd_spatial_grid,
+
+            # Portal commands
+            'portal_list': self.cmd_portal_list,
+            'portal_create': self.cmd_portal_create,
+            'portal_link': self.cmd_portal_link,
+            'portal_color': self.cmd_portal_color,
+            'portal_enable': self.cmd_portal_enable,
+            'portal_disable': self.cmd_portal_disable,
+            'portal_delete': self.cmd_portal_delete,
         }
 
     def handle_command(self, cmd_string):
@@ -389,6 +398,211 @@ class ConsoleCommandHandler:
     # ===================================================================
     # HELP
     # ===================================================================
+
+    # ===================================================================
+    # PORTAL COMMANDS
+    # ===================================================================
+
+    def cmd_portal_list(self, args):
+        """List all portals in the level with their link status."""
+        from editor.things import Portal
+        portals = [t for t in self.editor_state.things if isinstance(t, Portal)]
+        if not portals:
+            debug_log("Info", "No portals found in the level")
+            return
+
+        debug_log("Info", f"=== PORTALS ({len(portals)}) ===")
+        for p in portals:
+            name = p.properties.get('name', 'unnamed')
+            target = p.properties.get('portal_target', '<none>')
+            active = "ACTIVE" if p.is_active() else "inactive"
+            color = p.properties.get('color', [255, 255, 255])
+            pos = p.pos
+            debug_log("Info", f"  '{name}' → '{target}' [{active}] at ({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f}) color=({color[0]}, {color[1]}, {color[2]})")
+
+    def cmd_portal_create(self, args):
+        """Create a new portal pair: portal_create <name1> <name2> [x y z]"""
+        from editor.things import Portal
+        parts = args.split()
+        if len(parts) < 2:
+            debug_log("Error", "Usage: portal_create <name1> <name2> [x y z]")
+            debug_log("Info", "  Creates two linked portals. Optional position defaults to camera/PlayerStart")
+            return
+
+        name1, name2 = parts[0], parts[1]
+
+        # Determine spawn position
+        if len(parts) >= 5:
+            try:
+                pos = [float(parts[2]), float(parts[3]), float(parts[4])]
+            except ValueError:
+                debug_log("Error", "Invalid position coordinates")
+                return
+        else:
+            # Use camera position or player start
+            pos = [0, 128, 0]
+            if hasattr(self.main_window, 'view_3d'):
+                cam = self.main_window.view_3d.camera
+                pos = [cam.pos.x, cam.pos.y, cam.pos.z]
+
+        # Create portal A
+        portal_a = Portal(pos=[pos[0] - 64, pos[1], pos[2]])
+        portal_a.properties['name'] = name1
+        portal_a.properties['portal_target'] = name2
+        portal_a.properties['active'] = True
+
+        # Create portal B
+        portal_b = Portal(pos=[pos[0] + 64, pos[1], pos[2]])
+        portal_b.properties['name'] = name2
+        portal_b.properties['portal_target'] = name1
+        portal_b.properties['active'] = True
+
+        self.editor_state.things.append(portal_a)
+        self.editor_state.things.append(portal_b)
+        self.editor_state.save_state()
+
+        debug_log("Info", f"Created portal pair: '{name1}' ↔ '{name2}' at ({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f})")
+        self.main_window.update_all_ui()
+
+    def cmd_portal_link(self, args):
+        """Link two existing portals: portal_link <name1> <name2>"""
+        from editor.things import Portal
+        parts = args.split()
+        if len(parts) < 2:
+            debug_log("Error", "Usage: portal_link <portal_name> <target_name>")
+            return
+
+        portal_name, target_name = parts[0], parts[1]
+
+        # Find the portal
+        portal = None
+        for t in self.editor_state.things:
+            if isinstance(t, Portal) and t.properties.get('name') == portal_name:
+                portal = t
+                break
+
+        if not portal:
+            debug_log("Error", f"Portal '{portal_name}' not found")
+            return
+
+        # Verify target exists (optional - can link to non-existent for later creation)
+        target_exists = any(
+            isinstance(t, Portal) and t.properties.get('name') == target_name
+            for t in self.editor_state.things
+        )
+
+        portal.properties['portal_target'] = target_name
+        self.editor_state.save_state()
+
+        status = f"linked to '{target_name}'"
+        if not target_exists:
+            status += " (target does not exist yet)"
+        debug_log("Info", f"Portal '{portal_name}' {status}")
+        self.main_window.update_all_ui()
+
+    def cmd_portal_color(self, args):
+        """Set portal rim color: portal_color <name> <R> <G> <B>"""
+        from editor.things import Portal
+        parts = args.split()
+        if len(parts) < 4:
+            debug_log("Error", "Usage: portal_color <name> <R> <G> <B>  (values 0-255)")
+            return
+
+        name = parts[0]
+        try:
+            r = max(0, min(255, int(parts[1])))
+            g = max(0, min(255, int(parts[2])))
+            b = max(0, min(255, int(parts[3])))
+        except ValueError:
+            debug_log("Error", "R, G, B must be integers 0-255")
+            return
+
+        # Find and update all matching portals
+        found = False
+        for t in self.editor_state.things:
+            if isinstance(t, Portal) and t.properties.get('name') == name:
+                t.properties['color'] = [r, g, b]
+                found = True
+                debug_log("Info", f"Portal '{name}' color set to ({r}, {g}, {b})")
+
+        if not found:
+            debug_log("Error", f"Portal '{name}' not found")
+            return
+
+        self.editor_state.save_state()
+        self.main_window.update_all_ui()
+
+    def cmd_portal_enable(self, args):
+        """Enable a portal: portal_enable <name>"""
+        from editor.things import Portal
+        if not args:
+            debug_log("Error", "Usage: portal_enable <name>")
+            return
+
+        name = args.strip()
+        for t in self.editor_state.things:
+            if isinstance(t, Portal) and t.properties.get('name') == name:
+                t.properties['active'] = True
+                self.editor_state.save_state()
+                debug_log("Info", f"Portal '{name}' enabled")
+                self.main_window.update_all_ui()
+                return
+        debug_log("Error", f"Portal '{name}' not found")
+
+    def cmd_portal_disable(self, args):
+        """Disable a portal: portal_disable <name>"""
+        from editor.things import Portal
+        if not args:
+            debug_log("Error", "Usage: portal_disable <name>")
+            return
+
+        name = args.strip()
+        for t in self.editor_state.things:
+            if isinstance(t, Portal) and t.properties.get('name') == name:
+                t.properties['active'] = False
+                self.editor_state.save_state()
+                debug_log("Info", f"Portal '{name}' disabled")
+                self.main_window.update_all_ui()
+                return
+        debug_log("Error", f"Portal '{name}' not found")
+
+    def cmd_portal_delete(self, args):
+        """Delete a portal and optionally its pair: portal_delete <name> [and_pair]"""
+        from editor.things import Portal
+        if not args:
+            debug_log("Error", "Usage: portal_delete <name> [and_pair]")
+            return
+
+        parts = args.split()
+        name = parts[0]
+        delete_pair = len(parts) > 1 and parts[1].lower() == 'and_pair'
+
+        portal = None
+        for t in self.editor_state.things:
+            if isinstance(t, Portal) and t.properties.get('name') == name:
+                portal = t
+                break
+
+        if not portal:
+            debug_log("Error", f"Portal '{name}' not found")
+            return
+
+        target_name = portal.properties.get('portal_target', '')
+
+        self.editor_state.things.remove(portal)
+        deleted = [name]
+
+        if delete_pair and target_name:
+            for t in self.editor_state.things[:]:
+                if isinstance(t, Portal) and t.properties.get('name') == target_name:
+                    self.editor_state.things.remove(t)
+                    deleted.append(target_name)
+                    break
+
+        self.editor_state.save_state()
+        debug_log("Info", f"Deleted portal(s): {', '.join(deleted)}")
+        self.main_window.update_all_ui()
+
     def cmd_help(self, args):
         
         sep = '<span style="color:white;"> / </span>'
@@ -440,6 +654,14 @@ class ConsoleCommandHandler:
 <b style="color:orange;">notarget</b> — Toggle notarget (monsters ignore the player)<br>
 <b style="color:orange;">physics</b> on/off/toggle<br>
 <b style="color:orange;">setpos</b>{sep}<b style="color:orange;">teleport</b> x y z<br>
+<b style="color:cyan;">=== Portals ===</b><br>
+<b style="color:orange;">portal_list</b> — List all portals and their links<br>
+<b style="color:orange;">portal_create</b> &lt;name1&gt; &lt;name2&gt; [x y z] — Create a linked portal pair<br>
+<b style="color:orange;">portal_link</b> &lt;name&gt; &lt;target&gt; — Link an existing portal to another<br>
+<b style="color:orange;">portal_color</b> &lt;name&gt; &lt;R&gt; &lt;G&gt; &lt;B&gt; — Set rim color (0-255)<br>
+<b style="color:orange;">portal_enable</b> &lt;name&gt; — Activate a portal<br>
+<b style="color:orange;">portal_disable</b> &lt;name&gt; — Deactivate a portal<br>
+<b style="color:orange;">portal_delete</b> &lt;name&gt; [and_pair] — Remove portal(s)<br>
 <b style="color:cyan;">=== Debug ===</b><br>
 <b style="color:orange;">sg</b> — Toggle spatial grid visualisation<br>
 """
