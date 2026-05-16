@@ -18,7 +18,7 @@ Playable level with multiple rooms, pickups, a moving platform and a light that 
 
 Demonstrates how a monster can follow a path
 
-### `Portal_Test.json`
+### `Portal_Test.json` , `Portal_Test_dynamic.json`
 
 Demonstrates the new World Portals added with v1.2.6.0
 
