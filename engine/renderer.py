@@ -1225,10 +1225,9 @@ class Renderer:
         if not config.get('play_mode', False):
             self.draw_path_node_cubes(projection, view, things)
 
-        # Portal aperture outlines — always drawn in both editor and play mode
-        # so portals are always visible and selectable.  The stencil view-through
-        # pass (draw_portals) is separate and only fires in play mode.
-        self.draw_portal_wireframes(projection, view, things)
+        # Portal aperture outlines — editor only.
+        # In play mode the stencil pass (draw_portals) handles portal rendering.
+        self.draw_portal_wireframes(projection, view, things, config.get('play_mode', False))
 
         gl.glEnable(gl.GL_BLEND)
         gl.glDepthMask(gl.GL_FALSE)
@@ -2010,18 +2009,23 @@ class Renderer:
         gl.glBindVertexArray(0)
         gl.glUseProgram(0)
 
-    def draw_portal_wireframes(self, projection, view, things):
+    def draw_portal_wireframes(self, projection, view, things, play_mode=False):
         """
         Draw every Portal entity as a coloured rectangle outline in the 3D
-        view using the 'simple' shader.  Works in both editor and play mode —
-        this is purely a visual representation of the aperture so the level
-        designer can see, select and position portals.
+        view using the 'simple' shader.
 
-        In play mode the stencil pass (draw_portals) renders the actual portal
-        view.  In editor mode the stencil pass is skipped, but this outline is
-        always drawn so portals are never invisible.
+        In play mode: outlines are NOT drawn — the stencil pass (draw_portals)
+        renders the actual portal view, and we don't want editor-only visuals
+        cluttering the immersive view.
+
+        In editor mode: the stencil pass is skipped, but this outline is drawn
+        so portals are never invisible and remain selectable.
         """
         if Portal is None or 'simple' not in self.shaders:
+            return
+
+        # Skip all portal outlines and angle indicators during play mode
+        if play_mode:
             return
 
         portal_things = [t for t in things if isinstance(t, Portal)]
