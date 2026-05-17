@@ -2137,6 +2137,13 @@ class MainWindow(QMainWindow):
                 self.update_all_ui()
                 return
 
+            elif event.key() == Qt.Key_F12:
+                if getattr(self, 'is_kiosk_mode', False):
+                    self.exit_kiosk_mode(keep_play_mode=True)
+                else:
+                    self.enter_kiosk_mode()
+                return
+
             elif event.key() == Qt.Key_E:
                 if hasattr(self.view_3d, 'game_state') and self.view_3d.game_state:
                     self.view_3d.game_state.set_use_key_pressed()
@@ -2699,8 +2706,9 @@ class MainWindow(QMainWindow):
         # Go fullscreen
         self.showFullScreen()
 
-        # Launch play mode
-        self.enter_play_mode()
+        # Launch play mode ONLY if not already in play mode
+        if not self.view_3d.play_mode:
+            self.enter_play_mode()
 
     def exit_kiosk_mode(self, keep_play_mode=False, confirm=True):
         """Restore editor UI and exit play mode.
@@ -2709,7 +2717,7 @@ class MainWindow(QMainWindow):
             keep_play_mode: If True, stay in play mode (F12 toggle).
                             If False, also exit play mode (ESC quit).
             confirm: If True, show a "Quit? Are you sure?" dialog before
-                     exiting. Only applies when keep_play_mode=False (ESC flow).
+                    exiting. Only applies when keep_play_mode=False (ESC flow).
         """
         # Show confirmation dialog when quitting via ESC
         if confirm and not keep_play_mode:
@@ -2729,45 +2737,41 @@ class MainWindow(QMainWindow):
         if not keep_play_mode and hasattr(self.view_3d, 'play_mode') and self.view_3d.play_mode:
             self.view_3d.toggle_play_mode(None, None)
 
-        # Exit fullscreen
+        # Exit fullscreen FIRST - critical for proper geometry restoration
         self.showNormal()
 
-        # Restore menu bar and status bar
+        # Restore the complete layout state (geometry, docks, toolbars)
+        # This must happen BEFORE manual visibility fixes so restoreState()
+        # has full control over dock positions and toolbar states
+        self.load_layout()
+
+        # restoreState()/restoreGeometry() handle docks and toolbars,
+        # but menu bar and status bar visibility are NOT saved in the state
         if self.menuBar():
             self.menuBar().setVisible(True)
         self.statusBar().setVisible(True)
 
-        # Restore toolbars
-        for toolbar in self.findChildren(QToolBar):
-            toolbar.setVisible(True)
-
-        # Restore all dock widgets
-        for dock in self.findChildren(QDockWidget):
-            dock.setVisible(True)
-
-        # Restore play button
+        # Play button is a floating widget, not part of QMainWindow state
         if hasattr(self, 'play_button'):
             self.play_button.setVisible(True)
 
-        # Restore saved layout
-        self.load_layout()
-        self.update_all_ui()
-
-        # FIX: Update play button and mode label to reflect editor state
-        self.update_play_button_color()
-        if hasattr(self, 'mode_label'):
-            self.mode_label.setText("EDITOR MODE")
-            self.mode_label.setStyleSheet("""
-                QLabel {
-                    background-color: #333333;
-                    color: #888888;
-                    padding: 5px 10px;
-                    border-radius: 4px;
-                    font-weight: bold;
-                    font-size: 14px;
-                    border: 1px solid #444;
-                }
-            """)
+        # Update play button and mode label — only reset to editor state if
+        # we are actually leaving play mode (not an F12 fullscreen toggle).
+        if not keep_play_mode:
+            self.update_play_button_color()
+            if hasattr(self, 'mode_label'):
+                self.mode_label.setText("EDITOR MODE")
+                self.mode_label.setStyleSheet("""
+                    QLabel {
+                        background-color: #333333;
+                        color: #888888;
+                        padding: 5px 10px;
+                        border-radius: 4px;
+                        font-weight: bold;
+                        font-size: 14px;
+                        border: 1px solid #444;
+                    }
+                """)
 
         # If keeping play mode, recapture mouse for seamless FPS control
         if keep_play_mode and self.view_3d.play_mode:
