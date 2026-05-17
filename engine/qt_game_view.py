@@ -550,8 +550,10 @@ class QtGameView(QOpenGLWidget):
                         lines.append({'src': thing.pos, 'dst': dst, 'color': color})
 
         # --- 2. PathNode → next_node chains ---
+        # Build node_lookup here (outside the PathNode guard) so section 4
+        # (teleporters) can reuse it without a second O(n) scan.
+        node_lookup = {}
         if PathNode is not None:
-            node_lookup = {}
             for t in self.editor.state.things:
                 if isinstance(t, PathNode):
                     n = t.properties.get('name', '') or ''
@@ -582,17 +584,11 @@ class QtGameView(QOpenGLWidget):
                     lines.append({'src': t.pos, 'dst': dst, 'color': COLOR_PATROL})
 
         # --- 4. Teleporter connections (Action=teleport with target_node) ---
+        # FIX: Removed duplicate 'from editor.things import PathNode' import and
+        # duplicate node_lookup rebuild. PathNode is already imported at the top
+        # of this method and node_lookup was built in section 2 above.
         COLOR_TELEPORT = (0.78, 0.39, 1.0)  # Purple-ish (RGB 200,100,255)
-        try:
-            from editor.things import PathNode
-            # Build node lookup by name
-            node_lookup = {}
-            for t in self.editor.state.things:
-                if isinstance(t, PathNode):
-                    n = t.properties.get('name', '') or ''
-                    if n:
-                        node_lookup[n] = t
-
+        if PathNode is not None:
             for brush in self.editor.state.brushes:
                 if not brush.get('is_trigger', False):
                     continue
@@ -608,8 +604,6 @@ class QtGameView(QOpenGLWidget):
                         'dst': dst_node.pos,
                         'color': COLOR_TELEPORT
                     })
-        except ImportError:
-            pass
 
         return lines
 
@@ -2078,9 +2072,3 @@ class QtGameView(QOpenGLWidget):
             self.debug_console_window.command_input.setText(cmd)
             self.debug_console_window._on_command_entered()
         self._close_console_overlay()
-
-
-
-
-
-
