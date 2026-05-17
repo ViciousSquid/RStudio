@@ -18,8 +18,11 @@
 ### `main_window.py`
 "Main editor window – docks all UI components, menu, toolbar, play-mode toggle, toast notifications."
 
-### `obj_loader.py`
-OBJ file parser (shared between editor & engine).
+### `package_dialog.py`
+Package export metadata dialog: title, author, version, description, banner image, dependency preview
+
+### `package_exporter.py`
+`.fiopak` assembler: recursive map dependency resolution, asset crawling, ZIP archive generation with manifest
 
 ### `property_editor.py`
 "Per-object property panel (position, size, shader, colour, I/O, etc.)."
