@@ -1183,6 +1183,12 @@ class LogicThread(threading.Thread):
                 self._update_mover_path(i, brush, delta)
                 continue
 
+            if brush.get('rotate', False):
+                speed = brush.get('speed', 45.0)          # degrees per second
+                current = brush.get('_rot_angle', 0.0)
+                brush['_rot_angle'] = (current + speed * delta) % 360.0
+
+
             if i not in self.mover_states:
                 if 'original_pos' not in brush:
                     brush['original_pos'] = list(brush['pos'])

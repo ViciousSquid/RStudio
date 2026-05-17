@@ -567,6 +567,20 @@ class Renderer:
             uniforms.preload([f'lights[{i}].position', f'lights[{i}].color', 
                             f'lights[{i}].intensity', f'lights[{i}].radius'])
 
+    def _brush_model_matrix(self, brush):
+        """Build model matrix for a brush, applying rotation if _rot_angle is set."""
+        pos = brush.get('pos', [0, 0, 0])
+        size = brush.get('size', [64, 64, 64])
+        mat = glm.translate(self._identity_mat4, glm.vec3(*pos))
+        angle = brush.get('_rot_angle')
+        if angle:
+            axis_raw = brush.get('rot_axis', [0, 1, 0])
+            axis = glm.vec3(*axis_raw)
+            if glm.length(axis) > 0.001:
+                mat = glm.rotate(mat, glm.radians(float(angle)), glm.normalize(axis))
+        mat = glm.scale(mat, glm.vec3(*size))
+        return mat
+
     def _compute_normal_matrix(self, model_matrix):
         """Pre-compute normal matrix on CPU to avoid expensive inverse() in shader."""
         # Extract the upper-left 3x3 and compute transpose of inverse
@@ -1342,9 +1356,7 @@ class Renderer:
             self.render_stats.visible_tris += 12
 
             # Build model matrix
-            pos = brush.get('pos', [0, 0, 0])
-            size = brush.get('size', [64, 64, 64])
-            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
+            model_matrix = self._brush_model_matrix(brush)
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
 
             # Upload pre-computed normal matrix
@@ -1440,7 +1452,7 @@ class Renderer:
 
                 pos = brush.get('pos', [0, 0, 0])
                 size = brush.get('size', [64, 64, 64])
-                model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
+                model_matrix = self._brush_model_matrix(brush)
                 gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
 
                 if normal_mat_loc > 0:
