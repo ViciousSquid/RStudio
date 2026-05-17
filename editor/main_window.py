@@ -1675,7 +1675,10 @@ class MainWindow(QMainWindow):
         if not metadata:
             return
         
-        metadata['map_path'] = current_map
+        # Store map path relative to package root for portability
+        abs_map = os.path.abspath(current_map)
+        rel_map = os.path.relpath(abs_map, self.root_dir)
+        metadata['map_path'] = rel_map.replace('\\', '/')
 
         # Ask user where to save
         from PyQt5.QtWidgets import QFileDialog
