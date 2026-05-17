@@ -27,7 +27,7 @@
 ### Logic & Gameplay
 - Entity I/O system (Half-Life 2–style)
 - Visual scripting (25 examples)
-- NPCs/monsters (WIP)
+- NPCs/monsters
 
 ### Rendering
 - Real-time moving lights with (buggy) stencil shadows
