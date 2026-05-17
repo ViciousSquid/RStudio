@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (
     QDialog, QCheckBox, QVBoxLayout, QDialogButtonBox, QGroupBox, QHBoxLayout,
     QLabel, QSpinBox, QPushButton, QTabWidget, QWidget, QFormLayout, QSlider,
-    QMessageBox, QKeySequenceEdit, QFrame, QGridLayout
+    QMessageBox, QKeySequenceEdit, QFrame, QGridLayout, QComboBox
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QKeySequence
@@ -473,6 +473,15 @@ class SettingsWindow(QDialog):
         res_group.setLayout(res_layout)
         layout.addWidget(res_group)
 
+        # ── NEW: Launch packages in editor mode ─────────────────────────
+        self.launch_in_editor_checkbox = QCheckBox("Launch packages in editor mode")
+        self.launch_in_editor_checkbox.setToolTip(
+            "When enabled, opening a .gamepackage loads the map in the editor\n"
+            "instead of launching kiosk mode."
+        )
+        layout.addWidget(self.launch_in_editor_checkbox)
+        # ───────────────────────────────────────────────────────────────
+
         layout.addStretch()
 
     def _apply_stylesheet(self):
@@ -570,6 +579,9 @@ class SettingsWindow(QDialog):
             self.kiosk_mode_combo.setCurrentIndex(idx)
         self.kiosk_res_w.setValue(self.config.getint('Kiosk', 'res_width', fallback=1280))
         self.kiosk_res_h.setValue(self.config.getint('Kiosk', 'res_height', fallback=720))
+        self.launch_in_editor_checkbox.setChecked(
+            self.config.getboolean('Kiosk', 'launch_in_editor', fallback=False)
+        )
 
 
     def accept(self):
@@ -681,6 +693,8 @@ class SettingsWindow(QDialog):
         self.config.set('Kiosk', 'window_mode', self.kiosk_mode_combo.currentText())
         self.config.set('Kiosk', 'res_width', str(self.kiosk_res_w.value()))
         self.config.set('Kiosk', 'res_height', str(self.kiosk_res_h.value()))
+        self.config.set('Kiosk', 'launch_in_editor',
+                        str(self.launch_in_editor_checkbox.isChecked()))
 
     def _restart_application(self):
         """Restart the application."""

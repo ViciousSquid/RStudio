@@ -206,6 +206,7 @@ class Ui_MainWindow(object):
         MainWindow.file_menu.addSeparator()
         MainWindow.file_menu.addAction(QAction('Settings...', MainWindow, triggered=MainWindow.show_settings_dialog))
         MainWindow.file_menu.addSeparator()
+        MainWindow.file_menu.addAction(QAction('Play Game Package...', MainWindow, triggered=MainWindow.play_game_package))
         #MainWindow.file_menu.addAction(QAction('Exit', MainWindow, shortcut='Ctrl+Q', triggered=MainWindow.close))
 
         MainWindow.undo_action = QAction(QIcon("assets/b_undo.png"), 'Undo', MainWindow)

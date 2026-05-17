@@ -33,66 +33,100 @@ class PackageExporter:
             'models': set(),
             'sounds': set()
         }
-        self._errors: List[str] = []
+        self.errors: List[str] = []
     
-    def export(self, output_path: str, metadata: dict, 
-               progress_parent=None) -> Tuple[bool, List[str]]:
-        """
-        Execute full export pipeline.
-        
-        Args:
-            output_path: Destination .gamepackage file path
-            metadata: Dict from PackageMetadataDialog (title, author, etc.)
-            progress_parent: QWidget for progress dialog parenting
-            
-        Returns:
-            (success: bool, error_messages: list)
-        """
-        # Phase 1: Recursive asset crawling
-        progress = QProgressDialog("Analyzing campaign structure...", "Cancel", 0, 100, progress_parent)
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setValue(5)
-        QApplication.processEvents()
-        
-        start_map = metadata.get('start_map', 'maps/level_1.json')
+    def export(self, output_path, metadata, parent_widget=None):
+        """Export the current project as a .gamepackage zip."""
+        import zipfile
+        import json
+        import os
 
-        # Normalize start_map to a relative path within root_dir
-        # start_map may be an absolute filesystem path (from self.file_path)
-        # but the package expects paths relative to root_dir like 'maps/level_1.json'
-        if os.path.isabs(start_map):
-            # Convert absolute path to relative path under root_dir
-            start_map = os.path.relpath(start_map, self.root_dir)
-        # Ensure forward slashes for ZIP consistency
-        start_map = start_map.replace("\\", "/")
+        # ── 1. Collect ALL map dependencies recursively ──────────────────
+        start_map = metadata.get('map_path')
+        all_maps = set()
+        if start_map and os.path.exists(start_map):
+            all_maps = self._collect_map_dependencies(start_map)
+        else:
+            # Fallback: just the current map if no path was provided
+            if self.editor_state.file_path and os.path.exists(self.editor_state.file_path):
+                all_maps.add(os.path.abspath(self.editor_state.file_path))
 
-        # CRITICAL: Update metadata so manifest.json gets the relative path too
-        metadata['start_map'] = start_map
+        # ── 2. Gather referenced assets from ALL maps ────────────────────
+        referenced_assets = set()
 
-        self._crawl_campaign(start_map)
-        
-        if progress.wasCanceled():
-            return False, ["Export cancelled by user."]
-        
-        progress.setValue(30)
-        progress.setLabelText("Collecting asset dependencies...")
-        QApplication.processEvents()
-        
-        # Phase 2: Resolve all asset paths to absolute filesystem locations
-        asset_manifest = self._resolve_asset_paths()
-        
-        progress.setValue(50)
-        progress.setLabelText("Building package archive...")
-        QApplication.processEvents()
-        
-        # Phase 3: Assemble ZIP with manifest and all assets
-        success = self._assemble_package(output_path, metadata, asset_manifest, progress)
-        
-        progress.setValue(100)
-        
-        if success and not self._errors:
-            return True, []
-        return success, self._errors
+        for map_file in all_maps:
+            try:
+                with open(map_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except Exception as e:
+                self.errors.append(f"Could not read {map_file}: {e}")
+                continue
+
+            # Scan brushes for textures
+            for brush in data.get('brushes', []):
+                textures = brush.get('textures', {})
+                for face, tex in textures.items():
+                    if tex and isinstance(tex, str):
+                        referenced_assets.add(tex)
+
+            # Scan things for model paths, sprites, sounds, etc.
+            for thing in data.get('things', []):
+                if not isinstance(thing, dict):
+                    continue
+                props = thing.get('properties', {})
+                for key in ('model_path', 'sprite', 'sound', 'image', 'texture', 'material'):
+                    val = props.get(key)
+                    if val and isinstance(val, str):
+                        referenced_assets.add(val)
+
+        # ── 3. Build the .gamepackage zip ──────────────────────────────
+        try:
+            with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+
+                # --- Write metadata.json ---
+                zf.writestr('metadata.json', json.dumps(metadata, indent=2))
+
+                # --- Write every discovered map (preserving folder structure) ---
+                for map_file in all_maps:
+                    arcname = os.path.relpath(map_file, self.root_dir)
+                    zf.write(map_file, arcname)
+
+                # --- Write referenced assets (textures, models, sounds, etc.) ---
+                assets_dir = os.path.join(self.root_dir, 'assets')
+                for asset_name in referenced_assets:
+                    # Try multiple locations: assets/textures, assets/models, etc.
+                    candidates = []
+                    if os.path.isabs(asset_name):
+                        candidates.append(asset_name)
+                    else:
+                        for sub in ('textures', 'models', 'sounds', 'sprites', 'materials'):
+                            candidates.append(os.path.join(assets_dir, sub, asset_name))
+                        candidates.append(os.path.join(assets_dir, asset_name))
+
+                    found = False
+                    for src_path in candidates:
+                        if os.path.isfile(src_path):
+                            arcname = os.path.relpath(src_path, self.root_dir)
+                            zf.write(src_path, arcname)
+                            found = True
+                            break
+
+                    if not found:
+                        self.errors.append(f"Missing asset: {asset_name}")
+
+                # --- Write any extra package files (scripts, configs, etc.) ---
+                # (Add here if your engine needs specific files bundled)
+
+        except Exception as e:
+            self.errors.append(f"Failed to create package: {e}")
+            return False, self.errors
+
+        # ── 4. Report results ────────────────────────────────────────────
+        if self.errors:
+            # Warnings about missing assets, but package was still created
+            return True, self.errors
+
+        return True, []
     
     def _crawl_campaign(self, start_map_path: str) -> None:
         """
@@ -111,14 +145,14 @@ class PackageExporter:
             # Load map JSON
             map_full_path = os.path.join(self.root_dir, map_rel_path)
             if not os.path.exists(map_full_path):
-                self._errors.append(f"Map file not found: {map_rel_path}")
+                self.errors.append(f"Map file not found: {map_rel_path}")
                 continue
             
             try:
                 with open(map_full_path, 'r', encoding='utf-8') as f:
                     map_data = json.load(f)
             except (json.JSONDecodeError, IOError) as e:
-                self._errors.append(f"Failed to parse {map_rel_path}: {e}")
+                self.errors.append(f"Failed to parse {map_rel_path}: {e}")
                 continue
             
             # Extract assets from this map
@@ -135,6 +169,76 @@ class PackageExporter:
                         if not target.endswith('.json'):
                             target += '.json'
                         queue.append(target)
+
+
+    def _collect_map_dependencies(self, map_path, collected=None):
+        """Recursively find all .json map files referenced by entities."""
+        import json
+        import os
+
+        if collected is None:
+            collected = set()
+
+        abs_path = os.path.abspath(map_path)
+        if abs_path in collected or not os.path.isfile(abs_path):
+            return collected
+
+        collected.add(abs_path)
+
+        try:
+            with open(abs_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            self.errors.append(f"Could not scan {map_path}: {e}")
+            return collected
+
+        # Entities may be stored in 'things' or 'brushes'
+        all_entities = data.get('things', []) + data.get('brushes', [])
+
+        for entity in all_entities:
+            if not isinstance(entity, dict):
+                continue
+
+            # Merge top-level keys with nested 'properties' dict
+            props = dict(entity)
+            if 'properties' in entity and isinstance(entity['properties'], dict):
+                props.update(entity['properties'])
+
+            # Look for any property that references another map
+            target_map = None
+            for key in ('target_map', 'map', 'next_map', 'next_level',
+                        'target_level', 'level_name', 'map_name'):
+                if key in props and isinstance(props[key], str):
+                    val = props[key].strip()
+                    if val:
+                        target_map = val
+                        break
+
+            if not target_map:
+                continue
+
+            # Resolve relative map path to absolute
+            candidates = []
+            if os.path.isabs(target_map):
+                candidates.append(target_map)
+            else:
+                candidates.extend([
+                    os.path.join(self.root_dir, 'maps', target_map),
+                    os.path.join(self.root_dir, target_map),
+                    os.path.join(os.path.dirname(abs_path), target_map),
+                ])
+
+            for candidate in candidates:
+                if os.path.isfile(candidate):
+                    self._collect_map_dependencies(candidate, collected)
+                    break
+            else:
+                self.errors.append(
+                    f"Missing dependency: map '{target_map}' "
+                    f"referenced in {os.path.basename(abs_path)}"
+                )
+
+        return collected
     
     def _extract_map_assets(self, map_data: dict) -> None:
         """Scan map data structure for all asset references."""
@@ -197,7 +301,7 @@ class PackageExporter:
                     if os.path.exists(alt_path):
                         full_path = alt_path
                     else:
-                        self._errors.append(f"Asset not found: {rel_path}")
+                        self.errors.append(f"Asset not found: {rel_path}")
                         continue
                 
                 manifest['assets'][asset_type].append((archive_path, full_path))
@@ -240,5 +344,5 @@ class PackageExporter:
             return True
             
         except (IOError, OSError, zipfile.BadZipFile) as e:
-            self._errors.append(f"Package assembly failed: {e}")
+            self.errors.append(f"Package assembly failed: {e}")
             return False

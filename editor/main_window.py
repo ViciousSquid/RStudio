@@ -12,7 +12,7 @@ import time
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QMessageBox, QFileDialog, QDialog, QWidget, QLabel, QVBoxLayout,
-    QGraphicsOpacityEffect, QInputDialog, QColorDialog, QProgressDialog, QAction
+    QGraphicsOpacityEffect, QInputDialog, QColorDialog, QProgressDialog, QAction, QToolBar, QDockWidget
 )
 from PyQt5.QtWidgets import QShortcut
 from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, QRect, QPoint, pyqtSignal
@@ -1460,7 +1460,7 @@ class MainWindow(QMainWindow):
         # Update play button color
         self.update_play_button_color()
         
-        self.ui.notification_label.setText("PRESS ESC TO EXIT PLAY MODE")
+        self.ui.notification_label.setText("ESC = EXIT PLAY MODE  |  F12 = FULLSCREEN")
 
 
     def show_generate_tilemap_dialog(self):
@@ -1628,43 +1628,122 @@ class MainWindow(QMainWindow):
         self.file_menu.addAction(export_action)
 
     def export_game_package(self):
-        """Trigger the full package export workflow."""
+        """Trigger the full package export workflow — embeds in Properties dock."""
         from editor.package_dialog import PackageMetadataDialog
         from editor.package_exporter import PackageExporter
 
         # Determine current map path (fallback if unsaved)
         current_map = self.file_path or "maps/level_1.json"
 
-        # 1) Show metadata collection dialog
-        dialog = PackageMetadataDialog(current_map, self)
-        if dialog.exec_() != QDialog.Accepted:
+        # ── Swap Properties tab widget for export dialog ──────────────────
+        self._original_properties_widget = self.properties_tab_widget.currentWidget()
+        
+        self._export_dialog = PackageMetadataDialog(
+            current_map,
+            parent=self.properties_tab_widget,  # Parent to the tab widget itself
+            close_callback=self._restore_properties_tabs
+        )
+        
+        # Clear the tab widget and add the dialog as the only widget
+        # We temporarily reparent the dialog to cover the tabs
+        self.properties_tab_widget.setParent(None)  # Detach from dock
+        
+        # Create a container that fills the dock
+        self._export_container = QWidget()
+        self._export_container.setObjectName("ExportContainer")
+        container_layout = QVBoxLayout(self._export_container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.addWidget(self._export_dialog)
+        
+        # Replace the tab widget in the dock
+        self.properties_dock.setWidget(self._export_container)
+        
+        # Show the dialog
+        self._export_dialog.show()
+        
+        # Replace the export button connection.
+        # The dialog's default _on_export only validates and calls accept() —
+        # it does NOT create the package. We override with actual export logic.
+        self._export_dialog.export_btn.clicked.disconnect()
+        self._export_dialog.export_btn.clicked.connect(
+            lambda checked: self._run_export(self._export_dialog, current_map)
+        )
+
+    def _run_export(self, dialog, current_map):
+        """Execute the export after dialog is accepted."""
+        metadata = dialog.build_metadata()
+        if not metadata:
             return
+        
+        metadata['map_path'] = current_map
 
-        metadata = dialog.get_metadata()
+        # Ask user where to save
+        from PyQt5.QtWidgets import QFileDialog
+        # Ensure packages directory exists
+        packages_dir = os.path.join(self.root_dir, "packages")
+        if not os.path.exists(packages_dir):
+            os.makedirs(packages_dir)
 
-        # 2) Ask user where to save the .gamepackage file
         output_path, _ = QFileDialog.getSaveFileName(
-            self,
+            self._export_dialog,
             "Export Game Package",
-            f"{metadata['title']}.gamepackage",
+            os.path.join(packages_dir, f"{metadata['title']}.gamepackage"),
             "Game Packages (*.gamepackage)"
         )
         if not output_path:
             return
 
-        # 3) Run the export pipeline
+        # Run the export pipeline
+        from editor.package_exporter import PackageExporter
         exporter = PackageExporter(self.state, self.root_dir)
+        
+        # Pre-scan dependencies to show info in the dialog
+        all_maps = exporter._collect_map_dependencies(current_map)
+        dialog.set_dependency_info(len(all_maps), 0, exporter.errors)
+        QApplication.processEvents()
+        
         success, errors = exporter.export(output_path, metadata, self)
 
-        # 4) Notify user
+        # Update dialog with results
         if success:
+            dialog.dep_label.setStyleSheet("color: #4CAF50; font-size: 12px; padding: 4px;")
+            dialog.dep_label.setText(
+                f"Export successful!\n"
+                f"Maps: {len(all_maps)}\n"
+                f"Saved to: {os.path.basename(output_path)}"
+            )
+            dialog.export_btn.setText("Done")
+            dialog.export_btn.setEnabled(False)
             self.show_toast(f"Package exported: {os.path.basename(output_path)}")
         else:
+            dialog.dep_label.setStyleSheet("color: #f44336; font-size: 12px; padding: 4px;")
+            dialog.dep_label.setText("Export failed:\n" + "\n".join(errors[:5]))
             QMessageBox.critical(
-                self,
+                self._export_dialog,
                 "Export Failed",
                 "Errors occurred during export:\n\n" + "\n".join(errors)
             )
+
+    def _restore_properties_tabs(self):
+        """Restore the Properties / Debug Console tab widget."""
+        # Remove the export container
+        if hasattr(self, '_export_container') and self._export_container:
+            self._export_container.setParent(None)
+            self._export_container.deleteLater()
+            self._export_container = None
+        
+        # Restore the original tab widget to the dock
+        self.properties_dock.setWidget(self.properties_tab_widget)
+        self.properties_tab_widget.setParent(self.properties_dock)
+        self.properties_tab_widget.show()
+        
+        # Restore previous tab if we tracked it
+        if hasattr(self, '_original_properties_widget') and self._original_properties_widget:
+            idx = self.properties_tab_widget.indexOf(self._original_properties_widget)
+            if idx >= 0:
+                self.properties_tab_widget.setCurrentIndex(idx)
+        
+        self._export_dialog = None
 
     def new_map(self):
         # Check for unsaved changes
@@ -2463,6 +2542,182 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage("Layout reset to default.", 2000)
 
+
+    def play_game_package(self):
+        """Import a .gamepackage file and launch it in kiosk mode."""
+        import zipfile
+        import tempfile
+        import shutil
+
+        # Check for unsaved changes first
+        if not self.check_unsaved_changes():
+            return
+
+        # Default to packages/ folder, fallback to root dir if empty
+        packages_dir = os.path.join(self.root_dir, "packages")
+        start_dir = packages_dir if os.path.exists(packages_dir) else self.root_dir
+
+        filePath, _ = QFileDialog.getOpenFileName(
+            self, "Select Game Package", start_dir, "Game Packages (*.gamepackage)"
+        )
+        if not filePath:
+            return
+
+        temp_dir = None
+        try:
+            if not zipfile.is_zipfile(filePath):
+                QMessageBox.critical(self, "Error", "Selected file is not a valid game package.")
+                return
+
+            # Extract package to temp directory
+            temp_dir = tempfile.mkdtemp(prefix="fio_package_")
+            with zipfile.ZipFile(filePath, 'r') as zf:
+                zf.extractall(temp_dir)
+
+            # Find the map JSON inside the package
+            map_path = self._find_map_in_package(temp_dir)
+            if not map_path:
+                QMessageBox.critical(self, "Error", "No map file found in game package.")
+                return
+
+            # Try to configure ResourceManager for package assets
+            try:
+                from engine.resource_manager import ResourceManager
+                rm = ResourceManager()
+                if hasattr(rm, 'set_package_root'):
+                    rm.set_package_root(temp_dir)
+                elif hasattr(rm, 'load_package'):
+                    rm.load_package(filePath)
+            except Exception as e:
+                print(f"[Package] ResourceManager setup warning: {e}")
+
+            # Load level data
+            with open(map_path, 'r') as f:
+                level_data = json.load(f)
+
+            # Clear current scene and load package map
+            self.state.clear_scene()
+            self._clear_terrain()
+            self.state.load_from_data(level_data)
+
+            # Store temp dir for cleanup on application close
+            self._package_temp_dir = temp_dir
+            temp_dir = None  # Prevent cleanup in finally block
+
+            # Update UI state
+            self.file_path = filePath
+            self.unsaved_changes = False
+            self.update_title()
+            self.set_selected_object(None)
+            self.update_all_ui()
+
+            # Check if user wants editor mode instead of kiosk
+            launch_in_editor = self.config.getboolean('Kiosk', 'launch_in_editor', fallback=False)
+            if launch_in_editor:
+                # Just load the map in the editor — no kiosk, no play mode
+                self.show_toast(f"Loaded package: {os.path.basename(filePath)}")
+            else:
+                # Hide editor chrome and launch play mode
+                self.enter_kiosk_mode()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load game package:\n{e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            if temp_dir and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def _find_map_in_package(self, root_dir):
+        """Find the first suitable .json map file in an extracted package."""
+        best_match = None
+        fallback = None
+        for root, dirs, files in os.walk(root_dir):
+            for f in files:
+                if f.endswith('.json'):
+                    filepath = os.path.join(root, f)
+                    if fallback is None:
+                        fallback = filepath
+                    # Prefer files inside a 'maps' folder or with 'level' in the name
+                    if 'maps' in root.lower() or 'level' in f.lower():
+                        best_match = filepath
+                        return best_match
+        return best_match or fallback
+
+    def enter_kiosk_mode(self):
+        """Hide all editor UI and launch play mode fullscreen."""
+        self.is_kiosk_mode = True
+
+        # Save layout before hiding
+        self.save_layout()
+
+        # Hide menu bar and status bar
+        if self.menuBar():
+            self.menuBar().setVisible(False)
+        self.statusBar().setVisible(False)
+
+        # Hide all toolbars
+        for toolbar in self.findChildren(QToolBar):
+            toolbar.setVisible(False)
+
+        # Hide all docks except the 3D view
+        for dock in self.findChildren(QDockWidget):
+            if dock is not self.view_3d_dock:
+                dock.setVisible(False)
+
+        # Ensure 3D view is visible
+        self.view_3d_dock.setVisible(True)
+
+        # Hide the floating play button
+        if hasattr(self, 'play_button'):
+            self.play_button.setVisible(False)
+
+        # Go fullscreen
+        self.showFullScreen()
+
+        # Launch play mode
+        self.enter_play_mode()
+
+    def exit_kiosk_mode(self, keep_play_mode=False):
+        """Restore editor UI and exit play mode."""
+        self.is_kiosk_mode = False
+
+        # Exit play mode only if not keeping it (F12 toggle vs Escape)
+        if not keep_play_mode and hasattr(self.view_3d, 'play_mode') and self.view_3d.play_mode:
+            self.view_3d.toggle_play_mode(None, None)
+
+        # Exit fullscreen
+        self.showNormal()
+
+        # Restore menu bar and status bar
+        if self.menuBar():
+            self.menuBar().setVisible(True)
+        self.statusBar().setVisible(True)
+
+        # Restore toolbars
+        for toolbar in self.findChildren(QToolBar):
+            toolbar.setVisible(True)
+
+        # Restore all dock widgets
+        for dock in self.findChildren(QDockWidget):
+            dock.setVisible(True)
+
+        # Restore play button
+        if hasattr(self, 'play_button'):
+            self.play_button.setVisible(True)
+
+        # Restore saved layout
+        self.load_layout()
+        self.update_all_ui()
+
+        # If keeping play mode, recapture mouse for seamless FPS control
+        if keep_play_mode and self.view_3d.play_mode:
+            center_pos = self.view_3d.mapToGlobal(self.view_3d.rect().center())
+            QCursor.setPos(center_pos)
+            self.view_3d.last_mouse_pos = self.view_3d.mapFromGlobal(center_pos)
+            QApplication.setOverrideCursor(Qt.BlankCursor)
+            self.view_3d.setFocus()
+
     # =========================================================================
     # LOGIC GRAPH / WIZARD
     # =========================================================================
@@ -2581,6 +2836,11 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'autosave_timer'):
                 self.autosave_timer.stop()
 
+            # Cleanup extracted package temp dir
+            if hasattr(self, '_package_temp_dir') and self._package_temp_dir:
+                import shutil
+                shutil.rmtree(self._package_temp_dir, ignore_errors=True)
+
             try:
                 self.save_layout()
             except Exception as e:
@@ -2595,6 +2855,5 @@ class MainWindow(QMainWindow):
             import traceback
             traceback.print_exc()
             event.accept()
-
 
 
