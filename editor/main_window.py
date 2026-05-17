@@ -963,6 +963,17 @@ class MainWindow(QMainWindow):
         if not is_mover and not is_door:
             return
 
+        # ── Rotate preview ───────────────────────────────────────────────
+        if is_mover and brush.get('rotate', False):
+            self.preview_data = {
+                'obj': brush,
+                'is_rotate': True,
+                'speed': brush.get('speed', 45.0),
+                'angle': brush.get('_rot_angle', 0.0),
+            }
+            self.preview_timer.start(16)
+            return
+
         # Check for path-following preview
         path_target = brush.get('path_target', '')
         if path_target:
@@ -1057,8 +1068,9 @@ class MainWindow(QMainWindow):
         if self.preview_timer.isActive():
             self.preview_timer.stop()
             if self.preview_data and self.preview_data.get('obj'):
-                if self.preview_data.get('is_path'):
-                    # Reset to the first node's position (or original)
+                if self.preview_data.get('is_rotate'):
+                    self.preview_data['obj'].pop('_rot_angle', None)
+                elif self.preview_data.get('is_path'):
                     chain = self.preview_data.get('chain', [])
                     if chain:
                         self.preview_data['obj']['pos'] = list(chain[0].pos)
@@ -1068,7 +1080,7 @@ class MainWindow(QMainWindow):
                     self.preview_data['obj']['pos'] = self.preview_data['original_pos']
                 self.preview_data = {}
                 self.update_views()
-                
+
                 # Reset buttons
                 m_btn = self.property_editor._widgets.get('mover_preview_btn')
                 if m_btn:
@@ -1090,6 +1102,12 @@ class MainWindow(QMainWindow):
         dt = 0.016  # ~60 FPS
         data = self.preview_data
         brush = data['obj']
+
+        if data.get('is_rotate'):
+            data['angle'] = (data['angle'] + data['speed'] * dt) % 360.0
+            brush['_rot_angle'] = data['angle']
+            self.update_views()
+            return
 
         # ------------------------------------------------------------------
         #  Path‑following preview (when is_path is True)

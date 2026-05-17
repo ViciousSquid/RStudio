@@ -624,6 +624,7 @@ class PropertyEditor(QWidget):
         # Speed
         speed_input = QLineEdit(str(brush.get('speed', 64.0)))
         speed_input.editingFinished.connect(lambda: self.update_object_prop('speed', float(speed_input.text()) if speed_input.text() else 64.0))
+        speed_input.setToolTip("Units/sec for translation mode, or degrees/sec for Rotate mode")
         form.addRow("Speed:", speed_input)
         self._widgets['speed_input'] = speed_input
         
@@ -750,7 +751,68 @@ class PropertyEditor(QWidget):
         start_on_cb.toggled.connect(lambda checked: self.update_object_prop('start_on', checked))
         options_layout.addWidget(start_on_cb)
         self._widgets['start_on_cb'] = start_on_cb
-        
+
+        # ── Rotate mode ──────────────────────────────────────────────────
+        rotate_cb = QCheckBox("Rotate continuously (func_rotating)")
+        rotate_cb.setStyleSheet(self._checkbox_style())
+        rotate_cb.setChecked(brush.get('rotate', False))
+        options_layout.addWidget(rotate_cb)
+        self._widgets['rotate_cb'] = rotate_cb
+
+        rot_axis_widget = QWidget()
+        rot_axis_layout = QHBoxLayout(rot_axis_widget)
+        rot_axis_layout.setContentsMargins(16, 0, 0, 4)
+        rot_axis_layout.setSpacing(4)
+        rot_axis = brush.get('rot_axis', [0, 1, 0])
+        rot_ax = QLineEdit(str(rot_axis[0])); rot_ax.setFixedWidth(45)
+        rot_ay = QLineEdit(str(rot_axis[1])); rot_ay.setFixedWidth(45)
+        rot_az = QLineEdit(str(rot_axis[2])); rot_az.setFixedWidth(45)
+
+        def update_rot_axis():
+            try:
+                self.update_object_prop('rot_axis', [float(rot_ax.text()), float(rot_ay.text()), float(rot_az.text())])
+            except ValueError:
+                pass
+
+        rot_ax.editingFinished.connect(update_rot_axis)
+        rot_ay.editingFinished.connect(update_rot_axis)
+        rot_az.editingFinished.connect(update_rot_axis)
+
+        rot_axis_layout.addWidget(QLabel("Axis  X:")); rot_axis_layout.addWidget(rot_ax)
+        rot_axis_layout.addWidget(QLabel("Y:"));       rot_axis_layout.addWidget(rot_ay)
+        rot_axis_layout.addWidget(QLabel("Z:"));       rot_axis_layout.addWidget(rot_az)
+        rot_axis_layout.addStretch()
+        options_layout.addWidget(rot_axis_widget)
+        self._widgets['rot_axis_widget'] = rot_axis_widget
+        self._widgets['rot_ax'] = rot_ax
+        self._widgets['rot_ay'] = rot_ay
+        self._widgets['rot_az'] = rot_az
+
+        def on_rotate_changed(checked):
+            self.update_object_prop('rotate', checked)
+            rot_axis_widget.setVisible(checked)
+            if checked:
+                # Zero out direction so the mover doesn't also translate
+                self.update_object_prop('direction', [0, 0, 0])
+                for k, v in (('dir_x', '0'), ('dir_y', '0'), ('dir_z', '0')):
+                    if k in self._widgets:
+                        self._widgets[k].setText(v)
+            else:
+                # Restore default mover direction
+                self.update_object_prop('direction', [0, 1.0, 0])
+                for k, v in (('dir_x', '0'), ('dir_y', '1.0'), ('dir_z', '0')):
+                    if k in self._widgets:
+                        self._widgets[k].setText(v)
+            if 'distance_input' in self._widgets:
+                self._widgets['distance_input'].setEnabled(not checked)
+            for k in ('dir_x', 'dir_y', 'dir_z'):
+                if k in self._widgets:
+                    self._widgets[k].setEnabled(not checked)
+
+        rotate_cb.toggled.connect(on_rotate_changed)
+        rot_axis_widget.setVisible(brush.get('rotate', False))
+        # ─────────────────────────────────────────────────────────────────
+
         layout.addWidget(options_group)
         
         # Preview button
