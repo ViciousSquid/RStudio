@@ -2020,6 +2020,11 @@ class MainWindow(QMainWindow):
             if event.key() == Qt.Key_Escape:
                 self.view_3d.toggle_play_mode(None, None)
                 self.ui.notification_label.setText("")
+
+                if getattr(self, 'is_kiosk_mode', False):
+                    self.exit_kiosk_mode()
+                    return
+
                 if not self.camera_movement_learned:
                     QTimer.singleShot(500, lambda: self.show_tooltip(
                         "Hold right mouse to move camera with WASD", duration=0, toast_id="camera_tip"))
@@ -2301,8 +2306,17 @@ class MainWindow(QMainWindow):
             # Capture play state BEFORE doing anything
             was_playing = hasattr(self.view_3d, 'play_mode') and self.view_3d.play_mode
 
-            with open(filePath, 'r') as f:
-                level_data = json.load(f)
+            from engine.resource_manager import ResourceManager
+            rm = ResourceManager()
+
+            if rm.is_package_mode():
+                map_data = rm.get_text_asset(filePath)
+                if map_data is None:
+                    raise FileNotFoundError(f"Map {filePath} not found in package.")
+                level_data = json.loads(map_data)
+            else:
+                with open(filePath, 'r') as f:
+                    level_data = json.load(f)
 
             # Clear current scene completely
             self.state.clear_scene()

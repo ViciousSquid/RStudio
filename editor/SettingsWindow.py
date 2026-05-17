@@ -31,6 +31,7 @@ class SettingsWindow(QDialog):
         self._create_play_mode_tab()
         self._create_controls_tab()
         self._create_keyboard_tab()
+        self._create_kiosk_tab()
         
         # --- Button Row ---
         button_layout = QHBoxLayout()
@@ -447,6 +448,33 @@ class SettingsWindow(QDialog):
         layout.addLayout(rebind_grid)
         layout.addStretch()
 
+    def _create_kiosk_tab(self):
+        """Package Player / Kiosk Mode settings."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        self.tabs.addTab(widget, "Package Player")
+
+        mode_group = QGroupBox("Window Mode")
+        mode_layout = QFormLayout()
+        self.kiosk_mode_combo = QComboBox()
+        self.kiosk_mode_combo.addItems(["Fullscreen", "Borderless", "Windowed"])
+        mode_layout.addRow("Display Mode:", self.kiosk_mode_combo)
+        mode_group.setLayout(mode_layout)
+        layout.addWidget(mode_group)
+
+        res_group = QGroupBox("Resolution (Windowed Only)")
+        res_layout = QFormLayout()
+        self.kiosk_res_w = QSpinBox()
+        self.kiosk_res_w.setRange(640, 7680)
+        self.kiosk_res_h = QSpinBox()
+        self.kiosk_res_h.setRange(480, 4320)
+        res_layout.addRow("Width:", self.kiosk_res_w)
+        res_layout.addRow("Height:", self.kiosk_res_h)
+        res_group.setLayout(res_layout)
+        layout.addWidget(res_group)
+
+        layout.addStretch()
+
     def _apply_stylesheet(self):
         """Apply the checkbox styling."""
         self.setStyleSheet("""
@@ -535,6 +563,14 @@ class SettingsWindow(QDialog):
         self.key_f2_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_toggle_wireframe', fallback='F2')))
         self.key_f3_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_sysmon', fallback='F3')))
         self.key_f5_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_play_mode', fallback='F5')))
+
+        k_mode = self.config.get('Kiosk', 'window_mode', fallback='Fullscreen')
+        idx = self.kiosk_mode_combo.findText(k_mode)
+        if idx >= 0:
+            self.kiosk_mode_combo.setCurrentIndex(idx)
+        self.kiosk_res_w.setValue(self.config.getint('Kiosk', 'res_width', fallback=1280))
+        self.kiosk_res_h.setValue(self.config.getint('Kiosk', 'res_height', fallback=720))
+
 
     def accept(self):
         """Saves the current UI state back to the config object."""
@@ -639,6 +675,12 @@ class SettingsWindow(QDialog):
         self.config.set('Shortcuts', 'key_toggle_wireframe', self.key_f2_edit.keySequence().toString())
         self.config.set('Shortcuts', 'key_sysmon', self.key_f3_edit.keySequence().toString())
         self.config.set('Shortcuts', 'key_play_mode', self.key_f5_edit.keySequence().toString())
+
+        if not self.config.has_section('Kiosk'):
+            self.config.add_section('Kiosk')
+        self.config.set('Kiosk', 'window_mode', self.kiosk_mode_combo.currentText())
+        self.config.set('Kiosk', 'res_width', str(self.kiosk_res_w.value()))
+        self.config.set('Kiosk', 'res_height', str(self.kiosk_res_h.value()))
 
     def _restart_application(self):
         """Restart the application."""
