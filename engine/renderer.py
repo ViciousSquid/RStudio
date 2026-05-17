@@ -651,8 +651,16 @@ class Renderer:
             tex_id = gl.glGenTextures(1)
             self.texture_manager[tex_cache_name] = tex_id
             gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, 1, 1, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, 
+            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, 1, 1, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE,
                            (gl.GLubyte * 4)(255, 255, 255, 255))
+            # FIX: Set explicit filter and wrap params so this 1x1 texture is
+            # never "incomplete". The GL default MIN_FILTER is GL_NEAREST_MIPMAP_LINEAR
+            # (a mipmapped filter) but we supply no mipmaps, making it incomplete
+            # and rendering black on strict core-profile drivers including Adreno.
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S,     gl.GL_REPEAT)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T,     gl.GL_REPEAT)
             return tex_id
         if texture_name == 'caulk':
             tex_id = gl.glGenTextures(1)
@@ -804,6 +812,15 @@ class Renderer:
         gl.glEnableVertexAttribArray(0)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
         gl.glBindVertexArray(0)
+        # FIX: Cache uniform locations once here instead of calling
+        # glGetUniformLocation every frame inside _draw_one_portal.
+        # On Adreno, glGetUniformLocation has measurable driver overhead.
+        self._portal_mask_proj_loc = gl.glGetUniformLocation(self._portal_mask_shader, 'projection')
+        self._portal_mask_view_loc = gl.glGetUniformLocation(self._portal_mask_shader, 'view')
+        self._portal_rim_proj_loc  = gl.glGetUniformLocation(self._portal_rim_shader,  'projection')
+        self._portal_rim_view_loc  = gl.glGetUniformLocation(self._portal_rim_shader,  'view')
+        self._portal_rim_color_loc = gl.glGetUniformLocation(self._portal_rim_shader,  'rim_color')
+
         self._portal_gl_ready = True
         print("[Portal] GL resources initialised")
 
@@ -957,9 +974,9 @@ class Renderer:
         # FIX: Portal mask must render from both sides
         gl.glDisable(gl.GL_CULL_FACE)
 
-        # Cache uniform locations once per call (avoids repeated string lookups)
-        mask_proj_loc = gl.glGetUniformLocation(self._portal_mask_shader, 'projection')
-        mask_view_loc = gl.glGetUniformLocation(self._portal_mask_shader, 'view')
+        # Use uniform locations cached in _init_portal_gl (not per-frame lookups)
+        mask_proj_loc = self._portal_mask_proj_loc
+        mask_view_loc = self._portal_mask_view_loc
 
         # ----- Pass 1: write stencil mask (colour + depth writes OFF) -----
         gl.glEnable(gl.GL_STENCIL_TEST)
@@ -1046,12 +1063,10 @@ class Renderer:
 
             self._portal_upload_quad(corners_a)
             gl.glUseProgram(self._portal_rim_shader)
-            gl.glUniformMatrix4fv(gl.glGetUniformLocation(self._portal_rim_shader, 'projection'),
-                                1, gl.GL_FALSE, proj_ptr)
-            gl.glUniformMatrix4fv(gl.glGetUniformLocation(self._portal_rim_shader, 'view'),
-                                1, gl.GL_FALSE, view_ptr)
-            gl.glUniform4f(gl.glGetUniformLocation(self._portal_rim_shader, 'rim_color'),
-                        r, g, b, 0.55)
+            # FIX: Use cached uniform locations — not per-frame glGetUniformLocation
+            gl.glUniformMatrix4fv(self._portal_rim_proj_loc,  1, gl.GL_FALSE, proj_ptr)
+            gl.glUniformMatrix4fv(self._portal_rim_view_loc,  1, gl.GL_FALSE, view_ptr)
+            gl.glUniform4f(self._portal_rim_color_loc, r, g, b, 0.55)
 
             gl.glBindVertexArray(self._portal_quad_vao)
             # FIX: Only draw the border outline (LINE_LOOP), not a filled quad.
