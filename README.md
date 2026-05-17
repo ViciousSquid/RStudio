@@ -7,4 +7,6 @@
 
 ## Canary Branch
 
-Levels and assets can be exported as `.gamepackage` files which can be shared and Imported  (WORK IN PROGRESS)
+Levels and assets can be exported as `.gamepackage` files which can be shared
+
+NEW player.py which can parse .gamepackage files and initialise a play session
