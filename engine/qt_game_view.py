@@ -194,6 +194,14 @@ class QtGameView(QOpenGLWidget):
         self._console_input.returnPressed.connect(self._submit_console_command)
         self._console_input.installEventFilter(self)
         self._console_input.hide()
+
+        # ---- Play-mode enter hint (5-second transient HUD message) ----
+        self._play_mode_hint = ""
+        self._play_mode_hint_timer = QTimer(self)
+        self._play_mode_hint_timer.setSingleShot(True)
+        self._play_mode_hint_timer.timeout.connect(self._clear_play_mode_hint)
+        self._cached_hint_text = None
+        self._cached_hint_width = 0
         # ---------------------------------------------------------------------
 
         # Muzzle flash render-side frame counter. The logic thread sets
@@ -314,6 +322,14 @@ class QtGameView(QOpenGLWidget):
             effect.stop()
             effect.setVolume(1.0)
             self.sound_pool[name].append(effect)
+
+
+
+    def _clear_play_mode_hint(self):
+        """Clear the transient play-mode hint and trigger a repaint."""
+        self._play_mode_hint = ""
+        self._cached_hint_text = None
+        self.update()
 
     def _get_sound_instance(self, name):
         """Retrieve an available sound instance from the pool."""
@@ -1007,6 +1023,14 @@ class QtGameView(QOpenGLWidget):
             self.update()
             return
 
+        # ---- F12: Kiosk mode toggle (play mode only) ----
+        if self.play_mode and event.key() == Qt.Key_F12:
+            if getattr(self.editor, 'is_kiosk_mode', False):
+                self.editor.exit_kiosk_mode(keep_play_mode=True)
+            else:
+                self.editor.enter_kiosk_mode()
+            return
+
         # ---- Death screen: any key press exits play mode ----
         if self.play_mode:
             render_state = self.game_state.get_render_state()
@@ -1133,6 +1157,22 @@ class QtGameView(QOpenGLWidget):
             painter.drawText(cx - tw // 2 + 2, cy + 2, msg)
             painter.setPen(self._hud_grey_pen)
             painter.drawText(cx - tw // 2, cy, msg)
+
+        # ---- Play-mode enter hint (transient, 5s timeout) ----
+        # Drawn only when no interaction message is active
+        hint = getattr(self, '_play_mode_hint', '')
+        if hint and not msg:
+            if self._cached_hint_text != hint:
+                self._cached_hint_text = hint
+                self._cached_hint_width = QFontMetrics(self._hud_msg_font).horizontalAdvance(hint)
+            cx = self.width() // 2
+            cy = self.height() // 2 + 50
+            tw = self._cached_hint_width
+            painter.setFont(self._hud_msg_font)
+            painter.setPen(self._hud_shadow_pen)
+            painter.drawText(cx - tw // 2 + 2, cy + 2, hint)
+            painter.setPen(self._hud_grey_pen)
+            painter.drawText(cx - tw // 2, cy, hint)
 
         # ---- Weapon sprite (cached scaled pixmap) ----
         if active_weapon:
@@ -1532,6 +1572,10 @@ class QtGameView(QOpenGLWidget):
             )
             self.player.pos.y = player_start_pos[1]
 
+            # Show transient play-mode hint in 3D HUD (5 second timeout)
+            self._play_mode_hint = "ESC to Exit, F12 Fullscreen"
+            self._play_mode_hint_timer.start(3000)
+
             if self.logic_thread:
                 self.logic_thread.set_player(self.player)
                 self.logic_thread.set_play_mode(True)
@@ -1562,6 +1606,12 @@ class QtGameView(QOpenGLWidget):
                 self.logic_thread.set_player(None)
 
             self.player = None
+
+            # Clear any pending play-mode hint
+            self._play_mode_hint = ""
+            self._play_mode_hint_timer.stop()
+            self._cached_hint_text = None
+
             self.update()
 
 
