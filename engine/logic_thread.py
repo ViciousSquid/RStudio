@@ -199,6 +199,9 @@ class LogicThread(threading.Thread):
 
         # Parented lights
         self._parented_lights: list = []
+
+        # Parented portals (same system as lights — attach to movers)
+        self._parented_portals: list = []
         
         # Interaction State
         self.current_hud_message = ""
@@ -308,6 +311,7 @@ class LogicThread(threading.Thread):
             self._init_movers()
             self._init_doors()
             self._init_parented_lights()
+            self._init_parented_portals()
             
             # Reset player stats
             self.player_health = 100
@@ -389,6 +393,7 @@ class LogicThread(threading.Thread):
             self._reset_movers()
             self._reset_doors()
             self._reset_parented_lights()
+            self._reset_parented_portals()
             self.current_hud_message = ""
             self.gate_inputs = {}
             self.timer_states = {}
@@ -510,17 +515,15 @@ class LogicThread(threading.Thread):
         self.doors = []
         for i, brush in enumerate(self.brushes):
             if brush.get('is_door'):
-                if 'door_speed' in brush:
-                    brush['speed'] = brush['door_speed']
-                if 'door_distance' in brush:
-                    brush['distance'] = brush['door_distance']
-                if 'door_direction' in brush:
-                    dir_str = brush['door_direction']
-                    brush['direction'] = DOOR_DIRECTION_MAP.get(dir_str, [0, 1, 0])
+                # Resolve runtime parameters from editor properties without mutating the source brush
+                speed = float(brush.get('door_speed', brush.get('speed', 128.0)))
+                distance = float(brush.get('door_distance', brush.get('distance', 128.0)))
+                dir_str = brush.get('door_direction', '')
+                direction = DOOR_DIRECTION_MAP.get(dir_str, [0, 1, 0])
+
                 if 'door_lip' in brush:
                     lip = float(brush.get('door_lip', 0.0))
-                    base_dist = float(brush.get('distance', brush.get('door_distance', 128.0)))
-                    brush['distance'] = max(1.0, base_dist - lip)
+                    distance = max(1.0, distance - lip)
 
                 self.doors.append((i, brush))
                 if 'original_pos' not in brush:
@@ -529,6 +532,9 @@ class LogicThread(threading.Thread):
                     'progress': 0.0,
                     'state': 'closed',
                     'open_timer': 0.0,
+                    'speed': speed,
+                    'distance': distance,
+                    'direction': direction,
                 }
 
     def _reset_doors(self):
@@ -625,6 +631,7 @@ class LogicThread(threading.Thread):
         self._update_movers(delta)
         self._update_doors(delta)
         self._update_parented_lights()
+        self._update_parented_portals()
         
         # Update I/O system (delayed events)
         if self.io_manager:
@@ -1354,10 +1361,10 @@ class LogicThread(threading.Thread):
             if i not in self.door_states:
                 continue
             state = self.door_states[i]
-            speed = brush.get('speed', 128.0)
-            distance = brush.get('distance', 128.0)
+            speed = state.get('speed', 128.0)
+            distance = state.get('distance', 128.0)
             open_time = brush.get('open_time', 3.0)
-            direction = np.array(brush.get('direction', [0, 1, 0]), dtype=float)
+            direction = np.array(state.get('direction', [0, 1, 0]), dtype=float)
             dir_length = np.linalg.norm(direction)
             if dir_length > 0:
                 direction = direction / dir_length
@@ -1438,6 +1445,57 @@ class LogicThread(threading.Thread):
             light.pos[1] = bpos[1] + offset[1]
             light.pos[2] = bpos[2] + offset[2]
 
+
+    # =========================================================================
+    # PARENTED PORTALS
+    # =========================================================================
+
+    def _init_parented_portals(self):
+        """Find portals with a parent_mover and cache (portal, brush, offset)."""
+        self._parented_portals = []
+        if Portal is None:
+            return
+        for thing in self.things:
+            if not isinstance(thing, Portal):
+                continue
+            parent_name = thing.properties.get('parent_mover', '')
+            if not parent_name:
+                continue
+            brush = None
+            for b in self.brushes:
+                if b.get('is_mover') and b.get('name') == parent_name:
+                    brush = b
+                    break
+            if brush is None:
+                print(f"[Portal] Warning: parent_mover '{parent_name}' not found for portal '{thing.properties.get('name', '')}'")
+                continue
+            thing.properties['_original_pos'] = list(thing.pos)
+            offset = thing.properties.get('parent_offset')
+            if not offset or offset == [0.0, 0.0, 0.0]:
+                offset = [
+                    thing.pos[0] - brush['pos'][0],
+                    thing.pos[1] - brush['pos'][1],
+                    thing.pos[2] - brush['pos'][2],
+                ]
+                thing.properties['parent_offset'] = offset
+            self._parented_portals.append((thing, brush, offset))
+
+    def _reset_parented_portals(self):
+        """Restore portals to their original positions when exiting play mode."""
+        for portal, _brush, _offset in self._parented_portals:
+            original = portal.properties.pop('_original_pos', None)
+            if original is not None:
+                portal.pos = list(original)
+        self._parented_portals = []
+
+    def _update_parented_portals(self):
+        """Update portal positions to follow their parent mover."""
+        for portal, brush, offset in self._parented_portals:
+            bpos = brush['pos']
+            portal.pos[0] = bpos[0] + offset[0]
+            portal.pos[1] = bpos[1] + offset[1]
+            portal.pos[2] = bpos[2] + offset[2]
+
     # =========================================================================
     # PLAYER SHOOTING
     # =========================================================================
@@ -1476,8 +1534,11 @@ class LogicThread(threading.Thread):
                 continue
             if thing.properties.get('dead', False) or thing.properties.get('hidden', False):
                 continue
-            radius = 64.0
-            center = glm.vec3(thing.pos[0], thing.pos[1] + 64.0, thing.pos[2])
+            # Dynamic hitbox based on actual sprite dimensions
+            sprite_width = float(thing.properties.get('sprite_width', 64.0))
+            sprite_height = float(thing.properties.get('sprite_height', 128.0))
+            radius = max(sprite_width, sprite_height) / 2.0
+            center = glm.vec3(thing.pos[0], thing.pos[1] + sprite_height / 2.0, thing.pos[2])
             oc = ray_origin - center
             a = glm.dot(ray_dir, ray_dir)
             b = 2.0 * glm.dot(oc, ray_dir)

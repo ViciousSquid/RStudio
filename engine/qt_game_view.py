@@ -6,7 +6,7 @@ from collections import deque
 from typing import Optional
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
 from PyQt5.QtCore import Qt, QTimer, QPoint, QUrl, QRect, QEvent
-from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QFontDatabase, QPen, QBrush, QPolygon, QKeySequence, QPixmap, QSurfaceFormat
+from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QFontDatabase, QPen, QBrush, QPolygon, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage
 from PyQt5.QtMultimedia import QSoundEffect
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
@@ -107,6 +107,8 @@ class QtGameView(QOpenGLWidget):
         self.console_font = QFont("Arial", 9)
         self.console_font.setStyleHint(QFont.Monospace)
 
+        self._init_hud_caches()
+
         self.texture_manager = {}
         self.sprite_textures = {}
         self.gun_hud_pixmaps = {}
@@ -194,6 +196,18 @@ class QtGameView(QOpenGLWidget):
         self._console_input.hide()
         # ---------------------------------------------------------------------
 
+        # Muzzle flash render-side frame counter. The logic thread sets
+        # muzzle_flash_active for a single tick, which repaint() can miss
+        # if it runs faster than the logic thread. This counter ensures the
+        # flash is visible for a consistent number of render frames.
+        self._muzzle_flash_counter = 0
+        self._muzzle_flash_duration_frames = 3  # ~50ms at 60 FPS
+
+        # FIX: Force full repaint every frame — prevents QPainter partial-update
+        # artifacts where old HUD frames persist alongside new GL frames.
+        self.setAttribute(Qt.WA_OpaquePaintEvent)
+        self.setAttribute(Qt.WA_NoSystemBackground)
+
         timer = QTimer(self)
         timer.setInterval(16)
         timer.timeout.connect(self.update_loop)
@@ -217,6 +231,66 @@ class QtGameView(QOpenGLWidget):
                 self._preload_sound_file(f, full_path)
                 count += 1
         print(f"Preloaded {count} sound files.")
+
+
+    def _init_hud_caches(self):
+        """Pre-create fonts, pens, brushes and static text metrics to eliminate
+        per-frame allocations in the HUD / overlay rendering paths."""
+        # Fonts
+        self._hud_font = QFont("Arial", 11)
+        self._hud_font.setBold(True)
+        self._hud_msg_font = QFont("Arial", 14)
+        self._hud_msg_font.setBold(True)
+        self._fps_font = QFont("Arial", 10)
+        self._sprites_font = QFont("Arial", 10)
+        self._sprites_font.setBold(True)
+        self._death_title_font = QFont("Arial", 64, QFont.Bold)
+        self._death_sub_font = QFont("Arial", 18)
+        self._face_mode_font_top = QFont("Arial", 14, QFont.Bold)
+        self._face_mode_font_bot = QFont("Arial", 10, QFont.Bold)
+
+        # Pens / Brushes (reused every frame)
+        self._hud_bar_bg_pen = QPen(QColor(60, 60, 60), 2)
+        self._hud_bar_bg_brush = QBrush(QColor(40, 40, 40, 200))
+        self._hud_health_green = QColor(50, 200, 50)
+        self._hud_health_yellow = QColor(255, 200, 50)
+        self._hud_health_red = QColor(200, 50, 50)
+        self._hud_white_pen = QPen(QColor(255, 255, 255))
+        self._hud_black_pen = QPen(QColor(0, 0, 0))
+        self._hud_grey_pen = QPen(QColor(200, 200, 200))
+        self._hud_shadow_pen = QPen(QColor(0, 0, 0))
+        self._hud_pink_pen = QPen(QColor(255, 105, 180))
+        self._hud_fps_bg_brush = QBrush(QColor(0, 0, 0, 128))
+        self._hud_sprites_bg_brush = QBrush(QColor(0, 0, 0, 128))
+        self._face_mode_box_brush = QBrush(QColor(0, 0, 0, 180))
+        self._face_mode_pen = QPen(QColor(255, 255, 255))
+
+        # Static text widths (computed once – text & fonts never change)
+        self._face_mode_top_width = QFontMetrics(self._face_mode_font_top).horizontalAdvance(
+            "Select a FACE for texturing")
+        self._face_mode_bot_width = QFontMetrics(self._face_mode_font_bot).horizontalAdvance(
+            "Press ESC to cancel")
+        self._cached_death_title_width = QFontMetrics(self._death_title_font).horizontalAdvance(
+            "YOU DIED")
+        self._cached_death_sub_width = QFontMetrics(self._death_sub_font).horizontalAdvance(
+            "Press Escape to return to the editor")
+
+        # Dynamic caches
+        self._cached_hud_message = None
+        self._cached_hud_message_width = 0
+        self._cached_gun_hud = {}          # (weapon, height) -> scaled QPixmap
+        self._cached_key_pixmaps = {}    # key_name -> scaled QPixmap
+        self._cached_key_size = 100
+        self._console_fm = QFontMetrics(self.console_font)
+
+        # Key fallback cache
+        self._key_fallback_cache = {
+            'blue_key':   (QColor(50, 100, 200), QPen(QColor(40, 80, 160), 2), QBrush(QColor(50, 100, 200))),
+            'red_key':    (QColor(200, 50, 50),   QPen(QColor(160, 40, 40), 2),   QBrush(QColor(200, 50, 50))),
+            'yellow_key': (QColor(200, 200, 50),  QPen(QColor(160, 160, 40), 2),  QBrush(QColor(200, 200, 50))),
+            'green_key':  (QColor(50, 200, 50),   QPen(QColor(40, 160, 40), 2),   QBrush(QColor(50, 200, 50))),
+        }
+        self._key_fallback_default = (QColor(150, 150, 150), QPen(QColor(120, 120, 120), 2), QBrush(QColor(150, 150, 150)))
 
     def _preload_sound_file(self, name, path, pool_size=4):
         """Creates a pool of QSoundEffects for a specific file to allow polyphony.
@@ -391,19 +465,18 @@ class QtGameView(QOpenGLWidget):
             # try_swap() both checks AND consumes in a single atomic call.
             has_new = self.game_state.try_swap()
 
-            # Always request a repaint.  Previously this was conditional on
-            # has_new, which meant Qt's QOpenGLWidget FBO could go stale when
-            # the logic thread was between frames — the compositor would then
-            # present uninitialised / previous-frame FBO content, visible as
-            # per-frame brightness flicker (especially with an empty scene
-            # where the render completes almost instantly).
-            self.update()
+            # FIX: Use repaint() instead of update() to force a SYNCHRONOUS
+            # full-widget redraw. update() schedules an async paint that Qt's
+            # backing store may composite partially, causing the gun HUD to
+            # flicker against old frames when the camera moves. repaint()
+            # bypasses the backing store and redraws immediately.
+            self.repaint()
 
             # Also update the 2D views in play mode so monster positions are shown moving
             if has_new and self.play_mode:
                 self.editor.update_views()
         else:
-            self.update()
+            self.repaint()
 
     def _process_sound_queue(self):
         """Checks the game state for new sound requests and plays them using pooled objects."""
@@ -544,21 +617,42 @@ class QtGameView(QOpenGLWidget):
         if not self.renderer or getattr(self.renderer, '_shader_init_failed', False):
             return
 
+        # FIX: Snapshot the entire render state atomically at the start of
+        # the frame. This prevents "torn reads" where health (or any field)
+        # jumps between values because the logic thread swapped buffers
+        # while we were reading individual fields mid-frame.
+        render_state: Optional[RenderState] = None
+        if self.use_threading and self.logic_thread:
+            render_state = self.game_state.get_render_state()
+            # Copy all scalar fields we need for the HUD into local vars
+            # so they can't change during this paintGL call
+            if render_state:
+                self._cached_health = render_state.player_health
+                self._cached_max_health = render_state.player_max_health
+                self._cached_active_weapon = getattr(render_state, 'active_weapon', None)
+                self._cached_hud_message = getattr(render_state, 'hud_message', '')
+                self._cached_collected_keys = getattr(render_state, 'collected_keys', set())
+                # Render-side muzzle flash counter: logic thread sets the flag
+                # for one tick, but repaint() can miss it. When we detect the
+                # flag, prime the counter so the flash persists for N frames.
+                if getattr(render_state, 'muzzle_flash_active', False):
+                    self._muzzle_flash_counter = self._muzzle_flash_duration_frames
+                self._cached_muzzle_flash = self._muzzle_flash_counter > 0
+                self._cached_player_dead = getattr(render_state, 'player_dead', False)
+                self._cached_monster_debug = getattr(render_state, 'monster_debug_active', False)
+                self._cached_bullet_marks = list(getattr(render_state, 'bullet_marks', []))
+                self._cached_projectiles = list(getattr(render_state, 'projectiles', []))
+                self._cached_monster_rays = list(getattr(render_state, 'monster_debug_rays', []))
+
         # Rebuild 3D grid VBO when grid/world size changed
         if self.grid_dirty:
             self.renderer.update_grid_buffers(self.world_size, self.grid_size)
             self.grid_dirty = False
 
         # === THREADED RENDER PATH ===
-        render_state: Optional[RenderState] = None
-
         if self.use_threading and self.logic_thread:
-            # The swap is already handled by update_loop.  Here we just read
-            # whatever the current read-side state is — it is always valid
-            # (initialised to a sensible default RenderState, then replaced
-            # atomically by request_swap each time the logic thread finishes).
-            render_state = self.game_state.get_render_state()
-
+            # render_state was already fetched and snapshotted at the top of
+            # paintGL. Re-use it for GL rendering so HUD and scene are in sync.
             self.view_matrix = render_state.camera_view_matrix
 
             if render_state.is_play_mode:
@@ -663,8 +757,11 @@ class QtGameView(QOpenGLWidget):
         # framebuffer corruption that manifests as per-frame brightness flicker.
         gl.glFinish()
 
+        # Draw 2D overlays directly on the widget.
+        # QOpenGLWidget handles GL/2D context switching internally.
+        # All HUD resources (fonts, pens, brushes) are pre-cached in
+        # _init_hud_caches() to eliminate per-frame allocations.
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
         if self.editor.config.getboolean('Display', 'show_fps', fallback=False):
             self._draw_fps_counter(painter)
         if self.play_mode and self.show_sprites_in_play_mode:
@@ -688,21 +785,10 @@ class QtGameView(QOpenGLWidget):
 
         # Draw Face Mode UI Text
         if self.face_mode_active:
-            font_top = QFont("Arial", 14, QFont.Bold)
-            font_bot = QFont("Arial", 10, QFont.Bold)
-
-            msg_top = "Select a FACE for texturing"
-            msg_bot = "Press ESC to cancel"
-
-            painter.setFont(font_top)
-            mt = painter.fontMetrics()
-            wt = mt.horizontalAdvance(msg_top)
-            ht = mt.height()
-
-            painter.setFont(font_bot)
-            mb = painter.fontMetrics()
-            wb = mb.horizontalAdvance(msg_bot)
-            hb = mb.height()
+            painter.setFont(self._face_mode_font_top)
+            ht = self._face_mode_font_top.pointSize() + 6  # approximate height
+            painter.setFont(self._face_mode_font_bot)
+            hb = self._face_mode_font_bot.pointSize() + 4
 
             cx = self.width() // 2
             margin_bottom = 30
@@ -711,10 +797,16 @@ class QtGameView(QOpenGLWidget):
             padding_y = 10
 
             total_text_h = ht + hb + spacing
-            box_w = max(wt, wb) + (padding_x * 2)
+            box_w = max(self._face_mode_top_width, self._face_mode_bot_width) + (padding_x * 2)
             box_h = total_text_h + (padding_y * 2)
 
         painter.end()
+
+        # Decrement muzzle flash counter after the frame is fully rendered.
+        # This ensures the flash is visible for a consistent duration even
+        # when the logic thread's single-tick flag is missed by repaint().
+        if self._muzzle_flash_counter > 0:
+            self._muzzle_flash_counter -= 1
 
     def _render_bullet_marks(self, marks):
         """Draw simple black dots at hit locations."""
@@ -968,102 +1060,145 @@ class QtGameView(QOpenGLWidget):
         super().keyPressEvent(event)
 
     def _draw_sprites_text(self, painter):
-        font = QFont()
-        font.setPointSize(10)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.setPen(QColor(255, 105, 180))
-        painter.fillRect(5, 5, 80, 25, QColor(0, 0, 0, 128))
+        painter.setFont(self._sprites_font)
+        painter.setPen(self._hud_pink_pen)
+        painter.fillRect(5, 5, 80, 25, self._hud_sprites_bg_brush)
         painter.drawText(10, 20, "Sprites")
 
     def _draw_fps_counter(self, painter):
-        font = QFont()
-        font.setPointSize(10)
-        painter.setFont(font)
-        painter.setPen(QColor(255, 255, 255))
+        painter.setFont(self._fps_font)
+        painter.setPen(self._hud_white_pen)
         rect_width = 100
         rect_x = self.width() - rect_width - 5
-        painter.fillRect(rect_x, 5, rect_width, 20, QColor(0, 0, 0, 128))
+        painter.fillRect(rect_x, 5, rect_width, 20, self._hud_fps_bg_brush)
         painter.drawText(rect_x + 5, 20, f"FPS: {self.fps:.0f}")
 
     def _draw_hud(self, painter, render_state):
-        if not render_state: return
-        health = render_state.player_health
-        max_health = render_state.player_max_health
+        # Use cached snapshot values copied at paintGL start to avoid
+        # torn reads from buffer swaps mid-frame.
+        health = getattr(self, '_cached_health', 0)
+        max_health = getattr(self, '_cached_max_health', 100)
+        if health is None or max_health is None:
+            return
         health_ratio = health / max_health if max_health > 0 else 0
         hud_margin = 20
         bar_width = 200
         bar_height = 20
         bar_x = hud_margin
         bar_y = self.height() - hud_margin - bar_height
-        painter.setPen(QPen(QColor(60, 60, 60), 2))
-        painter.setBrush(QBrush(QColor(40, 40, 40, 200)))
+
+        # --- cached pens / brushes / fonts ---
+        painter.setPen(self._hud_bar_bg_pen)
+        painter.setBrush(self._hud_bar_bg_brush)
         painter.drawRect(bar_x, bar_y, bar_width, bar_height)
-        if health_ratio > 0.6: fill_color = QColor(50, 200, 50)
-        elif health_ratio > 0.3: fill_color = QColor(255, 200, 50)
-        else: fill_color = QColor(200, 50, 50)
+
         fill_width = int(bar_width * health_ratio)
         if fill_width > 0:
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QBrush(fill_color))
+            if health_ratio > 0.6:
+                painter.setBrush(QBrush(self._hud_health_green))
+            elif health_ratio > 0.3:
+                painter.setBrush(QBrush(self._hud_health_yellow))
+            else:
+                painter.setBrush(QBrush(self._hud_health_red))
             painter.drawRect(bar_x, bar_y, fill_width, bar_height)
-        font = QFont()
-        font.setPointSize(11)
-        font.setBold(True)
-        painter.setFont(font)
+
+        painter.setFont(self._hud_font)
         painter.setPen(QColor(255, 255, 255))
         painter.drawText(bar_x, bar_y - 5, f"HEALTH: {health}/{max_health}")
-        active_weapon = getattr(render_state, 'active_weapon', None)
+
+        active_weapon = getattr(self, '_cached_active_weapon', None)
         if active_weapon:
             cx, cy = self.width() // 2, self.height() // 2
             size = 10
-            painter.setPen(QPen(QColor(0, 255, 0, 200), 2))
+            # FIX: Use solid color instead of alpha to avoid blend mode flicker
+            painter.setPen(QPen(QColor(0, 255, 0), 2))
             painter.drawLine(cx - size, cy, cx + size, cy)
             painter.drawLine(cx, cy - size, cx, cy + size)
-        if hasattr(render_state, 'hud_message') and render_state.hud_message:
-            msg = render_state.hud_message
-            msg_font = QFont()
-            msg_font.setPointSize(14)
-            msg_font.setBold(True)
-            painter.setFont(msg_font)
-            fm = painter.fontMetrics()
-            text_width = fm.horizontalAdvance(msg)
+            # Draw a black outline crosshair behind for contrast
+            painter.setPen(QPen(QColor(0, 0, 0), 4))
+            painter.drawLine(cx - size, cy, cx + size, cy)
+            painter.drawLine(cx, cy - size, cx, cy + size)
+            # Re-draw green on top
+            painter.setPen(QPen(QColor(0, 255, 0), 2))
+            painter.drawLine(cx - size, cy, cx + size, cy)
+            painter.drawLine(cx, cy - size, cx, cy + size)
+
+        # ---- HUD message (cache text width) ----
+        msg = getattr(self, '_cached_hud_message', '')
+        if msg:
+            # Only recompute width when message changes
+            if self._cached_hud_message != msg:
+                self._cached_hud_message = msg
+                self._cached_hud_message_width = QFontMetrics(self._hud_msg_font).horizontalAdvance(msg)
             cx = self.width() // 2
             cy = self.height() // 2 + 50
-            painter.setPen(QColor(0, 0, 0))
-            painter.drawText(cx - text_width//2 + 2, cy + 2, msg)
-            painter.setPen(QColor(200, 200, 200))
-            painter.drawText(cx - text_width//2, cy, msg)
+            tw = self._cached_hud_message_width
+            painter.setFont(self._hud_msg_font)
+            painter.setPen(self._hud_shadow_pen)
+            painter.drawText(cx - tw // 2 + 2, cy + 2, msg)
+            painter.setPen(self._hud_grey_pen)
+            painter.drawText(cx - tw // 2, cy, msg)
+
+        # ---- Weapon sprite (cached scaled pixmap) ----
         if active_weapon:
             hud_pixmap = self._load_gun_hud_pixmap(active_weapon)
             if hud_pixmap and not hud_pixmap.isNull():
-                scale_factor = self.height() / 600.0
-                target_h = int(200 * scale_factor)
-                if hud_pixmap.height() > 0: target_w = int(hud_pixmap.width() * (target_h / hud_pixmap.height()))
-                else: target_w = target_h
-                x = self.width() - target_w - 20
-                y = self.height() - target_h
-                painter.drawPixmap(x, y, target_w, target_h, hud_pixmap)
-                # Muzzle flash overlay — drawn on top of gun sprite for one frame
-                if getattr(render_state, 'muzzle_flash_active', False):
+                target_h = int(200 * self.height() / 600.0)
+                cache_key = (active_weapon, target_h)
+                scaled = self._cached_gun_hud.get(cache_key)
+                if scaled is None or scaled.isNull():
+                    if hud_pixmap.height() > 0:
+                        target_w = int(hud_pixmap.width() * (target_h / hud_pixmap.height()))
+                    else:
+                        target_w = target_h
+                    # FIX: Convert to premultiplied ARGB to match QPainter GL backend
+                    img = hud_pixmap.toImage().convertToFormat(QImage.Format_ARGB32_Premultiplied)
+                    scaled = QPixmap.fromImage(img).scaled(target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    self._cached_gun_hud[cache_key] = scaled
+                x = self.width() - scaled.width() - 20
+                y = self.height() - scaled.height()
+                # FIX: Set composition mode explicitly to avoid blend inconsistency
+                painter.save()
+                painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+                painter.drawPixmap(x, y, scaled)
+                painter.restore()
+                # Muzzle flash overlay
+                if getattr(self, '_cached_muzzle_flash', False):
                     flash_pixmap = self._load_gun_flash_pixmap(active_weapon)
                     if flash_pixmap and not flash_pixmap.isNull():
-                        painter.drawPixmap(x, y, target_w, target_h, flash_pixmap)
-        collected_keys = getattr(render_state, 'collected_keys', set())
+                        painter.save()
+                        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+                        painter.drawPixmap(x, y, scaled.width(), scaled.height(), flash_pixmap)
+                        painter.restore()
+
+        # ---- Collected keys (cached scaled pixmaps) ----
+        collected_keys = getattr(self, '_cached_collected_keys', set())
         if collected_keys:
             key_x = self.width() - hud_margin - 100
             key_y = self.height() - hud_margin - 100
             key_size = 100
             key_spacing = 40
+            # Rebuild key cache if size changed
+            if self._cached_key_size != key_size:
+                self._cached_key_pixmaps.clear()
+                self._cached_key_size = key_size
             for i, key_name in enumerate(sorted(collected_keys)):
                 icon_x = key_x - i * key_spacing
+                cached = self._cached_key_pixmaps.get(key_name)
+                if cached is not None and not cached.isNull():
+                    painter.drawPixmap(icon_x, key_y, cached)
+                    continue
                 try:
                     pixmap = Pickup.get_key_pixmap(key_name)
                     if pixmap and not pixmap.isNull():
-                        scaled_pixmap = pixmap.scaled(key_size, key_size)
-                        painter.drawPixmap(icon_x, key_y, scaled_pixmap)
-                    else: self._draw_key_fallback(painter, key_name, icon_x, key_y, key_size)
-                except: self._draw_key_fallback(painter, key_name, icon_x, key_y, key_size)
+                        scaled = pixmap.scaled(key_size, key_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                        self._cached_key_pixmaps[key_name] = scaled
+                        painter.drawPixmap(icon_x, key_y, scaled)
+                    else:
+                        self._draw_key_fallback(painter, key_name, icon_x, key_y, key_size)
+                except Exception:
+                    self._draw_key_fallback(painter, key_name, icon_x, key_y, key_size)
 
     def _draw_death_screen(self, painter):
         """Full-screen death overlay — drawn on top of HUD after player_dead is set."""
@@ -1074,56 +1209,46 @@ class QtGameView(QOpenGLWidget):
         painter.setBrush(QBrush(QColor(120, 0, 0, 160)))
         painter.drawRect(0, 0, w, h)
 
-        # "YOU DIED" title
-        title_font = QFont("Arial", 64, QFont.Bold)
-        painter.setFont(title_font)
-        fm = painter.fontMetrics()
-        title_text = "YOU DIED"
-        title_w = fm.horizontalAdvance(title_text)
-        title_x = (w - title_w) // 2
+        # "YOU DIED" title — cached metrics
+        painter.setFont(self._death_title_font)
+        title_x = (w - self._cached_death_title_width) // 2
         title_y = h // 2 - 20
-
-        # Shadow
         painter.setPen(QColor(60, 0, 0, 220))
-        painter.drawText(title_x + 3, title_y + 3, title_text)
-        # Main text
+        painter.drawText(title_x + 3, title_y + 3, "YOU DIED")
         painter.setPen(QColor(255, 60, 60))
-        painter.drawText(title_x, title_y, title_text)
+        painter.drawText(title_x, title_y, "YOU DIED")
 
-        # Sub-prompt
-        sub_font = QFont("Arial", 18)
-        painter.setFont(sub_font)
-        fm2 = painter.fontMetrics()
-        sub_text = "Press Escape to return to the editor"
-        sub_w = fm2.horizontalAdvance(sub_text)
-        sub_x = (w - sub_w) // 2
+        # Sub-prompt — cached metrics
+        painter.setFont(self._death_sub_font)
+        sub_x = (w - self._cached_death_sub_width) // 2
         sub_y = title_y + 60
-
         painter.setPen(QColor(0, 0, 0, 180))
-        painter.drawText(sub_x + 2, sub_y + 2, sub_text)
+        painter.drawText(sub_x + 2, sub_y + 2, "Press Escape to return to the editor")
         painter.setPen(QColor(220, 180, 180))
-        painter.drawText(sub_x, sub_y, sub_text)
+        painter.drawText(sub_x, sub_y, "Press Escape to return to the editor")
 
     def _draw_key_fallback(self, painter, key_name, x, y, size):
-        key_colors = {'blue_key': QColor(50, 100, 200), 'red_key': QColor(200, 50, 50), 'yellow_key': QColor(200, 200, 50), 'green_key': QColor(50, 200, 50)}
-        color = key_colors.get(key_name, QColor(150, 150, 150))
-        painter.setPen(QPen(color.darker(120), 2))
-        painter.setBrush(QBrush(color))
+        color, pen, brush = self._key_fallback_cache.get(key_name, self._key_fallback_default)
+        painter.setPen(pen)
+        painter.setBrush(brush)
         painter.drawRoundedRect(x, y, size, size, 4, 4)
         painter.setPen(QPen(QColor(255, 255, 255), 2))
-        painter.drawLine(x + 8, y + size//2, x + size - 8, y + size//2)
-        painter.drawEllipse(x + 4, y + size//2 - 6, 12, 12)
-        painter.drawLine(x + size - 10, y + size//2, x + size - 10, y + size//2 + 6)
-        painter.drawLine(x + size - 14, y + size//2, x + size - 14, y + size//2 + 4)
+        mid = y + size // 2
+        painter.drawLine(x + 8, mid, x + size - 8, mid)
+        painter.drawEllipse(x + 4, mid - 6, 12, 12)
+        painter.drawLine(x + size - 10, mid, x + size - 10, mid + 6)
+        painter.drawLine(x + size - 14, mid, x + size - 14, mid + 4)
 
     def _draw_window_manager(self, painter):
+        # --- cached colours / brushes ---
         bg_color = QColor(20, 20, 25, 235)
         border_color = QColor(80, 80, 90)
         header_color = QColor(66, 95, 93)
         text_color = QColor(220, 220, 220)
         graph_bg_color = QColor(10, 10, 15, 200)
         target_height = 240 if self.sysmon_expanded else 30
-        rect = QRect(self.debug_window_rect.x(), self.debug_window_rect.y(), self.debug_window_rect.width(), target_height)
+        rect = QRect(self.debug_window_rect.x(), self.debug_window_rect.y(),
+                     self.debug_window_rect.width(), target_height)
         painter.setPen(QPen(border_color, 1))
         painter.setBrush(QBrush(bg_color))
         painter.drawRect(rect)
@@ -1134,9 +1259,11 @@ class QtGameView(QOpenGLWidget):
         painter.setFont(self.console_font)
         painter.setPen(QColor(255, 255, 255))
         painter.drawText(header_rect.adjusted(10, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, "SysMon [F3]")
-        painter.drawText(QRect(rect.right() - 50, rect.y(), 25, 25), Qt.AlignCenter, "▼" if self.sysmon_expanded else "▶")
+        painter.drawText(QRect(rect.right() - 50, rect.y(), 25, 25), Qt.AlignCenter,
+                         "▼" if self.sysmon_expanded else "▶")
         painter.drawText(QRect(rect.right() - 25, rect.y(), 25, 25), Qt.AlignCenter, "[X]")
-        if not self.sysmon_expanded: return
+        if not self.sysmon_expanded:
+            return
         graph_x, graph_y = rect.x() + 5, rect.y() + 30
         graph_width, graph_height = rect.width() - 10, 50
         painter.setPen(QPen(border_color, 1))
@@ -1145,10 +1272,13 @@ class QtGameView(QOpenGLWidget):
         if len(self.frame_times) > 1:
             max_ft = max(max(self.frame_times), 16.67)
             step = graph_width / max(len(self.frame_times) - 1, 1)
-            points = [QPoint(int(graph_x + i * step), int(graph_y + graph_height - (ft / max_ft) * graph_height)) for i, ft in enumerate(self.frame_times)]
+            points = [QPoint(int(graph_x + i * step),
+                             int(graph_y + graph_height - (ft / max_ft) * graph_height))
+                      for i, ft in enumerate(self.frame_times)]
             painter.setPen(Qt.NoPen)
             painter.setBrush(QBrush(QColor(100, 200, 100, 40)))
-            poly = QPolygon([QPoint(graph_x, graph_y + graph_height)] + points + [QPoint(points[-1].x(), graph_y + graph_height)])
+            poly = QPolygon([QPoint(graph_x, graph_y + graph_height)] + points +
+                            [QPoint(points[-1].x(), graph_y + graph_height)])
             painter.drawPolygon(poly)
             painter.setPen(QPen(QColor(100, 255, 100), 1))
             painter.drawPolyline(QPolygon(points))
@@ -1165,25 +1295,34 @@ class QtGameView(QOpenGLWidget):
         line_height = 18
         current_ft = self.frame_times[-1] if self.frame_times else 0
         painter.setPen(QColor(255, 255, 255))
-        painter.drawText(left_margin, stats_start_y, f"Frame: {current_ft:.1f}ms  FPS: {self.fps:.0f}")
+        painter.drawText(left_margin, stats_start_y,
+                         f"Frame: {current_ft:.1f}ms  FPS: {self.fps:.0f}")
         painter.setPen(text_color)
-        painter.drawText(left_margin, stats_start_y + line_height * 2, f"Things:   {len(self.editor.state.things)}")
-        painter.drawText(left_margin, stats_start_y + line_height * 3, f"Draws:    {self.renderer.render_stats.draw_calls if self.renderer else 0}")
+        painter.drawText(left_margin, stats_start_y + line_height * 2,
+                         f"Things:   {len(self.editor.state.things)}")
+        painter.drawText(left_margin, stats_start_y + line_height * 3,
+                         f"Draws:    {self.renderer.render_stats.draw_calls if self.renderer else 0}")
         brush_text = f"Brushes:  {self.sysmon_stats.get('total_brushes', 0)} "
         painter.drawText(left_margin, stats_start_y + line_height * 4, brush_text)
         tri_text = f"Tris:     {total_tris} "
         painter.drawText(left_margin, stats_start_y + line_height * 5, tri_text)
-        fm = painter.fontMetrics()
+        # FIX: reuse cached QFontMetrics instead of calling painter.fontMetrics()
+        fm = self._console_fm
         painter.setPen(QColor(50, 200, 50))
-        painter.drawText(left_margin + fm.horizontalAdvance(brush_text), stats_start_y + line_height * 4, f"(Visible: {self.sysmon_stats.get('visible_brushes', 0)})")
-        painter.drawText(left_margin + fm.horizontalAdvance(tri_text), stats_start_y + line_height * 5, f"(Visible: {visible_tris})")
+        painter.drawText(left_margin + fm.horizontalAdvance(brush_text),
+                         stats_start_y + line_height * 4,
+                         f"(Visible: {self.sysmon_stats.get('visible_brushes', 0)})")
+        painter.drawText(left_margin + fm.horizontalAdvance(tri_text),
+                         stats_start_y + line_height * 5,
+                         f"(Visible: {visible_tris})")
         painter.setPen(QColor(180, 180, 180))
         culled_brushes = self.sysmon_stats.get('culled_brushes', 0)
         total_brushes = self.sysmon_stats.get('total_brushes', 0)
         cull_pct = (culled_brushes / total_brushes * 100) if total_brushes > 0 else 0
         painter.drawText(left_margin, rect.bottom() - 10, f"Culled: {cull_pct:.1f}%")
         tps_text = f"TPS: {getattr(self.logic_thread, 'actual_tps', 0.0):.1f}"
-        painter.drawText(rect.right() - fm.horizontalAdvance(tps_text) - 10, rect.bottom() - 10, tps_text)
+        painter.drawText(rect.right() - fm.horizontalAdvance(tps_text) - 10,
+                         rect.bottom() - 10, tps_text)
 
     def _draw_render_menu(self, painter):
         width, height = 200, 120
@@ -1224,6 +1363,14 @@ class QtGameView(QOpenGLWidget):
             'LevelChanger': 'levelchanger.png',
             'Portal': 'portal.png',
         }
+        # Preload weapon HUD textures
+        for weapon in ['gun1', 'gun2', 'gun3']:
+            tid = self.load_texture(f'{weapon}HUD.png', 'sprites')
+            if tid:
+                self.sprite_textures[f'{weapon}_hud'] = tid
+            tid_flash = self.load_texture(f'{weapon}HUD_flash.png', 'sprites')
+            if tid_flash:
+                self.sprite_textures[f'{weapon}_flash'] = tid_flash
         for cls, fname in things.items():
             tid = self.load_texture(fname, 'sprites')
             if tid:
