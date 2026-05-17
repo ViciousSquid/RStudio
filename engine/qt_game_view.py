@@ -1007,6 +1007,14 @@ class QtGameView(QOpenGLWidget):
             self.update()
             return
 
+        # ---- F12: Kiosk mode toggle (play mode only) ----
+        if self.play_mode and event.key() == Qt.Key_F12:
+            if getattr(self.editor, 'is_kiosk_mode', False):
+                self.editor.exit_kiosk_mode(keep_play_mode=True)
+            else:
+                self.editor.enter_kiosk_mode()
+            return
+
         # ---- Death screen: any key press exits play mode ----
         if self.play_mode:
             render_state = self.game_state.get_render_state()
