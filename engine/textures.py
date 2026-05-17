@@ -12,7 +12,18 @@ class TextureManager:
         return self.textures[path]
 
     def _load_texture(self, path):
-        image = QImage(path)
+        from engine.resource_manager import ResourceManager
+        rm = ResourceManager()
+        
+        if rm.is_package_mode():
+            data = rm.get_asset(path)
+            if data:
+                image = QImage.fromData(data)
+            else:
+                image = QImage()
+        else:
+            image = QImage(path)
+
         if image.isNull():
             print(f"Error loading image: {path}")
             return -1
@@ -20,7 +31,6 @@ class TextureManager:
         image = image.convertToFormat(QImage.Format_RGBA8888)
         width, height = image.width(), image.height()
 
-        # FIX#10: Use constBits + sizeInBytes (Qt 5.10+) with fallback
         ptr = image.constBits()
         try:
             nbytes = image.sizeInBytes()
@@ -35,20 +45,13 @@ class TextureManager:
         gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, width, height, 0,
                      gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, data)
 
-        # Generate mipmaps, then set trilinear min filter + linear mag filter.
-        # (generateMipmap must happen AFTER texImage2D; MAG_FILTER must not be a
-        # mipmap filter — only MIN_FILTER supports mipmap variants.)
         gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
         gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR)
         gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
 
-        # Anisotropic filtering (if supported by the GL implementation).
-        # Uses the EXT_texture_filter_anisotropic enum values directly so this
-        # works on drivers that expose the extension without our needing the
-        # OpenGL.GL.EXT.texture_filter_anisotropic bindings.
         try:
-            max_aniso = gl.glGetFloatv(0x84FF)  # GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT
-            gl.glTexParameterf(gl.GL_TEXTURE_2D, 0x84FE, max_aniso)  # GL_TEXTURE_MAX_ANISOTROPY_EXT
+            max_aniso = gl.glGetFloatv(0x84FF)
+            gl.glTexParameterf(gl.GL_TEXTURE_2D, 0x84FE, max_aniso)
         except Exception:
             pass
 
