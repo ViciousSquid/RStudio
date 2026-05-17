@@ -29,11 +29,13 @@
 - Entity I/O system (Half-Life 2–style)
 - Visual scripting (25 examples)
 - NPCs/monsters
+- Node pathfinding
 
 ### Rendering
 - Real-time moving lights with (buggy) stencil shadows
 - Forward renderer with Frustum culling
 - Fog, glass, water and overbright shaders
+- Moving and rotating brushes
 - World Portals (Prey 2006 style)
 
 ### Technical
