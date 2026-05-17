@@ -23,6 +23,7 @@
 - Build a level, hit play, and walk around instantly
 - No compile or lightmap baking
 - Classic brush-based editing
+- Creations can be published and shared
 
 ### Logic & Gameplay
 - Entity I/O system (Half-Life 2–style)
