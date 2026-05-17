@@ -1144,6 +1144,12 @@ class Portal(Thing):
         self.properties.setdefault('color',    [255, 255, 255])
         self.properties.setdefault('show_rim', True)
 
+        # Parenting: attach this portal to a mover brush by name.
+        # When parent_mover is non-empty the logic thread moves this
+        # portal to (mover.pos + parent_offset) every tick during play.
+        self.properties.setdefault('parent_mover', '')
+        self.properties.setdefault('parent_offset', [0.0, 0.0, 0.0])
+
         # Internal transit cooldown (not saved to map file)
         self._transit_cooldown = 0.0
         # Last signed distance of player from this portal's plane (for edge detection)

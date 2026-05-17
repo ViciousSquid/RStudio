@@ -11,7 +11,7 @@ import time
 
 
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QMessageBox, QFileDialog, QWidget, QLabel, QVBoxLayout,
+    QApplication, QMainWindow, QMessageBox, QFileDialog, QDialog, QWidget, QLabel, QVBoxLayout,
     QGraphicsOpacityEffect, QInputDialog, QColorDialog, QProgressDialog, QAction
 )
 from PyQt5.QtWidgets import QShortcut
@@ -164,6 +164,7 @@ class MainWindow(QMainWindow):
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
         self.update_recent_files_menu()
+        self.setup_package_actions() 
         self.update_title()
         
         QTimer.singleShot(0, self.reposition_overlays)
@@ -1614,6 +1615,56 @@ class MainWindow(QMainWindow):
         msg_box.setStandardButtons(QMessageBox.Ok)
 
         msg_box.exec_()
+
+    # ------------------------------------------------------------------
+    #  .gamepackage Export Integration
+    # ------------------------------------------------------------------
+
+    def setup_package_actions(self):
+        """Add Export Package action to the File menu."""
+        export_action = QAction("Export Game Package...", self)
+        export_action.setShortcut("Ctrl+Shift+E")
+        export_action.triggered.connect(self.export_game_package)
+        self.file_menu.addAction(export_action)
+
+    def export_game_package(self):
+        """Trigger the full package export workflow."""
+        from editor.package_dialog import PackageMetadataDialog
+        from editor.package_exporter import PackageExporter
+
+        # Determine current map path (fallback if unsaved)
+        current_map = self.file_path or "maps/level_1.json"
+
+        # 1) Show metadata collection dialog
+        dialog = PackageMetadataDialog(current_map, self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        metadata = dialog.get_metadata()
+
+        # 2) Ask user where to save the .gamepackage file
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Game Package",
+            f"{metadata['title']}.gamepackage",
+            "Game Packages (*.gamepackage)"
+        )
+        if not output_path:
+            return
+
+        # 3) Run the export pipeline
+        exporter = PackageExporter(self.state, self.root_dir)
+        success, errors = exporter.export(output_path, metadata, self)
+
+        # 4) Notify user
+        if success:
+            self.show_toast(f"Package exported: {os.path.basename(output_path)}")
+        else:
+            QMessageBox.critical(
+                self,
+                "Export Failed",
+                "Errors occurred during export:\n\n" + "\n".join(errors)
+            )
 
     def new_map(self):
         # Check for unsaved changes

@@ -190,24 +190,24 @@ class Ui_MainWindow(object):
             }
         """)
         
-        file_menu = menubar.addMenu('File')
+        MainWindow.file_menu = menubar.addMenu('File')
         edit_menu = menubar.addMenu('Edit')
         view_menu = menubar.addMenu('View')
         logic_menu = menubar.addMenu('Logic')
         help_menu = menubar.addMenu('Help')
 
-        file_menu.addAction(QAction('New Map', MainWindow, shortcut='Ctrl+N', triggered=MainWindow.new_map))
-        file_menu.addAction(QAction('&Open...', MainWindow, shortcut='Ctrl+O', triggered=MainWindow.load_level))
+        MainWindow.file_menu.addAction(QAction('New Map', MainWindow, shortcut='Ctrl+N', triggered=MainWindow.new_map))
+        MainWindow.file_menu.addAction(QAction('&Open...', MainWindow, shortcut='Ctrl+O', triggered=MainWindow.load_level))
         
-        MainWindow.recent_menu = file_menu.addMenu('Recent')
-        file_menu.addSeparator()
+        MainWindow.recent_menu = MainWindow.file_menu.addMenu('Recent')
+        MainWindow.file_menu.addSeparator()
         
-        file_menu.addAction(QAction('&Save', MainWindow, shortcut='Ctrl+S', triggered=MainWindow.save_level))
-        file_menu.addAction(QAction('Save &As...', MainWindow, shortcut='Ctrl+Shift+S', triggered=MainWindow.save_level_as))
-        file_menu.addSeparator()
-        file_menu.addAction(QAction('Settings...', MainWindow, triggered=MainWindow.show_settings_dialog))
-        file_menu.addSeparator()
-        file_menu.addAction(QAction('Exit', MainWindow, shortcut='Ctrl+Q', triggered=MainWindow.close))
+        MainWindow.file_menu.addAction(QAction('&Save', MainWindow, shortcut='Ctrl+S', triggered=MainWindow.save_level))
+        MainWindow.file_menu.addAction(QAction('Save &As...', MainWindow, shortcut='Ctrl+Shift+S', triggered=MainWindow.save_level_as))
+        MainWindow.file_menu.addSeparator()
+        MainWindow.file_menu.addAction(QAction('Settings...', MainWindow, triggered=MainWindow.show_settings_dialog))
+        MainWindow.file_menu.addSeparator()
+        MainWindow.file_menu.addAction(QAction('Exit', MainWindow, shortcut='Ctrl+Q', triggered=MainWindow.close))
 
         MainWindow.undo_action = QAction(QIcon("assets/b_undo.png"), 'Undo', MainWindow)
         MainWindow.undo_action.setShortcut('Ctrl+Z')
