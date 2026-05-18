@@ -56,7 +56,6 @@ void main() {
     vec3 norm = normalize(Normal);
     vec3 result = vec3(0.1) * object_color;
     for(int i = 0; i < active_lights; i++) {
-        // FIX: use distSq to skip sqrt for out-of-range lights (matches ARM shader behaviour)
         highp vec3  toLight  = lights[i].position - FragPos;
         highp float distSq   = dot(toLight, toLight);
         highp float radiusSq = lights[i].radius * lights[i].radius;
@@ -115,7 +114,6 @@ void main() {
     vec3 result = vec3(0.1) * texColor.rgb;
 
     for(int i = 0; i < active_lights; i++) {
-        // FIX: use distSq to skip sqrt for out-of-range lights (matches ARM shader behaviour)
         highp vec3  toLight  = lights[i].position - FragPos;
         highp float distSq   = dot(toLight, toLight);
         highp float radiusSq = lights[i].radius * lights[i].radius;
@@ -619,6 +617,182 @@ void main() {
     FragColor = vec4(result, 1.0);
 }"""
 }
+
+# ----- ARM‑optimised shaders (used by BaseRenderer when arm_mode is True) -----
+DEFAULT_SHADERS['lit_arm.vert'] = """#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+out vec3 FragPos;
+out vec3 Normal;
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+uniform mat3 normalMatrix;
+void main() {
+    FragPos = vec3(model * vec4(aPos, 1.0));
+    Normal = normalMatrix * aNormal;
+    gl_Position = projection * view * vec4(FragPos, 1.0);
+}"""
+
+DEFAULT_SHADERS['lit_arm.frag'] = """#version 330 core
+out vec4 FragColor;
+in vec3 FragPos;
+in vec3 Normal;
+uniform vec3 object_color;
+uniform float alpha;
+struct Light { vec3 position; vec3 color; float intensity; float radius; };
+uniform Light lights[16];
+uniform int active_lights;
+void main() {
+    vec3 norm = normalize(Normal);
+    vec3 result = vec3(0.12) * object_color;
+    for(int i = 0; i < active_lights && i < 16; i++) {
+        vec3 toLight = lights[i].position - FragPos;
+        float distSq = dot(toLight, toLight);
+        float radiusSq = lights[i].radius * lights[i].radius;
+        if(distSq < radiusSq) {
+            float dist = sqrt(distSq);
+            vec3 lightDir = toLight / dist;
+            float diff = max(dot(norm, lightDir), 0.0);
+            float att = 1.0 - (dist / lights[i].radius);
+            att = att * att;
+            result += (diff * lights[i].color * lights[i].intensity * att) * object_color;
+        }
+    }
+    FragColor = vec4(result, alpha);
+}"""
+
+DEFAULT_SHADERS['textured_arm.vert'] = """#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+layout (location = 2) in vec2 aTexCoords;
+out vec3 FragPos;
+out vec3 Normal;
+out vec2 TexCoords;
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+uniform mat3 normalMatrix;
+uniform vec2 tex_scale;
+void main() {
+    FragPos = vec3(model * vec4(aPos, 1.0));
+    Normal = normalMatrix * aNormal;
+    TexCoords = aTexCoords * tex_scale;
+    gl_Position = projection * view * vec4(FragPos, 1.0);
+}"""
+
+DEFAULT_SHADERS['textured_arm.frag'] = """#version 330 core
+out vec4 FragColor;
+in vec3 FragPos;
+in vec3 Normal;
+in vec2 TexCoords;
+uniform sampler2D texture_diffuse;
+struct Light { vec3 position; vec3 color; float intensity; float radius; };
+uniform Light lights[16];
+uniform int active_lights;
+void main() {
+    vec4 texColor = texture(texture_diffuse, TexCoords);
+    if(texColor.a < 0.1) discard;
+    vec3 norm = normalize(Normal);
+    vec3 result = vec3(0.12) * texColor.rgb;
+    for(int i = 0; i < active_lights && i < 16; i++) {
+        vec3 toLight = lights[i].position - FragPos;
+        float distSq = dot(toLight, toLight);
+        float radiusSq = lights[i].radius * lights[i].radius;
+        if(distSq < radiusSq) {
+            float dist = sqrt(distSq);
+            vec3 lightDir = toLight / dist;
+            float diff = max(dot(norm, lightDir), 0.0);
+            float att = 1.0 - (dist / lights[i].radius);
+            att = att * att;
+            result += (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
+        }
+    }
+    FragColor = vec4(result, texColor.a);
+}"""
+
+DEFAULT_SHADERS['fog_arm.frag'] = """#version 330 core
+out vec4 FragColor;
+in vec3 localPos;
+uniform mat4 model;
+uniform mat4 inverseModel;
+uniform vec3 viewPos;
+uniform float density;
+uniform vec3 fogColor;
+uniform sampler3D noiseTexture;
+uniform float noiseScale;
+uniform float time;
+
+vec2 intersectBox(vec3 rayOrigin, vec3 rayDir) {
+    vec3 tMin = (-0.5 - rayOrigin) / rayDir;
+    vec3 tMax = ( 0.5 - rayOrigin) / rayDir;
+    vec3 t1 = min(tMin, tMax);
+    vec3 t2 = max(tMin, tMax);
+    float tNear = max(max(t1.x, t1.y), t1.z);
+    float tFar  = min(min(t2.x, t2.y), t2.z);
+    return vec2(tNear, tFar);
+}
+
+void main() {
+    vec3 fragWorldPos   = vec3(model * vec4(localPos, 1.0));
+    vec3 rayDirWorld    = normalize(fragWorldPos - viewPos);
+    vec3 rayOriginLocal = (inverseModel * vec4(viewPos,       1.0)).xyz;
+    vec3 rayDirLocal    = normalize((inverseModel * vec4(rayDirWorld, 0.0)).xyz);
+    vec2 t = intersectBox(rayOriginLocal, rayDirLocal);
+    float tNear = t.x;
+    float tFar  = t.y;
+    if (tNear >= tFar) discard;
+    tNear = max(0.0, tNear);
+
+    int   num_steps = 16;
+    float stepSize  = (tFar - tNear) / float(num_steps);
+    vec4  accumulatedColor = vec4(0.0);
+
+    for (int i = 0; i < num_steps; ++i) {
+        float currentT   = tNear + float(i) * stepSize;
+        vec3  samplePos  = rayOriginLocal + rayDirLocal * currentT;
+        vec3  noiseCoord = samplePos * noiseScale + vec3(0.0, 0.0, time * 0.1);
+        float noiseValue = texture(noiseTexture, noiseCoord).r;
+        float stepDensity   = density * noiseValue;
+        float transmittance = exp(-stepDensity * stepSize);
+        accumulatedColor.rgb += fogColor * (1.0 - transmittance) * (1.0 - accumulatedColor.a);
+        accumulatedColor.a   += (1.0 - transmittance);
+        if (accumulatedColor.a > 0.95) break;
+    }
+    accumulatedColor.a = clamp(accumulatedColor.a, 0.0, 1.0);
+    FragColor = accumulatedColor;
+}"""
+
+# ----- Portal shaders (used by BaseRenderer for stencil portals) -----
+DEFAULT_SHADERS['portal_mask.vert'] = """#version 330 core
+layout(location = 0) in vec3 aPos;
+uniform mat4 projection;
+uniform mat4 view;
+void main() {
+    gl_Position = projection * view * vec4(aPos, 1.0);
+}"""
+
+DEFAULT_SHADERS['portal_mask.frag'] = """#version 330 core
+out vec4 FragColor;
+void main() {
+    FragColor = vec4(0.0);
+}"""
+
+DEFAULT_SHADERS['portal_rim.vert'] = """#version 330 core
+layout(location = 0) in vec3 aPos;
+uniform mat4 projection;
+uniform mat4 view;
+void main() {
+    gl_Position = projection * view * vec4(aPos, 1.0);
+}"""
+
+DEFAULT_SHADERS['portal_rim.frag'] = """#version 330 core
+out vec4 FragColor;
+uniform vec4 rim_color;
+void main() {
+    FragColor = rim_color;
+}"""
+
 
 # Central Registry: (Shader Name) -> (Vertex Filename, Fragment Filename)
 SHADER_MAP = {

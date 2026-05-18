@@ -1,5 +1,3 @@
-# engine/resource_manager.py — Core abstraction upgrade
-
 import os
 import json
 import zipfile
@@ -57,7 +55,8 @@ class ResourceManager:
     def mount_package(self, package_path: str) -> bool:
         """
         Mount a .fiopak ZIP archive for in-memory asset streaming.
-        Returns True on successful mount with valid manifest.
+        Returns True on successful mount with valid manifest and an existing
+        start map.
         """
         self._cleanup_zip()
         
@@ -79,6 +78,13 @@ class ResourceManager:
             self._manifest = json.loads(manifest_data)
             print(f"[ResourceManager] Mounted package: {package_path}")
             print(f"  Title: {self._manifest.get('title', 'Untitled')}")
+            
+            # Verify / repair start map existence
+            if not self._ensure_start_map_exists():
+                print("[ResourceManager] Package has no usable start map – mount failed")
+                self._cleanup_zip()
+                return False
+            
             return True
             
         except (zipfile.BadZipFile, json.JSONDecodeError, KeyError) as e:
@@ -95,6 +101,48 @@ class ResourceManager:
         self._manifest = None
         self._asset_cache.clear()
         self._text_cache.clear()
+    
+    def _ensure_start_map_exists(self) -> bool:
+        """
+        Check that the start map referenced in the manifest actually exists
+        inside the ZIP. If not, try to find any .json map file in the archive
+        and update the manifest accordingly. Returns True if a valid start map
+        is available, False otherwise.
+        """
+        # Determine the current start map key (common names used by the editor)
+        possible_keys = ('map_path', 'start_map', 'main_map')
+        start_map = None
+        for key in possible_keys:
+            if key in self._manifest:
+                start_map = self._manifest[key]
+                if start_map:
+                    break
+        
+        # Normalise path (strip leading slashes, force forward slashes)
+        if start_map:
+            start_map = start_map.replace('\\', '/').lstrip('/')
+            # Try to read it from the ZIP
+            try:
+                self._zip_handle.getinfo(start_map)
+                return True
+            except KeyError:
+                print(f"[ResourceManager] Warning: start map '{start_map}' not found in package")
+                start_map = None
+        
+        # No valid start map – try to find any .json map file in the archive
+        map_files = [name for name in self._zip_handle.namelist()
+                     if name.endswith('.json') and not name.startswith('manifest.json')]
+        if not map_files:
+            print("[ResourceManager] No map file (.json) found in package")
+            return False
+        
+        # Pick the first map file (alphabetically)
+        candidate = sorted(map_files)[0]
+        print(f"[ResourceManager] Using auto‑detected map: {candidate}")
+        
+        # Update the manifest with the detected map (store under a standard key)
+        self._manifest['map_path'] = candidate
+        return True
     
     # ------------------------------------------------------------------
     # Asset Access API
@@ -194,8 +242,12 @@ class ResourceManager:
     
     def get_start_map(self) -> Optional[str]:
         """Resolve the starting map path from manifest."""
-        if self._manifest and 'start_map' in self._manifest:
-            return self._manifest['start_map']
+        if not self._manifest:
+            return None
+        # Try common keys in order of preference
+        for key in ('map_path', 'start_map', 'main_map'):
+            if key in self._manifest:
+                return self._manifest[key]
         return None
     
     def list_package_contents(self) -> List[str]:

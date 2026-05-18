@@ -18,7 +18,14 @@ from editor.things import (
 )
 from engine.player import Player
 from PIL import Image
-from .renderer import Renderer
+
+from .renderer_F   import Renderer_F
+from .renderer_D import Renderer_D
+_RENDERER_CLASSES = {
+    'Forward':  Renderer_F,
+    'Deferred': Renderer_D,
+}
+
 from engine import shaders
 from engine.threaded_game_state import ThreadedGameState, RenderState
 from engine.logic_thread import LogicThread
@@ -366,7 +373,8 @@ class QtGameView(QOpenGLWidget):
         except: pass
 
         config = getattr(self.editor, 'config', None)
-        self.renderer = Renderer(self.load_texture, self.grid_size, self.world_size, config)
+        self._renderer_mode = 'Forward'
+        self.renderer = Renderer_F(self.load_texture, self.grid_size, self.world_size, config)
         self.set_cull_distance(self.cull_distance)
 
         self._preload_assets()
@@ -756,9 +764,20 @@ class QtGameView(QOpenGLWidget):
                 self.renderer.draw_face_highlight(self.projection_matrix, self.view_matrix, brush, face_name)
 
         if render_state:
-            self.sysmon_stats['visible_brushes'] = len(render_state.visible_brushes)
-            self.sysmon_stats['culled_brushes'] = render_state.culled_brushes
-            self.sysmon_stats['total_brushes'] = render_state.total_brushes
+            visible = len(render_state.visible_brushes)
+            total   = render_state.total_brushes
+            # Actual brush count from the editor state (authoritative)
+            actual_total = len(self.editor.state.brushes)
+
+            # Prevent flicker: if render_state reports zero total but the map actually has brushes,
+            # it's a transient glitch – keep the previous stats.
+            if total == 0 and actual_total > 0:
+                # do not update sysmon_stats – retain old values
+                pass
+            else:
+                self.sysmon_stats['visible_brushes'] = visible
+                self.sysmon_stats['culled_brushes']  = render_state.culled_brushes
+                self.sysmon_stats['total_brushes']   = total
 
         # FIX: glFinish() instead of glFlush() — guarantees all GL commands have
         # completed before QPainter starts modifying the framebuffer.  glFlush()
@@ -1282,7 +1301,7 @@ class QtGameView(QOpenGLWidget):
         graph_bg_color = QColor(10, 10, 15, 200)
         target_height = 240 if self.sysmon_expanded else 30
         rect = QRect(self.debug_window_rect.x(), self.debug_window_rect.y(),
-                     self.debug_window_rect.width(), target_height)
+                    self.debug_window_rect.width(), target_height)
         painter.setPen(QPen(border_color, 1))
         painter.setBrush(QBrush(bg_color))
         painter.drawRect(rect)
@@ -1294,7 +1313,7 @@ class QtGameView(QOpenGLWidget):
         painter.setPen(QColor(255, 255, 255))
         painter.drawText(header_rect.adjusted(10, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, "SysMon [F3]")
         painter.drawText(QRect(rect.right() - 50, rect.y(), 25, 25), Qt.AlignCenter,
-                         "▼" if self.sysmon_expanded else "▶")
+                        "▼" if self.sysmon_expanded else "▶")
         painter.drawText(QRect(rect.right() - 25, rect.y(), 25, 25), Qt.AlignCenter, "[X]")
         if not self.sysmon_expanded:
             return
@@ -1307,8 +1326,8 @@ class QtGameView(QOpenGLWidget):
             max_ft = max(max(self.frame_times), 16.67)
             step = graph_width / max(len(self.frame_times) - 1, 1)
             points = [QPoint(int(graph_x + i * step),
-                             int(graph_y + graph_height - (ft / max_ft) * graph_height))
-                      for i, ft in enumerate(self.frame_times)]
+                            int(graph_y + graph_height - (ft / max_ft) * graph_height))
+                    for i, ft in enumerate(self.frame_times)]
             painter.setPen(Qt.NoPen)
             painter.setBrush(QBrush(QColor(100, 200, 100, 40)))
             poly = QPolygon([QPoint(graph_x, graph_y + graph_height)] + points +
@@ -1330,12 +1349,12 @@ class QtGameView(QOpenGLWidget):
         current_ft = self.frame_times[-1] if self.frame_times else 0
         painter.setPen(QColor(255, 255, 255))
         painter.drawText(left_margin, stats_start_y,
-                         f"Frame: {current_ft:.1f}ms  FPS: {self.fps:.0f}")
+                        f"Frame: {current_ft:.1f}ms  FPS: {self.fps:.0f}")
         painter.setPen(text_color)
         painter.drawText(left_margin, stats_start_y + line_height * 2,
-                         f"Things:   {len(self.editor.state.things)}")
+                        f"Things:   {len(self.editor.state.things)}")
         painter.drawText(left_margin, stats_start_y + line_height * 3,
-                         f"Draws:    {self.renderer.render_stats.draw_calls if self.renderer else 0}")
+                        f"Draws:    {self.renderer.render_stats.draw_calls if self.renderer else 0}")
         brush_text = f"Brushes:  {self.sysmon_stats.get('total_brushes', 0)} "
         painter.drawText(left_margin, stats_start_y + line_height * 4, brush_text)
         tri_text = f"Tris:     {total_tris} "
@@ -1344,11 +1363,11 @@ class QtGameView(QOpenGLWidget):
         fm = self._console_fm
         painter.setPen(QColor(50, 200, 50))
         painter.drawText(left_margin + fm.horizontalAdvance(brush_text),
-                         stats_start_y + line_height * 4,
-                         f"(Visible: {self.sysmon_stats.get('visible_brushes', 0)})")
+                        stats_start_y + line_height * 4,
+                        f"(Visible: {self.sysmon_stats.get('visible_brushes', 0)})")
         painter.drawText(left_margin + fm.horizontalAdvance(tri_text),
-                         stats_start_y + line_height * 5,
-                         f"(Visible: {visible_tris})")
+                        stats_start_y + line_height * 5,
+                        f"(Visible: {visible_tris})")
         painter.setPen(QColor(180, 180, 180))
         culled_brushes = self.sysmon_stats.get('culled_brushes', 0)
         total_brushes = self.sysmon_stats.get('total_brushes', 0)
@@ -1356,7 +1375,24 @@ class QtGameView(QOpenGLWidget):
         painter.drawText(left_margin, rect.bottom() - 10, f"Culled: {cull_pct:.1f}%")
         tps_text = f"TPS: {getattr(self.logic_thread, 'actual_tps', 0.0):.1f}"
         painter.drawText(rect.right() - fm.horizontalAdvance(tps_text) - 10,
-                         rect.bottom() - 10, tps_text)
+                        rect.bottom() - 10, tps_text)
+
+        # ── Active renderer label ─────────────────────────────────────────────
+        renderer_label = f"Renderer: "
+        renderer_name  = getattr(self, '_renderer_mode', 'Forward')
+        bold_font = QFont(self.console_font)
+        bold_font.setBold(True)
+        # RENDERER_LABEL_COLOUR — change the QColor here to restyle the name
+        renderer_name_color = QColor(120, 210, 255)
+        painter.setFont(self.console_font)
+        painter.setPen(text_color)
+        painter.drawText(left_margin, stats_start_y + line_height, renderer_label)
+        label_w = fm.horizontalAdvance(renderer_label)
+        painter.setFont(bold_font)
+        painter.setPen(renderer_name_color)
+        painter.drawText(left_margin + label_w, stats_start_y + line_height, renderer_name)
+        painter.setFont(self.console_font)   # restore for any subsequent draws
+        # ─────────────────────────────────────────────────────────────────────
 
     def _draw_render_menu(self, painter):
         width, height = 200, 120
@@ -1637,6 +1673,72 @@ class QtGameView(QOpenGLWidget):
             self.renderer.lod_manager.cull_dist_sq = distance * distance
             self.renderer.lod_manager.full_dist_sq = (distance * 0.25) ** 2
         self.update()
+
+    def switch_renderer(self, mode: str):
+        """
+        Hot-swap the active renderer at runtime.
+ 
+        Called from the status-bar Renderer dropdown.
+        The method is safe to call from the Qt main thread at any time:
+        it acquires the GL context, tears down the old renderer cleanly,
+        builds the new one, and re-applies the current settings.
+        """
+        if mode == self._renderer_mode:
+            return
+ 
+        cls = _RENDERER_CLASSES.get(mode)
+        if cls is None:
+            print(f"[QtGameView] Unknown renderer mode '{mode}' — ignoring.")
+            return
+ 
+        print(f"[QtGameView] Switching renderer: {self._renderer_mode} → {mode}")
+ 
+        self.makeCurrent()
+        try:
+            # Tear down old renderer
+            old = self.renderer
+            self.renderer = None          # prevent paintGL from running mid-swap
+ 
+            if old is not None:
+                if hasattr(old, 'cleanup'):
+                    try:
+                        old.cleanup()
+                    except Exception as e:
+                        print(f"[QtGameView] Renderer cleanup warning: {e}")
+                # The renderer holds its own GL objects (VAOs/VBOs/shaders).
+                # Deleting the Python object triggers no GL calls on its own;
+                # cleanup() above is the safe teardown point.
+                del old
+ 
+            # Create new renderer with same config as before
+            config = getattr(self.editor, 'config', None)
+            self.renderer = cls(
+                self.load_texture, self.grid_size, self.world_size, config)
+ 
+            # Re-apply settings that were live on the old renderer
+            self.renderer.set_sprite_textures(self.sprite_textures)
+            self.renderer.set_instance_textures(self.sprite_textures)
+            self.renderer.lod_manager.cull_dist_sq = self.cull_distance * self.cull_distance
+            self.renderer.lod_manager.full_dist_sq = (self.cull_distance * 0.25) ** 2
+            self.grid_dirty = True   # force grid VBO rebuild next frame
+ 
+            self._renderer_mode = mode
+            print(f"[QtGameView] Renderer switched to {mode}.")
+        except Exception as exc:
+            print(f"[QtGameView] switch_renderer FAILED: {exc}")
+            # Emergency fallback – reinstate the forward renderer so the
+            # viewport doesn't go black.
+            try:
+                config = getattr(self.editor, 'config', None)
+                self.renderer = Renderer_F(
+                    self.load_texture, self.grid_size, self.world_size, config)
+                self._renderer_mode = 'Forward'
+            except Exception as fe:
+                print(f"[QtGameView] Emergency fallback also failed: {fe}")
+        finally:
+            self.doneCurrent()
+ 
+        self.update()   # request a repaint with the new renderer
 
     def get_selected_object_pos(self):
         if not self.editor.state.selected_object: return None
