@@ -99,6 +99,24 @@ class View2D(QWidget):
         self.connection_snap_target = None
         self.update()
 
+    def _store_previous_tab_index(self):
+        """Store the current tab index before switching to Properties."""
+        if hasattr(self.main_window, 'properties_tab_widget'):
+            self.main_window._previous_tab_index = self.main_window.properties_tab_widget.currentIndex()
+
+    def _focus_properties_tab(self):
+        """Focus the Properties tab in the properties dock."""
+        if hasattr(self.main_window, 'properties_tab_widget'):
+            self._store_previous_tab_index()
+            self.main_window.properties_tab_widget.setCurrentIndex(0)
+
+    def _restore_previous_tab(self):
+        """Restore focus to the previously active tab before Properties was focused."""
+        if hasattr(self.main_window, 'properties_tab_widget'):
+            prev_idx = getattr(self.main_window, '_previous_tab_index', None)
+            if prev_idx is not None and prev_idx < self.main_window.properties_tab_widget.count():
+                self.main_window.properties_tab_widget.setCurrentIndex(prev_idx)
+
     def start_connection_mode(self, source_obj):
         """Start connection mode programmatically (e.g., from property editor)."""
         if not source_obj:
@@ -1996,9 +2014,15 @@ class View2D(QWidget):
                     selected_objects.append(clicked_object)
                 
                 self.editor.set_selected_objects(selected_objects)
+                # Focus Properties tab when selecting objects
+                if selected_objects and hasattr(self.main_window, 'properties_tab_widget'):
+                    self._focus_properties_tab()
             else:
                 # Normal click - single selection
                 self.editor.set_selected_object(clicked_object)
+                # Focus Properties tab when selecting an object
+                if clicked_object and hasattr(self.main_window, 'properties_tab_widget'):
+                    self._focus_properties_tab()
 
             if clicked_object and not (event.modifiers() & Qt.ShiftModifier):
                 # Check if object is locked (works for both brushes and things)
@@ -2323,6 +2347,9 @@ class View2D(QWidget):
             self.main_window.save_state()
             self.editor.state.things.append(new_thing)
             self.editor.set_selected_object(new_thing)
+            # Focus the Properties tab when creating a new thing
+            if hasattr(self.main_window, 'properties_tab_widget'):
+                self._focus_properties_tab()
             self.update()
 
     def get_brush_at(self, screen_pos):

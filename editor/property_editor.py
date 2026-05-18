@@ -122,6 +122,13 @@ class PropertyEditor(QWidget):
                     saved_scroll_pos = widget.verticalScrollBar().value()
                     break
         
+        # When deselecting (obj is None), restore the previous tab if we were on Properties
+        if obj is None and self.current_object is not None:
+            if hasattr(self.editor, 'properties_tab_widget'):
+                prev_idx = getattr(self.editor, '_previous_tab_index', None)
+                if prev_idx is not None and self.editor.properties_tab_widget.currentIndex() == 0:
+                    self.editor.properties_tab_widget.setCurrentIndex(prev_idx)
+
         self._populating = True  # Set flag to prevent recursion
         self.current_object = obj
         self.clear_layout()
