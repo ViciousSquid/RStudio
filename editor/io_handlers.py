@@ -191,6 +191,11 @@ def register_all_input_handlers(io_manager: IOManager):
         target = param or entity.get('path_target', '')
         if not target:
             return
+
+        # ✅ Guard: ensure the state dictionary exists
+        if not hasattr(logic, 'mover_path_states'):
+            logic.mover_path_states = {}
+
         entity['path_target'] = target
         entity['start_on'] = True
         if idx not in logic.mover_path_states:
@@ -201,14 +206,16 @@ def register_all_input_handlers(io_manager: IOManager):
                 'waiting':      False,
                 'wait_remaining': 0.0,
             }
-        # Remove from direction-based state if present
         logic.mover_states.pop(idx, None)
 
     def mover_stop_path(entity, param, logic):
         """Stop PathNode following and hold position."""
         idx = _get_brush_index(entity, logic)
         if idx >= 0:
-            logic.mover_path_states.pop(idx, None)
+            # ✅ Guard: use getattr with default empty dict, then pop safely
+            states = getattr(logic, 'mover_path_states', None)
+            if states is not None:
+                states.pop(idx, None)
 
     def mover_set_path_target(entity, param, logic):
         """Change the target PathNode name for this mover."""

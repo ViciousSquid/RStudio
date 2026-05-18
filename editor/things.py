@@ -268,11 +268,40 @@ class Thing:
         self.properties['_io_connections'] = []
 
     def get_icon_pixmap(self):
-        """Return a small pixmap (≈60×60) for 2D views."""
-        pix = self.get_instance_pixmap()
-        if pix is not None and not pix.isNull():
-            return pix.scaled(60, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        return None
+        """Return the 60×60 icon for 2D views. Uses custom sprite_2d if set."""
+        custom_path = self.properties.get('sprite_2d', '')
+        if custom_path:
+            # Resolve absolute path
+            project_root = self._get_project_root()
+            abs_path = os.path.join(project_root, custom_path)
+            if os.path.exists(abs_path):
+                # Check cache
+                if abs_path not in Monster._icon_cache:
+                    pix = QPixmap(abs_path)
+                    if not pix.isNull():
+                        # Scale to 60×60 for 2D view
+                        scaled = pix.scaled(60, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                        Monster._icon_cache[abs_path] = scaled
+                    else:
+                        Monster._icon_cache[abs_path] = None
+                cached = Monster._icon_cache.get(abs_path)
+                if cached is not None:
+                    return cached
+
+        # Fallback to default monster.png
+        icon_path = "assets/sprites/monster.png"
+        try:
+            project_root = self._get_project_root()
+            abs_path = os.path.join(project_root, icon_path)
+            if os.path.exists(abs_path):
+                pix = QPixmap(abs_path)
+                if not pix.isNull():
+                    return pix
+        except Exception:
+            pass
+
+        # Ultimate fallback: scale the full‑size sprite
+        return super().get_icon_pixmap()
 
 
 # =============================================================================
@@ -347,6 +376,7 @@ class Monster(Thing):
     """Enemy entity with subtypes (human, flying)."""
     pixmap_path = "assets/sprites/monsters/human/idle.png"   # fallback
     _subtype_sprites = {}  # cache keyed by full sprite path (includes dead/alive state)
+    _icon_cache = {}       # 1.2.6.0: cache for 2D view icons (60×60)
 
     # PERF: get_sprite_path used to run up to 5 os.path.isfile() calls every
     # time it was called — and it is called per-Monster per-frame from
@@ -586,15 +616,18 @@ class Monster(Thing):
 
     @classmethod
     def clear_sprite_cache(cls):
-        """Clear all sprite-related caches.
-
-        Called when assets have been modified on disk (e.g., after asset
-        hot-reload or variant additions). Also resets the default-path and
-        custom-path existence caches introduced for the per-frame perf fix.
-        """
+        """Clear all sprite-related caches."""
         cls._subtype_sprites.clear()
         cls._default_path_cache.clear()
         cls._custom_path_exists_cache.clear()
+        # Invalidate the base class cache for Monster’s default pixmap
+        if cls.__name__ in Thing._pixmap_cache:
+            del Thing._pixmap_cache[cls.__name__]
+
+    @classmethod
+    def invalidate_icon_cache(cls):
+        """Clear the 2D icon cache (called after sprite_2d changes)."""
+        cls._icon_cache.clear()
 
 
 class Pickup(Thing):

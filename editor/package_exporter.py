@@ -74,10 +74,13 @@ class PackageExporter:
                 if not isinstance(thing, dict):
                     continue
                 props = thing.get('properties', {})
-                for key in ('model_path', 'sprite', 'sound', 'image', 'texture', 'material'):
-                    val = props.get(key)
-                    if val and isinstance(val, str):
-                        referenced_assets.add(val)
+                # Use ASSET_KEYS so we catch custom_idle, custom_shoot,
+                # custom_dead, sprite_2d, sound_file, texture_path, etc.
+                for asset_keys in self.ASSET_KEYS.values():
+                    for key in asset_keys:
+                        val = props.get(key)
+                        if val and isinstance(val, str):
+                            referenced_assets.add(val)
 
         # ── 3. Build the .fiopak zip ──────────────────────────────
         try:

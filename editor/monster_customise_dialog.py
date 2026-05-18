@@ -239,9 +239,15 @@ class MonsterCustomiseDialog(QDialog):
         try:
             from editor.things import Monster
             Monster.clear_sprite_cache()
-            Monster.invalidate_2d_sprite_cache()
-        except Exception:
-            pass
+            Monster.invalidate_icon_cache()   # <-- NEW: clear 2D icon cache
+            # Force the 2D views to redraw with the new sprite
+            main_window = self.window()
+            while main_window and not hasattr(main_window, 'update_all_ui'):
+                main_window = main_window.parent()
+            if main_window and hasattr(main_window, 'update_all_ui'):
+                main_window.update_all_ui()
+        except Exception as e:
+            print(f"Error refreshing UI after sprite change: {e}")
 
         self.accept()
 
