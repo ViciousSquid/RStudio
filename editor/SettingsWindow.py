@@ -28,10 +28,9 @@ class SettingsWindow(QDialog):
         # --- Create Tabs ---
         self._create_editor_tab()
         self._create_display_tab()
-        self._create_play_mode_tab()
+        self._create_play_modes_tab()
         self._create_controls_tab()
         self._create_keyboard_tab()
-        self._create_kiosk_tab()
         
         # --- Button Row ---
         button_layout = QHBoxLayout()
@@ -299,11 +298,11 @@ class SettingsWindow(QDialog):
                 "Full quality rendering enabled."
             )
 
-    def _create_play_mode_tab(self):
-        """Play Mode tab: Physics and gameplay settings."""
+    def _create_play_modes_tab(self):
+        """Play Modes tab: Merged Gameplay, Physics, and Kiosk/Window settings."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        self.tabs.addTab(widget, "Play Mode")
+        self.tabs.addTab(widget, "Play Modes")
         
         # --- Gameplay Section ---
         gameplay_group = QGroupBox("Gameplay")
@@ -318,13 +317,51 @@ class SettingsWindow(QDialog):
         gameplay_group.setLayout(gameplay_layout)
         layout.addWidget(gameplay_group)
         
+        # --- Window Mode Section ---
+        mode_group = QGroupBox("Window Mode (Fullscreen Mode F12)")
+        mode_layout = QFormLayout()
+        self.kiosk_mode_combo = QComboBox()
+        self.kiosk_mode_combo.addItems(["Fullscreen", "Borderless", "Windowed"])
+        mode_layout.addRow("Display Mode:", self.kiosk_mode_combo)
+        mode_group.setLayout(mode_layout)
+        layout.addWidget(mode_group)
+
+        # --- Resolution Section ---
+        self.res_group = QGroupBox("Resolution (Windowed Only)")
+        res_layout = QFormLayout()
+        self.kiosk_res_w = QSpinBox()
+        self.kiosk_res_w.setRange(640, 7680)
+        self.kiosk_res_h = QSpinBox()
+        self.kiosk_res_h.setRange(480, 4320)
+        res_layout.addRow("Width:", self.kiosk_res_w)
+        res_layout.addRow("Height:", self.kiosk_res_h)
+        self.res_group.setLayout(res_layout)
+        layout.addWidget(self.res_group)
+
+        # --- Package Launch Settings ---
+        self.launch_in_editor_checkbox = QCheckBox("Launch packages in editor mode")
+        self.launch_in_editor_checkbox.setToolTip(
+            "When enabled, opening a .fiopak loads the map in the editor\n"
+            "instead of launching kiosk mode."
+        )
+        layout.addWidget(self.launch_in_editor_checkbox)
+
+        # Handle context visibility toggle for Resolution box
+        self.kiosk_mode_combo.currentTextChanged.connect(self._toggle_resolution_visibility)
+        self._toggle_resolution_visibility()
+
         layout.addStretch()
+
+    def _toggle_resolution_visibility(self):
+        """Hides the resolution settings when Fullscreen or Borderless modes are active."""
+        mode = self.kiosk_mode_combo.currentText()
+        self.res_group.setVisible(mode == "Windowed")
 
     def _create_controls_tab(self):
         """Controls tab: Mouse and input settings."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        self.tabs.addTab(widget, "Controls")
+        self.tabs.addTab(widget, "Mouse")
         
         # --- Mouse Section ---
         mouse_group = QGroupBox("Mouse")
@@ -362,9 +399,8 @@ class SettingsWindow(QDialog):
 
         # 2. Dictionary Items
         shortcut_definitions = {
-            "apply_texture": "Shift+T",
-            "Clone Brush": "SPACE",
-            "Delete Brush": "DEL",
+            "Clone Selected": "SPACE",
+            "Delete Selected": "DEL",
             "reset_layout": "Ctrl+Shift+R",
             "save_layout": "Ctrl+Shift+S",
             "Logic Graph Editor": "Ctrl+L",
@@ -373,15 +409,12 @@ class SettingsWindow(QDialog):
             "Unhide All Brushes": "Shift+H",
             "Decrease Grid Size": "[",
             "Increase Grid Size": "]",
-            "Toggle play mode": "F5",
             "Use (play mode)": "E",
             "Show connections": "F1",
             "Show sprites": "F3",
-            "Connect trigger": "Ctrl+Drag",
             "Light Radius": "Shift+Wheel",
             "Light Intensity": "Ctrl+Wheel",
             "Free Camera": "R-Click+WASD",
-            "Move Camera": "SPACE+C",
         }
         
         self.shortcut_labels = {}
@@ -446,42 +479,6 @@ class SettingsWindow(QDialog):
         rebind_grid.addWidget(self.key_f5_edit, 1, 3)
         
         layout.addLayout(rebind_grid)
-        layout.addStretch()
-
-    def _create_kiosk_tab(self):
-        """Package Player / Kiosk Mode settings."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        self.tabs.addTab(widget, "Package Player")
-
-        mode_group = QGroupBox("Window Mode")
-        mode_layout = QFormLayout()
-        self.kiosk_mode_combo = QComboBox()
-        self.kiosk_mode_combo.addItems(["Fullscreen", "Borderless", "Windowed"])
-        mode_layout.addRow("Display Mode:", self.kiosk_mode_combo)
-        mode_group.setLayout(mode_layout)
-        layout.addWidget(mode_group)
-
-        res_group = QGroupBox("Resolution (Windowed Only)")
-        res_layout = QFormLayout()
-        self.kiosk_res_w = QSpinBox()
-        self.kiosk_res_w.setRange(640, 7680)
-        self.kiosk_res_h = QSpinBox()
-        self.kiosk_res_h.setRange(480, 4320)
-        res_layout.addRow("Width:", self.kiosk_res_w)
-        res_layout.addRow("Height:", self.kiosk_res_h)
-        res_group.setLayout(res_layout)
-        layout.addWidget(res_group)
-
-        # ── NEW: Launch packages in editor mode ─────────────────────────
-        self.launch_in_editor_checkbox = QCheckBox("Launch packages in editor mode")
-        self.launch_in_editor_checkbox.setToolTip(
-            "When enabled, opening a .fiopak loads the map in the editor\n"
-            "instead of launching kiosk mode."
-        )
-        layout.addWidget(self.launch_in_editor_checkbox)
-        # ───────────────────────────────────────────────────────────────
-
         layout.addStretch()
 
     def _apply_stylesheet(self):
@@ -582,7 +579,6 @@ class SettingsWindow(QDialog):
         self.launch_in_editor_checkbox.setChecked(
             self.config.getboolean('Kiosk', 'launch_in_editor', fallback=False)
         )
-
 
     def accept(self):
         """Saves the current UI state back to the config object."""
@@ -712,5 +708,3 @@ class SettingsWindow(QDialog):
                 pass
         
         os.execl(python, python, script, *args)
-
-
