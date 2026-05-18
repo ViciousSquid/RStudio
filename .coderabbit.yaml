@@ -1,0 +1,6 @@
+reviews:
+  auto_review:
+    enabled: true
+    # Tells CodeRabbit to watch PRs targeting 'stable' in addition to your default branch
+    base_branches:
+      - "1.2.6.0_Latest"
