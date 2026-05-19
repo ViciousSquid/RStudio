@@ -49,7 +49,7 @@
 - JSON level format
 - OBJ model support
 - OpenGL 3.3 target
-- Optimized for Snapdragon 8CX / Windows-on-ARM
+- Optimized for Snapdragon 8CX / Windows-on-ARM @60FPS
 
 🗎 Modular architecture, fully open source (MIT License)
 
