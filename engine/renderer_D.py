@@ -376,7 +376,7 @@ class Renderer_D(BaseRenderer):
             base = f"lights[{i}]"
             pos = getattr(light, 'pos', [0,0,0])
             gl.glUniform3f(gl.glGetUniformLocation(prog, f"{base}.position"), float(pos[0]), float(pos[1]), float(pos[2]))
-            color = light.properties.get('color', [1.0,1.0,1.0])
+            color = light.properties.get('colour', [1.0,1.0,1.0])
             if color and max(color) > 1.0:
                 color = [c/255.0 for c in color]
             gl.glUniform3f(gl.glGetUniformLocation(prog, f"{base}.color"), *[float(c) for c in color[:3]])
