@@ -69,7 +69,7 @@ Fio is structured as:
 - Engine Layer (rendering, physics, AI)
 - Rendering System
   - BaseRenderer (shared interface)
-  - Forward and Deferred pipelines
+  - Forward and Deferred pipelines (runtime-switchable)
   - Shared shader system
 
  ## Why Fio exists
