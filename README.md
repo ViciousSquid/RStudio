@@ -30,6 +30,7 @@
 - Visual scripting (25 examples)
 - NPCs/monsters
 - Node pathfinding
+- Logic Gates, Triggers, Timers
 
 ### Rendering
 - Real-time moving lights with (buggy) stencil shadows
