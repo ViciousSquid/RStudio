@@ -31,7 +31,7 @@ Shared base renderer & methods for forward/deferred pipelines.
 OpenGL DEFERRED renderer _(fallback to forward for wireframe/vertex modes)_
 
 ### `renderer_F.py`
-OpenGL FORWARD renderer
+OpenGL FORWARD renderer (default)
 
 ### `resource_manager.py`
 Caches textures, models, shaders.
