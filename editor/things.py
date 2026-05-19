@@ -1155,6 +1155,10 @@ class Portal(Thing):
         self.properties.setdefault('parent_mover', '')
         self.properties.setdefault('parent_offset', [0.0, 0.0, 0.0])
 
+        # FIX: New properties for local position and yaw offset (supports rotation)
+        self.properties.setdefault('parent_local_pos', None)   # None = use parent_offset (legacy)
+        self.properties.setdefault('parent_local_yaw', 0.0)
+
         # Internal transit cooldown (not saved to map file)
         self._transit_cooldown = 0.0
         # Last signed distance of player from this portal's plane (for edge detection)
@@ -1181,6 +1185,49 @@ class Portal(Thing):
             return math.radians(float(rot[0]))
         except (TypeError, ValueError, IndexError):
             return 0.0
+
+    # FIX: Helper to get portal's own yaw in degrees (for rotation update)
+    def get_yaw_degrees(self) -> float:
+        rot = self.properties.get('rotation', [0.0, 0.0, 0.0])
+        try:
+            return float(rot[0])
+        except (TypeError, ValueError, IndexError):
+            return 0.0
+
+    def set_yaw_degrees(self, yaw: float):
+        self.properties['rotation'][0] = yaw
+        self.properties['angle'] = yaw
+
+    def get_parent_local_pos(self):
+        """Return local position relative to mover's origin."""
+        local = self.properties.get('parent_local_pos')
+        if local is not None:
+            return local[:3]
+        return self.properties.get('parent_offset', [0.0, 0.0, 0.0])
+
+    def get_parent_local_yaw(self):
+        return float(self.properties.get('parent_local_yaw', 0.0))
+
+    def set_parent_local_transform(self, mover_pos, mover_yaw):
+        """Compute and store local position and yaw offset from the mover's current transform."""
+        self.properties['parent_local_pos'] = [
+            self.pos[0] - mover_pos[0],
+            self.pos[1] - mover_pos[1],
+            self.pos[2] - mover_pos[2]
+        ]
+        portal_yaw = self.get_yaw_degrees()
+        self.properties['parent_local_yaw'] = portal_yaw - mover_yaw
+
+    def get_yaw_degrees(self):
+        rot = self.properties.get('rotation', [0.0, 0.0, 0.0])
+        try:
+            return float(rot[0])
+        except (TypeError, ValueError, IndexError):
+            return 0.0
+
+    def set_yaw_degrees(self, yaw):
+        self.properties['rotation'][0] = yaw
+        self.properties['angle'] = yaw
 
     def get_normal(self):
         """
@@ -1219,6 +1266,19 @@ class Portal(Thing):
         if isinstance(v, bool):
             return v
         return str(v).lower() not in ('false', '0', 'no')
+
+    # FIX: Local position getter (with legacy fallback)
+    def get_parent_local_pos(self):
+        """Return local position relative to mover's origin.
+        If parent_local_pos is set, use it; otherwise fall back to parent_offset.
+        """
+        local = self.properties.get('parent_local_pos')
+        if local is not None:
+            return local[:3]
+        return self.properties.get('parent_offset', [0.0, 0.0, 0.0])
+
+    def get_parent_local_yaw(self) -> float:
+        return float(self.properties.get('parent_local_yaw', 0.0))
 
     # ── I/O interface ─────────────────────────────────────────────────────────
 
