@@ -8,11 +8,11 @@ import os
 import math
 import uuid
 from PyQt5.QtGui import QPixmap, QColor
-from PyQt5.QtCore import Qt   # Needed for scaling flags in get_icon_pixmap
+from PyQt5.QtCore import Qt
 import json
 import ast
 
-# Import debug logger - with fallback to print if not available
+
 try:
     from .debug_console import debug_log
 except ImportError:
@@ -143,6 +143,14 @@ class Thing:
 
         cls._pixmap_cache[class_name] = pixmap
         return pixmap
+
+    def get_icon_pixmap(self):
+        """Return a 60×60 icon for 2D views. Default implementation returns scaled instance pixmap."""
+        pixmap = self.get_instance_pixmap()
+        if pixmap and not pixmap.isNull():
+            # Scale to 60×60 for consistent icon size in 2D view
+            return pixmap.scaled(60, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        return None
     
     def get_instance_pixmap(self):
         """
@@ -266,43 +274,6 @@ class Thing:
     def clear_io_connections(self):
         """Clear all I/O connections."""
         self.properties['_io_connections'] = []
-
-    def get_icon_pixmap(self):
-        """Return the 60×60 icon for 2D views. Uses custom sprite_2d if set."""
-        custom_path = self.properties.get('sprite_2d', '')
-        if custom_path:
-            # Resolve absolute path
-            project_root = self._get_project_root()
-            abs_path = os.path.join(project_root, custom_path)
-            if os.path.exists(abs_path):
-                # Check cache
-                if abs_path not in Monster._icon_cache:
-                    pix = QPixmap(abs_path)
-                    if not pix.isNull():
-                        # Scale to 60×60 for 2D view
-                        scaled = pix.scaled(60, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                        Monster._icon_cache[abs_path] = scaled
-                    else:
-                        Monster._icon_cache[abs_path] = None
-                cached = Monster._icon_cache.get(abs_path)
-                if cached is not None:
-                    return cached
-
-        # Fallback to default monster.png
-        icon_path = "assets/sprites/monster.png"
-        try:
-            project_root = self._get_project_root()
-            abs_path = os.path.join(project_root, icon_path)
-            if os.path.exists(abs_path):
-                pix = QPixmap(abs_path)
-                if not pix.isNull():
-                    return pix
-        except Exception:
-            pass
-
-        # Ultimate fallback: scale the full‑size sprite
-        return super().get_icon_pixmap()
-
 
 # =============================================================================
 # STANDARD THING SUBCLASSES
@@ -612,7 +583,8 @@ class Monster(Thing):
         except Exception:
             pass
         # Fallback: scale the full sprite down
-        return super().get_icon_pixmap()
+        # Use get_instance_pixmap() instead of super().get_icon_pixmap()
+        return self.get_instance_pixmap()
 
     @classmethod
     def clear_sprite_cache(cls):
