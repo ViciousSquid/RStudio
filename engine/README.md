@@ -28,7 +28,7 @@ Qt OpenGL widget that hosts the Renderer
 Shared methods for forward/deferred pipelines.
 
 ### `renderer_D.py`
-OpenGL DEFERRED renderer
+OpenGL DEFERRED renderer _(fallback to forward for wireframe/vertex modes)_
 
 ### `renderer_F.py`
 OpenGL FORWARD renderer
