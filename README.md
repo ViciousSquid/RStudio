@@ -34,7 +34,7 @@
 
 ### Rendering
 - Real-time moving lights with (buggy) stencil shadows
-- Forward renderer with Frustum culling
+- Dual Forward and Deferred renderers with Frustum culling
 - Fog, glass, water and overbright shaders
 - Moving and rotating brushes
 - World Portals (Prey 2006 style)
