@@ -25,7 +25,7 @@ Player controller, noclip, strafe movement.
 Qt OpenGL widget that hosts the Renderer
 
 ### `renderer_core.py`
-Polymorphic shared base renderer for forward/deferred pipelines.
+Polymorphic shared base class for forward/deferred pipelines.
 
 ### `renderer_D.py`
 OpenGL DEFERRED renderer _(fallback to forward for wireframe/vertex modes)_
