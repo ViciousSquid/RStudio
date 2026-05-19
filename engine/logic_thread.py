@@ -491,6 +491,10 @@ class LogicThread(threading.Thread):
                 if 'original_pos' not in brush:
                     brush['original_pos'] = list(brush['pos'])
 
+                # FIX: initialise rotation_yaw if mover rotates
+                if brush.get('rotate', False) and 'rotation_yaw' not in brush:
+                    brush['rotation_yaw'] = 0.0
+
                 path_target = brush.get('path_target', '')
                 if path_target and brush.get('start_on', False):
                     self.mover_path_states[i] = {
@@ -1183,11 +1187,14 @@ class LogicThread(threading.Thread):
                 self._update_mover_path(i, brush, delta)
                 continue
 
+            # FIX: Handle rotation for movers that have 'rotate' = True
             if brush.get('rotate', False):
                 speed = brush.get('speed', 45.0)          # degrees per second
                 current = brush.get('_rot_angle', 0.0)
-                brush['_rot_angle'] = (current + speed * delta) % 360.0
-
+                new_angle = (current + speed * delta) % 360.0
+                brush['_rot_angle'] = new_angle
+                # Store the world yaw for parented portals/lights to use
+                brush['rotation_yaw'] = new_angle
 
             if i not in self.mover_states:
                 if 'original_pos' not in brush:
@@ -1453,11 +1460,11 @@ class LogicThread(threading.Thread):
 
 
     # =========================================================================
-    # PARENTED PORTALS
+    # PARENTED PORTALS (FIX: full transformation including rotation)
     # =========================================================================
 
     def _init_parented_portals(self):
-        """Find portals with a parent_mover and cache (portal, brush, offset)."""
+        """Find portals with a parent_mover, compute local position and yaw offset automatically."""
         self._parented_portals = []
         if Portal is None:
             return
@@ -1467,6 +1474,7 @@ class LogicThread(threading.Thread):
             parent_name = thing.properties.get('parent_mover', '')
             if not parent_name:
                 continue
+            # find the mover brush by name
             brush = None
             for b in self.brushes:
                 if b.get('is_mover') and b.get('name') == parent_name:
@@ -1475,32 +1483,50 @@ class LogicThread(threading.Thread):
             if brush is None:
                 print(f"[Portal] Warning: parent_mover '{parent_name}' not found for portal '{thing.properties.get('name', '')}'")
                 continue
+
+            # store original position and yaw for resetting later
             thing.properties['_original_pos'] = list(thing.pos)
-            offset = thing.properties.get('parent_offset')
-            if not offset or offset == [0.0, 0.0, 0.0]:
-                offset = [
-                    thing.pos[0] - brush['pos'][0],
-                    thing.pos[1] - brush['pos'][1],
-                    thing.pos[2] - brush['pos'][2],
-                ]
-                thing.properties['parent_offset'] = offset
-            self._parented_portals.append((thing, brush, offset))
+            thing.properties['_original_yaw'] = thing.get_yaw_degrees()
+
+            # if local transform not already stored, compute it now
+            if thing.properties.get('parent_local_pos') is None:
+                mover_yaw = brush.get('rotation_yaw', 0.0)
+                thing.set_parent_local_transform(brush['pos'], mover_yaw)
+
+            local_pos = thing.get_parent_local_pos()
+            local_yaw = thing.get_parent_local_yaw()
+
+            self._parented_portals.append((thing, brush, local_pos, local_yaw))
 
     def _reset_parented_portals(self):
-        """Restore portals to their original positions when exiting play mode."""
-        for portal, _brush, _offset in self._parented_portals:
+        """Restore portals to their original positions and yaws when exiting play mode."""
+        for portal, _brush, _local_pos, _local_yaw in self._parented_portals:
             original = portal.properties.pop('_original_pos', None)
             if original is not None:
                 portal.pos = list(original)
+            original_yaw = portal.properties.pop('_original_yaw', None)
+            if original_yaw is not None:
+                portal.set_yaw_degrees(original_yaw)
         self._parented_portals = []
 
     def _update_parented_portals(self):
-        """Update portal positions to follow their parent mover."""
-        for portal, brush, offset in self._parented_portals:
-            bpos = brush['pos']
-            portal.pos[0] = bpos[0] + offset[0]
-            portal.pos[1] = bpos[1] + offset[1]
-            portal.pos[2] = bpos[2] + offset[2]
+        """Update portal world position and yaw to follow the parent mover's position AND rotation."""
+        for portal, brush, local_pos, local_yaw in self._parented_portals:
+            mover_pos = brush['pos']
+            mover_yaw = brush.get('rotation_yaw', 0.0)   # degrees
+
+            # rotate local position by mover's yaw
+            yaw_rad = math.radians(mover_yaw)
+            cos_y = math.cos(yaw_rad)
+            sin_y = math.sin(yaw_rad)
+            world_x = mover_pos[0] + local_pos[0] * cos_y - local_pos[2] * sin_y
+            world_z = mover_pos[2] + local_pos[0] * sin_y + local_pos[2] * cos_y
+            portal.pos[0] = world_x
+            portal.pos[1] = mover_pos[1] + local_pos[1]
+            portal.pos[2] = world_z
+
+            # update portal's own yaw (facing direction)
+            portal.set_yaw_degrees(mover_yaw + local_yaw)
 
     # =========================================================================
     # PLAYER SHOOTING
