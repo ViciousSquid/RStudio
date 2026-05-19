@@ -21,6 +21,11 @@ except ImportError:
         def debug_log(category, message):
             print(f"[{category}] {message}")
 
+try:
+    from editor.things import ENTITY_TYPES
+except ImportError:
+    ENTITY_TYPES = {}
+
 
 def register_all_input_handlers(io_manager: IOManager):
     """Register all input handlers with the I/O manager."""
@@ -711,40 +716,75 @@ def register_all_input_handlers(io_manager: IOManager):
         if entity.properties.get('disabled', False):
             return
 
+        # ---- target node resolution with fallback ----
         target_name = entity.properties.get('target_node', '')
-        node = logic._find_path_node_by_name(target_name)
-        if not node:
-            debug_log("IO", f"LogicSpawner '{entity.name}': "
-                      f"target_node '{target_name}' not found.")
-            return
+        node = None
+        if target_name:
+            node = logic._find_path_node_by_name(target_name)
+            if not node:
+                debug_log("IO", f"LogicSpawner '{entity.name}': target_node '{target_name}' not found. Falling back to spawner position.")
+        else:
+            debug_log("IO", f"LogicSpawner '{entity.name}': no target_node set. Using spawner position.")
 
-        max_spawn   = int(entity.properties.get('max_spawn', 0))
+        spawn_pos = list(node.pos) if node else list(entity.pos)
+
+        # ---- spawn count limit ----
+        max_spawn = int(entity.properties.get('max_spawn', 0))
         spawn_count = entity.properties.get('_spawn_count', 0)
         if max_spawn > 0 and spawn_count >= max_spawn:
             if logic.io_manager:
                 logic.io_manager.fire_output(entity, 'OnMaxReached')
+            debug_log("IO", f"LogicSpawner '{entity.name}': max_spawn reached ({max_spawn})")
             return
 
+        # ---- spawn type (case‑insensitive) ----
         spawn_type = entity.properties.get('spawn_type', 'Monster')
-        from editor.things import ENTITY_TYPES
+        # ENTITY_TYPES is now imported from editor.things
         cls = ENTITY_TYPES.get(spawn_type)
         if cls is None:
-            debug_log("IO", f"LogicSpawner: unknown spawn_type '{spawn_type}'")
+            # case‑insensitive fallback
+            for key, value in ENTITY_TYPES.items():
+                if key.lower() == spawn_type.lower():
+                    cls = value
+                    break
+        if cls is None:
+            debug_log("Error", f"LogicSpawner: unknown spawn_type '{spawn_type}'")
             return
 
+        # ---- extra properties (spawn_properties) ----
         extra_props = dict(entity.properties.get('spawn_properties', {}))
-        new_thing = cls(pos=list(node.pos), properties=extra_props)
+
+        # ---- RANDOM MONSTER HANDLING ----
+        if spawn_type == 'Monster' and extra_props.get('random', False):
+            import random
+            from engine.monster_constants import MONSTER_VARIANTS
+
+            # Choose random monster type
+            monster_types = ['human', 'flying']
+            chosen_type = random.choice(monster_types)
+            extra_props['monster_type'] = chosen_type
+
+            # Choose random variant for that type (including <None>)
+            variants = ['<None>'] + MONSTER_VARIANTS.get(chosen_type, [])
+            chosen_variant = random.choice(variants)
+            extra_props['variant'] = chosen_variant
+
+            debug_log("IO", f"LogicSpawner random spawn: type={chosen_type}, variant={chosen_variant}")
+
+        # ---- create the new entity ----
+        new_thing = cls(pos=spawn_pos, properties=extra_props)
         logic.editor_state.things.append(new_thing)
         entity.properties['_spawn_count'] = spawn_count + 1
 
-        # Rebuild entity caches so the new thing is findable by name/id
+        # ---- rebuild caches so the new entity can be found by name/id ----
         if hasattr(logic, '_build_entity_caches'):
             logic._build_entity_caches()
 
+        # ---- fire outputs ----
         if logic.io_manager:
             logic.io_manager.fire_output(entity, 'OnSpawn')
-        debug_log("IO", f"LogicSpawner '{entity.name}' spawned "
-                  f"'{spawn_type}' at PathNode '{target_name}'")
+
+        debug_log("IO", f"LogicSpawner '{entity.name}' spawned '{spawn_type}' at {spawn_pos}")
 
     def spawner_enable(entity, param, logic):
         entity.properties['disabled'] = False
