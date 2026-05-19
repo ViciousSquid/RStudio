@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
 from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QFont
 from editor.things import Thing, Light, Pickup, Monster, Model, Speaker, LogicGate, PathNode, LogicCamera, LogicSpawner, Portal
+from engine.monster_constants import MONSTER_VARIANTS
 
 # I/O System imports
 try:
@@ -16,6 +17,7 @@ try:
     IO_AVAILABLE = True
 except ImportError:
     IO_AVAILABLE = False
+
 
 
 class ClickableLineEdit(QLineEdit):
@@ -2493,7 +2495,7 @@ class PropertyEditor(QWidget):
 
             tab_layout.addWidget(cam_group)
 
-        # === LOGIC SPAWNER ===
+               # === LOGIC SPAWNER ===
         if isinstance(thing, LogicSpawner):
             _spn_group_style = """
                 QGroupBox {
@@ -2567,6 +2569,139 @@ class PropertyEditor(QWidget):
             spn_form.addRow("Max Spawn:", max_spin)
 
             tab_layout.addWidget(spn_group)
+
+            # --- Monster Spawn Settings (only visible when spawn_type is 'Monster') ---
+            monster_group = QGroupBox("Monster Spawn Settings")
+            monster_group.setStyleSheet("""
+                QGroupBox {
+                    font-weight: bold;
+                    color: #F08000;
+                    border: 1px solid #F08000;
+                    border-radius: 4px;
+                    margin-top: 12px;
+                    padding-top: 8px;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    subcontrol-position: top left;
+                    left: 8px;
+                    padding: 0 4px;
+                    background-color: #2b3d3b;
+                }
+            """)
+            monster_form = QFormLayout(monster_group)
+            monster_form.setSpacing(6)
+            monster_form.setContentsMargins(8, 8, 8, 8)
+
+            # Get current spawn_properties
+            spawn_props = thing.properties.get('spawn_properties', {})
+
+            # Monster type combo
+            monster_type_combo = QComboBox()
+            monster_type_combo.addItems(['human', 'flying'])
+            current_mtype = spawn_props.get('monster_type', 'human')
+            monster_type_combo.setCurrentText(current_mtype)
+            monster_form.addRow("Monster Type:", monster_type_combo)
+
+            # Variant combo (populated based on monster type)
+            variant_combo = QComboBox()
+            variant_combo.setToolTip("Sprite variant (<None> = default, variant1 = alternative skin)")
+            monster_form.addRow("Variant:", variant_combo)
+
+            # Random checkbox
+            random_check = QCheckBox("Spawn random type & variant each time")
+            random_check.setStyleSheet(self._checkbox_style())
+            random_check.setChecked(spawn_props.get('random', False))
+            monster_form.addRow(random_check)
+
+            def populate_variant_combo():
+                from engine.monster_constants import MONSTER_VARIANTS
+                mtype = monster_type_combo.currentText()
+                variant_combo.blockSignals(True)
+                variant_combo.clear()
+                variant_combo.addItem('<None>')
+                for v in MONSTER_VARIANTS.get(mtype, []):
+                    variant_combo.addItem(v)
+                cur_variant = spawn_props.get('variant', '<None>')
+                idx = variant_combo.findText(cur_variant)
+                variant_combo.setCurrentIndex(idx if idx >= 0 else 0)
+                variant_combo.blockSignals(False)
+
+            def on_monster_type_changed(mtype):
+                # Update spawn_properties
+                spawn_props['monster_type'] = mtype
+                thing.properties['spawn_properties'] = spawn_props
+                # Update variant dropdown
+                populate_variant_combo()
+                # If random is off, also store the selected variant
+                if not random_check.isChecked():
+                    spawn_props['variant'] = variant_combo.currentText()
+                else:
+                    # Random mode: remove fixed type/variant
+                    spawn_props.pop('monster_type', None)
+                    spawn_props.pop('variant', None)
+                thing.properties['spawn_properties'] = spawn_props
+                self.editor.mark_dirty()
+
+            def on_variant_changed(variant):
+                if not random_check.isChecked():
+                    spawn_props['variant'] = variant
+                    thing.properties['spawn_properties'] = spawn_props
+                    self.editor.mark_dirty()
+
+            def on_random_toggled(checked):
+                spawn_props['random'] = checked
+                if checked:
+                    # Remove fixed type/variant
+                    spawn_props.pop('monster_type', None)
+                    spawn_props.pop('variant', None)
+                    # Disable combos
+                    monster_type_combo.setEnabled(False)
+                    variant_combo.setEnabled(False)
+                else:
+                    # Restore current combos to spawn_props
+                    spawn_props['monster_type'] = monster_type_combo.currentText()
+                    spawn_props['variant'] = variant_combo.currentText()
+                    monster_type_combo.setEnabled(True)
+                    variant_combo.setEnabled(True)
+                thing.properties['spawn_properties'] = spawn_props
+                self.editor.mark_dirty()
+
+            # Connect signals
+            monster_type_combo.currentTextChanged.connect(on_monster_type_changed)
+            variant_combo.currentTextChanged.connect(on_variant_changed)
+            random_check.toggled.connect(on_random_toggled)
+
+            # Apply the initial enabled state based on the checkbox
+            on_random_toggled(random_check.isChecked())
+
+            # Populate variants initially
+            populate_variant_combo()
+
+            # Show/hide the monster group based on spawn_type
+            def update_monster_group_visibility():
+                is_monster = (spawn_combo.currentText() == 'Monster')
+                monster_group.setVisible(is_monster)
+                if not is_monster:
+                    # Clear spawn_properties if they contain monster keys (cleanup)
+                    for k in ['monster_type', 'variant', 'random']:
+                        spawn_props.pop(k, None)
+                    thing.properties['spawn_properties'] = spawn_props
+                else:
+                    # Ensure spawn_properties dict exists
+                    if 'spawn_properties' not in thing.properties:
+                        thing.properties['spawn_properties'] = {}
+                    # If random is unchecked, store current values
+                    if not random_check.isChecked():
+                        spawn_props['monster_type'] = monster_type_combo.currentText()
+                        spawn_props['variant'] = variant_combo.currentText()
+                    thing.properties['spawn_properties'] = spawn_props
+                self.editor.mark_dirty()
+
+            spawn_combo.currentTextChanged.connect(lambda _: update_monster_group_visibility())
+            update_monster_group_visibility()   # initial state
+
+            tab_layout.addWidget(monster_group)
 
         # === MONSTER AI + FLAGS ===
         if isinstance(thing, Monster):
