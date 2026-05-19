@@ -10,9 +10,9 @@
 **Key Features**
 - 🔁 Runtime-switchable Forward & Deferred rendering
 - 🎨 Unified shader system across pipelines
-- 🧠 Half-Life 2–style Entity I/O logic system
+- 🧠 Entity I/O logic system inspired by Source engine
 - 🧱 Classic brush-based CSG editing
-* Designed to bring back the immediacy of classic Radiant/Worldcraft workflows.
+- **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
 ### [Download for macOS and Windows](https://github.com/ViciousSquid/Fio/releases) | [Getting Started](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) | [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
 #### Linux: use the included Dockerfile or [run from source](https://github.com/ViciousSquid/Fio#-quickstart)
