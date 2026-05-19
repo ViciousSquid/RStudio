@@ -5,7 +5,7 @@
 
 <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="MIT License">  <img src="https://img.shields.io/badge/status-Active%20Development-orange?style=for-the-badge" alt="Status">
 
-### _A modular 3D engine and brush-based CSG level editor inspired by Radiant and Hammer, with runtime-switchable forward and deferred rendering, a shared shader system, and a HL2-style entity I/O pipeline._
+### _A modular 3D engine and brush-based CSG level editor inspired by Radiant and Hammer, with runtime-switchable forward and deferred rendering, a shared shader system, and a Half-Life 2-style entity I/O pipeline._
 
 **Key Features**
 - 🔁 Runtime-switchable Forward & Deferred rendering
