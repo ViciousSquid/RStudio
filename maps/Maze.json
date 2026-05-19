@@ -1167,12 +1167,12 @@
             "pos": [
                 -2240.0,
                 352.0,
-                672.0
+                384.0
             ],
             "size": [
                 128.0,
                 832.0,
-                704.0
+                128.0
             ],
             "textures": {
                 "north": "default.png",
@@ -1228,7 +1228,7 @@
         },
         {
             "pos": [
-                -1320.0,
+                -1312.0,
                 352.0,
                 1440.0
             ],
@@ -1288,6 +1288,47 @@
                 "down": "default.png"
             },
             "id": "52cac55f-03ab-4ac2-8fb9-140b1ae50c38"
+        },
+        {
+            "pos": [
+                -2480,
+                272,
+                544
+            ],
+            "size": [
+                304.0,
+                48.0,
+                304.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "colour": [
+                0.6039215686274509,
+                0.1450980392156863,
+                0.8
+            ],
+            "is_mover": true,
+            "speed": 96.0,
+            "distance": 512.0,
+            "direction": [
+                0.0,
+                0.0,
+                1.0
+            ],
+            "path_target": "PathNode_1",
+            "start_on": true,
+            "id": "ef6fd889-8ba1-434f-8c1c-946b6c40403b",
+            "original_pos": [
+                -2480,
+                272,
+                544
+            ]
         }
     ],
     "things": [
@@ -1783,6 +1824,118 @@
                     0.0,
                     0.0
                 ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                -2480,
+                272,
+                544
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_1",
+                "id": "75e12df5-be06-458f-92ed-4cd71465bd2e",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_2",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                -2480,
+                272,
+                1168
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_2",
+                "id": "daeca0be-87a7-4a83-ad7b-fa511780f69f",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_3",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                -1872,
+                272,
+                1168
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_3",
+                "id": "5548a778-5cfc-49e6-b55b-55430935a4a8",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_1",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "pickup",
+            "pos": [
+                -2464,
+                352,
+                1168
+            ],
+            "properties": {
+                "type": "pickup",
+                "name": "Pickup_1",
+                "id": "e05bf711-3498-4fe5-b379-6d83bcd30ebc",
+                "item_type": "gun2",
+                "value": 25,
+                "activation": "walk_over",
+                "collected": true,
+                "respawns": false,
+                "respawn_time": 20.0,
+                "key_name": "blue_key",
+                "custom_sprite": "assets/sprites/gun2.png"
+            },
+            "io_connections": []
+        },
+        {
+            "type": "monster",
+            "pos": [
+                -1501.24609375,
+                32.0,
+                945.1909790039062
+            ],
+            "properties": {
+                "type": "monster",
+                "name": "Monster_1",
+                "id": "a5fb6340-6ea6-47c2-9277-fb243fb6debd",
+                "monster_type": "flying",
+                "monster_id": 0,
+                "health": -50,
+                "damage": 10,
+                "triggered": false,
+                "wake_on_sight": true,
+                "awake": false,
+                "patrol": false,
+                "patrol_target": "",
+                "patrol_mode": "loop",
+                "variant": "variant1",
+                "sprite_width": 160,
+                "sprite_height": 160,
+                "sight": 512,
+                "non_hostile": false,
+                "dead": true
             },
             "io_connections": []
         }
