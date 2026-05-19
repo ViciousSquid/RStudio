@@ -5,9 +5,13 @@
 
 <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="MIT License">  <img src="https://img.shields.io/badge/status-Active%20Development-orange?style=for-the-badge" alt="Status">
 
-### _A real-time liminal Quake/Hammer-style CSG level editor and game engine_
+### _A modular 3D engine and brush-based CSG level editor inspired by Radiant and Hammer, with runtime-switchable forward and deferred rendering, a shared shader system, and a HL2-style entity I/O pipeline._
 
-* For rapid block-out, logic wiring, and gameplay testing.
+**Key Features**
+- 🔁 Runtime-switchable Forward & Deferred rendering
+- 🎨 Unified shader system across pipelines
+- 🧠 Half-Life 2–style Entity I/O logic system
+- 🧱 Classic brush-based CSG editing
 * Designed to bring back the immediacy of classic Radiant/Worldcraft workflows.
 
 ### [Download for macOS and Windows](https://github.com/ViciousSquid/Fio/releases) | [Getting Started](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) | [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
@@ -20,9 +24,10 @@
  ------------------------
 
 ### Core Workflow
-- Build a level, hit play, and walk around instantly
-- No compile or lightmap baking
-- Classic brush-based editing
+- Editor and engine run as a unified environment
+- Hit play instantly — no compile or bake step
+- Iterate on gameplay and logic in real-time
+- Design, test, and refine in a single environment
 - Creations can be published and shared
 
 ### Logic & Gameplay
@@ -33,12 +38,12 @@
 - Logic Gates, Triggers, Timers
 
 ### Rendering
-- Real-time moving lights with (buggy) stencil shadows
-- Switch on-the-fly between Forward & Deferred renderers
+- Dual rendering pipelines (Forward & Deferred, switchable at runtime)
+- Real-time dynamic lighting with shadows
 - Fog, glass, water and overbright shaders
 - Moving and rotating brushes
-- Frustum culling
 - World Portals (Prey 2006 style)
+- Frustum culling
 
 ### Technical
 - JSON level format
@@ -46,7 +51,7 @@
 - OpenGL 3.3 target
 - Optimized for Snapdragon 8CX / Windows-on-ARM
 
-🗎 Fully modular and open source (MIT License)
+🗎 Modular architecture, fully open source (MIT License)
 
 
   ------------------------
@@ -56,6 +61,27 @@
 
 
   ------------------------------
+ ## Architecture Overview
+
+Fio is structured as:
+
+- Editor Layer (PyQt UI, tools, asset browser)
+- Engine Layer (rendering, physics, AI)
+- Rendering System
+  - BaseRenderer (shared interface)
+  - Forward and Deferred pipelines
+  - Shared shader system
+
+ ## Why Fio exists
+
+Most Python 3D engines focus on simplicity or education.
+
+Fio is built as:
+- a rendering experimentation platform
+- a level editor inspired by classic BSP workflows
+- a systems-driven engine with tooling-first design
+
+------------------------------
 
  #### 🚀 Quickstart:
 
