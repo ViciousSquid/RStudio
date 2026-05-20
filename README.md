@@ -8,10 +8,9 @@
 ### _A modular 3D engine and brush-based CSG level editor inspired by Radiant and Hammer_
 
 **Key Features**
-- 🔁 Runtime-switchable Forward & Deferred rendering
-- 🎨 Unified shader system across pipelines
-- 🧠 Entity I/O logic system inspired by Source engine
-- 🧱 Classic brush-based CSG editing
+- Hit play instantly — no compile or bake step
+- Entity I/O logic system inspired by Source engine
+- Classic brush-based CSG editing
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
 ### [Download for macOS and Windows](https://github.com/ViciousSquid/Fio/releases) | [Getting Started](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) | [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
@@ -25,7 +24,6 @@
 
 ### Core Workflow
 - Editor and engine run as a unified environment
-- Hit play instantly — no compile or bake step
 - Iterate on gameplay and logic in real-time
 - Design, test, and refine in a single environment
 - Creations can be published and shared
@@ -38,18 +36,19 @@
 - Logic Gates, Triggers, Timers
 
 ### Rendering
-- Dual rendering pipelines (Forward & Deferred, switchable at runtime)
 - Real-time dynamic lighting with shadows
 - Fog, glass, water and overbright shaders
 - Moving and rotating brushes
 - World Portals (Prey 2006 style)
-- Frustum culling
+- Forward renderer with Frustum culling
 
 ### Technical
 - JSON level format
 - OBJ model support
 - OpenGL 3.3 target
 - Optimized for Snapdragon 8CX / Windows-on-ARM @60FPS
+- Editor Layer (PyQt UI, tools, asset browser)
+- Engine Layer (rendering, physics, AI)
 
 🗎 Modular architecture, fully open source (MIT License)
 
@@ -61,16 +60,6 @@
 
 
   ------------------------------
- ## Architecture Overview
-
-Fio is structured as:
-
-- Editor Layer (PyQt UI, tools, asset browser)
-- Engine Layer (rendering, physics, AI)
-- Rendering System
-  - BaseRenderer (shared interface)
-  - Forward and Deferred pipelines (runtime-switchable)
-  - Shared shader system
 
  ## Why Fio exists
 
