@@ -489,21 +489,6 @@ class Ui_MainWindow(object):
         bottom_layout.addSpacing(20)
         bottom_layout.addWidget(QLabel("Display:"))
         bottom_layout.addWidget(MainWindow.display_mode_combobox)
-
-        # --- RENDERER SELECTOR (far right, before notification area) ---
-        bottom_layout.addSpacing(20)
-        bottom_layout.addWidget(QLabel("Renderer:"))
-        MainWindow.renderer_combobox = QComboBox()
-        MainWindow.renderer_combobox.addItems(["Forward", "Deferred"])
-        MainWindow.renderer_combobox.setCurrentText("Forward")
-        MainWindow.renderer_combobox.setToolTip(
-            "Forward: classic single-pass rendering\n"
-            "Deferred: G-buffer pipeline (better with many lights)")
-        MainWindow.renderer_combobox.currentTextChanged.connect(
-            lambda mode: MainWindow.view_3d.switch_renderer(mode)
-                         if hasattr(MainWindow, 'view_3d') and MainWindow.view_3d
-                         else None)
-        bottom_layout.addWidget(MainWindow.renderer_combobox)
  
         # --- EXPANDING NOTIFICATION AREA (FAR RIGHT) ---
         # Add a small buffer spacing before the label
