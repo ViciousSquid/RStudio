@@ -20,10 +20,9 @@ from engine.player import Player
 from PIL import Image
 
 from .renderer_F   import Renderer_F
-from .renderer_D import Renderer_D
 _RENDERER_CLASSES = {
     'Forward':  Renderer_F,
-    'Deferred': Renderer_D,
+# Can add additional renderers here (e.g. deferred)
 }
 
 from engine import shaders

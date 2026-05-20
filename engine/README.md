@@ -24,14 +24,11 @@ Player controller, noclip, strafe movement.
 ### `qt_game_view.py`
 Qt OpenGL widget that hosts the Renderer
 
-### `renderer_core.py`
-Polymorphic shared base class for forward/deferred pipelines.
-
 ### `renderer_D.py`
-OpenGL DEFERRED renderer _(fallback to forward for wireframe/vertex modes)_
+OpenGL DEFERRED renderer
 
 ### `renderer_F.py`
-OpenGL FORWARD renderer (default)
+OpenGL FORWARD renderer
 
 ### `resource_manager.py`
 Caches textures, models, shaders.
