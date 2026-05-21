@@ -997,6 +997,8 @@ class MainWindow(QMainWindow):
                 self._start_oscillation_preview(brush)
                 return
 
+            original_pos = list(brush['pos'])
+
             self.preview_data = {
                 'obj': brush,
                 'is_path': True,
@@ -1009,11 +1011,10 @@ class MainWindow(QMainWindow):
                 'waiting': False,
                 'wait_remaining': 0.0,
                 'time': 0.0,
+                'original_pos': original_pos,
             }
             # Position the brush at the first node to start
             brush['pos'] = list(chain[0].pos)
-            self.preview_timer.start(16)
-            return
 
         # No path – use oscillation preview (original behaviour)
         self._start_oscillation_preview(brush)
@@ -1075,11 +1076,17 @@ class MainWindow(QMainWindow):
                 if self.preview_data.get('is_rotate'):
                     self.preview_data['obj'].pop('_rot_angle', None)
                 elif self.preview_data.get('is_path'):
-                    chain = self.preview_data.get('chain', [])
-                    if chain:
-                        self.preview_data['obj']['pos'] = list(chain[0].pos)
+                    # Restore the original position that was saved before preview started
+                    original_pos = self.preview_data.get('original_pos')
+                    if original_pos is not None:
+                        self.preview_data['obj']['pos'] = original_pos
                     else:
-                        self.preview_data['obj']['pos'] = self.preview_data.get('original_pos', [0,0,0])
+                        # Fallback (should not happen) – use first node or origin
+                        chain = self.preview_data.get('chain', [])
+                        if chain:
+                            self.preview_data['obj']['pos'] = list(chain[0].pos)
+                        else:
+                            self.preview_data['obj']['pos'] = [0, 0, 0]
                 else:
                     self.preview_data['obj']['pos'] = self.preview_data['original_pos']
                 self.preview_data = {}
@@ -2371,26 +2378,26 @@ class MainWindow(QMainWindow):
             self.view_3d.update()
 
     def save_level_as(self):
-        # Ensure 'filePath' is defined here
         filePath, _ = QFileDialog.getSaveFileName(self, "Save Level As", "maps", "JSON Files (*.json)")
-        
         if filePath:
             self.file_path = filePath
+            self.stop_mover_preview()
             self.save_level()
 
     def save_level(self):
         if not self.file_path:
             self.save_level_as()
             return
+
+        self.stop_mover_preview()
+
         try:
             with open(self.file_path, 'w') as f:
                 json.dump(self.state.get_level_data(), f, indent=4)
             print(f"Level saved to {self.file_path}")
-            
             self.unsaved_changes = False
             self.update_title()
             self.add_recent_file(self.file_path)
-            
             self.show_toast("Saved!")
         except Exception as e:
             self.show_toast(f"Error saving: {e}", is_error=True)
@@ -2622,7 +2629,9 @@ class MainWindow(QMainWindow):
 
             # Find the map JSON inside the package
             map_path = self._find_map_in_package(temp_dir)
-            self.file_path = map_path   # point to writable JSON, not the .fiopak archive
+            # Do NOT set file_path to the archive path – saving would corrupt the package.
+            # Force a "Save As" dialog the first time the user saves.
+            self.file_path = None
             if not map_path:
                 QMessageBox.critical(self, "Error", "No map file found in game package.")
                 return
