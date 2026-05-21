@@ -133,9 +133,9 @@ class MainWindow(QMainWindow):
         self.key_bindings = {}
 
         self.config = configparser.ConfigParser()
+        self.config.optionxform = str          # preserve case of option names
         self.config_path = 'settings.ini'
         self.load_config()
-
         self.load_key_bindings()
 
         self.unsaved_changes = False
@@ -1727,7 +1727,7 @@ class MainWindow(QMainWindow):
         dialog.set_dependency_info(len(all_maps), 0, exporter.errors)
         QApplication.processEvents()
         
-        success, errors = exporter.export(output_path, metadata, self)
+        success, errors = exporter.export(output_path, metadata, current_map, self)
 
         # Update dialog with results
         if success:
@@ -2574,6 +2574,20 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage("Layout reset to default.", 2000)
 
+    def _safe_extract_zip(self, zip_path, dest_dir):
+        """Extract a zip file safely, rejecting any member that would escape dest_dir."""
+        import zipfile
+        import os
+        import shutil
+
+        dest_dir = os.path.realpath(dest_dir)
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            for member in zf.infolist():
+                target_path = os.path.realpath(os.path.join(dest_dir, member.filename))
+                if not target_path.startswith(dest_dir + os.sep) and target_path != dest_dir:
+                    raise ValueError(f"Zip slip attempt detected: {member.filename}")
+            zf.extractall(dest_dir)
+
 
     def play_game_package(self):
         """Import a .fiopak file and launch it in kiosk mode."""
@@ -2604,10 +2618,11 @@ class MainWindow(QMainWindow):
             # Extract package to temp directory
             temp_dir = tempfile.mkdtemp(prefix="fio_package_")
             with zipfile.ZipFile(filePath, 'r') as zf:
-                zf.extractall(temp_dir)
+                self._safe_extract_zip(filePath, temp_dir)
 
             # Find the map JSON inside the package
             map_path = self._find_map_in_package(temp_dir)
+            self.file_path = map_path   # point to writable JSON, not the .fiopak archive
             if not map_path:
                 QMessageBox.critical(self, "Error", "No map file found in game package.")
                 return
@@ -2860,36 +2875,50 @@ class MainWindow(QMainWindow):
             self.open_logic_graph()
 
     def validate_io_connections(self):
-        """Check all entities for connections that point to missing targets."""
+        """Check all entities for connections that point to missing targets (by name or ID)."""
         all_names = set()
+        all_ids = set()
         for t in self.state.things:
             n = t.properties.get('name', '')
             if n:
                 all_names.add(n)
+            eid = getattr(t, 'id', None) or t.properties.get('id')
+            if eid is not None:
+                all_ids.add(eid)
+
         for b in self.state.brushes:
             n = b.get('name', '')
             if n:
                 all_names.add(n)
+            eid = b.get('id')
+            if eid is not None:
+                all_ids.add(eid)
 
         broken = []
         all_entities = list(self.state.things) + list(self.state.brushes)
         for entity in all_entities:
             if hasattr(entity, 'properties'):
-                conns    = entity.properties.get('_io_connections', [])
+                conns = entity.properties.get('_io_connections', [])
                 src_name = entity.properties.get('name', '?')
             else:
-                conns    = entity.get('_io_connections', [])
+                conns = entity.get('_io_connections', [])
                 src_name = entity.get('name', '?')
 
             for c in conns:
                 if isinstance(c, dict):
-                    tgt     = c.get('target', '')
-                    out_pin = c.get('output', '?')
+                    tgt_name = c.get('target', '')
+                    tgt_id   = c.get('target_id')
+                    out_pin  = c.get('output', '?')
                 else:
-                    tgt     = getattr(c, 'target_name', '')
-                    out_pin = getattr(c, 'output_name', '?')
-                if tgt and tgt not in all_names:
-                    broken.append(f"  {src_name}.{out_pin}  →  \"{tgt}\"  (NOT FOUND)")
+                    tgt_name = getattr(c, 'target_name', '')
+                    tgt_id   = getattr(c, 'target_id', None)
+                    out_pin  = getattr(c, 'output_name', '?')
+
+                if tgt_id is not None:
+                    if tgt_id not in all_ids:
+                        broken.append(f"  {src_name}.{out_pin}  →  (ID:{tgt_id})  NOT FOUND")
+                elif tgt_name and tgt_name not in all_names:
+                    broken.append(f"  {src_name}.{out_pin}  →  \"{tgt_name}\"  NOT FOUND")
 
         if broken:
             QMessageBox.warning(

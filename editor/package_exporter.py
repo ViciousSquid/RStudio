@@ -35,7 +35,7 @@ class PackageExporter:
         }
         self.errors: List[str] = []
     
-    def export(self, output_path, metadata, parent_widget=None):
+    def export(self, output_path, metadata, current_map_path, parent_widget=None):
         """Export the current project as a .fiopak zip."""
         import zipfile
         import json
@@ -47,9 +47,9 @@ class PackageExporter:
         if start_map and os.path.exists(start_map):
             all_maps = self._collect_map_dependencies(start_map)
         else:
-            # Fallback: just the current map if no path was provided
-            if self.editor_state.file_path and os.path.exists(self.editor_state.file_path):
-                all_maps.add(os.path.abspath(self.editor_state.file_path))
+            # Fallback: use the provided current_map_path (no longer relies on editor_state.file_path)
+            if current_map_path and os.path.exists(current_map_path):
+                all_maps.add(os.path.abspath(current_map_path))
 
         # ── 2. Gather referenced assets from ALL maps ────────────────────
         referenced_assets = set()
