@@ -24,8 +24,8 @@ Player controller, noclip, strafe movement.
 ### `qt_game_view.py`
 Qt OpenGL widget that hosts the Renderer
 
-### `renderer_D.py`
-OpenGL DEFERRED renderer
+### `renderer_core.py`
+BaseRenderer class (modular)
 
 ### `renderer_F.py`
 OpenGL FORWARD renderer
