@@ -301,8 +301,16 @@
                 ],
                 "active": true,
                 "color": "(255, 255, 255)",
-                "show_rim": true,
-                "angle": 0.0
+                "show_rim": false,
+                "angle": 0.0,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "parent_local_pos": null,
+                "parent_local_yaw": 0.0
             },
             "io_connections": []
         },
@@ -332,7 +340,15 @@
                     255
                 ],
                 "show_rim": true,
-                "angle": 0.0
+                "angle": 0.0,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "parent_local_pos": null,
+                "parent_local_yaw": 0.0
             },
             "io_connections": []
         },
