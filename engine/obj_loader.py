@@ -114,5 +114,5 @@ class OBJLoader:
                 elif keyword == 'Ks' and len(parts) >= 4:
                     mtl['specular'] = (float(parts[1]), float(parts[2]), float(parts[3]))
                 elif keyword in ('map_Kd', 'map_Ka') and len(parts) > 1:
-                    # Store relative texture path for later resolution
-                    mtl['texture'] = parts[1]
+                    # Join all remaining parts to handle spaces in filenames
+                    mtl['texture'] = ' '.join(parts[1:])

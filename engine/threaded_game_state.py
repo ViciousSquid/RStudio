@@ -28,6 +28,16 @@ class RenderState:
         self.player_max_health = 100
         self.player_dead = False
         self.active_weapon = None
+
+        # Player 2 (split-screen)
+        self.player2_pos = glm.vec3(0, 0, 0)
+        self.player2_angle = 0.0
+        self.player2_pitch = 0.0
+        self.player2_view_matrix = glm.mat4(1.0)
+        self.player2_health = 100
+        self.player2_max_health = 100
+        self.player2_dead = False
+        self.splitscreen_active = False
         
         # Scene Data
         self.visible_brushes = []
@@ -72,6 +82,14 @@ class RenderState:
         self.player_max_health = 100
         self.player_dead = False
         self.active_weapon = None
+        self.player2_pos = glm.vec3(0, 0, 0)
+        self.player2_angle = 0.0
+        self.player2_pitch = 0.0
+        self.player2_view_matrix = glm.mat4(1.0)
+        self.player2_health = 100
+        self.player2_max_health = 100
+        self.player2_dead = False
+        self.splitscreen_active = False
         self.visible_brushes = []
         self.all_brushes = []
         self.visible_things = []
@@ -112,6 +130,14 @@ class ThreadedGameState:
         # Use key — protected by its own lock
         self._use_key_lock = threading.Lock()
         self._use_key_pressed = False
+
+        # Player 2 input (gamepad / arrow keys)
+        self._p2_lock = threading.Lock()
+        self._p2_input = {
+            'move_x': 0.0, 'move_z': 0.0,
+            'look_dx': 0.0, 'look_dy': 0.0,
+            'jump': False, 'crouch': False,
+        }
 
         # Sound queue — thread-safe, accessed from logic and render threads
         self._sound_lock = threading.Lock()
@@ -206,6 +232,27 @@ class ThreadedGameState:
         """Thread-safe: enqueue a sound request from any thread."""
         with self._sound_lock:
             self.sound_queue.append(request)
+
+    # --- Player 2 Input ---
+
+    def set_p2_input(self, move_x: float, move_z: float,
+                     look_dx: float, look_dy: float,
+                     jump: bool, crouch: bool = False) -> None:
+        """Thread-safe: push P2 input from the render/UI thread."""
+        with self._p2_lock:
+            self._p2_input = {
+                'move_x': float(move_x),
+                'move_z': float(move_z),
+                'look_dx': float(look_dx),
+                'look_dy': float(look_dy),
+                'jump': bool(jump),
+                'crouch': bool(crouch),
+            }
+
+    def get_p2_input(self) -> dict:
+        """Thread-safe: read P2 input from the logic thread."""
+        with self._p2_lock:
+            return self._p2_input.copy()
 
     def consume_sounds(self) -> list:
         """Thread-safe: drain all pending sound requests (called from render thread)."""

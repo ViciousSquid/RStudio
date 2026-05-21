@@ -218,7 +218,7 @@ class Renderer_F(BaseRenderer):
     # --------------------------------------------------------------------------
     # render_scene – forward rendering pipeline
     # --------------------------------------------------------------------------
-    def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config):
+    def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config, clear=True):
         current_mode = config.get('render_mode', RENDER_MODE_LIT)
 
         gl.glEnable(gl.GL_DEPTH_TEST)

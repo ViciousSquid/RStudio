@@ -132,6 +132,10 @@ class LogicThread(threading.Thread):
         
         self.running = False
         self.player: Optional[Player] = None
+        self.player2: Optional[Player] = None
+        self.player2_health = 100
+        self.player2_max_health = 100
+        self.player2_dead = False
         self.play_mode = False
         self.terrain = None
         
@@ -303,6 +307,14 @@ class LogicThread(threading.Thread):
 
     def set_player(self, player: Optional[Player]):
         self.player = player
+
+    def set_player2(self, player2: Optional[Player]) -> None:
+        """Set or clear Player 2 for split-screen mode."""
+        self.player2 = player2
+        if player2 is None:
+            self.player2_health = 100
+            self.player2_max_health = 100
+            self.player2_dead = False
         
     def set_play_mode(self, enabled: bool):
         self.play_mode = enabled
@@ -346,6 +358,11 @@ class LogicThread(threading.Thread):
             # Reset visual fx
             self.bullet_marks = []
             self.muzzle_flash_active = False
+
+            # Reset P2 stats
+            self.player2_health = 100
+            self.player2_max_health = 100
+            self.player2_dead = False
 
             # Reset monster AI state (delegated)
             self._reset_all_monsters(clear_dead=True)
@@ -709,6 +726,22 @@ class LogicThread(threading.Thread):
 
         # Monster AI (delegated)
         self.monster_ai.update(delta)
+
+        # ── Player 2 physics (split-screen) ──────────────────────────────────
+        if self.player2 and not self.player2_dead:
+            p2 = self.game_state.get_p2_input()
+            p2_dir = glm.vec3(float(p2['move_x']), 0.0, float(p2['move_z']))
+            self.player2.angle -= float(p2['look_dx']) * 0.002
+            self.player2.pitch -= float(p2['look_dy']) * 0.002
+            self.player2.pitch = max(-1.5, min(1.5, self.player2.pitch))
+            mover_brushes = [b for _, b in self.movers]
+            door_brushes  = [b for _, b in self.doors]
+            self.player2.update(
+                delta, p2_dir,
+                bool(p2['jump']), False,   # crouch removed
+                self.brushes, mover_brushes, door_brushes, self.terrain,
+                spatial_grid=getattr(self, '_spatial_grid', None),
+            )
 
     # =========================================================================
     # PORTAL TRANSIT
@@ -1793,3 +1826,26 @@ class LogicThread(threading.Thread):
 
         write_state.visible_things = visible_things
         write_state.timestamp = time.perf_counter()
+
+        # ── Player 2 render state ─────────────────────────────────────────────
+        if self.play_mode and self.player2:
+            p2_pos   = glm.vec3(self.player2.pos)
+            p2_cam   = p2_pos + glm.vec3(0, self.player2.camera_height, 0)
+            p2_angle = self.player2.angle
+            p2_pitch = self.player2.pitch
+            p2_dir   = glm.vec3(
+                math.sin(p2_angle) * math.cos(p2_pitch),
+                math.sin(p2_pitch),
+                math.cos(p2_angle) * math.cos(p2_pitch),
+            )
+            write_state.player2_pos        = p2_pos
+            write_state.player2_angle       = p2_angle
+            write_state.player2_pitch       = p2_pitch
+            write_state.player2_view_matrix = glm.lookAt(
+                p2_cam, p2_cam + p2_dir, glm.vec3(0, 1, 0))
+            write_state.player2_health      = self.player2_health
+            write_state.player2_max_health  = self.player2_max_health
+            write_state.player2_dead        = self.player2_dead
+            write_state.splitscreen_active  = True
+        else:
+            write_state.splitscreen_active  = False
