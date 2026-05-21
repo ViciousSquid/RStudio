@@ -22,7 +22,6 @@ from PIL import Image
 from .renderer_F   import Renderer_F
 _RENDERER_CLASSES = {
     'Forward':  Renderer_F,
-# Can add additional renderers here (e.g. deferred)
 }
 
 from engine import shaders
@@ -40,19 +39,17 @@ def perspective_projection(fov, aspect, near, far):
 
 class QtGameView(QOpenGLWidget):
     def __init__(self, editor):
-        super().__init__(editor)  # MUST be first
+        super().__init__(editor)
 
         fmt = QSurfaceFormat()
         fmt.setVersion(3, 3)
         fmt.setProfile(QSurfaceFormat.CoreProfile)
         fmt.setDepthBufferSize(24)
         fmt.setStencilBufferSize(8)
-
-        self.setFormat(fmt)  # now it's safe
+        self.setFormat(fmt)
 
         self.editor = editor
 
-        # Rendering and view state
         self.brush_display_mode = "Solid Lit"
         self.show_triggers_as_solid = False
         self.camera = Camera()
@@ -69,11 +66,9 @@ class QtGameView(QOpenGLWidget):
         self.dragging_sysmon = False
         self.sysmon_drag_offset = QPoint(0, 0)
 
-        # Audio setup: Initialize Sound Pool
-        self.sound_pool = {}  # Map of filename -> list of QSoundEffect
+        self.sound_pool = {}
         self._init_sound_system()
 
-        # Initialize render mode names mapping for notifications
         self.render_mode_names = {
             RENDER_MODE_LIT: "Lit",
             RENDER_MODE_UNLIT: "Unlit",
@@ -91,22 +86,17 @@ class QtGameView(QOpenGLWidget):
             'culled_surfaces': 0
         }
 
-        # Threading Initialization
         self.game_state = ThreadedGameState()
-
         self.logic_thread: Optional[LogicThread] = None
         self.use_threading = True
         self._thread_started = False
 
-        # Face Mode Initialization
         self.face_mode_active = False
         self.hovered_face_info = None
 
-        # Input state
         self.mouselook_active = False
         self.last_mouse_pos = QPoint()
 
-        # Debug Window Manager State
         self.debug_mode_active = False
         self.debug_window_rect = QRect(20, 20, 400, 200)
         self.frame_times = deque(maxlen=100)
@@ -118,12 +108,11 @@ class QtGameView(QOpenGLWidget):
         self.texture_manager = {}
         self.sprite_textures = {}
         self.gun_hud_pixmaps = {}
-        self.gun_flash_pixmaps = {}  # gunxHUD_flash.png muzzle flash overlays
-        self.monster_debug_active = False  # F7 toggle
-        self.show_spatial_grid = False     # 'sg' console command toggle
+        self.gun_flash_pixmaps = {}
+        self.monster_debug_active = False
+        self.show_spatial_grid = False
         self.renderer = None
 
-        # Debug Rendering Resources
         self.debug_shader = None
         self.debug_vao = None
         self.debug_vbo = None
@@ -134,13 +123,11 @@ class QtGameView(QOpenGLWidget):
         self.play_mode = False
         self.player = None
 
-        # ── Split-screen / Player 2 ───────────────────────────────────────────
         self.player2 = None
-        self.splitscreen_mode = False   # toggled with F9 in play mode
+        self.splitscreen_mode = False
         self._gamepad = None
         self._init_gamepad()
 
-        # Stored spawn point so death-screen Escape can cleanly exit play mode
         self._last_player_start_pos = [0, 0, 0]
         self._last_player_start_angle = 0
 
@@ -150,7 +137,6 @@ class QtGameView(QOpenGLWidget):
         self.last_fps_time = time.perf_counter()
         self.start_time = time.perf_counter()
 
-        # Pre-allocated render config
         self._render_config = {
             "culling_enabled": True,
             "brush_display_mode": "Textured",
@@ -168,10 +154,9 @@ class QtGameView(QOpenGLWidget):
         self.gizmo_drag_axis = None
         self.gizmo_object_start_pos = None
         self.drag_start_on_axis = None
-        # Terrain sculpt painting mode
         self.terrain_sculpt_active = False
-        self.terrain_sculpt_painting = False  # True while mouse is held down
-        self.terrain_sculpt_mode = 'raise'    # raise / lower / smooth / flatten
+        self.terrain_sculpt_painting = False
+        self.terrain_sculpt_mode = 'raise'
         self.terrain_sculpt_radius = 50.0
         self.terrain_sculpt_strength = 20.0
         self.projection_matrix = glm.mat4(1.0)
@@ -179,15 +164,9 @@ class QtGameView(QOpenGLWidget):
         self._cached_aspect_ratio = 1.0
         self.cull_distance = 4096
 
-        # Matrix pointers for raw OpenGL calls
         self._proj_ptr = None
         self._view_ptr = None
 
-        # ---- In-game console overlay ----------------------------------------
-        # A floating QLineEdit that appears at the bottom of the viewport when
-        # the player presses the console key (default: backtick).  While it is
-        # visible, camera rotation and game input are frozen so the player can
-        # type freely.
         self.console_overlay_active = False
         self._console_input = QLineEdit(self)
         self._console_input.setPlaceholderText("Enter command…   Esc to close")
@@ -207,24 +186,16 @@ class QtGameView(QOpenGLWidget):
         self._console_input.installEventFilter(self)
         self._console_input.hide()
 
-        # ---- Play-mode enter hint (5-second transient HUD message) ----
         self._play_mode_hint = ""
         self._play_mode_hint_timer = QTimer(self)
         self._play_mode_hint_timer.setSingleShot(True)
         self._play_mode_hint_timer.timeout.connect(self._clear_play_mode_hint)
         self._cached_hint_text = None
         self._cached_hint_width = 0
-        # ---------------------------------------------------------------------
 
-        # Muzzle flash render-side frame counter. The logic thread sets
-        # muzzle_flash_active for a single tick, which repaint() can miss
-        # if it runs faster than the logic thread. This counter ensures the
-        # flash is visible for a consistent number of render frames.
         self._muzzle_flash_counter = 0
-        self._muzzle_flash_duration_frames = 3  # ~50ms at 60 FPS
+        self._muzzle_flash_duration_frames = 3
 
-        # FIX: Force full repaint every frame — prevents QPainter partial-update
-        # artifacts where old HUD frames persist alongside new GL frames.
         self.setAttribute(Qt.WA_OpaquePaintEvent)
         self.setAttribute(Qt.WA_NoSystemBackground)
 
@@ -237,7 +208,6 @@ class QtGameView(QOpenGLWidget):
         self.setMouseTracking(True)
 
     def _init_sound_system(self):
-        """Preload all sounds in assets/sounds to avoid lag during playback."""
         sound_dir = os.path.join(os.getcwd(), 'assets', 'sounds')
         if not os.path.exists(sound_dir):
             print("Warning: assets/sounds directory not found.")
@@ -252,11 +222,7 @@ class QtGameView(QOpenGLWidget):
                 count += 1
         print(f"Preloaded {count} sound files.")
 
-
     def _init_hud_caches(self):
-        """Pre-create fonts, pens, brushes and static text metrics to eliminate
-        per-frame allocations in the HUD / overlay rendering paths."""
-        # Fonts
         self._hud_font = QFont("Arial", 11)
         self._hud_font.setBold(True)
         self._hud_msg_font = QFont("Arial", 14)
@@ -269,7 +235,6 @@ class QtGameView(QOpenGLWidget):
         self._face_mode_font_top = QFont("Arial", 14, QFont.Bold)
         self._face_mode_font_bot = QFont("Arial", 10, QFont.Bold)
 
-        # Pens / Brushes (reused every frame)
         self._hud_bar_bg_pen = QPen(QColor(60, 60, 60), 2)
         self._hud_bar_bg_brush = QBrush(QColor(40, 40, 40, 200))
         self._hud_health_green = QColor(50, 200, 50)
@@ -285,7 +250,6 @@ class QtGameView(QOpenGLWidget):
         self._face_mode_box_brush = QBrush(QColor(0, 0, 0, 180))
         self._face_mode_pen = QPen(QColor(255, 255, 255))
 
-        # Static text widths (computed once – text & fonts never change)
         self._face_mode_top_width = QFontMetrics(self._face_mode_font_top).horizontalAdvance(
             "Select a FACE for texturing")
         self._face_mode_bot_width = QFontMetrics(self._face_mode_font_bot).horizontalAdvance(
@@ -295,15 +259,13 @@ class QtGameView(QOpenGLWidget):
         self._cached_death_sub_width = QFontMetrics(self._death_sub_font).horizontalAdvance(
             "Press Escape to return to the editor")
 
-        # Dynamic caches
         self._cached_hud_message = None
         self._cached_hud_message_width = 0
-        self._cached_gun_hud = {}          # (weapon, height) -> scaled QPixmap
-        self._cached_key_pixmaps = {}    # key_name -> scaled QPixmap
+        self._cached_gun_hud = {}
+        self._cached_key_pixmaps = {}
         self._cached_key_size = 100
         self._console_fm = QFontMetrics(self.console_font)
 
-        # Key fallback cache
         self._key_fallback_cache = {
             'blue_key':   (QColor(50, 100, 200), QPen(QColor(40, 80, 160), 2), QBrush(QColor(50, 100, 200))),
             'red_key':    (QColor(200, 50, 50),   QPen(QColor(160, 40, 40), 2),   QBrush(QColor(200, 50, 50))),
@@ -312,11 +274,7 @@ class QtGameView(QOpenGLWidget):
         }
         self._key_fallback_default = (QColor(150, 150, 150), QPen(QColor(120, 120, 120), 2), QBrush(QColor(150, 150, 150)))
 
-    # ── Gamepad / Split-screen helpers ────────────────────────────────────────
-
-    def _init_gamepad(self) -> None:
-        """Try to connect QGamepad device 0 for Player 2.
-        Falls back silently to arrow-key control if unavailable."""
+    def _init_gamepad(self):
         try:
             from PyQt5.QtGamepad import QGamepad, QGamepadManager
             connected = list(QGamepadManager.instance().connectedGamepads())
@@ -326,51 +284,46 @@ class QtGameView(QOpenGLWidget):
             else:
                 print("[Gamepad] No gamepad found — P2 will use arrow keys.")
         except Exception:
-            pass  # QtGamepad not installed
+            pass
 
-    def _update_p2_input(self) -> None:
-        """Poll gamepad (or arrow keys) each frame and push P2 input to game_state."""
-        DEAD = 0.15     # axis dead zone
-        TURN = 2.5      # arrow-key turn scale (passed as look_dx)
-
+    # MODIFIED: _update_p2_input now returns raw turn direction
+    def _update_p2_input(self):
+        DEAD = 0.15
         move_x = move_z = look_dx = look_dy = 0.0
         jump = crouch = False
 
         gp = self._gamepad
         if gp is not None and gp.isConnected():
             ax = gp.axisLeftX();  ay = gp.axisLeftY()
-            move_x = ax  if abs(ax) > DEAD else 0.0
-            move_z = -ay if abs(ay) > DEAD else 0.0   # forward = -Y axis
+            move_x = ax if abs(ax) > DEAD else 0.0
+            move_z = -ay if abs(ay) > DEAD else 0.0
             rx = gp.axisRightX(); ry = gp.axisRightY()
-            look_dx = rx * 5.0 if abs(rx) > DEAD else 0.0
-            look_dy = ry * 5.0 if abs(ry) > DEAD else 0.0
-            jump    = bool(gp.buttonA())
-            crouch  = bool(gp.buttonB())
+            look_dx = rx if abs(rx) > DEAD else 0.0   # raw turn rate
+            look_dy = ry if abs(ry) > DEAD else 0.0
+            jump = bool(gp.buttonA())
+            crouch = bool(gp.buttonB())
         else:
-            # Arrow-key fallback — safe in play mode because P1 uses WASD
-            keys     = self.editor.keys_pressed
-            move_z   = (1.0 if Qt.Key_Up    in keys else 0.0) \
-                     - (1.0 if Qt.Key_Down  in keys else 0.0)
-            look_dx  = (-TURN if Qt.Key_Left  in keys else 0.0) \
-                     + ( TURN if Qt.Key_Right in keys else 0.0)
-            jump     = Qt.Key_Return in keys or Qt.Key_Enter in keys
-            crouch   = False
+            keys = self.editor.keys_pressed
+            move_z = (1.0 if Qt.Key_Up in keys else 0.0) - (1.0 if Qt.Key_Down in keys else 0.0)
+            move_x = 0.0   # no strafe from arrow keys
+            # Turning: raw direction (-1, 0, 1)
+            look_dx = 0.0
+            if Qt.Key_Left in keys:
+                look_dx = -1.0
+            elif Qt.Key_Right in keys:
+                look_dx = 1.0
+            jump = Qt.Key_Return in keys or Qt.Key_Enter in keys
+            crouch = False
 
         self.game_state.set_p2_input(move_x, move_z, look_dx, look_dy, jump, crouch)
 
-    def _toggle_splitscreen(self) -> None:
-        """Enable / disable split-screen.  Safe to call mid-play-mode."""
+    def _toggle_splitscreen(self):
         self.splitscreen_mode = not self.splitscreen_mode
-
         if self.play_mode:
-            pos   = getattr(self, '_last_player_start_pos',   [0, 0, 0])
+            pos = getattr(self, '_last_player_start_pos', [0, 0, 0])
             angle = getattr(self, '_last_player_start_angle', 0)
             if self.splitscreen_mode:
-                self.player2 = Player(
-                    pos[0] + 32, pos[2],
-                    float(np.radians(90.0 - angle)),
-                    physics_enabled=True,
-                )
+                self.player2 = Player(pos[0] + 32, pos[2], np.radians(90.0 - angle), physics_enabled=True)
                 self.player2.pos.y = pos[1]
                 if self.logic_thread:
                     self.logic_thread.set_player2(self.player2)
@@ -378,97 +331,67 @@ class QtGameView(QOpenGLWidget):
                 self.player2 = None
                 if self.logic_thread:
                     self.logic_thread.set_player2(None)
-
-            # Update aspect ratio for the new viewport width
             w, h = self.width(), self.height()
             if h > 0:
                 vp_w = (w // 2) if self.splitscreen_mode else w
                 self._cached_aspect_ratio = vp_w / h
                 if self.logic_thread:
                     self.logic_thread.set_frustum_aspect(self._cached_aspect_ratio)
-
         status = "ON" if self.splitscreen_mode else "OFF"
         if hasattr(self.editor, 'show_toast'):
             self.editor.show_toast(f"Split-Screen: {status}  [F9]")
 
     def _preload_sound_file(self, name, path, pool_size=4):
-        """Creates a pool of QSoundEffects for a specific file to allow polyphony.
-
-        After setting the source we play once at zero volume and immediately
-        stop.  This forces the audio backend to decode and buffer the sample
-        so the very first *real* play() has no start-up latency.
-        """
         if name in self.sound_pool:
             return
-
         self.sound_pool[name] = []
         url = QUrl.fromLocalFile(path)
-
         for _ in range(pool_size):
             effect = QSoundEffect(self)
             effect.setSource(url)
-            # Prime the audio pipeline: play silent then stop
             effect.setVolume(0.0)
             effect.play()
             effect.stop()
             effect.setVolume(1.0)
             self.sound_pool[name].append(effect)
 
-
-
     def _clear_play_mode_hint(self):
-        """Clear the transient play-mode hint and trigger a repaint."""
         self._play_mode_hint = ""
         self._cached_hint_text = None
         self.update()
 
     def _get_sound_instance(self, name):
-        """Retrieve an available sound instance from the pool."""
         clean_name = os.path.basename(name)
-
         if clean_name not in self.sound_pool:
             path = os.path.join(os.getcwd(), 'assets', 'sounds', clean_name)
             if os.path.exists(path):
                 self._preload_sound_file(clean_name, path)
             else:
                 return None
-
         pool = self.sound_pool[clean_name]
-
-        # Find an instance that isn't playing
         for effect in pool:
             if not effect.isPlaying():
                 return effect
-
-        # All are playing — grow the pool
         if pool:
             source_url = pool[0].source()
             new_effect = QSoundEffect(self)
             new_effect.setSource(source_url)
             pool.append(new_effect)
             return new_effect
-
         return None
 
     def initializeGL(self):
         gl.glClearColor(0.1, 0.1, 0.15, 1.0)
-        try:
-            pass
-        except: pass
-
         config = getattr(self.editor, 'config', None)
         self._renderer_mode = 'Forward'
         self.renderer = Renderer_F(self.load_texture, self.grid_size, self.world_size, config)
         self.set_cull_distance(self.cull_distance)
-
         self._preload_assets()
         self.load_all_sprite_textures()
         if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'brushes'):
             self.preload_level_textures()
-
         self._start_logic_thread()
         self._init_debug_resources()
-
         if hasattr(self, 'debug_console_window'):
             QTimer.singleShot(1000, self.debug_console_window.show)
 
@@ -517,7 +440,8 @@ class QtGameView(QOpenGLWidget):
                     self.renderer.load_texture(os.path.join('terrain', f), 'textures')
 
     def _start_logic_thread(self):
-        if self._thread_started: return
+        if self._thread_started:
+            return
         self.logic_thread = LogicThread(self.game_state, self.editor.state, self.visibility_system)
         self.logic_thread.set_editor_camera(self.camera.pos, self.camera.yaw, self.camera.pitch, self.camera.fov)
         self.logic_thread.set_play_mode(False)
@@ -564,74 +488,45 @@ class QtGameView(QOpenGLWidget):
             self.fps = self.frame_count / fps_elapsed
             self.frame_count = 0
             self.last_fps_time = current_time
-
         self.frame_times.append(delta * 1000.0)
         self._process_sound_queue()
-
         if self.use_threading and self.logic_thread:
             keys = set() if self.console_overlay_active else self.editor.keys_pressed
             self.game_state.set_keys(keys)
-
-            # Poll P2 input (gamepad or arrow keys) when split-screen is active
             if self.play_mode and getattr(self, 'splitscreen_mode', False):
                 self._update_p2_input()
-
-            # Consume new-frame flag so the logic thread can write again.
-            # try_swap() both checks AND consumes in a single atomic call.
             has_new = self.game_state.try_swap()
-
-            # Use repaint() instead of update() to force a SYNCHRONOUS
-            # full-widget redraw.
             self.repaint()
-
-            # Also update the 2D views in play mode so monster positions are shown moving
             if has_new and self.play_mode:
                 self.editor.update_views()
         else:
             self.repaint()
 
     def _process_sound_queue(self):
-        """Checks the game state for new sound requests and plays them using pooled objects."""
         for request in self.game_state.consume_sounds():
             sound_file = request.get('file')
             volume = request.get('volume', 1.0)
-
             if not sound_file:
                 continue
-
             effect = self._get_sound_instance(sound_file)
-
             if effect:
                 effect.setVolume(volume)
                 effect.play()
 
     def _gather_io_connections(self):
-        """Collect all connection lines for 3D rendering.
-
-        Gathers three kinds of link:
-          1. I/O system connections  (yellow = logic, cyan = standard)
-          2. PathNode → next_node chains  (teal)
-          3. Monster → patrol_target  (teal)
-
-        Returns a list of dicts with 'src', 'dst', 'color' keys suitable
-        for Renderer.draw_connection_lines().
-        """
-        COLOR_LOGIC   = (1.0, 1.0, 0.0)            # yellow
-        COLOR_IO      = (0.0, 1.0, 1.0)            # cyan
-        COLOR_PATROL  = (0.15, 0.65, 0.60)         # teal (matches 2D view)
-
+        COLOR_LOGIC   = (1.0, 1.0, 0.0)
+        COLOR_IO      = (0.0, 1.0, 1.0)
+        COLOR_PATROL  = (0.15, 0.65, 0.60)
         try:
             from editor.io_system import get_connections
             io_available = True
         except ImportError:
             io_available = False
-
         try:
             from editor.things import PathNode, Monster
         except ImportError:
             PathNode = None
             Monster = None
-
         def find_pos_by_name(name):
             for b in self.editor.state.brushes:
                 if b.get('name') == name:
@@ -641,10 +536,7 @@ class QtGameView(QOpenGLWidget):
                 if t_name == name:
                     return t.pos
             return None
-
         lines = []
-
-        # --- 1. I/O system connections ---
         if io_available:
             for brush in self.editor.state.brushes:
                 for conn in get_connections(brush):
@@ -660,10 +552,6 @@ class QtGameView(QOpenGLWidget):
                         is_logic = thing.properties.get('type') == 'logic_gate'
                         color = COLOR_LOGIC if is_logic else COLOR_IO
                         lines.append({'src': thing.pos, 'dst': dst, 'color': color})
-
-        # --- 2. PathNode → next_node chains ---
-        # Build node_lookup here (outside the PathNode guard) so section 4
-        # (teleporters) can reuse it without a second O(n) scan.
         node_lookup = {}
         if PathNode is not None:
             for t in self.editor.state.things:
@@ -671,7 +559,6 @@ class QtGameView(QOpenGLWidget):
                     n = t.properties.get('name', '') or ''
                     if n:
                         node_lookup[n] = t
-
             for name, node in node_lookup.items():
                 next_name = node.get_next_node_name()
                 if not next_name:
@@ -680,8 +567,6 @@ class QtGameView(QOpenGLWidget):
                 if next_node is None:
                     continue
                 lines.append({'src': node.pos, 'dst': next_node.pos, 'color': COLOR_PATROL})
-
-        # --- 3. Monster → patrol_target ---
         if Monster is not None and PathNode is not None:
             for t in self.editor.state.things:
                 if not isinstance(t, Monster):
@@ -694,12 +579,7 @@ class QtGameView(QOpenGLWidget):
                 dst = find_pos_by_name(target_name)
                 if dst:
                     lines.append({'src': t.pos, 'dst': dst, 'color': COLOR_PATROL})
-
-        # --- 4. Teleporter connections (Action=teleport with target_node) ---
-        # FIX: Removed duplicate 'from editor.things import PathNode' import and
-        # duplicate node_lookup rebuild. PathNode is already imported at the top
-        # of this method and node_lookup was built in section 2 above.
-        COLOR_TELEPORT = (0.78, 0.39, 1.0)  # Purple-ish (RGB 200,100,255)
+        COLOR_TELEPORT = (0.78, 0.39, 1.0)
         if PathNode is not None:
             for brush in self.editor.state.brushes:
                 if not brush.get('is_trigger', False):
@@ -711,19 +591,134 @@ class QtGameView(QOpenGLWidget):
                     continue
                 dst_node = node_lookup.get(target_name)
                 if dst_node:
-                    lines.append({
-                        'src': brush['pos'],
-                        'dst': dst_node.pos,
-                        'color': COLOR_TELEPORT
-                    })
-
+                    lines.append({'src': brush['pos'], 'dst': dst_node.pos, 'color': COLOR_TELEPORT})
         return lines
+
+    # =========================================================================
+    # POST-EFFECT RENDERING METHODS
+    # =========================================================================
+
+    def _render_bullet_marks(self, marks, proj_matrix, view_matrix):
+        if not marks or 'simple' not in self.renderer.shaders:
+            return
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        shader = self.renderer.shaders['simple']
+        uniforms = self.renderer.uniforms['simple']
+        gl.glUseProgram(shader)
+        proj_ptr = glm.value_ptr(proj_matrix)
+        view_ptr = glm.value_ptr(view_matrix)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, view_ptr)
+        gl.glBindVertexArray(self.renderer.vaos['cube'])
+        for mark in marks:
+            pos = mark['pos']
+            alpha = mark['alpha']
+            gl.glUniform3f(uniforms['color'], 0.0, 0.0, 0.0)
+            mat = glm.translate(glm.mat4(1.0), glm.vec3(pos[0], pos[1], pos[2]))
+            mat = glm.scale(mat, glm.vec3(2.0, 2.0, 2.0))
+            gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+        gl.glBindVertexArray(0)
+        gl.glDisable(gl.GL_BLEND)
+
+    def _render_projectiles(self, projectiles, proj_matrix, view_matrix):
+        if not projectiles or 'sprite' not in self.renderer.shaders:
+            return
+        tex_id = (self.sprite_textures.get('projectile') or
+                  self.sprite_textures.get('Monster'))
+        if not tex_id:
+            return
+        from engine.monster_constants import MONSTER_PROJECTILE_SPRITE_SIZE
+        pw, ph = MONSTER_PROJECTILE_SPRITE_SIZE
+        shader = self.renderer.shaders['sprite']
+        uniforms = self.renderer.uniforms['sprite']
+        gl.glUseProgram(shader)
+        proj_ptr = glm.value_ptr(proj_matrix)
+        view_ptr = glm.value_ptr(view_matrix)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, view_ptr)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(uniforms['sprite_texture'], 0)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+        gl.glBindVertexArray(self.renderer.vaos['sprite'])
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        pos_loc = uniforms['sprite_pos_world']
+        size_loc = uniforms['sprite_size']
+        for proj in projectiles:
+            pos = proj['pos']
+            gl.glUniform3f(pos_loc, pos[0], pos[1], pos[2])
+            gl.glUniform2f(size_loc, pw, ph)
+            gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
+        gl.glBindVertexArray(0)
+        gl.glDisable(gl.GL_BLEND)
+
+    def _render_monster_debug_rays(self, rays, proj_matrix, view_matrix):
+        if not rays or not self.debug_shader:
+            return
+        gl.glUseProgram(self.debug_shader)
+        proj_loc = gl.glGetUniformLocation(self.debug_shader, 'projection')
+        view_loc = gl.glGetUniformLocation(self.debug_shader, 'view')
+        color_loc = gl.glGetUniformLocation(self.debug_shader, 'color')
+        proj_ptr = glm.value_ptr(proj_matrix)
+        view_ptr = glm.value_ptr(view_matrix)
+        gl.glUniformMatrix4fv(proj_loc, 1, gl.GL_FALSE, proj_ptr)
+        gl.glUniformMatrix4fv(view_loc, 1, gl.GL_FALSE, view_ptr)
+        gl.glBindVertexArray(self.debug_vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.debug_vbo)
+        for ray in rays:
+            s, e = ray['start'], ray['end']
+            if ray.get('color') == 'green':
+                gl.glUniform3f(color_loc, 0.0, 1.0, 0.0)
+            else:
+                gl.glUniform3f(color_loc, 1.0, 0.0, 0.0)
+            data = np.array([s[0], s[1], s[2], e[0], e[1], e[2]], dtype=np.float32)
+            gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data.nbytes, data)
+            gl.glDrawArrays(gl.GL_LINES, 0, 2)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
+        gl.glBindVertexArray(0)
+
+    def _render_spatial_grid(self, proj_matrix, view_matrix):
+        if not self.debug_shader or not self.logic_thread:
+            return
+        grid = getattr(self.logic_thread, '_spatial_grid', None)
+        if grid is None:
+            return
+        gl.glUseProgram(self.debug_shader)
+        proj_loc = gl.glGetUniformLocation(self.debug_shader, 'projection')
+        view_loc = gl.glGetUniformLocation(self.debug_shader, 'view')
+        color_loc = gl.glGetUniformLocation(self.debug_shader, 'color')
+        proj_ptr = glm.value_ptr(proj_matrix)
+        view_ptr = glm.value_ptr(view_matrix)
+        gl.glUniformMatrix4fv(proj_loc, 1, gl.GL_FALSE, proj_ptr)
+        gl.glUniformMatrix4fv(view_loc, 1, gl.GL_FALSE, view_ptr)
+        gl.glUniform3f(color_loc, 0.0, 0.8, 1.0)
+        gl.glBindVertexArray(self.debug_vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.debug_vbo)
+        cs = grid.cell_size
+        draw_y = 1.0
+        for (cx, cz) in grid.cells:
+            x0 = cx * cs
+            z0 = cz * cs
+            x1 = x0 + cs
+            z1 = z0 + cs
+            edges = [
+                (x0, draw_y, z0, x1, draw_y, z0),
+                (x1, draw_y, z0, x1, draw_y, z1),
+                (x1, draw_y, z1, x0, draw_y, z1),
+                (x0, draw_y, z1, x0, draw_y, z0),
+            ]
+            for e in edges:
+                data = np.array(e, dtype=np.float32)
+                gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data.nbytes, data)
+                gl.glDrawArrays(gl.GL_LINES, 0, 2)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
+        gl.glBindVertexArray(0)
 
     def paintGL(self):
         if not self.renderer or getattr(self.renderer, '_shader_init_failed', False):
             return
-
-        # Snapshot the entire render state atomically at the start of the frame
         render_state: Optional[RenderState] = None
         if self.use_threading and self.logic_thread:
             render_state = self.game_state.get_render_state()
@@ -741,24 +736,17 @@ class QtGameView(QOpenGLWidget):
                 self._cached_bullet_marks = list(getattr(render_state, 'bullet_marks', []))
                 self._cached_projectiles = list(getattr(render_state, 'projectiles', []))
                 self._cached_monster_rays = list(getattr(render_state, 'monster_debug_rays', []))
-
-        # Rebuild 3D grid VBO when grid/world size changed
         if self.grid_dirty:
             self.renderer.update_grid_buffers(self.world_size, self.grid_size)
             self.grid_dirty = False
-
-        # === THREADED RENDER PATH ===
         if self.use_threading and self.logic_thread:
             self.view_matrix = render_state.camera_view_matrix
-
             if render_state.is_play_mode:
                 camera_pos = render_state.player_pos
             else:
                 camera_pos = render_state.editor_camera_pos
-
             brushes_to_render = render_state.visible_brushes
             things_to_render = render_state.visible_things
-
             if not self.play_mode:
                 self.camera.pos = glm.vec3(render_state.editor_camera_pos)
                 self.camera.yaw = render_state.editor_camera_yaw
@@ -770,17 +758,13 @@ class QtGameView(QOpenGLWidget):
                 self.camera.yaw = 90.0 - math.degrees(render_state.player_angle)
                 self.camera.pitch = math.degrees(render_state.player_pitch)
         else:
-            # Non-threaded fallback (editor only)
             self.view_matrix = self.camera.get_view_matrix()
             camera_pos = self.camera.pos
             brushes_to_render = self.editor.state.brushes
             things_to_render = self.editor.state.things
-
         self.projection_matrix = perspective_projection(self.camera.fov, self._cached_aspect_ratio, 0.1, 10000.0)
-
         self._proj_ptr = glm.value_ptr(self.projection_matrix)
         self._view_ptr = glm.value_ptr(self.view_matrix)
-
         self._render_config["culling_enabled"] = self.culling_enabled
         self._render_config["brush_display_mode"] = self.brush_display_mode
         self._render_config["show_triggers_as_solid"] = self.show_triggers_as_solid
@@ -791,41 +775,31 @@ class QtGameView(QOpenGLWidget):
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
         self._render_config["grid_visible"] = getattr(self, 'grid_visible', True) and not self.play_mode
         self._render_config["terrain"] = getattr(self.editor, 'terrain', None)
-
         if render_state and hasattr(render_state, 'all_brushes'):
             self._render_config["all_brushes"] = render_state.all_brushes
         else:
             self._render_config["all_brushes"] = self.editor.state.brushes
-
         self.update_instance_textures(things_to_render)
-
-        # Decide whether split‑screen is active this frame
         _splitscreen = (
             self.play_mode
             and getattr(self, 'splitscreen_mode', False)
             and render_state is not None
             and getattr(render_state, 'splitscreen_active', False)
         )
-
         if _splitscreen:
             _w, _h = self.width(), self.height()
-            _half  = _w // 2
-            _asp   = _half / _h if _h > 0 else 1.0
-            _split_proj     = perspective_projection(self.camera.fov, _asp, 0.1, 10000.0)
-            _split_proj_ptr = glm.value_ptr(_split_proj)
+            _half = _w // 2
+            _asp = _half / _h if _h > 0 else 1.0
+            _split_proj = perspective_projection(self.camera.fov, _asp, 0.1, 10000.0)
 
-            # Full clear once (color, depth, stencil)
+            gl.glDisable(gl.GL_SCISSOR_TEST)
+            gl.glDepthMask(gl.GL_TRUE)
+            
             gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
 
-            # ------------------------------------------------------------
-            # Player 1 (left half)
-            # ------------------------------------------------------------
             gl.glEnable(gl.GL_SCISSOR_TEST)
             gl.glScissor(0, 0, _half, _h)
             gl.glViewport(0, 0, _half, _h)
-            gl.glClear(gl.GL_DEPTH_BUFFER_BIT)   # clear depth for left half
-
-            # Reset state to sane defaults before rendering
             gl.glDepthMask(gl.GL_TRUE)
             gl.glDepthFunc(gl.GL_LESS)
             gl.glDisable(gl.GL_BLEND)
@@ -838,22 +812,25 @@ class QtGameView(QOpenGLWidget):
                 clear=False
             )
 
-            # ------------------------------------------------------------
-            # Player 2 (right half)
-            # ------------------------------------------------------------
+            if render_state and hasattr(render_state, 'bullet_marks'):
+                self._render_bullet_marks(render_state.bullet_marks, _split_proj, self.view_matrix)
+            if render_state and hasattr(render_state, 'projectiles') and render_state.projectiles:
+                self._render_projectiles(render_state.projectiles, _split_proj, self.view_matrix)
+            if render_state and getattr(render_state, 'monster_debug_active', False):
+                self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []),
+                                                _split_proj, self.view_matrix)
+            if self.play_mode and getattr(self, 'show_spatial_grid', False):
+                self._render_spatial_grid(_split_proj, self.view_matrix)
+
             gl.glScissor(_half, 0, _half, _h)
             gl.glViewport(_half, 0, _half, _h)
-            gl.glClear(gl.GL_DEPTH_BUFFER_BIT)   # clear depth for right half
-
-            # Reset state again (left view may have changed it)
             gl.glDepthMask(gl.GL_TRUE)
             gl.glDepthFunc(gl.GL_LESS)
             gl.glDisable(gl.GL_BLEND)
             gl.glDisable(gl.GL_STENCIL_TEST)
 
-            # Use ALL brushes for Player 2 – no culling
             p2_brushes = render_state.all_brushes if hasattr(render_state, 'all_brushes') else brushes_to_render
-            _p2_view    = render_state.player2_view_matrix
+            _p2_view = render_state.player2_view_matrix
             _p2_cam_pos = render_state.player2_pos
 
             self.renderer.render_scene(
@@ -863,59 +840,52 @@ class QtGameView(QOpenGLWidget):
                 clear=False
             )
 
+            if render_state and hasattr(render_state, 'bullet_marks'):
+                self._render_bullet_marks(render_state.bullet_marks, _split_proj, _p2_view)
+            if render_state and hasattr(render_state, 'projectiles') and render_state.projectiles:
+                self._render_projectiles(render_state.projectiles, _split_proj, _p2_view)
+            if render_state and getattr(render_state, 'monster_debug_active', False):
+                self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []),
+                                                _split_proj, _p2_view)
+            if self.play_mode and getattr(self, 'show_spatial_grid', False):
+                self._render_spatial_grid(_split_proj, _p2_view)
+
             gl.glDisable(gl.GL_SCISSOR_TEST)
             gl.glViewport(0, 0, _w, _h)
         else:
-            # Single‑viewport rendering (normal or split‑screen off)
             self.renderer.render_scene(
                 self.projection_matrix, self.view_matrix, camera_pos,
                 brushes_to_render, things_to_render,
                 self.selected_object, self._render_config,
             )
-
-        # Render Bullet Marks
-        if render_state and hasattr(render_state, 'bullet_marks'):
-            self._render_bullet_marks(render_state.bullet_marks)
-
-        # Render flying‑monster projectiles
-        if render_state and hasattr(render_state, 'projectiles') and render_state.projectiles:
-            self._render_projectiles(render_state.projectiles)
-
-        # Render monster debug rays (F7 toggle)
-        if render_state and getattr(render_state, 'monster_debug_active', False):
-            self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []))
-
-        # Render spatial grid cells ('sg' console command)
-        if self.play_mode and getattr(self, 'show_spatial_grid', False):
-            self._render_spatial_grid()
-
-        # 3D I/O connection lines (editor only — never in play mode)
+            if render_state and hasattr(render_state, 'bullet_marks'):
+                self._render_bullet_marks(render_state.bullet_marks, self.projection_matrix, self.view_matrix)
+            if render_state and hasattr(render_state, 'projectiles') and render_state.projectiles:
+                self._render_projectiles(render_state.projectiles, self.projection_matrix, self.view_matrix)
+            if render_state and getattr(render_state, 'monster_debug_active', False):
+                self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []),
+                                                self.projection_matrix, self.view_matrix)
+            if self.play_mode and getattr(self, 'show_spatial_grid', False):
+                self._render_spatial_grid(self.projection_matrix, self.view_matrix)
         if not self.play_mode and getattr(self.editor, 'show_logic_links', False):
             conn_lines = self._gather_io_connections()
             if conn_lines:
-                self.renderer.draw_connection_lines(
-                    self.projection_matrix, self.view_matrix, conn_lines)
-
-        # Face Mode Highlight
+                self.renderer.draw_connection_lines(self.projection_matrix, self.view_matrix, conn_lines)
         if self.face_mode_active and self.hovered_face_info:
             brush, face_name = self.hovered_face_info
             if hasattr(self.renderer, 'draw_face_highlight'):
                 self.renderer.draw_face_highlight(self.projection_matrix, self.view_matrix, brush, face_name)
-
         if render_state:
             visible = len(render_state.visible_brushes)
-            total   = render_state.total_brushes
+            total = render_state.total_brushes
             actual_total = len(self.editor.state.brushes)
             if total == 0 and actual_total > 0:
-                pass  # transient glitch – keep previous stats
+                pass
             else:
                 self.sysmon_stats['visible_brushes'] = visible
-                self.sysmon_stats['culled_brushes']  = render_state.culled_brushes
-                self.sysmon_stats['total_brushes']   = total
-
+                self.sysmon_stats['culled_brushes'] = render_state.culled_brushes
+                self.sysmon_stats['total_brushes'] = total
         gl.glFinish()
-
-        # Draw 2D overlays directly on the widget
         painter = QPainter(self)
         if self.editor.config.getboolean('Display', 'show_fps', fallback=False):
             self._draw_fps_counter(painter)
@@ -933,312 +903,26 @@ class QtGameView(QOpenGLWidget):
                 self._draw_hud_splitscreen(painter, render_state)
             else:
                 self._draw_hud(painter, render_state)
-
-        # Death screen overlay
         if self.play_mode and render_state and getattr(render_state, 'player_dead', False):
             self._draw_death_screen(painter)
-
         if self.debug_mode_active:
             self._draw_window_manager(painter)
-
-        if not self.play_mode and getattr(self.editor, 'show_logic_links', False):
-            painter.setPen(QColor(255, 255, 0))
-            painter.setFont(QFont("Arial", 10, QFont.Bold))
-            # painter.drawText(10, self.height() - 40, "LINKS VISIBLE [F1]")
-
-        # Draw Face Mode UI Text
         if self.face_mode_active:
             painter.setFont(self._face_mode_font_top)
             ht = self._face_mode_font_top.pointSize() + 6
             painter.setFont(self._face_mode_font_bot)
             hb = self._face_mode_font_bot.pointSize() + 4
-
             cx = self.width() // 2
             margin_bottom = 30
             spacing = 5
             padding_x = 20
             padding_y = 10
-
             total_text_h = ht + hb + spacing
             box_w = max(self._face_mode_top_width, self._face_mode_bot_width) + (padding_x * 2)
             box_h = total_text_h + (padding_y * 2)
-
         painter.end()
-
-        # Decrement muzzle flash counter after the frame is fully rendered
         if self._muzzle_flash_counter > 0:
             self._muzzle_flash_counter -= 1
-
-    def _render_projectiles(self, projectiles):
-        """Render flying-monster projectiles as camera-facing billboards."""
-        if not projectiles or 'sprite' not in self.renderer.shaders:
-            return
-
-        # Use dedicated projectile texture, falling back to the generic monster sprite
-        tex_id = (self.sprite_textures.get('projectile') or
-                  self.sprite_textures.get('Monster'))
-        if not tex_id:
-            return
-
-        from engine.monster_constants import MONSTER_PROJECTILE_SPRITE_SIZE
-        pw, ph = MONSTER_PROJECTILE_SPRITE_SIZE
-
-        shader   = self.renderer.shaders['sprite']
-        uniforms = self.renderer.uniforms['sprite']
-
-        gl.glUseProgram(shader)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'],       1, gl.GL_FALSE, self._view_ptr)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glUniform1i(uniforms['sprite_texture'], 0)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-        gl.glBindVertexArray(self.renderer.vaos['sprite'])
-
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-
-        pos_loc  = uniforms['sprite_pos_world']
-        size_loc = uniforms['sprite_size']
-        for proj in projectiles:
-            pos = proj['pos']
-            gl.glUniform3f(pos_loc,  pos[0], pos[1], pos[2])
-            gl.glUniform2f(size_loc, pw, ph)
-            gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
-
-        gl.glBindVertexArray(0)
-        gl.glDisable(gl.GL_BLEND)
-
-    def _render_monster_debug_rays(self, rays):
-        """Draw LOS debug lines from monsters to player (F7 toggle).
-
-        Green = has line-of-sight, Red = blocked by wall brush.
-        Uses the debug_shader / debug_vao already initialised for
-        the editor debug renderer.
-        """
-        if not rays or not self.debug_shader:
-            return
-
-        gl.glUseProgram(self.debug_shader)
-        proj_loc  = gl.glGetUniformLocation(self.debug_shader, 'projection')
-        view_loc  = gl.glGetUniformLocation(self.debug_shader, 'view')
-        color_loc = gl.glGetUniformLocation(self.debug_shader, 'color')
-        gl.glUniformMatrix4fv(proj_loc, 1, gl.GL_FALSE, self._proj_ptr)
-        gl.glUniformMatrix4fv(view_loc, 1, gl.GL_FALSE, self._view_ptr)
-
-        gl.glBindVertexArray(self.debug_vao)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.debug_vbo)
-
-        for ray in rays:
-            s, e = ray['start'], ray['end']
-            if ray.get('color') == 'green':
-                gl.glUniform3f(color_loc, 0.0, 1.0, 0.0)
-            else:
-                gl.glUniform3f(color_loc, 1.0, 0.0, 0.0)
-            data = np.array([s[0], s[1], s[2], e[0], e[1], e[2]], dtype=np.float32)
-            gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data.nbytes, data)
-            gl.glDrawArrays(gl.GL_LINES, 0, 2)
-
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
-        gl.glBindVertexArray(0)
-
-    def _render_bullet_marks(self, marks):
-        """Draw simple black dots at hit locations."""
-        if not marks or 'simple' not in self.renderer.shaders:
-            return
-
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-
-        shader = self.renderer.shaders['simple']
-        uniforms = self.renderer.uniforms['simple']
-        gl.glUseProgram(shader)
-
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, self._proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, self._view_ptr)
-
-        gl.glBindVertexArray(self.renderer.vaos['cube'])
-
-        for mark in marks:
-            pos = mark['pos']
-            alpha = mark['alpha']
-
-            gl.glUniform3f(uniforms['color'], 0.0, 0.0, 0.0)
-
-            mat = glm.translate(glm.mat4(1.0), glm.vec3(pos[0], pos[1], pos[2]))
-            mat = glm.scale(mat, glm.vec3(2.0, 2.0, 2.0))
-
-            gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
-            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
-
-        gl.glBindVertexArray(0)
-        gl.glDisable(gl.GL_BLEND)
-
-    def _render_spatial_grid(self):
-        """Draw the spatial grid cell boundaries as wireframe quads.
-
-        Each populated cell in the SpatialGrid is drawn as a rectangle
-        at Y=0 using the debug shader so the player can see the
-        partitioning structure used by monster AI and physics.
-        """
-        if not self.debug_shader or not self.logic_thread:
-            return
-        grid = getattr(self.logic_thread, '_spatial_grid', None)
-        if grid is None:
-            return
-
-        gl.glUseProgram(self.debug_shader)
-        proj_loc  = gl.glGetUniformLocation(self.debug_shader, 'projection')
-        view_loc  = gl.glGetUniformLocation(self.debug_shader, 'view')
-        color_loc = gl.glGetUniformLocation(self.debug_shader, 'color')
-        gl.glUniformMatrix4fv(proj_loc, 1, gl.GL_FALSE, self._proj_ptr)
-        gl.glUniformMatrix4fv(view_loc, 1, gl.GL_FALSE, self._view_ptr)
-        gl.glUniform3f(color_loc, 0.0, 0.8, 1.0)  # cyan
-
-        gl.glBindVertexArray(self.debug_vao)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.debug_vbo)
-
-        cs = grid.cell_size
-        draw_y = 1.0  # slightly above ground to avoid z-fight
-
-        for (cx, cz) in grid.cells:
-            x0 = cx * cs
-            z0 = cz * cs
-            x1 = x0 + cs
-            z1 = z0 + cs
-            # Four edges of the cell
-            edges = [
-                (x0, draw_y, z0, x1, draw_y, z0),
-                (x1, draw_y, z0, x1, draw_y, z1),
-                (x1, draw_y, z1, x0, draw_y, z1),
-                (x0, draw_y, z1, x0, draw_y, z0),
-            ]
-            for e in edges:
-                data = np.array(e, dtype=np.float32)
-                gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data.nbytes, data)
-                gl.glDrawArrays(gl.GL_LINES, 0, 2)
-
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
-        gl.glBindVertexArray(0)
-
-    def keyPressEvent(self, event):
-        def check_key(cfg_key, default):
-            key_str = self.editor.config.get('Shortcuts', cfg_key, fallback=default)
-            seq = QKeySequence(key_str)
-            return QKeySequence(event.key() | int(event.modifiers())) == seq
-
-        # ---- In-game console overlay ----------------------------------------
-        if self.play_mode and check_key('key_console', '`'):
-            if self.console_overlay_active:
-                self._close_console_overlay()
-            else:
-                self._open_console_overlay()
-            return
-
-        if self.console_overlay_active:
-            return
-
-        if check_key('key_show_connections', 'F1'):
-            current_state = getattr(self.editor, 'show_logic_links', False)
-            self.editor.show_logic_links = not current_state
-            self.editor.update_views()
-            if hasattr(self.editor, 'show_toast'):
-                status = "ON" if self.editor.show_logic_links else "OFF"
-                self.editor.show_toast(f"Logic Links: {status}")
-            return
-
-        if check_key('key_toggle_wireframe', 'F2'):
-            if self.current_render_mode == RENDER_MODE_WIREFRAME:
-                self.current_render_mode = RENDER_MODE_LIT
-            else:
-                self.current_render_mode = RENDER_MODE_WIREFRAME
-            mode_name = self.render_mode_names.get(self.current_render_mode, "Unknown")
-            if hasattr(self.editor, 'show_toast'):
-                self.editor.show_toast(f"Render Mode: {mode_name}")
-            self.update()
-            return
-
-        if check_key('key_sysmon', 'F3'):
-            self.debug_mode_active = not self.debug_mode_active
-            # In play mode, never change cursor behaviour – keep mouse captured.
-            # Only update the view so the overlay appears/disappears.
-            self.update()
-            return
-
-        # ---- F7: Monster debug visualisation toggle ----
-        if self.play_mode and event.key() == Qt.Key_F7:
-            self.monster_debug_active = not self.monster_debug_active
-            if self.logic_thread:
-                self.logic_thread.monster_debug_active = self.monster_debug_active
-            if hasattr(self.editor, 'show_toast'):
-                status = "ON" if self.monster_debug_active else "OFF"
-                self.editor.show_toast(f"Monster Debug: {status}")
-            self.update()
-            return
-        
-        # ---- F9: Split-screen toggle (play mode only) ----
-        if self.play_mode and event.key() == Qt.Key_F9:
-            self._toggle_splitscreen()
-            return
-
-        # ---- F12: Kiosk mode toggle (play mode only) ----
-        if self.play_mode and event.key() == Qt.Key_F12:
-            if getattr(self.editor, 'is_kiosk_mode', False):
-                self.editor.exit_kiosk_mode(keep_play_mode=True)
-            else:
-                self.editor.enter_kiosk_mode()
-            return
-
-        # ---- Death screen: any key press exits play mode ----
-        if self.play_mode:
-            render_state = self.game_state.get_render_state()
-            if getattr(render_state, 'player_dead', False):
-                if event.key() == Qt.Key_Escape:
-                    self._exit_play_mode()
-                    return
-                return
-
-        if not self.play_mode:
-            if event.key() == Qt.Key_BracketLeft:
-                if hasattr(self.editor, 'set_grid_size'):
-                    new_size = max(2, self.grid_size // 2)
-                    self.editor.set_grid_size(new_size)
-                    if hasattr(self.editor, 'show_toast'):
-                        self.editor.show_toast(f"Grid Size: {new_size}")
-                return
-            elif event.key() == Qt.Key_BracketRight:
-                if hasattr(self.editor, 'set_grid_size'):
-                    new_size = min(128, self.grid_size * 2)
-                    self.editor.set_grid_size(new_size)
-                    if hasattr(self.editor, 'show_toast'):
-                        self.editor.show_toast(f"Grid Size: {new_size}")
-                return
-
-        if self.play_mode:
-            if getattr(self, 'show_render_menu', False):
-                if event.key() == Qt.Key_1:
-                    self.current_render_mode = RENDER_MODE_LIT
-                    self.update()
-                elif event.key() == Qt.Key_2:
-                    self.current_render_mode = RENDER_MODE_UNLIT
-                    self.update()
-                elif event.key() == Qt.Key_3:
-                    self.current_render_mode = RENDER_MODE_WIREFRAME
-                    self.update()
-                elif event.key() == Qt.Key_4:
-                    self.current_render_mode = RENDER_MODE_VERTEX
-                    self.update()
-                elif event.key() == Qt.Key_Escape:
-                    self.show_render_menu = False
-                    self.update()
-                return
-
-        super().keyPressEvent(event)
-
-    def _draw_sprites_text(self, painter):
-        painter.setFont(self._sprites_font)
-        painter.setPen(self._hud_pink_pen)
-        painter.fillRect(5, 5, 80, 25, self._hud_sprites_bg_brush)
-        painter.drawText(10, 20, "Sprites")
 
     def _draw_fps_counter(self, painter):
         painter.setFont(self._fps_font)
@@ -1248,14 +932,17 @@ class QtGameView(QOpenGLWidget):
         painter.fillRect(rect_x, 5, rect_width, 20, self._hud_fps_bg_brush)
         painter.drawText(rect_x + 5, 20, f"FPS: {self.fps:.0f}")
 
+    def _draw_sprites_text(self, painter):
+        painter.setFont(self._sprites_font)
+        painter.setPen(self._hud_pink_pen)
+        painter.fillRect(5, 5, 80, 25, self._hud_sprites_bg_brush)
+        painter.drawText(10, 20, "Sprites")
+
     def _draw_hud(self, painter, render_state, viewport_width=None, viewport_height=None):
-        # Use provided viewport dimensions or fall back to full widget size
         if viewport_width is None:
             viewport_width = self.width()
         if viewport_height is None:
             viewport_height = self.height()
-
-        # Use cached snapshot values copied at paintGL start
         health = getattr(self, '_cached_health', 0)
         max_health = getattr(self, '_cached_max_health', 100)
         if health is None or max_health is None:
@@ -1266,12 +953,9 @@ class QtGameView(QOpenGLWidget):
         bar_height = 20
         bar_x = hud_margin
         bar_y = viewport_height - hud_margin - bar_height
-
-        # --- health bar background ---
         painter.setPen(self._hud_bar_bg_pen)
         painter.setBrush(self._hud_bar_bg_brush)
         painter.drawRect(bar_x, bar_y, bar_width, bar_height)
-
         fill_width = int(bar_width * health_ratio)
         if fill_width > 0:
             painter.setPen(Qt.NoPen)
@@ -1282,27 +966,20 @@ class QtGameView(QOpenGLWidget):
             else:
                 painter.setBrush(QBrush(self._hud_health_red))
             painter.drawRect(bar_x, bar_y, fill_width, bar_height)
-
         painter.setFont(self._hud_font)
         painter.setPen(QColor(255, 255, 255))
         painter.drawText(bar_x, bar_y - 5, f"HEALTH: {health}/{max_health}")
-
-        # --- crosshair (centered on viewport) ---
         active_weapon = getattr(self, '_cached_active_weapon', None)
         if active_weapon:
             cx = viewport_width // 2
             cy = viewport_height // 2
             size = 10
-            # black outline
             painter.setPen(QPen(QColor(0, 0, 0), 4))
             painter.drawLine(cx - size, cy, cx + size, cy)
             painter.drawLine(cx, cy - size, cx, cy + size)
-            # green main
             painter.setPen(QPen(QColor(0, 255, 0), 2))
             painter.drawLine(cx - size, cy, cx + size, cy)
             painter.drawLine(cx, cy - size, cx, cy + size)
-
-        # --- HUD message (centre top) ---
         msg = getattr(self, '_cached_hud_message', '')
         if msg:
             if self._cached_hud_message != msg:
@@ -1316,8 +993,6 @@ class QtGameView(QOpenGLWidget):
             painter.drawText(cx - tw // 2 + 2, cy + 2, msg)
             painter.setPen(self._hud_grey_pen)
             painter.drawText(cx - tw // 2, cy, msg)
-
-        # --- Play-mode enter hint (transient) ---
         hint = getattr(self, '_play_mode_hint', '')
         if hint and not msg:
             if self._cached_hint_text != hint:
@@ -1331,8 +1006,6 @@ class QtGameView(QOpenGLWidget):
             painter.drawText(cx - tw // 2 + 2, cy + 2, hint)
             painter.setPen(self._hud_grey_pen)
             painter.drawText(cx - tw // 2, cy, hint)
-
-        # --- Weapon sprite (right‑bottom, now relative to viewport) ---
         if active_weapon:
             hud_pixmap = self._load_gun_hud_pixmap(active_weapon)
             if hud_pixmap and not hud_pixmap.isNull():
@@ -1353,7 +1026,6 @@ class QtGameView(QOpenGLWidget):
                 painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
                 painter.drawPixmap(x, y, scaled)
                 painter.restore()
-                # Muzzle flash overlay
                 if getattr(self, '_cached_muzzle_flash', False):
                     flash_pixmap = self._load_gun_flash_pixmap(active_weapon)
                     if flash_pixmap and not flash_pixmap.isNull():
@@ -1361,8 +1033,6 @@ class QtGameView(QOpenGLWidget):
                         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
                         painter.drawPixmap(x, y, scaled.width(), scaled.height(), flash_pixmap)
                         painter.restore()
-
-        # --- Collected keys (left side, horizontal stack) ---
         collected_keys = getattr(self, '_cached_collected_keys', set())
         if collected_keys:
             key_x = viewport_width - hud_margin - 100
@@ -1392,44 +1062,31 @@ class QtGameView(QOpenGLWidget):
     def _draw_hud_splitscreen(self, painter, render_state):
         w, h = self.width(), self.height()
         half = w // 2
-
-        # ── Centre divider ────────────────────────────────────────────────────
         painter.setPen(QPen(QColor(0, 0, 0), 4))
         painter.drawLine(half, 0, half, h)
         painter.setPen(QPen(QColor(80, 80, 80), 2))
         painter.drawLine(half, 0, half, h)
-
-        # ── P1 HUD (left half) ────────────────────────────────────────────────
         painter.save()
         painter.setClipRect(0, 0, half, h)
-        # Call _draw_hud with the left viewport dimensions
         self._draw_hud(painter, render_state, viewport_width=half, viewport_height=h)
         painter.restore()
-
-        # "P1" label top‑left of left half
         painter.setPen(QColor(255, 200, 50))
         painter.setFont(self._hud_font)
         painter.drawText(8, 22, "P1")
-
-        # ── P2 HUD (right half) ───────────────────────────────────────────────
-        p2_health     = getattr(render_state, 'player2_health',     100)
+        p2_health = getattr(render_state, 'player2_health', 100)
         p2_max_health = getattr(render_state, 'player2_max_health', 100)
-        p2_dead       = getattr(render_state, 'player2_dead',       False)
-        p2_ratio      = (p2_health / p2_max_health) if p2_max_health > 0 else 0.0
-
+        p2_dead = getattr(render_state, 'player2_dead', False)
+        p2_ratio = (p2_health / p2_max_health) if p2_max_health > 0 else 0.0
         painter.save()
         painter.setClipRect(half, 0, half, h)
-
         margin = 20
-        bar_w  = 200
-        bar_h  = 20
-        bar_x  = half + margin
-        bar_y  = h - margin - bar_h
-
+        bar_w = 200
+        bar_h = 20
+        bar_x = half + margin
+        bar_y = h - margin - bar_h
         painter.setPen(self._hud_bar_bg_pen)
         painter.setBrush(self._hud_bar_bg_brush)
         painter.drawRect(bar_x, bar_y, bar_w, bar_h)
-
         fill = int(bar_w * p2_ratio)
         if fill > 0:
             painter.setPen(Qt.NoPen)
@@ -1440,12 +1097,9 @@ class QtGameView(QOpenGLWidget):
             else:
                 painter.setBrush(QBrush(self._hud_health_red))
             painter.drawRect(bar_x, bar_y, fill, bar_h)
-
         painter.setFont(self._hud_font)
         painter.setPen(QColor(255, 255, 255))
         painter.drawText(bar_x, bar_y - 5, f"P2  {p2_health}/{p2_max_health}")
-
-        # P2 crosshair (centre of right half)
         cx = half + half // 2
         cy = h // 2
         sz = 10
@@ -1455,38 +1109,28 @@ class QtGameView(QOpenGLWidget):
         painter.setPen(QPen(QColor(0, 200, 255), 2))
         painter.drawLine(cx - sz, cy, cx + sz, cy)
         painter.drawLine(cx, cy - sz, cx, cy + sz)
-
-        # "P2" label
         painter.setFont(self._hud_font)
         painter.setPen(QColor(0, 200, 255))
         painter.drawText(half + 8, 22, "P2")
-
-        # P2 death overlay (if dead)
         if p2_dead:
             painter.setPen(Qt.NoPen)
             painter.setBrush(QBrush(QColor(120, 0, 0, 140)))
             painter.drawRect(half, 0, half, h)
             painter.setFont(self._death_title_font)
-            lbl   = "P2 DIED"
+            lbl = "P2 DIED"
             lbl_w = QFontMetrics(self._death_title_font).horizontalAdvance(lbl)
             lbl_x = half + (half - lbl_w) // 2
             painter.setPen(QColor(60, 0, 0, 220))
             painter.drawText(lbl_x + 3, h // 2 + 3, lbl)
             painter.setPen(QColor(255, 60, 60))
             painter.drawText(lbl_x, h // 2, lbl)
-
         painter.restore()
 
     def _draw_death_screen(self, painter):
-        """Full-screen death overlay — drawn on top of HUD after player_dead is set."""
         w, h = self.width(), self.height()
-
-        # Dark red vignette overlay
         painter.setPen(Qt.NoPen)
         painter.setBrush(QBrush(QColor(120, 0, 0, 160)))
         painter.drawRect(0, 0, w, h)
-
-        # "YOU DIED" title — cached metrics
         painter.setFont(self._death_title_font)
         title_x = (w - self._cached_death_title_width) // 2
         title_y = h // 2 - 20
@@ -1494,8 +1138,6 @@ class QtGameView(QOpenGLWidget):
         painter.drawText(title_x + 3, title_y + 3, "YOU DIED")
         painter.setPen(QColor(255, 60, 60))
         painter.drawText(title_x, title_y, "YOU DIED")
-
-        # Sub-prompt — cached metrics
         painter.setFont(self._death_sub_font)
         sub_x = (w - self._cached_death_sub_width) // 2
         sub_y = title_y + 60
@@ -1517,7 +1159,6 @@ class QtGameView(QOpenGLWidget):
         painter.drawLine(x + size - 14, mid, x + size - 14, mid + 4)
 
     def _draw_window_manager(self, painter):
-        # --- cached colours / brushes ---
         bg_color = QColor(20, 20, 25, 235)
         border_color = QColor(80, 80, 90)
         header_color = QColor(66, 95, 93)
@@ -1583,7 +1224,6 @@ class QtGameView(QOpenGLWidget):
         painter.drawText(left_margin, stats_start_y + line_height * 4, brush_text)
         tri_text = f"Tris:     {total_tris} "
         painter.drawText(left_margin, stats_start_y + line_height * 5, tri_text)
-        # FIX: reuse cached QFontMetrics instead of calling painter.fontMetrics()
         fm = self._console_fm
         painter.setPen(QColor(50, 200, 50))
         painter.drawText(left_margin + fm.horizontalAdvance(brush_text),
@@ -1600,13 +1240,10 @@ class QtGameView(QOpenGLWidget):
         tps_text = f"TPS: {getattr(self.logic_thread, 'actual_tps', 0.0):.1f}"
         painter.drawText(rect.right() - fm.horizontalAdvance(tps_text) - 10,
                         rect.bottom() - 10, tps_text)
-
-        # ── Active renderer label ─────────────────────────────────────────────
         renderer_label = f"Renderer: "
-        renderer_name  = getattr(self, '_renderer_mode', 'Forward')
+        renderer_name = getattr(self, '_renderer_mode', 'Forward')
         bold_font = QFont(self.console_font)
         bold_font.setBold(True)
-        # RENDERER_LABEL_COLOUR — change the QColor here to restyle the name
         renderer_name_color = QColor(120, 210, 255)
         painter.setFont(self.console_font)
         painter.setPen(text_color)
@@ -1615,8 +1252,7 @@ class QtGameView(QOpenGLWidget):
         painter.setFont(bold_font)
         painter.setPen(renderer_name_color)
         painter.drawText(left_margin + label_w, stats_start_y + line_height, renderer_name)
-        painter.setFont(self.console_font)   # restore for any subsequent draws
-        # ─────────────────────────────────────────────────────────────────────
+        painter.setFont(self.console_font)
 
     def _draw_render_menu(self, painter):
         width, height = 200, 120
@@ -1657,7 +1293,6 @@ class QtGameView(QOpenGLWidget):
             'LevelChanger': 'levelchanger.png',
             'Portal': 'portal.png',
         }
-        # Preload weapon HUD textures
         for weapon in ['gun1', 'gun2', 'gun3']:
             tid = self.load_texture(f'{weapon}HUD.png', 'sprites')
             if tid:
@@ -1669,13 +1304,10 @@ class QtGameView(QOpenGLWidget):
             tid = self.load_texture(fname, 'sprites')
             if tid:
                 self.sprite_textures[cls] = tid
-        # Portal fallback: if portal.png doesn't exist yet, generate a 16×16
-        # solid cyan texture so the entity is never completely invisible.
         if 'Portal' not in self.sprite_textures and self.renderer:
             try:
                 tex_id = gl.glGenTextures(1)
                 gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                # 4 pixels of cyan (R=0 G=220 B=255 A=255)
                 cyan = (gl.GLubyte * (4 * 4))(
                     0, 220, 255, 255,  0, 220, 255, 255,
                     0, 220, 255, 255,  0, 220, 255, 255,
@@ -1690,8 +1322,8 @@ class QtGameView(QOpenGLWidget):
         key_textures = {'blue_key': 'bluekey.png', 'red_key': 'redkey.png', 'yellow_key': 'yellowkey.png', 'green_key': 'greenkey.png'}
         for key_name, fname in key_textures.items():
             tid = self.load_texture(fname, 'sprites')
-            if tid: self.sprite_textures[f'key_{key_name}'] = tid
-        # Try to load dedicated projectile sprite (optional)
+            if tid:
+                self.sprite_textures[f'key_{key_name}'] = tid
         proj_tid = self.load_texture('projectile.png', 'sprites')
         if proj_tid:
             self.sprite_textures['projectile'] = proj_tid
@@ -1699,11 +1331,8 @@ class QtGameView(QOpenGLWidget):
             self.renderer.set_sprite_textures(self.sprite_textures)
 
     def _pixmap_to_texture(self, pixmap):
-        """Convert QPixmap to OpenGL texture ID."""
-        from PyQt5.QtGui import QImage
         image = pixmap.toImage().convertToFormat(QImage.Format_RGBA8888)
         width, height = image.width(), image.height()
-        # FIX#10: Use constBits + sizeInBytes (Qt 5.10+) with fallback
         ptr = image.constBits()
         try:
             nbytes = image.sizeInBytes()
@@ -1720,46 +1349,32 @@ class QtGameView(QOpenGLWidget):
         return tex_id
 
     def update_instance_textures(self, things):
-        """Update per-instance textures for special entities (Monster, LogicGate, Pickup, LevelChanger)."""
         if not self.renderer:
             return
-
         instance_textures = {}
-
         for thing in things:
-            # === MONSTER ===
-            # Three possible states: alive (idle), shooting, dead.
-            # The tex_key encodes all three so each sprite is cached independently.
             if isinstance(thing, Monster):
-                mtype       = thing.properties.get('monster_type', 'human')
-                is_dead     = thing.properties.get('dead',        False)
+                mtype = thing.properties.get('monster_type', 'human')
+                is_dead = thing.properties.get('dead', False)
                 is_shooting = thing.properties.get('is_shooting', False)
-
                 if is_dead:
                     state_key = 'dead'
                 elif is_shooting:
                     state_key = 'shooting'
                 else:
                     state_key = 'alive'
-
-                # Key by the actual sprite path so per-instance custom sprites
-                # are cached independently from same-type default sprites.
                 sprite_path = thing.get_sprite_path()
                 tex_key = f"msprite__{sprite_path.replace('/', '__').replace('.', '_')}"
-
                 if tex_key not in self.sprite_textures:
                     rel_path = sprite_path.replace('assets/', '')
-                    dirname  = os.path.dirname(rel_path)   # e.g. "sprites/monsters/human"
-                    filename = os.path.basename(rel_path)  # e.g. "shoot.png"
+                    dirname = os.path.dirname(rel_path)
+                    filename = os.path.basename(rel_path)
                     tid = self.load_texture(filename, dirname)
                     if tid:
                         self.sprite_textures[tex_key] = tid
-
                 if tex_key in self.sprite_textures:
                     instance_textures[id(thing)] = self.sprite_textures[tex_key]
                 continue
-
-            # === LOGIC GATE ===
             if isinstance(thing, LogicGate):
                 l_type = thing.properties.get('logic_type', 'and').lower()
                 filename = f"logic_{l_type}.png"
@@ -1770,8 +1385,6 @@ class QtGameView(QOpenGLWidget):
                         self.sprite_textures[tex_key] = tid
                 if tex_key in self.sprite_textures:
                     instance_textures[id(thing)] = self.sprite_textures[tex_key]
-
-            # === PICKUP (keys, custom sprites, guns) ===
             elif isinstance(thing, Pickup):
                 if thing.is_key():
                     key_name = thing.get_key_name()
@@ -1784,8 +1397,6 @@ class QtGameView(QOpenGLWidget):
                     tex_id = self.load_texture(filename, 'sprites')
                     if tex_id:
                         instance_textures[id(thing)] = tex_id
-
-            # === LEVEL CHANGER ===
             elif isinstance(thing, LevelChanger):
                 tex_key = 'LevelChanger'
                 if tex_key in self.sprite_textures:
@@ -1794,53 +1405,32 @@ class QtGameView(QOpenGLWidget):
                     fallback_key = 'logic_relay'
                     if fallback_key in self.sprite_textures:
                         instance_textures[id(thing)] = self.sprite_textures[fallback_key]
-
-            # === PORTAL ===
-            # Portals are drawn as wireframe apertures by draw_portal_wireframes,
-            # but we still register a texture so draw_sprites doesn't skip them
-            # (which would break 3D hit-testing via the sprite VAO bounds).
             elif isinstance(thing, Portal):
                 tex_key = 'Portal'
                 if tex_key in self.sprite_textures:
                     instance_textures[id(thing)] = self.sprite_textures[tex_key]
-
         self.renderer.set_instance_textures(instance_textures)
 
     def toggle_play_mode(self, player_start_pos, player_start_angle, physics_enabled=True):
         self.play_mode = not self.play_mode
-
-        # Store the previous state of debug_mode_active so we can restore it later
-        # but we don't change it when entering or exiting play mode.
-        # The sysmon overlay will remain visible if it was on before.
-
         if self.play_mode:
-            # Store spawn info
             self._last_player_start_pos = player_start_pos
             self._last_player_start_angle = player_start_angle
-
-            # Capture mouse for mouselook
             center_pos = self.mapToGlobal(self.rect().center())
             QCursor.setPos(center_pos)
             self.last_mouse_pos = self.mapFromGlobal(center_pos)
             QApplication.setOverrideCursor(Qt.BlankCursor)
-
-            # Create player
             self.player = Player(
                 player_start_pos[0], player_start_pos[2],
                 np.radians(90.0 - player_start_angle),
                 physics_enabled=physics_enabled
             )
             self.player.pos.y = player_start_pos[1]
-
-            # Show transient play-mode hint in 3D HUD (5 second timeout)
             self._play_mode_hint = "ESC to Exit, F12 Fullscreen"
             self._play_mode_hint_timer.start(3000)
-
             if self.logic_thread:
                 self.logic_thread.set_player(self.player)
                 self.logic_thread.set_play_mode(True)
-
-            # ── Player 2 (split-screen) ───────────────────────────────────────
             if self.splitscreen_mode:
                 self.player2 = Player(
                     player_start_pos[0] + 32, player_start_pos[2],
@@ -1854,33 +1444,21 @@ class QtGameView(QOpenGLWidget):
                     self._cached_aspect_ratio = (self.width() // 2) / self.height()
                     if self.logic_thread:
                         self.logic_thread.set_frustum_aspect(self._cached_aspect_ratio)
-
-
         else:
-            # Exiting play mode
-            # Close console overlay if open
             if self.console_overlay_active:
                 self._console_input.hide()
                 self.console_overlay_active = False
-
-            # Reset monster debug overlay
             self.monster_debug_active = False
             self.show_spatial_grid = False
             if self.logic_thread:
                 self.logic_thread.monster_debug_active = False
-
-            # Restore cursor
             while QApplication.overrideCursor() is not None:
                 QApplication.restoreOverrideCursor()
             self.setCursor(Qt.ArrowCursor)
-
             if self.logic_thread:
                 self.logic_thread.set_play_mode(False)
                 self.logic_thread.set_player(None)
-
             self.player = None
-
-            # Despawn P2
             self.player2 = None
             if self.logic_thread:
                 self.logic_thread.set_player2(None)
@@ -1888,24 +1466,15 @@ class QtGameView(QOpenGLWidget):
                 self._cached_aspect_ratio = self.width() / self.height()
                 if self.logic_thread:
                     self.logic_thread.set_frustum_aspect(self._cached_aspect_ratio)
-
-            # Clear any pending play-mode hint
             self._play_mode_hint = ""
             self._play_mode_hint_timer.stop()
             self._cached_hint_text = None
-
             self.update()
 
-
     def _exit_play_mode(self):
-        """
-        Exit play mode cleanly from within the view (e.g. death screen Escape).
-        Calls toggle_play_mode with the stored spawn info so the editor's state
-        stays consistent.  Falls back to direct teardown if nothing is stored.
-        """
         if not self.play_mode:
             return
-        pos   = getattr(self, '_last_player_start_pos',   [0, 0, 0])
+        pos = getattr(self, '_last_player_start_pos', [0, 0, 0])
         angle = getattr(self, '_last_player_start_angle', 0)
         self.toggle_play_mode(pos, angle)
 
@@ -1921,59 +1490,36 @@ class QtGameView(QOpenGLWidget):
         self.update()
 
     def switch_renderer(self, mode: str):
-        """
-        Hot-swap the active renderer at runtime.
- 
-        Called from the status-bar Renderer dropdown.
-        The method is safe to call from the Qt main thread at any time:
-        it acquires the GL context, tears down the old renderer cleanly,
-        builds the new one, and re-applies the current settings.
-        """
         if mode == self._renderer_mode:
             return
- 
         cls = _RENDERER_CLASSES.get(mode)
         if cls is None:
             print(f"[QtGameView] Unknown renderer mode '{mode}' — ignoring.")
             return
- 
         print(f"[QtGameView] Switching renderer: {self._renderer_mode} → {mode}")
- 
         self.makeCurrent()
         try:
-            # Tear down old renderer
             old = self.renderer
-            self.renderer = None          # prevent paintGL from running mid-swap
- 
+            self.renderer = None
             if old is not None:
                 if hasattr(old, 'cleanup'):
                     try:
                         old.cleanup()
                     except Exception as e:
                         print(f"[QtGameView] Renderer cleanup warning: {e}")
-                # The renderer holds its own GL objects (VAOs/VBOs/shaders).
-                # Deleting the Python object triggers no GL calls on its own;
-                # cleanup() above is the safe teardown point.
                 del old
- 
-            # Create new renderer with same config as before
             config = getattr(self.editor, 'config', None)
             self.renderer = cls(
                 self.load_texture, self.grid_size, self.world_size, config)
- 
-            # Re-apply settings that were live on the old renderer
             self.renderer.set_sprite_textures(self.sprite_textures)
             self.renderer.set_instance_textures(self.sprite_textures)
             self.renderer.lod_manager.cull_dist_sq = self.cull_distance * self.cull_distance
             self.renderer.lod_manager.full_dist_sq = (self.cull_distance * 0.25) ** 2
-            self.grid_dirty = True   # force grid VBO rebuild next frame
- 
+            self.grid_dirty = True
             self._renderer_mode = mode
             print(f"[QtGameView] Renderer switched to {mode}.")
         except Exception as exc:
             print(f"[QtGameView] switch_renderer FAILED: {exc}")
-            # Emergency fallback – reinstate the forward renderer so the
-            # viewport doesn't go black.
             try:
                 config = getattr(self.editor, 'config', None)
                 self.renderer = Renderer_F(
@@ -1983,17 +1529,18 @@ class QtGameView(QOpenGLWidget):
                 print(f"[QtGameView] Emergency fallback also failed: {fe}")
         finally:
             self.doneCurrent()
- 
-        self.update()   # request a repaint with the new renderer
+        self.update()
 
     def get_selected_object_pos(self):
-        if not self.editor.state.selected_object: return None
-        if isinstance(self.editor.state.selected_object, dict): 
+        if not self.editor.state.selected_object:
+            return None
+        if isinstance(self.editor.state.selected_object, dict):
             return glm.vec3(self.editor.state.selected_object.get('pos', [0, 0, 0]))
         return glm.vec3(self.editor.state.selected_object.pos)
 
     def set_selected_object_pos(self, new_pos_vec):
-        if not self.editor.state.selected_object: return
+        if not self.editor.state.selected_object:
+            return
         grid = self.editor.grid_size_spinbox.value()
         snapped = [round(c / grid) * grid for c in new_pos_vec]
         if isinstance(self.editor.state.selected_object, dict):
@@ -2002,12 +1549,7 @@ class QtGameView(QOpenGLWidget):
             self.editor.state.selected_object.pos = snapped
         self.update()
 
-    # =========================================================================
-    # TERRAIN SCULPT PAINTING
-    # =========================================================================
-
     def set_terrain_sculpt_active(self, active: bool):
-        """Enable or disable terrain sculpt painting mode."""
         self.terrain_sculpt_active = active
         if active:
             self.setCursor(Qt.CrossCursor)
@@ -2016,13 +1558,10 @@ class QtGameView(QOpenGLWidget):
             self.setCursor(Qt.ArrowCursor)
 
     def raycast_terrain(self, mx: int, my: int):
-        """Cast a ray from the mouse position and find where it hits the terrain.
-        Returns (world_x, world_y, world_z) or None."""
         terrain = getattr(self.editor, 'terrain', None)
         if terrain is None or not terrain.enabled:
             return None
         ray_o, ray_d = self.get_ray_from_mouse(mx, my)
-        # March along the ray testing against the terrain heightfield
         step = 4.0
         max_dist = 5000.0
         t = 1.0
@@ -2035,7 +1574,6 @@ class QtGameView(QOpenGLWidget):
             if h is not None:
                 above = py >= h
                 if not above and prev_above:
-                    # Refine with binary search
                     lo, hi = t - step, t
                     for _ in range(12):
                         mid = (lo + hi) * 0.5
@@ -2054,7 +1592,6 @@ class QtGameView(QOpenGLWidget):
                     return (fx, fy, fz)
                 prev_above = above
             t += step
-            # Increase step size further from camera
             if t > 500:
                 step = 16.0
             elif t > 200:
@@ -2062,7 +1599,6 @@ class QtGameView(QOpenGLWidget):
         return None
 
     def _apply_sculpt_at_mouse(self, mx: int, my: int):
-        """Apply a single sculpt stroke at the mouse position."""
         hit = self.raycast_terrain(mx, my)
         if hit is None:
             return
@@ -2079,14 +1615,14 @@ class QtGameView(QOpenGLWidget):
             terrain.smooth_sculpt_at(wx, wz, radius, min(strength / 20.0, 1.0))
         elif mode == 'flatten':
             terrain.flatten_sculpt_at(wx, wz, radius, min(strength / 20.0, 1.0))
-        # Persist to state
         if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'terrain_data'):
             self.editor.state.terrain_data = terrain.to_dict()
         self.update()
 
     def get_ray_from_mouse(self, mx, my):
         w, h = self.width(), self.height()
-        if w == 0 or h == 0: return glm.vec3(0), glm.vec3(0, 0, 1)
+        if w == 0 or h == 0:
+            return glm.vec3(0), glm.vec3(0, 0, 1)
         ndc_x = (2.0 * mx / w) - 1.0
         ndc_y = 1.0 - (2.0 * my / h)
         clip = glm.vec4(ndc_x, ndc_y, -1.0, 1.0)
@@ -2114,15 +1650,22 @@ class QtGameView(QOpenGLWidget):
             hit = True
             for i in range(3):
                 if abs(ray_d[i]) < 1e-6:
-                    if ray_o[i] < bmin[i] or ray_o[i] > bmax[i]: hit = False; break
+                    if ray_o[i] < bmin[i] or ray_o[i] > bmax[i]:
+                        hit = False
+                        break
                 else:
                     t1 = (bmin[i] - ray_o[i]) / ray_d[i]
                     t2 = (bmax[i] - ray_o[i]) / ray_d[i]
-                    if t1 > t2: t1, t2 = t2, t1
+                    if t1 > t2:
+                        t1, t2 = t2, t1
                     tmin = max(tmin, t1)
                     tmax = min(tmax, t2)
-                    if tmin > tmax: hit = False; break
-            if hit and tmin < best_t: best_t = tmin; best_obj = brush
+                    if tmin > tmax:
+                        hit = False
+                        break
+            if hit and tmin < best_t:
+                best_t = tmin
+                best_obj = brush
         for thing in self.editor.state.things:
             tp = glm.vec3(thing.pos)
             radius = 32.0
@@ -2133,13 +1676,16 @@ class QtGameView(QOpenGLWidget):
             disc = b * b - 4 * a * c
             if disc >= 0:
                 t = (-b - disc**0.5) / (2.0 * a)
-                if 0 < t < best_t: best_t = t; best_obj = thing
+                if 0 < t < best_t:
+                    best_t = t
+                    best_obj = thing
         return best_obj
 
     def intersect_ray_with_axis(self, ray_o, ray_d, obj_pos, axis_vec):
         perp = glm.cross(ray_d, axis_vec)
         denom = glm.dot(perp, perp)
-        if denom < 1e-6: return None, float('inf')
+        if denom < 1e-6:
+            return None, float('inf')
         diff = obj_pos - ray_o
         t = glm.dot(glm.cross(diff, axis_vec), perp) / denom
         closest = ray_o + ray_d * t
@@ -2151,7 +1697,8 @@ class QtGameView(QOpenGLWidget):
         best_t = float('inf')
         best_hit = None
         for brush in self.editor.state.brushes:
-            if brush.get('hidden', False): continue
+            if brush.get('hidden', False):
+                continue
             pos = glm.vec3(brush.get('pos', [0, 0, 0]))
             size = glm.vec3(brush.get('size', [64, 64, 64]))
             bmin, bmax = pos - size/2, pos + size/2
@@ -2159,15 +1706,21 @@ class QtGameView(QOpenGLWidget):
             hit = True
             for i in range(3):
                 if abs(ray_d[i]) < 1e-6:
-                    if ray_o[i] < bmin[i] or ray_o[i] > bmax[i]: hit = False; break
+                    if ray_o[i] < bmin[i] or ray_o[i] > bmax[i]:
+                        hit = False
+                        break
                 else:
                     t1 = (bmin[i] - ray_o[i]) / ray_d[i]
                     t2 = (bmax[i] - ray_o[i]) / ray_d[i]
-                    if t1 > t2: t1, t2 = t2, t1
+                    if t1 > t2:
+                        t1, t2 = t2, t1
                     tmin_b = max(tmin_b, t1)
                     tmax_b = min(tmax_b, t2)
-                    if tmin_b > tmax_b: hit = False; break
-            if not hit or tmin_b >= best_t: continue
+                    if tmin_b > tmax_b:
+                        hit = False
+                        break
+            if not hit or tmin_b >= best_t:
+                continue
             t_box = tmin_b
             hit_pt = ray_o + ray_d * t_box
             local = hit_pt - pos
@@ -2184,23 +1737,17 @@ class QtGameView(QOpenGLWidget):
         return best_hit
 
     def mousePressEvent(self, event):
-        # Terrain sculpt painting
         if self.terrain_sculpt_active and not self.play_mode and event.button() == Qt.LeftButton:
             self.terrain_sculpt_painting = True
             self._apply_sculpt_at_mouse(event.x(), event.y())
             return
-
-        # System monitor interaction – only allowed in editor mode
         if not self.play_mode and self.debug_mode_active and event.button() == Qt.LeftButton:
             if self.debug_window_rect.contains(event.pos()):
-                # Close button (top-right X)
                 if event.x() > self.debug_window_rect.right() - 25 and event.y() < self.debug_window_rect.y() + 25:
                     self.debug_mode_active = False
                     if self.play_mode:
                         QApplication.setOverrideCursor(Qt.BlankCursor)
                     return
-
-                # Title bar drag (top 25 px)
                 title_bar_rect = QRect(self.debug_window_rect.x(), self.debug_window_rect.y(),
                                     self.debug_window_rect.width(), 25)
                 if title_bar_rect.contains(event.pos()):
@@ -2208,22 +1755,17 @@ class QtGameView(QOpenGLWidget):
                     self.sysmon_drag_offset = event.pos() - QPoint(self.debug_window_rect.x(), self.debug_window_rect.y())
                     self.setCursor(Qt.ClosedHandCursor)
                     return
-
-        # Face Mode Click - Apply Texture (Left Click Only)
         if self.face_mode_active and event.button() == Qt.LeftButton:
             if self.hovered_face_info:
                 brush, face = self.hovered_face_info
                 self.editor.apply_texture_to_specific_face(brush, face)
             return
-
-        # Legacy Face Selection (Ctrl+Click)
         if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ControlModifier and not self.play_mode:
             face = self.get_face_at(event.pos())
             if face:
                 self.editor.selected_face = face
                 self.update()
             return
-
         if self.play_mode and event.button() == Qt.LeftButton:
             if self.console_overlay_active:
                 return
@@ -2233,14 +1775,12 @@ class QtGameView(QOpenGLWidget):
             active_weapon = getattr(render_state, 'active_weapon', None)
             if active_weapon:
                 self.game_state.queue_shot()
-                # Play weapon-specific sound immediately (zero latency)
                 from engine.monster_constants import WEAPON_SHOOT_SOUND
                 sound_file = WEAPON_SHOOT_SOUND.get(active_weapon, 'shoot.wav')
                 effect = self._get_sound_instance(sound_file)
                 if effect:
                     effect.play()
                 return
-
         if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ShiftModifier and not self.play_mode:
             obj = self.get_object_at_3d(event.x(), event.y())
             if obj:
@@ -2248,7 +1788,6 @@ class QtGameView(QOpenGLWidget):
                 self.editor.set_selected_object(obj)
                 self.update()
             return
-
         if event.button() == Qt.LeftButton and self.editor.state.selected_object and not self.play_mode:
             obj_pos = self.get_selected_object_pos()
             if obj_pos:
@@ -2271,16 +1810,13 @@ class QtGameView(QOpenGLWidget):
                     self.drag_start_on_axis = start_pt
                     self.setCursor(Qt.ClosedHandCursor)
                     return
-
         if not self.play_mode and event.button() == Qt.RightButton:
             self.mouselook_active = True
             self.last_mouse_pos = event.pos()
             self.setCursor(Qt.BlankCursor)
-
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        # SysMon title-bar dragging – only in editor mode
         if not self.play_mode and self.dragging_sysmon:
             new_pos = event.pos() - self.sysmon_drag_offset
             new_x = max(5, min(new_pos.x(), self.width() - self.debug_window_rect.width() - 5))
@@ -2288,8 +1824,6 @@ class QtGameView(QOpenGLWidget):
             self.debug_window_rect.moveTo(new_x, new_y)
             self.update()
             return
-
-        # Mouselook (priority over face hover)
         if self.mouselook_active:
             dx, dy = event.x() - self.last_mouse_pos.x(), event.y() - self.last_mouse_pos.y()
             if self.use_threading and self.logic_thread:
@@ -2301,9 +1835,6 @@ class QtGameView(QOpenGLWidget):
             self.last_mouse_pos = self.mapFromGlobal(center)
             self.editor.update_views()
             return
-
-        # Play Mode Mouse – only skip if console overlay is capturing input.
-        # Sysmon (debug_mode_active) should NOT block mouselook.
         if self.play_mode:
             if self.console_overlay_active:
                 return
@@ -2316,13 +1847,9 @@ class QtGameView(QOpenGLWidget):
             QCursor.setPos(center)
             self.last_mouse_pos = self.mapFromGlobal(center)
             return
-
-        # Terrain sculpt drag painting
         if self.terrain_sculpt_painting and self.terrain_sculpt_active:
             self._apply_sculpt_at_mouse(event.x(), event.y())
             return
-
-        # Gizmo Drag
         if self.is_dragging_gizmo:
             ray_o, ray_d = self.get_ray_from_mouse(event.x(), event.y())
             axis_vec = {'x': glm.vec3(1,0,0), 'y': glm.vec3(0,1,0), 'z': glm.vec3(0,0,1)}[self.gizmo_drag_axis]
@@ -2331,35 +1858,27 @@ class QtGameView(QOpenGLWidget):
                 diff = pt - self.drag_start_on_axis
                 self.set_selected_object_pos(self.gizmo_object_start_pos + diff)
             return
-
-        # Face Mode Hover
         if self.face_mode_active:
             self.hovered_face_info = self.get_brush_face_at_coords(event.x(), event.y())
             self.update()
             return
-
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         if self.terrain_sculpt_painting and event.button() == Qt.LeftButton:
             self.terrain_sculpt_painting = False
             return
-
-        # SysMon dragging end – only in editor mode
         if not self.play_mode and self.dragging_sysmon and event.button() == Qt.LeftButton:
             self.dragging_sysmon = False
             self.setCursor(Qt.ArrowCursor)
             return
-
         if self.is_dragging_gizmo:
             self.is_dragging_gizmo = False
             self.setCursor(Qt.ArrowCursor)
             self.editor.save_state()
-
         if self.mouselook_active and event.button() == Qt.RightButton:
             self.mouselook_active = False
             self.setCursor(Qt.ArrowCursor)
-
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event):
@@ -2368,7 +1887,8 @@ class QtGameView(QOpenGLWidget):
             self.editor.update_views()
 
     def get_face_at(self, mouse_pos):
-        if not isinstance(self.editor.state.selected_object, dict): return None
+        if not isinstance(self.editor.state.selected_object, dict):
+            return None
         brush = self.editor.state.selected_object
         ray_o, ray_d = self.get_ray_from_mouse(mouse_pos.x(), mouse_pos.y())
         pos = glm.vec3(brush.get('pos', [0, 0, 0]))
@@ -2377,23 +1897,27 @@ class QtGameView(QOpenGLWidget):
         tmin, tmax = 0.0, float('inf')
         for i in range(3):
             if abs(ray_d[i]) < 1e-6:
-                if ray_o[i] < bmin[i] or ray_o[i] > bmax[i]: return None
+                if ray_o[i] < bmin[i] or ray_o[i] > bmax[i]:
+                    return None
             else:
                 t1 = (bmin[i] - ray_o[i]) / ray_d[i]
                 t2 = (bmax[i] - ray_o[i]) / ray_d[i]
-                if t1 > t2: t1, t2 = t2, t1
+                if t1 > t2:
+                    t1, t2 = t2, t1
                 tmin = max(tmin, t1)
                 tmax = min(tmax, t2)
-        if tmin > tmax: return None
+        if tmin > tmax:
+            return None
         hit = ray_o + ray_d * tmin
         local = hit - pos
-        rel = abs(local) / size
-        if rel.x > rel.y and rel.x > rel.z: return 'east' if local.x > 0 else 'west'
-        if rel.y > rel.x and rel.y > rel.z: return 'top' if local.y > 0 else 'bottom'
+        rel = glm.abs(local) / size
+        if rel.x > rel.y and rel.x > rel.z:
+            return 'east' if local.x > 0 else 'west'
+        if rel.y > rel.x and rel.y > rel.z:
+            return 'top' if local.y > 0 else 'bottom'
         return 'north' if local.z > 0 else 'south'
 
     def _load_gun_hud_pixmap(self, gun_type):
-        """Lazy load HUD pixmaps for guns."""
         if gun_type in self.gun_hud_pixmaps:
             return self.gun_hud_pixmaps[gun_type]
         path = os.path.join('assets', 'sprites', f'{gun_type}HUD.png')
@@ -2404,7 +1928,6 @@ class QtGameView(QOpenGLWidget):
         return None
 
     def _load_gun_flash_pixmap(self, gun_type):
-        """Lazy load muzzle flash pixmap for guns (gunxHUD_flash.png)."""
         if gun_type in self.gun_flash_pixmaps:
             return self.gun_flash_pixmaps[gun_type]
         path = os.path.join('assets', 'sprites', f'{gun_type}HUD_flash.png')
@@ -2414,25 +1937,15 @@ class QtGameView(QOpenGLWidget):
             return pixmap
         return None
 
-    # =========================================================================
-    # IN-GAME CONSOLE OVERLAY
-    # =========================================================================
-
     def eventFilter(self, obj, event):
-        """Catch Escape inside the console QLineEdit to close the overlay."""
         if obj is self._console_input and event.type() == QEvent.KeyPress:
             if event.key() == Qt.Key_Escape:
                 self._close_console_overlay()
-                return True   # consumed — do not propagate
+                return True
         return super().eventFilter(obj, event)
 
     def _open_console_overlay(self):
-        """
-        Show the floating command bar at the bottom of the viewport.
-        Restores a visible cursor and freezes game input until dismissed.
-        """
         self.console_overlay_active = True
-        # Restore a visible cursor so the player can see they are typing
         QApplication.setOverrideCursor(Qt.ArrowCursor)
         w, h = self.width(), self.height()
         self._console_input.setGeometry(0, h - 36, w, 36)
@@ -2442,15 +1955,11 @@ class QtGameView(QOpenGLWidget):
         self._console_input.clear()
 
     def _close_console_overlay(self):
-        """
-        Hide the command bar and restore play-mode mouselook.
-        """
         self.console_overlay_active = False
         self._console_input.hide()
         self._console_input.clearFocus()
         self.setFocus()
         if self.play_mode:
-            # Restore blank cursor and re-centre the mouse for mouselook
             while QApplication.overrideCursor() is not None:
                 QApplication.restoreOverrideCursor()
             QApplication.setOverrideCursor(Qt.BlankCursor)
@@ -2459,14 +1968,104 @@ class QtGameView(QOpenGLWidget):
             self.last_mouse_pos = self.mapFromGlobal(center)
 
     def _submit_console_command(self):
-        """
-        Forward whatever is in the overlay input to the DebugConsole and close.
-        Routing through DebugConsole._on_command_entered means the command is
-        echoed in orange, added to history, and dispatched to the handler — the
-        same behaviour as typing in the standalone console window.
-        """
         cmd = self._console_input.text().strip()
         if cmd and self.debug_console_window:
             self.debug_console_window.command_input.setText(cmd)
             self.debug_console_window._on_command_entered()
         self._close_console_overlay()
+
+    def keyPressEvent(self, event):
+        def check_key(cfg_key, default):
+            key_str = self.editor.config.get('Shortcuts', cfg_key, fallback=default)
+            seq = QKeySequence(key_str)
+            return QKeySequence(event.key() | int(event.modifiers())) == seq
+
+        if self.play_mode and check_key('key_console', '`'):
+            if self.console_overlay_active:
+                self._close_console_overlay()
+            else:
+                self._open_console_overlay()
+            return
+        if self.console_overlay_active:
+            return
+        if check_key('key_show_connections', 'F1'):
+            current_state = getattr(self.editor, 'show_logic_links', False)
+            self.editor.show_logic_links = not current_state
+            self.editor.update_views()
+            if hasattr(self.editor, 'show_toast'):
+                status = "ON" if self.editor.show_logic_links else "OFF"
+                self.editor.show_toast(f"Logic Links: {status}")
+            return
+        if check_key('key_toggle_wireframe', 'F2'):
+            if self.current_render_mode == RENDER_MODE_WIREFRAME:
+                self.current_render_mode = RENDER_MODE_LIT
+            else:
+                self.current_render_mode = RENDER_MODE_WIREFRAME
+            mode_name = self.render_mode_names.get(self.current_render_mode, "Unknown")
+            if hasattr(self.editor, 'show_toast'):
+                self.editor.show_toast(f"Render Mode: {mode_name}")
+            self.update()
+            return
+        if check_key('key_sysmon', 'F3'):
+            self.debug_mode_active = not self.debug_mode_active
+            self.update()
+            return
+        if self.play_mode and event.key() == Qt.Key_F7:
+            self.monster_debug_active = not self.monster_debug_active
+            if self.logic_thread:
+                self.logic_thread.monster_debug_active = self.monster_debug_active
+            if hasattr(self.editor, 'show_toast'):
+                status = "ON" if self.monster_debug_active else "OFF"
+                self.editor.show_toast(f"Monster Debug: {status}")
+            self.update()
+            return
+        if self.play_mode and event.key() == Qt.Key_F9:
+            self._toggle_splitscreen()
+            return
+        if self.play_mode and event.key() == Qt.Key_F12:
+            if getattr(self.editor, 'is_kiosk_mode', False):
+                self.editor.exit_kiosk_mode(keep_play_mode=True)
+            else:
+                self.editor.enter_kiosk_mode()
+            return
+        if self.play_mode:
+            render_state = self.game_state.get_render_state()
+            if getattr(render_state, 'player_dead', False):
+                if event.key() == Qt.Key_Escape:
+                    self._exit_play_mode()
+                    return
+                return
+        if not self.play_mode:
+            if event.key() == Qt.Key_BracketLeft:
+                if hasattr(self.editor, 'set_grid_size'):
+                    new_size = max(2, self.grid_size // 2)
+                    self.editor.set_grid_size(new_size)
+                    if hasattr(self.editor, 'show_toast'):
+                        self.editor.show_toast(f"Grid Size: {new_size}")
+                return
+            elif event.key() == Qt.Key_BracketRight:
+                if hasattr(self.editor, 'set_grid_size'):
+                    new_size = min(128, self.grid_size * 2)
+                    self.editor.set_grid_size(new_size)
+                    if hasattr(self.editor, 'show_toast'):
+                        self.editor.show_toast(f"Grid Size: {new_size}")
+                return
+        if self.play_mode:
+            if getattr(self, 'show_render_menu', False):
+                if event.key() == Qt.Key_1:
+                    self.current_render_mode = RENDER_MODE_LIT
+                    self.update()
+                elif event.key() == Qt.Key_2:
+                    self.current_render_mode = RENDER_MODE_UNLIT
+                    self.update()
+                elif event.key() == Qt.Key_3:
+                    self.current_render_mode = RENDER_MODE_WIREFRAME
+                    self.update()
+                elif event.key() == Qt.Key_4:
+                    self.current_render_mode = RENDER_MODE_VERTEX
+                    self.update()
+                elif event.key() == Qt.Key_Escape:
+                    self.show_render_menu = False
+                    self.update()
+                return
+        super().keyPressEvent(event)

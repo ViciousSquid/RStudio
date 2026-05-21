@@ -234,17 +234,16 @@ class LogicThread(threading.Thread):
         self._id_cache = {}
 
         # ── Portal transit state ───────────────────────────────────────────
-        # Keyed by id(portal): last signed distance of the player from the
-        # portal's plane.  Used by the crossing-the-plane edge-detection test.
         self._portal_last_side: Dict[int, float] = {}
-        # Keyed by id(portal): cooldown seconds remaining before this portal
-        # may fire another transit.  Prevents rapid back-and-forth bouncing.
         self._portal_cooldowns: Dict[int, float] = {}
 
         # Performance Monitoring
         self.actual_tps = 0.0
         self._tick_count = 0
         self._last_tps_time = time.perf_counter()
+
+        # Player 2 turn sensitivity (degrees per second)
+        self.p2_turn_sensitivity = 10.0
 
     @property
     def brushes(self):
@@ -320,6 +319,11 @@ class LogicThread(threading.Thread):
         self.play_mode = enabled
         
         if enabled:
+            # Read P2 turn sensitivity from editor config
+            if hasattr(self.editor_state, 'config'):
+                self.p2_turn_sensitivity = float(
+                    self.editor_state.config.get('Controls', 'p2_turn_sensitivity', fallback=10.0)
+                )
             self._init_movers()
             self._init_doors()
             self._init_parented_lights()
@@ -731,7 +735,9 @@ class LogicThread(threading.Thread):
         if self.player2 and not self.player2_dead:
             p2 = self.game_state.get_p2_input()
             p2_dir = glm.vec3(float(p2['move_x']), 0.0, float(p2['move_z']))
-            self.player2.angle -= float(p2['look_dx']) * 0.002
+            # Apply turning with sensitivity and delta
+            turn_input = float(p2['look_dx'])
+            self.player2.angle -= turn_input * self.p2_turn_sensitivity * delta
             self.player2.pitch -= float(p2['look_dy']) * 0.002
             self.player2.pitch = max(-1.5, min(1.5, self.player2.pitch))
             mover_brushes = [b for _, b in self.movers]
@@ -750,27 +756,6 @@ class LogicThread(threading.Thread):
     def _update_portals(self, delta: float):
         """
         Detect and execute player transit through active portal pairs.
-
-        Called once per logic tick from _tick_play_mode, after the player's
-        physics position has been updated for this tick.
-
-        Algorithm (crossing-the-plane test)
-        ------------------------------------
-        For each active portal A with a valid linked partner B:
-          1. Compute the signed distance of the player's foot-position from
-             portal A's plane (positive = front/viewer side, negative = back).
-          2. Compare with the value stored from the previous tick.
-          3. If the player transitioned from positive to negative this tick,
-             AND their foot projects inside the aperture rectangle (with a
-             generous 125 % margin to catch fast-moving players), fire a
-             transit: teleport the player to portal B's exit point, rotate
-             their velocity and view-angle by (yaw_B - yaw_A + π), and start
-             a cooldown on both portals so we don't immediately re-trigger.
-          4. Fire the OnPlayerEnter I/O output on portal A.
-
-        The plane-crossing approach is more robust than an AABB volume test
-        for thin portals — it handles any player speed and doesn't require
-        the portal to have a physical thickness.
         """
         if Portal is None or not self.player:
             return
@@ -781,9 +766,7 @@ class LogicThread(threading.Thread):
             if self._portal_cooldowns[pid] <= 0.0:
                 del self._portal_cooldowns[pid]
 
-        # Build a name → Portal lookup (cheap linear scan over things, which
-        # is a small list at runtime; caching by id is intentionally not used
-        # here because portal active-state can change via I/O mid-level)
+        # Build a name → Portal lookup
         portals_by_name: Dict[str, object] = {}
         for t in self.things:
             if isinstance(t, Portal):
@@ -791,7 +774,7 @@ class LogicThread(threading.Thread):
                 if name:
                     portals_by_name[name] = t
 
-        player_pos = self.player.pos  # glm.vec3
+        player_pos = self.player.pos
 
         for portal_a in list(portals_by_name.values()):
             if not portal_a.is_active():
@@ -807,7 +790,6 @@ class LogicThread(threading.Thread):
             if pid_a in self._portal_cooldowns:
                 continue
 
-            # ── Signed distance from portal A's plane ────────────────────────
             nx, ny, nz = portal_a.get_normal()
             ox, oy, oz = portal_a.pos
             ppx = float(player_pos.x)
@@ -818,17 +800,12 @@ class LogicThread(threading.Thread):
             last = self._portal_last_side.get(pid_a, signed)
             self._portal_last_side[pid_a] = signed
 
-            # Transit fires when the player crosses from front (+) to back (-)
             if last >= 0.0 and signed < 0.0:
                 if self._player_within_aperture(portal_a, ppx, ppy, ppz):
                     self._execute_portal_transit(portal_a, portal_b)
-                    # Apply cooldown to both ends so we don't re-trigger
                     self._portal_cooldowns[id(portal_a)] = _PORTAL_TRANSIT_COOLDOWN
                     self._portal_cooldowns[id(portal_b)] = _PORTAL_TRANSIT_COOLDOWN
-                    # Seed last_side for portal_b so the exit side doesn't
-                    # immediately trigger a reverse transit
                     self._portal_last_side[id(portal_b)] = 0.1
-                    # Fire I/O output
                     if self.io_manager:
                         self.io_manager.fire_output(portal_a, 'OnPlayerEnter')
                     debug_log(
@@ -839,59 +816,25 @@ class LogicThread(threading.Thread):
 
     @staticmethod
     def _player_within_aperture(portal, px: float, py: float, pz: float) -> bool:
-        """
-        Return True if (px, py, pz) projects inside the portal aperture.
-
-        Projects the player's world position onto the portal's local right
-        axis and up axis, then checks whether the projected values fall within
-        ±width/2 and ±height/2 respectively.  A 125 % margin is applied to
-        avoid missing fast-moving players whose foot-centre passes through a
-        corner of the aperture.
-        """
         ox, oy, oz = portal.pos
         yaw = portal.get_yaw_radians()
-
-        # Right axis (perpendicular to normal in the XZ plane)
         rx = math.cos(yaw)
         rz = -math.sin(yaw)
-
         dx = px - ox
         dy = py - oy
         dz = pz - oz
-
         local_right = dx * rx + dz * rz
         local_up    = dy
-
         hw = portal.get_width()  / 2.0 * 1.25
         hh = portal.get_height() / 2.0 * 1.25
-
         return abs(local_right) <= hw and abs(local_up) <= hh
 
     def _execute_portal_transit(self, portal_a, portal_b):
-        """
-        Teleport the player from portal_a's side to portal_b's exit.
-
-        Transforms:
-          position  — offset from A's origin is rotated by delta_yaw and
-                      re-applied to B's origin.
-          velocity  — rotated by the same delta_yaw in the XZ plane so
-                      momentum is conserved (walk through a portal sideways
-                      and emerge moving sideways).
-          angle     — incremented by delta_yaw so the player's view direction
-                      is seamlessly correct on the other side.
-
-        The player is also pushed slightly past portal B's plane to prevent
-        the exit-side transit test from triggering on the very next tick.
-        """
         yaw_a = portal_a.get_yaw_radians()
         yaw_b = portal_b.get_yaw_radians()
-        # The π flip ensures the player exits facing outward through portal B
         delta_yaw = (yaw_b - yaw_a) + math.pi
-
         pos_a = glm.vec3(*portal_a.pos)
         pos_b = glm.vec3(*portal_b.pos)
-
-        # Rotate relative position
         relative = self.player.pos - pos_a
         cos_d = math.cos(delta_yaw)
         sin_d = math.sin(delta_yaw)
@@ -901,17 +844,11 @@ class LogicThread(threading.Thread):
             relative.x * sin_d + relative.z * cos_d,
         )
         self.player.pos = pos_b + rotated
-
-        # Push past portal B's plane so we don't re-trigger immediately
         nx_b, ny_b, nz_b = portal_b.get_normal()
         self.player.pos += glm.vec3(nx_b, ny_b, nz_b) * 8.0
-
-        # Rotate velocity in XZ
         vx = self.player.velocity.x * cos_d - self.player.velocity.z * sin_d
         vz = self.player.velocity.x * sin_d + self.player.velocity.z * cos_d
         self.player.velocity = glm.vec3(vx, self.player.velocity.y, vz)
-
-        # Rotate view angle
         self.player.angle = self.player.angle + delta_yaw
 
     # =========================================================================
@@ -1220,13 +1157,11 @@ class LogicThread(threading.Thread):
                 self._update_mover_path(i, brush, delta)
                 continue
 
-            # FIX: Handle rotation for movers that have 'rotate' = True
             if brush.get('rotate', False):
-                speed = brush.get('speed', 45.0)          # degrees per second
+                speed = brush.get('speed', 45.0)
                 current = brush.get('_rot_angle', 0.0)
                 new_angle = (current + speed * delta) % 360.0
                 brush['_rot_angle'] = new_angle
-                # Store the world yaw for parented portals/lights to use
                 brush['rotation_yaw'] = new_angle
 
             if i not in self.mover_states:
@@ -1268,7 +1203,6 @@ class LogicThread(threading.Thread):
                 self.player.pos += glm.vec3(move_delta[0], move_delta[1], move_delta[2])
 
     def _update_cinematic_camera(self, delta: float):
-        """Advance the cinematic camera along its PathNode chain."""
         cs = self.cinematic_state
         if not cs or not cs.get('active') or cs.get('paused'):
             return
@@ -1327,7 +1261,6 @@ class LogicThread(threading.Thread):
                     self.io_manager.fire_output(entity, 'OnFinished')
 
     def _update_mover_path(self, idx: int, brush: dict, delta: float):
-        """Move a mover along a PathNode chain."""
         state = self.mover_path_states[idx]
         node_name = state['current_node']
         if not node_name:
@@ -1497,7 +1430,6 @@ class LogicThread(threading.Thread):
     # =========================================================================
 
     def _init_parented_portals(self):
-        """Find portals with a parent_mover, compute local position and yaw offset automatically."""
         self._parented_portals = []
         if Portal is None:
             return
@@ -1507,7 +1439,6 @@ class LogicThread(threading.Thread):
             parent_name = thing.properties.get('parent_mover', '')
             if not parent_name:
                 continue
-            # find the mover brush by name
             brush = None
             for b in self.brushes:
                 if b.get('is_mover') and b.get('name') == parent_name:
@@ -1517,11 +1448,9 @@ class LogicThread(threading.Thread):
                 print(f"[Portal] Warning: parent_mover '{parent_name}' not found for portal '{thing.properties.get('name', '')}'")
                 continue
 
-            # store original position and yaw for resetting later
             thing.properties['_original_pos'] = list(thing.pos)
             thing.properties['_original_yaw'] = thing.get_yaw_degrees()
 
-            # if local transform not already stored, compute it now
             if thing.properties.get('parent_local_pos') is None:
                 mover_yaw = brush.get('rotation_yaw', 0.0)
                 thing.set_parent_local_transform(brush['pos'], mover_yaw)
@@ -1532,7 +1461,6 @@ class LogicThread(threading.Thread):
             self._parented_portals.append((thing, brush, local_pos, local_yaw))
 
     def _reset_parented_portals(self):
-        """Restore portals to their original positions and yaws when exiting play mode."""
         for portal, _brush, _local_pos, _local_yaw in self._parented_portals:
             original = portal.properties.pop('_original_pos', None)
             if original is not None:
@@ -1543,12 +1471,10 @@ class LogicThread(threading.Thread):
         self._parented_portals = []
 
     def _update_parented_portals(self):
-        """Update portal world position and yaw to follow the parent mover's position AND rotation."""
         for portal, brush, local_pos, local_yaw in self._parented_portals:
             mover_pos = brush['pos']
-            mover_yaw = brush.get('rotation_yaw', 0.0)   # degrees
+            mover_yaw = brush.get('rotation_yaw', 0.0)
 
-            # rotate local position by mover's yaw
             yaw_rad = math.radians(mover_yaw)
             cos_y = math.cos(yaw_rad)
             sin_y = math.sin(yaw_rad)
@@ -1558,7 +1484,6 @@ class LogicThread(threading.Thread):
             portal.pos[1] = mover_pos[1] + local_pos[1]
             portal.pos[2] = world_z
 
-            # update portal's own yaw (facing direction)
             portal.set_yaw_degrees(mover_yaw + local_yaw)
 
     # =========================================================================
@@ -1599,7 +1524,6 @@ class LogicThread(threading.Thread):
                 continue
             if thing.properties.get('dead', False) or thing.properties.get('hidden', False):
                 continue
-            # Dynamic hitbox based on actual sprite dimensions
             sprite_width = float(thing.properties.get('sprite_width', 64.0))
             sprite_height = float(thing.properties.get('sprite_height', 128.0))
             radius = max(sprite_width, sprite_height) / 2.0

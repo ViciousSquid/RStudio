@@ -146,7 +146,9 @@ class ThreadedGameState:
     def get_render_state(self) -> RenderState:
         """Called by RenderThread (Qt) to get the latest frame data."""
         with self._render_state_lock:
-            return self._read_state
+            snap = object.__new__(RenderState)
+            snap.__dict__ = self._read_state.__dict__.copy()
+            return snap
 
     def get_write_state(self) -> RenderState:
         """Called by LogicThread to get the object to write to."""
