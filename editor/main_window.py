@@ -1458,6 +1458,9 @@ class MainWindow(QMainWindow):
 
 
     def enter_play_mode(self):
+
+        self._store_and_switch_to_debug_console()
+
         player_start = None
         for thing in self.state.things:
             if isinstance(thing, PlayerStart):
@@ -1490,6 +1493,22 @@ class MainWindow(QMainWindow):
         self.update_play_button_color()
         
         #self.ui.notification_label.setText("ESC = EXIT PLAY MODE  |  F12 = FULLSCREEN")
+
+    def _store_and_switch_to_debug_console(self):
+        """Store current tab index and switch to Debug Console tab."""
+        # Only do this if we are actually entering play mode
+        if self.view_3d.play_mode:
+            return
+        self._prev_properties_tab_index = self.properties_tab_widget.currentIndex()
+        debug_console_idx = self.properties_tab_widget.indexOf(self.debug_console)
+        if debug_console_idx >= 0:
+            self.properties_tab_widget.setCurrentIndex(debug_console_idx)
+
+    def _restore_properties_tab(self):
+        """Restore previously active tab after play mode ends."""
+        if hasattr(self, '_prev_properties_tab_index') and self._prev_properties_tab_index is not None:
+            self.properties_tab_widget.setCurrentIndex(self._prev_properties_tab_index)
+            self._prev_properties_tab_index = None
 
 
     def show_generate_tilemap_dialog(self):
@@ -2131,6 +2150,8 @@ class MainWindow(QMainWindow):
             if event.key() == Qt.Key_Escape:
                 self.view_3d.toggle_play_mode(None, None)
                 self.ui.notification_label.setText("")
+                # --- NEW: Restore previous tab ---
+                self._restore_properties_tab()
 
                 if getattr(self, 'is_kiosk_mode', False):
                     self.exit_kiosk_mode()
@@ -2782,6 +2803,8 @@ class MainWindow(QMainWindow):
         # Exit play mode only if not keeping it (F12 toggle vs Escape)
         if not keep_play_mode and hasattr(self.view_3d, 'play_mode') and self.view_3d.play_mode:
             self.view_3d.toggle_play_mode(None, None)
+        # --- Restore previous tab ---
+        self._restore_properties_tab()
 
         # Exit fullscreen FIRST - critical for proper geometry restoration
         self.showNormal()
