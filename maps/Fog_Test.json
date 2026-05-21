@@ -154,7 +154,14 @@
             },
             "is_fog": true,
             "fog_density": 2.0,
-            "id": "1ab503da-93ef-4d82-b9d4-ca547af24579"
+            "id": "1ab503da-93ef-4d82-b9d4-ca547af24579",
+            "shader": "Fog",
+            "fog_color": [
+                0.5,
+                0.6,
+                0.7
+            ],
+            "is_trigger": false
         }
     ],
     "things": [
@@ -178,7 +185,13 @@
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
-                "id": "d05823c5-8ed1-418b-b8e5-d9a6d1b6742f"
+                "id": "d05823c5-8ed1-418b-b8e5-d9a6d1b6742f",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
             },
             "io_connections": []
         },
@@ -202,7 +215,13 @@
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
-                "id": "8870d8d3-c2c8-4692-9bc2-643feffd7366"
+                "id": "8870d8d3-c2c8-4692-9bc2-643feffd7366",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
             },
             "io_connections": []
         },
