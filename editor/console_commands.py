@@ -1087,6 +1087,11 @@ class ConsoleCommandHandler:
         parts = args.split()
         spawn_type = parts[0].lower()
 
+        # Simple counter to guarantee unique names across spawns
+        if not hasattr(self, '_spawn_counter'):
+            self._spawn_counter = 0
+        self._spawn_counter += 1
+
         if spawn_type == "pickup":
             if len(parts) < 2:
                 debug_log("Error", "Usage: spawn pickup <health|ammo|gun1|key> [value]")
@@ -1094,34 +1099,35 @@ class ConsoleCommandHandler:
             item = parts[1]
             value = parts[2] if len(parts) > 2 else "25"
 
-            new_pickup = Pickup(pos=[0, 0, 0])
+            new_pickup = Pickup(pos=[0, 0, 0])         # name=None if constructor supports it
             new_pickup.properties['item_type'] = item
             new_pickup.properties['value'] = value
-            new_pickup.properties['name'] = f"Pickup_{item}"
+            # Unique name: includes item type AND counter
+            new_pickup.properties['name'] = f"Pickup_{item}_{self._spawn_counter}"
             self.editor_state.things.append(new_pickup)
-            debug_log("Info", f"Spawned pickup: {item} (value={value})")
+            debug_log("Info", f"Spawned pickup: {item} (value={value}) named '{new_pickup.properties['name']}'")
             self.editor_state.save_state()
             self.main_window.update_all_ui()
 
         elif spawn_type == "light":
             new_light = Light(pos=[0, 100, 0])
-            new_light.properties['name'] = "Light_new"
+            new_light.properties['name'] = f"Light_{self._spawn_counter}"
             self.editor_state.things.append(new_light)
-            debug_log("Info", "Spawned light at [0, 100, 0]")
+            debug_log("Info", f"Spawned light at [0, 100, 0] named '{new_light.properties['name']}'")
             self.editor_state.save_state()
             self.main_window.update_all_ui()
 
         elif spawn_type == "levelchanger":
             new_changer = LevelChanger(pos=[0, 40, 0])
-            new_changer.properties['name'] = "LevelChanger_new"
-            new_changer.properties['target_map'] = "Simple_Map_Test.json"  # default
+            new_changer.properties['name'] = f"LevelChanger_{self._spawn_counter}"
+            new_changer.properties['target_map'] = "Simple_Map_Test.json"
             self.editor_state.things.append(new_changer)
-            debug_log("Info", "Spawned LevelChanger at [0, 40, 0]")
+            debug_log("Info", f"Spawned LevelChanger at [0, 40, 0] named '{new_changer.properties['name']}'")
             self.editor_state.save_state()
             self.main_window.update_all_ui()
 
         else:
-            debug_log("Error", f"Unknown spawn type '{spawn_type}'. Try: pickup or light")
+            debug_log("Error", f"Unknown spawn type '{spawn_type}'. Try: pickup, light, or levelchanger")
 
     def cmd_delete(self, args):
         if not args:
