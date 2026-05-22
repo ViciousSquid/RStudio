@@ -30,6 +30,8 @@ from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from editor.debug_console import DebugConsole, get_debug_logger
 
+# Pygame for gamepad support
+import pygame
 
 def perspective_projection(fov, aspect, near, far):
     if aspect == 0:
@@ -125,8 +127,22 @@ class QtGameView(QOpenGLWidget):
 
         self.player2 = None
         self.splitscreen_mode = False
-        self._gamepad = None
-        self._init_gamepad()
+
+        # Pygame gamepad initialisation
+        pygame.init()
+        pygame.joystick.init()
+        self.gamepad = None
+        if pygame.joystick.get_count() > 0:
+            self.gamepad = pygame.joystick.Joystick(0)
+            self.gamepad.init()
+            print(f"[Gamepad] Found: {self.gamepad.get_name()}")
+        else:
+            print("[Gamepad] No gamepad connected – using arrow keys for P2")
+
+        # Timer to poll gamepad state regularly
+        self.gamepad_timer = QTimer(self)
+        self.gamepad_timer.timeout.connect(self._poll_gamepad)
+        self.gamepad_timer.start(16)  # ~60 Hz
 
         self._last_player_start_pos = [0, 0, 0]
         self._last_player_start_angle = 0
@@ -274,72 +290,28 @@ class QtGameView(QOpenGLWidget):
         }
         self._key_fallback_default = (QColor(150, 150, 150), QPen(QColor(120, 120, 120), 2), QBrush(QColor(150, 150, 150)))
 
-    def _init_gamepad(self):
-        try:
-            from PyQt5.QtGamepad import QGamepad, QGamepadManager
-            connected = list(QGamepadManager.instance().connectedGamepads())
-            if connected:
-                self._gamepad = QGamepad(connected[0])
-                print(f"[Gamepad] P2 gamepad: {self._gamepad.name() or 'Unknown'}")
-            else:
-                print("[Gamepad] No gamepad found — P2 will use arrow keys.")
-        except Exception:
-            pass
+    def _poll_gamepad(self):
+        """Read gamepad state and send to game_state for Player 2."""
+        if not self.gamepad:
+            return
+        pygame.event.pump()  # Update joystick state
 
-    # MODIFIED: _update_p2_input now returns raw turn direction
-    def _update_p2_input(self):
+        # Axes: 0=left X, 1=left Y, 2=right X, 3=right Y
+        move_x = self.gamepad.get_axis(0)
+        move_z = -self.gamepad.get_axis(1)   # Invert Y
+        look_dx = self.gamepad.get_axis(2)   # Right stick X
+        look_dy = -self.gamepad.get_axis(3)  # Right stick Y (inverted)
+
         DEAD = 0.15
-        move_x = move_z = look_dx = look_dy = 0.0
-        jump = crouch = False
+        move_x = move_x if abs(move_x) > DEAD else 0.0
+        move_z = move_z if abs(move_z) > DEAD else 0.0
+        look_dx = look_dx if abs(look_dx) > DEAD else 0.0
+        look_dy = look_dy if abs(look_dy) > DEAD else 0.0
 
-        gp = self._gamepad
-        if gp is not None and gp.isConnected():
-            ax = gp.axisLeftX();  ay = gp.axisLeftY()
-            move_x = ax if abs(ax) > DEAD else 0.0
-            move_z = -ay if abs(ay) > DEAD else 0.0
-            rx = gp.axisRightX(); ry = gp.axisRightY()
-            look_dx = rx if abs(rx) > DEAD else 0.0   # raw turn rate
-            look_dy = ry if abs(ry) > DEAD else 0.0
-            jump = bool(gp.buttonA())
-            crouch = bool(gp.buttonB())
-        else:
-            keys = self.editor.keys_pressed
-            move_z = (1.0 if Qt.Key_Up in keys else 0.0) - (1.0 if Qt.Key_Down in keys else 0.0)
-            move_x = 0.0   # no strafe from arrow keys
-            # Turning: raw direction (-1, 0, 1)
-            look_dx = 0.0
-            if Qt.Key_Left in keys:
-                look_dx = -1.0
-            elif Qt.Key_Right in keys:
-                look_dx = 1.0
-            jump = Qt.Key_Return in keys or Qt.Key_Enter in keys
-            crouch = False
+        jump = self.gamepad.get_button(0)   # A button
+        crouch = self.gamepad.get_button(1) # B button (optional)
 
         self.game_state.set_p2_input(move_x, move_z, look_dx, look_dy, jump, crouch)
-
-    def _toggle_splitscreen(self):
-        self.splitscreen_mode = not self.splitscreen_mode
-        if self.play_mode:
-            pos = getattr(self, '_last_player_start_pos', [0, 0, 0])
-            angle = getattr(self, '_last_player_start_angle', 0)
-            if self.splitscreen_mode:
-                self.player2 = Player(pos[0] + 32, pos[2], np.radians(90.0 - angle), physics_enabled=True)
-                self.player2.pos.y = pos[1]
-                if self.logic_thread:
-                    self.logic_thread.set_player2(self.player2)
-            else:
-                self.player2 = None
-                if self.logic_thread:
-                    self.logic_thread.set_player2(None)
-            w, h = self.width(), self.height()
-            if h > 0:
-                vp_w = (w // 2) if self.splitscreen_mode else w
-                self._cached_aspect_ratio = vp_w / h
-                if self.logic_thread:
-                    self.logic_thread.set_frustum_aspect(self._cached_aspect_ratio)
-        status = "ON" if self.splitscreen_mode else "OFF"
-        if hasattr(self.editor, 'show_toast'):
-            self.editor.show_toast(f"Split-Screen: {status}  [F9]")
 
     def _preload_sound_file(self, name, path, pool_size=4):
         if name in self.sound_pool:
@@ -493,8 +465,8 @@ class QtGameView(QOpenGLWidget):
         if self.use_threading and self.logic_thread:
             keys = set() if self.console_overlay_active else self.editor.keys_pressed
             self.game_state.set_keys(keys)
-            if self.play_mode and getattr(self, 'splitscreen_mode', False):
-                self._update_p2_input()
+            # Player 2 input is handled by the gamepad timer and arrow keys fallback
+            # (No need to call _update_p2_input here because the timer does it)
             has_new = self.game_state.try_swap()
             self.repaint()
             if has_new and self.play_mode:
@@ -1414,6 +1386,8 @@ class QtGameView(QOpenGLWidget):
     def toggle_play_mode(self, player_start_pos, player_start_angle, physics_enabled=True):
         self.play_mode = not self.play_mode
         if self.play_mode:
+            # Force split-screen OFF when entering play mode
+            self.splitscreen_mode = False
             self._last_player_start_pos = player_start_pos
             self._last_player_start_angle = player_start_angle
             center_pos = self.mapToGlobal(self.rect().center())
@@ -1470,6 +1444,30 @@ class QtGameView(QOpenGLWidget):
             self._play_mode_hint_timer.stop()
             self._cached_hint_text = None
             self.update()
+
+    def _toggle_splitscreen(self):
+        self.splitscreen_mode = not self.splitscreen_mode
+        if self.play_mode:
+            pos = getattr(self, '_last_player_start_pos', [0, 0, 0])
+            angle = getattr(self, '_last_player_start_angle', 0)
+            if self.splitscreen_mode:
+                self.player2 = Player(pos[0] + 32, pos[2], np.radians(90.0 - angle), physics_enabled=True)
+                self.player2.pos.y = pos[1]
+                if self.logic_thread:
+                    self.logic_thread.set_player2(self.player2)
+            else:
+                self.player2 = None
+                if self.logic_thread:
+                    self.logic_thread.set_player2(None)
+            w, h = self.width(), self.height()
+            if h > 0:
+                vp_w = (w // 2) if self.splitscreen_mode else w
+                self._cached_aspect_ratio = vp_w / h
+                if self.logic_thread:
+                    self.logic_thread.set_frustum_aspect(self._cached_aspect_ratio)
+        status = "ON" if self.splitscreen_mode else "OFF"
+        if hasattr(self.editor, 'show_toast'):
+            self.editor.show_toast(f"Split-Screen: {status}  [F9]")
 
     def _exit_play_mode(self):
         if not self.play_mode:
