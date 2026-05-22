@@ -30,6 +30,7 @@
 
 ### Logic & Gameplay
 - Entity I/O system (Half-Life 2–style)
+- Optional split-screen mode (F9)
 - Visual scripting (25 examples)
 - NPCs/monsters
 - Node pathfinding
