@@ -70,6 +70,7 @@ class ConsoleCommandHandler:
             'physics': self.cmd_physics,
             'setpos': self.cmd_setpos,
             'teleport': self.cmd_setpos,
+            'ss': self.cmd_split_screen,          # NEW
 
             # Original commands
             'noclip': self.cmd_noclip,
@@ -613,7 +614,7 @@ class ConsoleCommandHandler:
 <b style="color:orange;">clear</b> — Clear console<br>
 <b style="color:orange;">help</b> — Show this help<br>
 <b style="color:orange;">fps</b> — Toggle FPS display<br>
-<b style="color:orange;">map &lt;name&gt;</b> — Load a different map<br>
+<b style="color:orange;">map</b> &lt;name&gt; — Load a different map<br>
 <b style="color:cyan;">=== Entity / I/O Commands ===</b><br>
 <b style="color:orange;">list</b>{sep}<b style="color:orange;">ents</b>{sep}<b style="color:orange;">ls</b>{sep}<b style="color:orange;">entities</b> — List all entities<br>
 <b style="color:orange;">ent</b>{sep}<b style="color:orange;">info</b> &lt;name&gt; — Show entity details<br>
@@ -654,6 +655,7 @@ class ConsoleCommandHandler:
 <b style="color:orange;">notarget</b> — Toggle notarget (monsters ignore the player)<br>
 <b style="color:orange;">physics</b> on/off/toggle<br>
 <b style="color:orange;">setpos</b>{sep}<b style="color:orange;">teleport</b> x y z<br>
+<b style="color:orange;">ss</b> — Toggle split-screen mode (same as F9)<br>
 <b style="color:cyan;">=== Portals ===</b><br>
 <b style="color:orange;">portal_list</b> — List all portals and their links<br>
 <b style="color:orange;">portal_create</b> &lt;name1&gt; &lt;name2&gt; [x y z] — Create a linked portal pair<br>
@@ -1258,6 +1260,17 @@ class ConsoleCommandHandler:
             self.main_window.show_toast(f"Teleported to {x:.1f}, {y:.1f}, {z:.1f}")
         except Exception:
             debug_log("Error", "Usage: setpos x y z   (example: setpos 0 50 100)")
+
+    # NEW: Split-screen command
+    def cmd_split_screen(self, args):
+        """Toggle split-screen mode (mirrors F9)."""
+        if not self._require_play_mode("ss"):
+            return
+        view_3d = self.main_window.view_3d
+        if hasattr(view_3d, '_toggle_splitscreen'):
+            view_3d._toggle_splitscreen()
+        else:
+            debug_log("Error", "Split-screen toggle not available.")
 
     def cmd_clear(self, args):
         self.main_window.debug_console.clear()
