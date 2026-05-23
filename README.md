@@ -33,7 +33,7 @@
 ### Logic & Gameplay
 - Entity I/O system (Half-Life 2–style)
 - Visual scripting wizard with 25 examples
-- 19 example maps showcasing engine features
+- 19 playable example maps showcasing engine features
 - NPCs/monsters
 - Node pathfinding
 - Logic Gates, Triggers, Timers
