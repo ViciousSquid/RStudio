@@ -11,6 +11,7 @@
 - Hit play instantly — no compile or bake step
 - Entity I/O logic system inspired by Source engine
 - Classic brush-based CSG editing
+- Visual scripting (no coding)
 - Procedural Liminal map generator - playable maps with one click!
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
