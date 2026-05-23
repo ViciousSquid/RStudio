@@ -193,7 +193,7 @@ class Ui_MainWindow(object):
         MainWindow.file_menu = menubar.addMenu('File')
         edit_menu = menubar.addMenu('Edit')
         view_menu = menubar.addMenu('View')
-        logic_menu = menubar.addMenu('Logic')
+        tools_menu = menubar.addMenu('Tools')
         help_menu = menubar.addMenu('Help')
 
         MainWindow.file_menu.addAction(QAction('New Map', MainWindow, shortcut='Ctrl+N', triggered=MainWindow.new_map))
@@ -247,25 +247,31 @@ class Ui_MainWindow(object):
         MainWindow.reset_layout_action.triggered.connect(MainWindow.reset_layout)
         view_menu.addAction(MainWindow.reset_layout_action)
 
-        # ── Logic Menu ──────────────────────────────────────────────────
+        # ── Tools Menu (formerly Logic) ──────────────────────────────────
         logic_graph_action = QAction('Logic Graph Editor…', MainWindow)
         logic_graph_action.setShortcut('Ctrl+L')
         logic_graph_action.setToolTip('Open the visual I/O node graph editor')
         logic_graph_action.triggered.connect(MainWindow.open_logic_graph)
-        logic_menu.addAction(logic_graph_action)
- 
+        tools_menu.addAction(logic_graph_action)
+
         logic_wizard_action = QAction('Logic Wizard…', MainWindow)
         logic_wizard_action.setShortcut('Ctrl+Shift+W')
         logic_wizard_action.setToolTip('Guided setup for common I/O scenarios')
         logic_wizard_action.triggered.connect(MainWindow.open_logic_wizard)
-        logic_menu.addAction(logic_wizard_action)
- 
-        logic_menu.addSeparator()
- 
+        tools_menu.addAction(logic_wizard_action)
+
+        tools_menu.addSeparator()
+
         validate_action = QAction('Validate All Connections…', MainWindow)
         validate_action.setToolTip('Check for connections with missing target entities')
         validate_action.triggered.connect(MainWindow.validate_io_connections)
-        logic_menu.addAction(validate_action)
+        tools_menu.addAction(validate_action)
+
+        tools_menu.addSeparator()
+
+        procedural_action = QAction('Procedural map generator…', MainWindow)
+        procedural_action.triggered.connect(MainWindow.show_procedural_map_generator)
+        tools_menu.addAction(procedural_action)
         
         view_menu.addSeparator()
         toggle_triggers_action = QAction('Opaque Triggers', MainWindow, checkable=True)

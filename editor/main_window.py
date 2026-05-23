@@ -7,7 +7,9 @@ import numpy as np
 import configparser
 import math
 import copy
+import glm
 import time
+from datetime import datetime
 
 
 from PyQt5.QtWidgets import (
@@ -28,6 +30,7 @@ from editor.terrain_editor import TerrainEditorWindow
 from engine.terrain import Terrain
 from editor.debug_console import DebugConsole, CommandInput, debug_log
 from editor.console_commands import ConsoleCommandHandler
+from editor.procedural_generator import ProceduralMapWidget
 
 
 class Toast(QLabel):
@@ -244,6 +247,42 @@ class MainWindow(QMainWindow):
         self.autosave_timer.timeout.connect(self.autosave)
         self.setup_autosave()
 
+        # Overlay management for Properties dock
+        self._original_properties_widget = None   # the widget that was replaced
+        self._current_overlay = None              # currently active overlay widget
+        self._overlay_close_callback = None       # optional cleanup when overlay is closed
+
+
+    def _close_current_overlay(self):
+        """Close any active overlay and restore the original Properties dock content."""
+        if self._current_overlay is not None:
+            # Call custom close callback if provided
+            if self._overlay_close_callback:
+                self._overlay_close_callback()
+                self._overlay_close_callback = None
+
+            # Remove the overlay widget
+            self._current_overlay.setParent(None)
+            self._current_overlay.deleteLater()
+            self._current_overlay = None
+
+            # Restore original widget
+            if self._original_properties_widget:
+                self.properties_dock.setWidget(self._original_properties_widget)
+                self._original_properties_widget = None
+
+    def _show_overlay(self, overlay_widget, close_callback=None):
+        """
+        Replace the Properties dock content with overlay_widget.
+        Any existing overlay is closed first.
+        close_callback is called when the overlay is later closed.
+        """
+        self._close_current_overlay()
+        self._original_properties_widget = self.properties_dock.widget()
+        self.properties_dock.setWidget(overlay_widget)
+        self._current_overlay = overlay_widget
+        self._overlay_close_callback = close_callback
+
     def update_title(self):
         """Updates window title with filename and dirty status."""
         fname = os.path.basename(self.file_path) if self.file_path else "Untitled"
@@ -420,6 +459,107 @@ class MainWindow(QMainWindow):
             
         except Exception as e:
             print(f"Autosave failed: {e}")
+
+    def show_procedural_map_generator(self):
+        """Open the procedural map generator as an overlay in the Properties dock."""
+        from editor.procedural_generator import ProceduralMapWidget
+
+        # Create the generator widget (it will emit map_generated when closed)
+        generator = ProceduralMapWidget(self.properties_dock)
+        generator.map_generated.connect(self._on_procedural_map_generated)
+
+        # Show it in the overlay system
+        self._show_overlay(generator)
+
+    def _on_procedural_map_generated(self, map_data):
+        """
+        Handle the signal from the generator:
+        - if map_data is not None → load the generated map (keep generator open)
+        - if map_data is None → user clicked X → close the overlay
+        """
+        if map_data is not None:
+            # Load the generated map without closing the generator
+            import tempfile, json, os
+            fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="procedural_")
+            os.close(fd)
+            with open(temp_path, 'w') as f:
+                json.dump(map_data, f, indent=4)
+            self.load_level_file(temp_path)
+            os.unlink(temp_path)
+            self.show_toast("Generated map loaded – use Save As to keep it")
+        else:
+            # User closed the generator – close the overlay
+            self._close_current_overlay()
+
+    def _on_procedural_map_closed(self, map_data):
+        """
+        Called when the procedural map widget emits map_generated.
+        - If map_data is None → user clicked X → restore original Properties tab.
+        - Else → load the generated map into the editor (generator remains open).
+        """
+        if map_data is None:
+            # Restore original content (user closed the generator)
+            self.properties_dock.setWidget(self._original_properties_widget)
+            self._original_properties_widget = None
+        else:
+            # Load the generated map without closing the generator
+            try:
+                # Create a temporary file name (not saved to disk unless user saves later)
+                import tempfile
+                fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="procedural_", dir=None)
+                os.close(fd)
+                with open(temp_path, 'w') as f:
+                    json.dump(map_data, f, indent=4)
+
+                # Load the temporary file
+                self.load_level_file(temp_path)
+
+                # Optionally delete the temp file after load
+                # (load_level_file makes a copy of the data, so we can delete)
+                os.unlink(temp_path)
+
+                self.show_toast("Generated map loaded – use Save As to keep it")
+            except Exception as e:
+                self.show_toast(f"Failed to load generated map: {e}", is_error=True)
+                import traceback
+                traceback.print_exc()
+
+    def load_procedural_map(self, map_data):
+        """Save the generated map to maps/ folder and load it."""
+        if not self.check_unsaved_changes():
+            return
+        try:
+            # Ensure maps directory exists
+            maps_dir = os.path.join(self.root_dir, "maps")
+            if not os.path.exists(maps_dir):
+                os.makedirs(maps_dir)
+
+            # Generate a unique filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"procedural_{timestamp}.json"
+            filepath = os.path.join(maps_dir, filename)
+
+            # Save map data to file
+            with open(filepath, 'w') as f:
+                json.dump(map_data, f, indent=4)
+
+            # Now load the saved file (reuse existing load_level_file logic)
+            self.load_level_file(filepath)
+
+        except Exception as e:
+            self.show_toast(f"Failed to save/load procedural map: {e}", is_error=True)
+            import traceback
+            traceback.print_exc()
+
+    def center_2d_views_on(self, world_pos):
+        """Center all 2D views on the given world position (list/tuple of [x, y, z])."""
+        from PyQt5.QtCore import QPointF
+        self.view_top.pan_offset = QPointF(world_pos[0], world_pos[2])
+        self.view_side.pan_offset = QPointF(world_pos[2], world_pos[1])
+        self.view_front.pan_offset = QPointF(world_pos[0], world_pos[1])
+        self.view_top.update()
+        self.view_side.update()
+        self.view_front.update()
 
 
     def moveEvent(self, event):
@@ -1676,46 +1816,44 @@ class MainWindow(QMainWindow):
         self.file_menu.addAction(export_action)
 
     def export_game_package(self):
-        """Trigger the full package export workflow — embeds in Properties dock."""
+        """Trigger the full package export workflow as an overlay in the Properties dock."""
         from editor.package_dialog import PackageMetadataDialog
         from editor.package_exporter import PackageExporter
 
-        # Determine current map path (fallback if unsaved)
         current_map = self.file_path or "maps/level_1.json"
 
-        # ── Swap Properties tab widget for export dialog ──────────────────
-        self._original_properties_widget = self.properties_tab_widget.currentWidget()
-        
+        # Create container + dialog
+        container = QWidget()
+        container.setObjectName("ExportContainer")
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+
         self._export_dialog = PackageMetadataDialog(
             current_map,
-            parent=self.properties_tab_widget,  # Parent to the tab widget itself
-            close_callback=self._restore_properties_tabs
+            parent=container,
+            close_callback=self._cleanup_export_overlay
         )
-        
-        # Clear the tab widget and add the dialog as the only widget
-        # We temporarily reparent the dialog to cover the tabs
-        self.properties_tab_widget.setParent(None)  # Detach from dock
-        
-        # Create a container that fills the dock
-        self._export_container = QWidget()
-        self._export_container.setObjectName("ExportContainer")
-        container_layout = QVBoxLayout(self._export_container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        container_layout.addWidget(self._export_dialog)
-        
-        # Replace the tab widget in the dock
-        self.properties_dock.setWidget(self._export_container)
-        
-        # Show the dialog
-        self._export_dialog.show()
-        
-        # Replace the export button connection.
-        # The dialog's default _on_export only validates and calls accept() —
-        # it does NOT create the package. We override with actual export logic.
+        layout.addWidget(self._export_dialog)
+
+        # Replace the export button's default behaviour (validation only) with actual export
         self._export_dialog.export_btn.clicked.disconnect()
         self._export_dialog.export_btn.clicked.connect(
-            lambda checked: self._run_export(self._export_dialog, current_map)
+            lambda: self._run_export(self._export_dialog, current_map)
         )
+
+        # Cancel button and close event should close the overlay, not just the dialog
+        self._export_dialog.cancel_btn.clicked.disconnect()
+        self._export_dialog.cancel_btn.clicked.connect(self._close_current_overlay)
+        self._export_dialog.rejected.connect(self._close_current_overlay)
+
+        # Show the overlay
+        self._show_overlay(container, close_callback=self._cleanup_export_overlay)
+
+    def _cleanup_export_overlay(self):
+        """Clean up references after the export overlay is closed."""
+        if hasattr(self, '_export_dialog'):
+            self._export_dialog = None
+        # The overlay itself will be destroyed by _close_current_overlay
 
     def _run_export(self, dialog, current_map):
         """Execute the export after dialog is accepted."""
@@ -2461,9 +2599,7 @@ class MainWindow(QMainWindow):
             self.state.clear_scene()
 
             # --- Clear existing terrain BEFORE loading new data ---
-            # This prevents leftover terrain from the previous map.
             self._clear_terrain()
-            # Also clear any lingering references in the 3D view
             self.view_3d.terrain = None
             if self.view_3d.logic_thread:
                 self.view_3d.logic_thread.set_terrain(None)
@@ -2484,24 +2620,45 @@ class MainWindow(QMainWindow):
                 if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
                     self.view_3d.logic_thread.set_terrain(self.terrain)
             else:
-                # No terrain in the new map – ensure it is absent from the scene
                 self._clear_terrain()
 
-            # Reset camera to PlayerStart
+            # --- Find PlayerStart and reposition camera ---
             player_start_pos = None
+            player_angle = 0.0
             for t in self.state.things:
                 if isinstance(t, PlayerStart):
                     player_start_pos = t.pos
+                    player_angle = t.get_angle()
                     break
 
             if player_start_pos:
-                self.view_3d.camera.pos = [
-                    player_start_pos[0],
-                    player_start_pos[1] + 80,
-                    player_start_pos[2] + 200
-                ]
-                self.view_3d.camera.pitch = -20
+                # Read user preference (default = True)
+                place_camera = self.config.getboolean('Display', 'place_camera_at_player_start', fallback=True)
+
+                if place_camera:
+                    # Place 3D editor camera exactly at player start
+                    self.view_3d.camera.pos = glm.vec3(player_start_pos)
+                    self.view_3d.camera.yaw = player_angle      # face the same direction
+                    self.view_3d.camera.pitch = 0.0
+
+                    # Center 2D views so the camera frustum is visible
+                    self.center_2d_views_on(player_start_pos)
+                     # Force a second update after event loop
+                    QTimer.singleShot(50, lambda: self.center_2d_views_on(player_start_pos))
+                else:
+                    # Old behaviour: offset camera behind the spawn
+                    self.view_3d.camera.pos = [
+                        player_start_pos[0],
+                        player_start_pos[1] + 80,
+                        player_start_pos[2] + 200
+                    ]
+                    self.view_3d.camera.pitch = -20
+                    self.view_3d.camera.yaw = -90
+            else:
+                # No player start – reset camera to default position
+                self.view_3d.camera.pos = glm.vec3(0, 150, 400)
                 self.view_3d.camera.yaw = -90
+                self.view_3d.camera.pitch = -20
 
             # Update file path and UI state
             self.file_path = filePath
@@ -2516,18 +2673,16 @@ class MainWindow(QMainWindow):
             # Proper, synchronous play mode restart
             if was_playing:
                 print("[MainWindow] Restarting Play Mode with new level...")
-                # Clean exit (avoid toggle)
                 if hasattr(self, 'exit_play_mode'):
                     self.exit_play_mode()
                 else:
                     self.view_3d.play_mode = False
-                # Immediate re-entry (no QTimer!)
                 self.enter_play_mode()
 
             print(f"[MainWindow] Successfully loaded {os.path.basename(filePath)}")
             self.show_toast(f"Loaded {os.path.basename(filePath)}")
 
-            # Keep the Logic Graph in sync with the newly loaded map
+            # Keep the Logic Graph in sync
             self._refresh_logic_graph()
 
             return True

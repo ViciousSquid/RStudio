@@ -99,6 +99,13 @@ class SettingsWindow(QDialog):
         self.click_select_3d_checkbox = QCheckBox("Click to select in 3D view")
         self.click_select_3d_checkbox.setToolTip("Allow selecting brushes/things by clicking in the 3D view (without Shift)")
         view_3d_layout.addWidget(self.click_select_3d_checkbox)
+
+        self.place_camera_at_player_start_checkbox = QCheckBox("Focus Player_Start on load")
+        self.place_camera_at_player_start_checkbox.setToolTip(
+            "When enabled, loading a map moves the 3D editor camera to the Player Start location\n"
+            "and centers the 2D views on it. This helps preview the map from the player's perspective."
+        )
+        view_3d_layout.addWidget(self.place_camera_at_player_start_checkbox)
         
         selection_trans_layout = QHBoxLayout()
         selection_trans_layout.addWidget(QLabel("Selection Transparency:"))
@@ -537,8 +544,11 @@ class SettingsWindow(QDialog):
 
         self.invert_mouse_checkbox.setChecked(self.config.getboolean('Controls', 'invert_mouse', fallback=False))
         self.middle_click_drag_checkbox.setChecked(self.config.getboolean('Controls', 'middle_click_drag', fallback=False))
+
+        self.place_camera_at_player_start_checkbox.setChecked(
+        self.config.getboolean('Display', 'place_camera_at_player_start', fallback=True)
+        )
         
-        # Load P2 turn sensitivity (now in Split Screen tab)
         self.p2_turn_sensitivity_spin.setValue(
             self.config.getint('Controls', 'p2_turn_sensitivity', fallback=10)
         )
@@ -658,6 +668,9 @@ class SettingsWindow(QDialog):
         self.config.set('Kiosk', 'res_height', str(self.kiosk_res_h.value()))
         self.config.set('Kiosk', 'launch_in_editor',
                         str(self.launch_in_editor_checkbox.isChecked()))
+
+        self.config.set('Display', 'place_camera_at_player_start',
+                str(self.place_camera_at_player_start_checkbox.isChecked()))
 
     def _restart_application(self):
         from PyQt5.QtWidgets import QApplication
