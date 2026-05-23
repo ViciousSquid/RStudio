@@ -12,6 +12,7 @@
 - Generate fully playable procedural liminal maps with one click
 - Entity I/O logic system inspired by Source engine
 - Classic brush-based CSG editing
+- Export creations as portable packages
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
 ### [Download binaries for macOS and Windows](https://github.com/ViciousSquid/Fio/releases) || [Getting Started](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) || [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
@@ -27,7 +28,6 @@
 - Editor and engine run as a unified environment
 - Iterate on gameplay and logic in real-time
 - Design, test, and refine in a single environment
-- Creations can be published and shared
 
 ### Logic & Gameplay
 - Entity I/O system (Half-Life 2–style)
