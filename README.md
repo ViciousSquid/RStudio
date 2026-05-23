@@ -28,7 +28,6 @@
 ### Core Workflow
 - Editor and engine run as a unified environment
 - Iterate on gameplay and logic in real-time
-- Design, test, and refine in a single environment
 
 ### Logic & Gameplay
 - Entity I/O system (Half-Life 2–style)
