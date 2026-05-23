@@ -13,6 +13,7 @@
 - Entity I/O logic system inspired by Source engine
 - Classic brush-based CSG editing
 - Export creations as portable packages
+- Local split-screen multiplayer - Two players with single keyboard (or gamepad)
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
 ### [Download binaries for macOS and Windows](https://github.com/ViciousSquid/Fio/releases) || [Getting Started](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) || [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
