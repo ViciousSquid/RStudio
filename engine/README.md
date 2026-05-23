@@ -21,6 +21,9 @@ Collision & physics simulation
 ### `player.py`
 Player controller, noclip, strafe movement.
 
+### `procedural_generator.py`
+Procedural liminal map generator
+
 ### `qt_game_view.py`
 Qt OpenGL widget that hosts the Renderer
 
