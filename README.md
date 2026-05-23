@@ -51,6 +51,7 @@
 - Optimized for Snapdragon 8CX / Windows-on-ARM @60FPS
 - Editor Layer (PyQt UI, tools, asset browser)
 - Engine Layer (rendering, physics, AI)
+- Includes Fio → Quake/Valve220 map converter
 
 🗎 Modular architecture, fully open source (MIT License)
 
