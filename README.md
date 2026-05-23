@@ -9,10 +9,9 @@
 
 **Key Features**
 - Hit play instantly — no compile or bake step
+- Generate fully playable procedural liminal maps with one click
 - Entity I/O logic system inspired by Source engine
 - Classic brush-based CSG editing
-- Visual scripting (no coding)
-- Procedural Liminal map generator - playable maps with one click!
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
 ### [Download binaries for macOS and Windows](https://github.com/ViciousSquid/Fio/releases) || [Getting Started](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) || [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
