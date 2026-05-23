@@ -144,6 +144,9 @@ class QtGameView(QOpenGLWidget):
         self.gamepad_timer.timeout.connect(self._poll_gamepad)
         self.gamepad_timer.start(16)  # ~60 Hz
 
+        # NEW: Store arrow key states for Player 2 when no gamepad
+        self.p2_keys_pressed = set()
+
         self._last_player_start_pos = [0, 0, 0]
         self._last_player_start_angle = 0
 
@@ -465,8 +468,8 @@ class QtGameView(QOpenGLWidget):
         if self.use_threading and self.logic_thread:
             keys = set() if self.console_overlay_active else self.editor.keys_pressed
             self.game_state.set_keys(keys)
-            # Player 2 input is handled by the gamepad timer and arrow keys fallback
-            # (No need to call _update_p2_input here because the timer does it)
+            # Update Player 2 input from arrow keys (if no gamepad)
+            self._update_p2_keyboard_input()
             has_new = self.game_state.try_swap()
             self.repaint()
             if has_new and self.play_mode:
@@ -1212,18 +1215,18 @@ class QtGameView(QOpenGLWidget):
         tps_text = f"TPS: {getattr(self.logic_thread, 'actual_tps', 0.0):.1f}"
         painter.drawText(rect.right() - fm.horizontalAdvance(tps_text) - 10,
                         rect.bottom() - 10, tps_text)
-        renderer_label = f"Renderer: "
-        renderer_name = getattr(self, '_renderer_mode', 'Forward')
+        #renderer_label = f""
+        #renderer_name = getattr(self, '_renderer_mode', 'Forward')
         bold_font = QFont(self.console_font)
         bold_font.setBold(True)
         renderer_name_color = QColor(120, 210, 255)
         painter.setFont(self.console_font)
         painter.setPen(text_color)
-        painter.drawText(left_margin, stats_start_y + line_height, renderer_label)
-        label_w = fm.horizontalAdvance(renderer_label)
+        #painter.drawText(left_margin, stats_start_y + line_height, renderer_label)
+        #label_w = fm.horizontalAdvance(renderer_label)
         painter.setFont(bold_font)
         painter.setPen(renderer_name_color)
-        painter.drawText(left_margin + label_w, stats_start_y + line_height, renderer_name)
+        #painter.drawText(left_margin + label_w, stats_start_y + line_height, renderer_name)
         painter.setFont(self.console_font)
 
     def _draw_render_menu(self, painter):
@@ -1972,7 +1975,48 @@ class QtGameView(QOpenGLWidget):
             self.debug_console_window._on_command_entered()
         self._close_console_overlay()
 
+
+    def _update_p2_keyboard_input(self):
+        """If no gamepad is connected and split‑screen is active, read arrow keys and send P2 input.
+        Up/Down = forward/backward, Left/Right = turn left/right (no strafing)."""
+        if not self.play_mode or not self.splitscreen_mode or self.gamepad:
+            return
+
+        move_z = 0.0
+        look_dx = 0.0
+        if 'up' in self.p2_keys_pressed:
+            move_z = 1.0
+        if 'down' in self.p2_keys_pressed:
+            move_z = -1.0
+        if 'left' in self.p2_keys_pressed:
+            look_dx = -1.0  # turn left (negative yaw change)
+        if 'right' in self.p2_keys_pressed:
+            look_dx = 1.0   # turn right
+
+        # No strafing (move_x = 0), no look up/down (look_dy = 0)
+        move_x = 0.0
+        look_dy = 0.0
+        jump = False
+        crouch = False
+
+        self.game_state.set_p2_input(move_x, move_z, look_dx, look_dy, jump, crouch)
+
     def keyPressEvent(self, event):
+        # ----- Player 2 arrow key handling (when no gamepad) -----
+        if self.play_mode and not self.gamepad and self.splitscreen_mode:
+            if event.key() == Qt.Key_Up:
+                self.p2_keys_pressed.add('up')
+                return
+            elif event.key() == Qt.Key_Down:
+                self.p2_keys_pressed.add('down')
+                return
+            elif event.key() == Qt.Key_Left:
+                self.p2_keys_pressed.add('left')
+                return
+            elif event.key() == Qt.Key_Right:
+                self.p2_keys_pressed.add('right')
+                return
+
         def check_key(cfg_key, default):
             key_str = self.editor.config.get('Shortcuts', cfg_key, fallback=default)
             seq = QKeySequence(key_str)
@@ -2067,3 +2111,20 @@ class QtGameView(QOpenGLWidget):
                     self.update()
                 return
         super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        # Remove arrow keys from the set when released
+        if self.play_mode and not self.gamepad and self.splitscreen_mode:
+            if event.key() == Qt.Key_Up:
+                self.p2_keys_pressed.discard('up')
+                return
+            elif event.key() == Qt.Key_Down:
+                self.p2_keys_pressed.discard('down')
+                return
+            elif event.key() == Qt.Key_Left:
+                self.p2_keys_pressed.discard('left')
+                return
+            elif event.key() == Qt.Key_Right:
+                self.p2_keys_pressed.discard('right')
+                return
+        super().keyReleaseEvent(event)
