@@ -16,7 +16,7 @@
 - Local split-screen multiplayer - Two players with single keyboard (or gamepad)
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
-### [Download binaries for macOS and Windows](https://github.com/ViciousSquid/Fio/releases) || [Getting Started](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) || [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
+### [💾 Download Binaries (Win/macOS](https://github.com/ViciousSquid/Fio/releases) || [Getting Started](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) || [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
 #### Linux: use the included Dockerfile or [run from source](https://github.com/ViciousSquid/Fio#-quickstart)
 <img width="2039" height="1119" alt="image" src="https://github.com/user-attachments/assets/a68a33ac-1da7-4626-8796-46a6435cf95c" />
 
