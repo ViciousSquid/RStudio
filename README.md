@@ -41,7 +41,7 @@
 - Real-time dynamic lighting with shadows
 - Fog, glass, water and overbright shaders
 - Moving and rotating brushes
-- World Portals (Prey 2006 style)
+- Dynamic world portals that can move, rotate, and follow scripted paths
 - Forward renderer with Frustum culling
 
 ### Technical
