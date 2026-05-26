@@ -26,7 +26,7 @@ Package export metadata dialog: title, author, version, description, banner imag
 
 ### `procedural_generator.py`
 
-Procedurally generates gully-playable liminal maps
+Procedurally generates fully-playable liminal maps
 
 ### `property_editor.py`
 "Per-object property panel (position, size, shader, colour, I/O, etc.)."
