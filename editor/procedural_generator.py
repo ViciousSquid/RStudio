@@ -24,7 +24,7 @@ WALL_DEFAULT_HEIGHT = 256
 ENTITY_Y_OFFSET = 32
 
 # ----------------------------------------------------------------------
-# Grid and map generation (unchanged)
+# Grid and map generation
 # ----------------------------------------------------------------------
 class RoomObj:
     def __init__(self, cell_x, cell_y, cell_w, cell_h, world_x, world_y, world_w, world_h, center):
@@ -595,12 +595,10 @@ class ProceduralMapWidget(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        # Title
         title = QLabel("Procedural Map Generator")
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(title)
 
-        # Button row: full width 50/50 split
         btn_row = QHBoxLayout()
         btn_row.setSpacing(0)
 
@@ -689,7 +687,7 @@ class ProceduralMapWidget(QWidget):
         self.spawn_monsters.setChecked(True)
         self.monster_amount = QSpinBox()
         self.monster_amount.setRange(1, 64)
-        self.monster_amount.setValue(3)
+        self.monster_amount.setValue(4)
         form.addRow(self.spawn_monsters, self.monster_amount)
 
         params_layout.addWidget(group)
