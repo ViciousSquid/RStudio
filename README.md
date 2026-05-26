@@ -16,7 +16,7 @@
 - Local split-screen multiplayer - Two players with single keyboard (or gamepad)
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
-### [💾 Download Binaries (Win/macOS](https://github.com/ViciousSquid/Fio/releases) || [Getting Started](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) || [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
+### [💾 Download Binaries (Win/macOS)](https://github.com/ViciousSquid/Fio/releases) || [Getting Started](https://github.com/ViciousSquid/Fio/wiki/Getting-started--&-Basic-Navigation) || [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
 #### Linux: use the included Dockerfile or [run from source](https://github.com/ViciousSquid/Fio#-quickstart)
 <img width="2039" height="1119" alt="image" src="https://github.com/user-attachments/assets/a68a33ac-1da7-4626-8796-46a6435cf95c" />
 
@@ -26,32 +26,34 @@
  ------------------------
 
 ### Core Workflow
-- Editor and engine run as a unified environment
-- Iterate on gameplay and logic in real-time
+- The editor is the engine runtime.
+- Gameplay systems/world editing unified into a single live environment.
 
 ### Logic & Gameplay
-- Entity I/O system (Half-Life 2–style)
-- Visual scripting wizard with 25 examples
-- 19 playable example maps showcasing engine features
-- NPCs/monsters
-- Node pathfinding
-- Logic Gates, Triggers, Timers
+- Entity I/O system (Half-Life 2–style wiring model)
+- Visual scripting wizard (25 example setups)
+- 19 included example maps
+- NPCs / monsters
+- Node-based pathfinding
+- Triggers, timers, and logic gates
 
 ### Rendering
-- Real-time dynamic lighting with shadows
-- Fog, glass, water and overbright shaders
-- Moving and rotating brushes
-- Dynamic world portals that can move, rotate, and follow scripted paths
-- Forward renderer with Frustum culling
+- OpenGL 3.3 forward renderer
+- Dynamic lighting with shadows
+- Fog, glass, water, overbright effects
+- Frustum culling
+- Dynamic portals (movable / scripted transforms
 
-### Technical
-- JSON level format
-- OBJ model support
-- OpenGL 3.3 target
-- Optimized for Snapdragon 8CX / Windows-on-ARM @60FPS
-- Editor Layer (PyQt UI, tools, asset browser)
-- Engine Layer (rendering, physics, AI)
-- Includes Fio → Quake/Valve220 map converter
+### Architecture
+- Editor layer: PyQt-based tool suite + asset browser
+- Engine layer: rendering, physics, AI
+- Modular system design (fully open source, MIT licensed)
+
+### Technical Targets
+- Python 3.10+
+- Multi-threaded
+- Optimized for Windows-on-ARM (Snapdragon 8cx-class devices)
+- Stable 60 FPS target on mid-range hardware
 
 🗎 Modular architecture, fully open source (MIT License)
 
@@ -79,25 +81,12 @@ Fio is built as:
 
  Python 3.10+ is required
  
- 1. Clone and Enter the Directory:
 ```bash
 git clone https://github.com/ViciousSquid/Fio.git
 cd Fio
-```
-2. Setup Virtual Environment (Recommended)
-```bash
 python -m venv venv
-# Windows:
-venv\Scripts\activate
-# macOS/Linux:
-source venv/bin/activate
-```
-3. Install Dependencies:
-```bash
+source venv/bin/activate  # or venv\Scripts\activate (Windows)
 pip install -r requirements.txt
-```
-4. Launch the Editor:
-```bash
 python main.py
 ```
    
