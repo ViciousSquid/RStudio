@@ -500,22 +500,23 @@ def create_map_data(params):
     ]
     things.extend(lights)
 
+    # ------------------- MONSTER SPAWNING -------------------
+    monster_positions = []          # store (x, z) of each monster
+    monster_rooms = set()           # indices of rooms that contain a monster
     if params.get('spawn_monsters', False):
         candidate_rooms = [r for r in grid.rooms if r != start_room]
         if not candidate_rooms:
             candidate_rooms = grid.rooms
 
-        # Monster collision radius (half of 128 width)
-        monster_radius = 64
+        monster_radius = 64   # collision radius
 
-        # Modified random_point_in_room with wall clearance
-        def random_point_in_room(room, min_dist_from_wall):
+        # Helper: random point inside a room with wall clearance
+        def rand_point_in_room(room, min_dist_from_wall):
             min_x = room.world_x + min_dist_from_wall
             max_x = room.world_x + room.world_w - min_dist_from_wall
             min_z = room.world_y + min_dist_from_wall
             max_z = room.world_y + room.world_h - min_dist_from_wall
             if min_x >= max_x or min_z >= max_z:
-                # Room too small – use centre (still safe because room cells are empty)
                 return room.world_x + room.world_w / 2, room.world_y + room.world_h / 2
             x = random.uniform(min_x, max_x)
             z = random.uniform(min_z, max_z)
@@ -524,19 +525,18 @@ def create_map_data(params):
         for i in range(params['monster_count']):
             # Find a room large enough to accommodate the monster
             room = None
-            for _ in range(10):   # up to 10 attempts
+            for _ in range(10):
                 room = random.choice(candidate_rooms)
                 if (room.world_w >= 2 * monster_radius and
                     room.world_h >= 2 * monster_radius):
                     break
             else:
-                room = random.choice(candidate_rooms)   # fallback – centre will be used
+                room = random.choice(candidate_rooms)
 
-            wx, wz = random_point_in_room(room, min_dist_from_wall=monster_radius)
+            wx, wz = rand_point_in_room(room, min_dist_from_wall=monster_radius)
             monster_type = random.choice(["flying", "human"])
 
             if monster_type == "human":
-                # Human height = 192 → centre Y = floor surface + height/2
                 wy = FLOOR_SURFACE + 96
             else:
                 min_fly = FLOOR_SURFACE + 64
@@ -571,6 +571,63 @@ def create_map_data(params):
                 },
                 "io_connections": []
             })
+            monster_positions.append((wx, wz))
+            monster_rooms.add(grid.rooms.index(room))
+
+    # ------------------- HEALTH PICKUP SPAWNING -------------------
+    if params.get('spawn_health', False):
+        health_count = params.get('health_count', 4)
+        # Rooms that are allowed for health: no monster in them
+        allowed_rooms = [room for idx, room in enumerate(grid.rooms) if idx not in monster_rooms]
+        if not allowed_rooms:
+            # Fallback: use all rooms except the start room (but still avoid monster rooms if any)
+            allowed_rooms = [r for r in grid.rooms if r != start_room]
+            allowed_rooms = [r for r in allowed_rooms if grid.rooms.index(r) not in monster_rooms]
+
+        if allowed_rooms:
+            # Minimum distance from any monster (world units)
+            MIN_DIST_TO_MONSTER = 128.0
+            # How many attempts to place each health pickup
+            MAX_ATTEMPTS = 50
+
+            for i in range(health_count):
+                placed = False
+                for _ in range(MAX_ATTEMPTS):
+                    room = random.choice(allowed_rooms)
+                    # Try to find a point at least 32 from walls and 128 from any monster
+                    wx, wz = random_point_in_room(room, min_dist_from_wall=32)
+                    # Check distance to all monsters
+                    too_close = False
+                    for mx, mz in monster_positions:
+                        dist = math.hypot(wx - mx, wz - mz)
+                        if dist < MIN_DIST_TO_MONSTER:
+                            too_close = True
+                            break
+                    if not too_close:
+                        wy = FLOOR_SURFACE + ENTITY_Y_OFFSET
+                        things.append({
+                            "type": "pickup",
+                            "pos": [wx, wy, wz],
+                            "properties": {
+                                "type": "pickup",
+                                "name": f"HealthPickup_{i}",
+                                "item_type": "health",
+                                "value": 25,
+                                "activation": "walk_over",
+                                "respawns": False,
+                                "respawn_time": 20.0,
+                                "collected": False,
+                                "key_name": "",
+                                "custom_sprite": "assets/sprites/health.png",
+                                "id": f"health_pickup_{i}"
+                            },
+                            "io_connections": []
+                        })
+                        placed = True
+                        break
+                # If we couldn't place after MAX_ATTEMPTS, just skip this pickup
+                if not placed:
+                    print(f"Warning: Could not place health pickup #{i} after {MAX_ATTEMPTS} attempts. Skipping.")
 
     return {
         "version": 3,
@@ -682,7 +739,6 @@ class ProceduralMapWidget(QWidget):
         self.wall_tex.setMaximumHeight(50)
         form.addRow("Wall Texture:", self.wall_tex)
 
-
         self.spawn_monsters = QCheckBox("Spawn Monsters")
         self.spawn_monsters.setChecked(True)
         self.monster_amount = QSpinBox()
@@ -690,8 +746,15 @@ class ProceduralMapWidget(QWidget):
         self.monster_amount.setValue(4)
         form.addRow(self.spawn_monsters, self.monster_amount)
 
-        params_layout.addWidget(group)
+        # Health pickups
+        self.spawn_health = QCheckBox("Spawn Health")
+        self.spawn_health.setChecked(True)
+        self.health_amount = QSpinBox()
+        self.health_amount.setRange(1, 64)
+        self.health_amount.setValue(6)
+        form.addRow(self.spawn_health, self.health_amount)
 
+        params_layout.addWidget(group)
         params_layout.addStretch()
 
         scroll.setWidget(params_widget)
@@ -730,6 +793,9 @@ class ProceduralMapWidget(QWidget):
             'monster_count': self.monster_amount.value(),
             'world_width': world_width,
             'world_height': world_height,
+            # --- NEW ---
+            'spawn_health': self.spawn_health.isChecked(),
+            'health_count': self.health_amount.value(),
         }
         self.current_params = params
         map_data = create_map_data(params)
