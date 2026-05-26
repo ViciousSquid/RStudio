@@ -579,7 +579,7 @@ def create_map_data(params):
     }
 
 # ----------------------------------------------------------------------
-# Main widget that replaces the bottom pane (no preview, X to close)
+# Main widget
 # ----------------------------------------------------------------------
 class ProceduralMapWidget(QWidget):
     """Generator UI that replaces the properties tab widget."""
@@ -684,7 +684,6 @@ class ProceduralMapWidget(QWidget):
         self.wall_tex.setMaximumHeight(50)
         form.addRow("Wall Texture:", self.wall_tex)
 
-        # Floor texture option removed – floor always uses "default.png"
 
         self.spawn_monsters = QCheckBox("Spawn Monsters")
         self.spawn_monsters.setChecked(True)
