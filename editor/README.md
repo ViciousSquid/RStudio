@@ -24,6 +24,10 @@ Package export metadata dialog: title, author, version, description, banner imag
 ### `package_exporter.py`
 `.fiopak` assembler: recursive map dependency resolution, asset crawling, ZIP archive generation with manifest
 
+### `procedural_generator.py`
+
+Procedurally generates gully-playable liminal maps
+
 ### `property_editor.py`
 "Per-object property panel (position, size, shader, colour, I/O, etc.)."
 
