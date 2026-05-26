@@ -626,7 +626,19 @@ class PropertyEditor(QWidget):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(8, 8, 8, 8)
-        
+
+        # Preview button at the top
+        preview_btn = QPushButton("▶ Preview Movement")
+        preview_btn.setCheckable(True)
+        preview_btn.setStyleSheet("""
+            QPushButton { background-color: #425F5D; color: white; border-radius: 4px; padding: 8px; font-weight: bold; }
+            QPushButton:checked { background-color: #0056b3; }
+            QPushButton:hover { background-color: #5a7a82; }
+        """)
+        preview_btn.toggled.connect(self.toggle_mover_preview)
+        layout.addWidget(preview_btn)
+        self._widgets['mover_preview_btn'] = preview_btn
+
         form = QFormLayout()
         form.setSpacing(8)
         
@@ -824,18 +836,6 @@ class PropertyEditor(QWidget):
 
         layout.addWidget(options_group)
         
-        # Preview button
-        preview_btn = QPushButton("▶ Preview Movement")
-        preview_btn.setCheckable(True)
-        preview_btn.setStyleSheet("""
-            QPushButton { background-color: #425F5D; color: white; border-radius: 4px; padding: 8px; font-weight: bold; }
-            QPushButton:checked { background-color: #0056b3; }
-            QPushButton:hover { background-color: #5a7a82; }
-        """)
-        preview_btn.toggled.connect(self.toggle_mover_preview)
-        layout.addWidget(preview_btn)
-        self._widgets['mover_preview_btn'] = preview_btn
-        
         layout.addStretch()
         return widget
 
@@ -844,7 +844,19 @@ class PropertyEditor(QWidget):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(8, 8, 8, 8)
-        
+
+        # Preview button at the top
+        preview_btn = QPushButton("▶ Preview Door")
+        preview_btn.setCheckable(True)
+        preview_btn.setStyleSheet("""
+            QPushButton { background-color: #425F5D; color: white; border-radius: 4px; padding: 8px; font-weight: bold; }
+            QPushButton:checked { background-color: #0056b3; }
+            QPushButton:hover { background-color: #5a7a82; }
+        """)
+        preview_btn.toggled.connect(self.toggle_door_preview)
+        layout.addWidget(preview_btn)
+        self._widgets['door_preview_btn'] = preview_btn
+
         form = QFormLayout()
         form.setSpacing(8)
         
@@ -976,18 +988,6 @@ class PropertyEditor(QWidget):
             lambda _name: self._update_door_key_link(self.current_object))
 
         layout.addWidget(options_group)
-
-        # Preview button
-        preview_btn = QPushButton("▶ Preview Door")
-        preview_btn.setCheckable(True)
-        preview_btn.setStyleSheet("""
-            QPushButton { background-color: #425F5D; color: white; border-radius: 4px; padding: 8px; font-weight: bold; }
-            QPushButton:checked { background-color: #0056b3; }
-            QPushButton:hover { background-color: #5a7a82; }
-        """)
-        preview_btn.toggled.connect(self.toggle_door_preview)
-        layout.addWidget(preview_btn)
-        self._widgets['door_preview_btn'] = preview_btn
         
         layout.addStretch()
         return widget

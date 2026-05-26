@@ -69,6 +69,30 @@ class PackageMetadataDialog(QDialog):
         info.setStyleSheet(f"color: #888; font-size: {small_size}pt; padding-bottom: 8px;")
         layout.addWidget(info)
         
+        # Buttons (at the top, below the header)
+        btn_layout_top = QHBoxLayout()
+        btn_layout_top.setSpacing(0)
+        
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.clicked.connect(self._on_close)
+        btn_layout_top.addWidget(self.cancel_btn, 1)
+        
+        self.export_btn = QPushButton("Export...")
+        self.export_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #2E7D32;
+                font-weight: bold;
+                font-size: {base_size}pt;
+            }}
+            QPushButton:hover {{
+                background-color: #388E3C;
+            }}
+        """)
+        self.export_btn.clicked.connect(self._on_export)
+        btn_layout_top.addWidget(self.export_btn, 1)
+        
+        layout.addLayout(btn_layout_top)
+
         # Form
         form = QFormLayout()
         form.setSpacing(10)
@@ -100,30 +124,6 @@ class PackageMetadataDialog(QDialog):
         layout.addWidget(self.dep_label)
         
         layout.addStretch()
-        
-        # Buttons
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-        
-        self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.clicked.connect(self._on_close)
-        btn_layout.addWidget(self.cancel_btn)
-        
-        self.export_btn = QPushButton("Export...")
-        self.export_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: #2E7D32;
-                font-weight: bold;
-                font-size: {base_size}pt;
-            }}
-            QPushButton:hover {{
-                background-color: #388E3C;
-            }}
-        """)
-        self.export_btn.clicked.connect(self._on_export)
-        btn_layout.addWidget(self.export_btn)
-        
-        layout.addLayout(btn_layout)
         
         self.setMinimumWidth(400)
     

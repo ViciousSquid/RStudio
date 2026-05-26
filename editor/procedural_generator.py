@@ -7,7 +7,7 @@ from datetime import datetime
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QPushButton,
     QGroupBox, QFormLayout, QTextEdit, QCheckBox, QScrollArea, QFrame,
-    QToolButton, QComboBox
+    QComboBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QIcon
@@ -583,7 +583,7 @@ def create_map_data(params):
 # ----------------------------------------------------------------------
 class ProceduralMapWidget(QWidget):
     """Generator UI that replaces the properties tab widget."""
-    map_generated = pyqtSignal(dict)  # emits map data dict (None = close request)
+    map_generated = pyqtSignal(object)  # emits map data dict, or None = close request
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -595,33 +595,59 @@ class ProceduralMapWidget(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        # Top bar with title and X close button
-        top_bar = QHBoxLayout()
+        # Title
         title = QLabel("Procedural Map Generator")
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
-        top_bar.addWidget(title)
-        top_bar.addStretch()
+        layout.addWidget(title)
 
-        close_btn = QToolButton()
-        close_btn.setText("✕")
-        close_btn.setToolTip("Close generator")
-        close_btn.setStyleSheet("""
-            QToolButton {
+        # Button row: full width 50/50 split
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(0)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setStyleSheet("""
+            QPushButton {
                 background-color: #555;
-                color: white;
-                border: none;
-                border-radius: 3px;
-                font-size: 16px;
-                padding: 2px 6px;
+                color: #f0f0f0;
+                border: 1px solid #666;
+                padding: 8px 16px;
             }
-            QToolButton:hover {
+            QPushButton:hover {
                 background-color: #F08000;
             }
+            QPushButton:pressed {
+                background-color: #d06000;
+            }
         """)
-        close_btn.clicked.connect(self.reject)
-        top_bar.addWidget(close_btn)
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn, 1)
 
-        layout.addLayout(top_bar)
+        self.generate_btn = QPushButton("Generate")
+        self.generate_btn.clicked.connect(self.accept_and_load)
+        self.generate_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2E7D32;
+                color: white;
+                font-weight: bold;
+                border: none;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #388E3C;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+                color: #666666;
+            }
+        """)
+        btn_row.addWidget(self.generate_btn, 1)
+
+        layout.addLayout(btn_row)
+
+        # Timer for button cooldown
+        self._cooldown_timer = QTimer(self)
+        self._cooldown_timer.setSingleShot(True)
+        self._cooldown_timer.timeout.connect(self._enable_generate_button)
 
         # Scrollable parameters area
         scroll = QScrollArea()
@@ -668,35 +694,6 @@ class ProceduralMapWidget(QWidget):
         form.addRow(self.spawn_monsters, self.monster_amount)
 
         params_layout.addWidget(group)
-
-        # Generate button
-        self.generate_btn = QPushButton("Generate")
-        self.generate_btn.clicked.connect(self.accept_and_load)
-        params_layout.addWidget(self.generate_btn)
-
-        # Style button green
-        self.generate_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                font-weight: bold;
-                border: none;
-                padding: 8px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-            QPushButton:disabled {
-                background-color: #cccccc;
-                color: #666666;
-            }
-        """)
-
-        # Timer for button cooldown
-        self._cooldown_timer = QTimer(self)
-        self._cooldown_timer.setSingleShot(True)
-        self._cooldown_timer.timeout.connect(self._enable_generate_button)
 
         params_layout.addStretch()
 
