@@ -8,7 +8,7 @@
 ### _A tooling-first 3D engine and brush-based CSG level editor inspired by Radiant and Hammer_
 
 **Key Features**
-- Hit play instantly: no compile or bake step
+- Hit play instantly: no import, compile or bake step
 - Generate fully playable procedural liminal maps with one click
 - Entity I/O logic system inspired by Source engine
 - Classic brush-based CSG editing
