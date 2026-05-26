@@ -42,7 +42,7 @@
 - Dynamic lighting with shadows
 - Fog, glass, water, overbright effects
 - Frustum culling
-- Dynamic portals (movable / scripted transforms
+- Dynamic portals (moveable / scripted transforms)
 
 ### Architecture
 - Editor layer: PyQt-based tool suite + asset browser
