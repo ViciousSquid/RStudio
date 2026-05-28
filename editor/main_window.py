@@ -132,6 +132,7 @@ class MainWindow(QMainWindow):
     def __init__(self, root_dir):
         super().__init__()
         self.root_dir = root_dir
+        self.root_dir = os.path.abspath(root_dir)   # force absolute
         self.debug_console = None
         self.key_bindings = {}
 
@@ -270,6 +271,12 @@ class MainWindow(QMainWindow):
             if self._original_properties_widget:
                 self.properties_dock.setWidget(self._original_properties_widget)
                 self._original_properties_widget = None
+
+    def _cleanup_export_overlay(self):
+        """Clean up references after the export overlay is closed."""
+        if hasattr(self, '_export_dialog'):
+            self._export_dialog = None
+        # The overlay itself will be destroyed by _close_current_overlay
 
     def _show_overlay(self, overlay_widget, close_callback=None):
         """
@@ -1816,11 +1823,42 @@ class MainWindow(QMainWindow):
         self.file_menu.addAction(export_action)
 
     def export_game_package(self):
-        """Trigger the full package export workflow as an overlay in the Properties dock."""
-        from editor.package_dialog import PackageMetadataDialog
-        from editor.package_exporter import PackageExporter
+        """Export a game package. If the level is unsaved, create a temporary saved copy first."""
+        import tempfile
+        import os
+        import json
 
-        current_map = self.file_path or "maps/level_1.json"
+        temp_file = None
+
+        # Determine the map path to use for export
+        if self.unsaved_changes or self.file_path is None:
+            # Unsaved or never saved – create a temporary file
+            try:
+                # Ensure maps directory exists (optional, temp can go to system temp)
+                maps_dir = os.path.join(self.root_dir, "maps")
+                if not os.path.exists(maps_dir):
+                    os.makedirs(maps_dir)
+
+                # Create a temporary file inside maps/ (or system temp)
+                fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="export_temp_", dir=maps_dir)
+                os.close(fd)
+
+                # Write current level data to temp file
+                with open(temp_path, 'w', encoding='utf-8') as f:
+                    json.dump(self.state.get_level_data(), f, indent=4)
+
+                temp_file = temp_path
+                current_map = temp_path
+                self.show_toast("Using temporary saved copy for export...")
+            except Exception as e:
+                self.show_toast(f"Failed to create temporary map: {e}", is_error=True)
+                return
+        else:
+            # Already saved – use the existing file
+            current_map = self.file_path
+
+        # Proceed with export using current_map (temp or real)
+        from editor.package_dialog import PackageMetadataDialog
 
         # Create container + dialog
         container = QWidget()
@@ -1835,83 +1873,72 @@ class MainWindow(QMainWindow):
         )
         layout.addWidget(self._export_dialog)
 
-        # Replace the export button's default behaviour (validation only) with actual export
+        # Replace the export button's default behaviour with actual export
         self._export_dialog.export_btn.clicked.disconnect()
         self._export_dialog.export_btn.clicked.connect(
-            lambda: self._run_export(self._export_dialog, current_map)
+            lambda: self._run_export(self._export_dialog, current_map, temp_file)
         )
 
-        # Cancel button and close event should close the overlay, not just the dialog
+        # Cancel button and close event should close the overlay
         self._export_dialog.cancel_btn.clicked.disconnect()
         self._export_dialog.cancel_btn.clicked.connect(self._close_current_overlay)
         self._export_dialog.rejected.connect(self._close_current_overlay)
 
-        # Show the overlay
         self._show_overlay(container, close_callback=self._cleanup_export_overlay)
 
-    def _cleanup_export_overlay(self):
-        """Clean up references after the export overlay is closed."""
-        if hasattr(self, '_export_dialog'):
-            self._export_dialog = None
-        # The overlay itself will be destroyed by _close_current_overlay
-
-    def _run_export(self, dialog, current_map):
-        """Execute the export after dialog is accepted."""
+    def _run_export(self, dialog, current_map, temp_file=None):
+        """Execute the export. If temp_file is provided, delete it afterwards."""
         metadata = dialog.build_metadata()
         if not metadata:
             return
-        
-        # Store map path relative to package root for portability
-        abs_map = os.path.abspath(current_map)
-        rel_map = os.path.relpath(abs_map, self.root_dir)
-        metadata['map_path'] = rel_map.replace('\\', '/')
 
-        # Ask user where to save
-        from PyQt5.QtWidgets import QFileDialog
-        # Ensure packages directory exists
+        # Normalise paths
+        abs_map = os.path.abspath(current_map)
+        rel_map = os.path.relpath(abs_map, self.root_dir).replace('\\', '/')
+        metadata['map_path'] = rel_map
+
+        # Ask user where to save the package
         packages_dir = os.path.join(self.root_dir, "packages")
         if not os.path.exists(packages_dir):
             os.makedirs(packages_dir)
 
         output_path, _ = QFileDialog.getSaveFileName(
-            self._export_dialog,
+            dialog,
             "Export Game Package",
             os.path.join(packages_dir, f"{metadata['title']}.fiopak"),
             "Game Packages (*.fiopak)"
         )
         if not output_path:
+            # User cancelled – clean up temp file if any
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.unlink(temp_file)
+                except:
+                    pass
             return
 
-        # Run the export pipeline
+        # Run the export
         from editor.package_exporter import PackageExporter
         exporter = PackageExporter(self.state, self.root_dir)
-        
-        # Pre-scan dependencies to show info in the dialog
-        all_maps = exporter._collect_map_dependencies(current_map)
-        dialog.set_dependency_info(len(all_maps), 0, exporter.errors)
-        QApplication.processEvents()
-        
-        success, errors = exporter.export(output_path, metadata, current_map, self)
+        success, errors = exporter.export(output_path, metadata, abs_map, parent_widget=dialog)
 
-        # Update dialog with results
+        # Clean up temporary file if it exists
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+            except Exception as e:
+                print(f"Warning: could not delete temp file {temp_file}: {e}")
+
         if success:
             dialog.dep_label.setStyleSheet("color: #4CAF50; font-size: 12px; padding: 4px;")
-            dialog.dep_label.setText(
-                f"Export successful!\n"
-                f"Maps: {len(all_maps)}\n"
-                f"Saved to: {os.path.basename(output_path)}"
-            )
+            dialog.dep_label.setText(f"Export successful!\nSaved to: {os.path.basename(output_path)}")
             dialog.export_btn.setText("Done")
             dialog.export_btn.setEnabled(False)
             self.show_toast(f"Package exported: {os.path.basename(output_path)}")
         else:
             dialog.dep_label.setStyleSheet("color: #f44336; font-size: 12px; padding: 4px;")
             dialog.dep_label.setText("Export failed:\n" + "\n".join(errors[:5]))
-            QMessageBox.critical(
-                self._export_dialog,
-                "Export Failed",
-                "Errors occurred during export:\n\n" + "\n".join(errors)
-            )
+            # Error already shown in exporter
 
     def _restore_properties_tabs(self):
         """Restore the Properties / Debug Console tab widget."""
