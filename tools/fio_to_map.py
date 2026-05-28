@@ -218,7 +218,7 @@ class MapBrush:
             else:
                 lines.append(f"    {face.to_standard_format()}")
         lines.append("}")
-        return "\\n".join(lines)
+        return "\n".join(lines)  # FIXED: Use actual newline
 
 
 @dataclass
@@ -244,7 +244,7 @@ class MapEntity:
             lines.append(brush.to_map_string(format_type))
         
         lines.append("}")
-        return "\\n".join(lines)
+        return "\n".join(lines)  # FIXED: Use actual newline
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -664,7 +664,7 @@ class FioToMapConverter:
             lines.append(entity.to_map_string(self.format_type))
             lines.append("")  # Blank line between entities
         
-        return "\\n".join(lines)
+        return "\n".join(lines)  # FIXED: Use actual newline
     
     def convert_file(self, input_path: str, output_path: str):
         """Convert a Fio JSON file to a .map file."""
@@ -676,17 +676,17 @@ class FioToMapConverter:
         print(f"  Brushes: {len(fio_data.get('brushes', []))}")
         print(f"  Entities: {len(fio_data.get('things', []))}")
         
-        print(f"\\nConverting to {self.format_type} format...")
+        print(f"\nConverting to {self.format_type} format...")
         map_content = self.convert(fio_data)
         
         with open(output_path, 'w') as f:
             f.write(map_content)
         
-        print(f"\\nSaved Quake .map to: {output_path}")
+        print(f"\nSaved Quake .map to: {output_path}")
         print(f"  Format: {self.format_type}")
         
         if self.warnings:
-            print(f"\\nWarnings ({len(self.warnings)}):")
+            print(f"\nWarnings ({len(self.warnings)}):")
             for w in self.warnings:
                 print(f"  - {w}")
 
