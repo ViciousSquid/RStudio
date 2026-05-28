@@ -777,6 +777,7 @@ class View2D(QWidget):
             is_locked = brush.get('lock', False)
             is_fog = brush.get('is_fog', False)
             is_mover = brush.get('is_mover', False)
+            is_door = brush.get('is_door', False)
             
             # Check for flash effect (takes precedence over other colors)
             is_flashing = False
@@ -827,15 +828,39 @@ class View2D(QWidget):
             screen_rect = QRectF(p1, p2).normalized()
             painter.drawRect(screen_rect)
 
+                        # Build combined type label for trigger/mover/door
+            type_labels = []
             if is_trigger:
+                type_labels.append("TRIGGER")
+            if is_mover:
+                type_labels.append("MOVER")
+            if is_door:
+                type_labels.append("DOOR")
+            
+            if type_labels:
                 painter.setPen(QColor(255, 255, 255, 180))
                 font = painter.font()
                 font.setPointSize(10)
                 painter.setFont(font)
-                painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, "t r i g g e r")
-            
+                label_text = " / ".join(type_labels)
+                painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, label_text)
+
+            # Add mover label
             if is_mover:
-                self.draw_mover_arrow(painter, brush, ax1, ax2, ax_map)
+                painter.setPen(QColor(255, 255, 255, 180))
+                font = painter.font()
+                font.setPointSize(10)
+                painter.setFont(font)
+                painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, "MOVER")
+            
+            # Add door label
+            if is_door:
+                painter.setPen(QColor(255, 255, 255, 180))
+                font = painter.font()
+                font.setPointSize(10)
+                painter.setFont(font)
+                painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, "DOOR")
+            
             
             # Draw glow light direction arrow
             if brush.get('shader') == 'Glow':

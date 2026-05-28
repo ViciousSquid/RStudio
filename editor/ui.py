@@ -116,13 +116,15 @@ class Ui_MainWindow(object):
         MainWindow.properties_tab_widget.addTab(MainWindow.debug_console, "Debug Console")
         MainWindow.properties_tab_widget.setStyleSheet("""
             QTabBar::tab:selected { background: #F08000; color: white; }
-            QTabBar::tab { background: #2b2b2b; color: #ccc; height: 28px; min-width: 120px; padding: 0px 8px; border: 1px solid #222; }
+            QTabBar::tab { background: #2b2b2b; color: #ccc; height: 40px; min-width: 120px; padding: 0px 8px; border: 1px solid #222; }
             QTabBar::tab:hover { background: #5a7a82; }
         """)
 
         MainWindow.properties_dock = QDockWidget(" ", MainWindow)
         MainWindow.properties_dock.setObjectName("PropertiesDock")
         MainWindow.properties_dock.setWidget(MainWindow.properties_tab_widget)
+        toggle_action = MainWindow.properties_dock.toggleViewAction()
+        toggle_action.setText("Properties/Console")
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.properties_dock)
 
         # --- 3. Layout Adjustments ---
@@ -260,12 +262,17 @@ class Ui_MainWindow(object):
         logic_wizard_action.triggered.connect(MainWindow.open_logic_wizard)
         tools_menu.addAction(logic_wizard_action)
 
-        tools_menu.addSeparator()
-
         validate_action = QAction('Validate All Connections…', MainWindow)
         validate_action.setToolTip('Check for connections with missing target entities')
         validate_action.triggered.connect(MainWindow.validate_io_connections)
         tools_menu.addAction(validate_action)
+
+        tools_menu.addSeparator()
+
+        terrain_action = QAction('Terrain Generator…', MainWindow)
+        terrain_action.setToolTip('Open the terrain editor (low‑poly terrain generator)')
+        terrain_action.triggered.connect(MainWindow.open_terrain_editor)
+        tools_menu.addAction(terrain_action)
 
         tools_menu.addSeparator()
 

@@ -312,10 +312,12 @@ class PropertyEditor(QWidget):
         appearance_tab = self._create_appearance_tab(brush)
         self.tab_widget.addTab(appearance_tab, "Appearance")
         
-        # === I/O TAB (for triggers, movers, doors) ===
+        # === I/O TAB (store reference for dynamic add/remove) ===
+        self.io_tab_index = None
+        self.io_tab = None
         if IO_AVAILABLE and (is_trigger or is_mover or is_door):
-            io_tab = self._create_io_tab_for_brush(brush)
-            self.io_tab_index = self.tab_widget.addTab(io_tab, "⚡ I/O")
+            self.io_tab = self._create_io_tab_for_brush(brush)
+            self.io_tab_index = self.tab_widget.addTab(self.io_tab, "⚡ I/O")
         
         content_layout.addWidget(self.tab_widget)
         content_layout.addStretch()
@@ -356,6 +358,44 @@ class PropertyEditor(QWidget):
         layout.addWidget(inputs_widget)
         
         return tab
+
+    def _ensure_io_tab(self):
+        """Add I/O tab if not already present and if current brush needs it."""
+        if not IO_AVAILABLE:
+            return
+        if hasattr(self, 'io_tab_index') and self.io_tab_index is not None:
+            return  # already exists
+        if self.current_object is None:
+            return
+        needs_io = (self.current_object.get('is_trigger') or
+                    self.current_object.get('is_mover') or
+                    self.current_object.get('is_door'))
+        if not needs_io:
+            return
+        self.io_tab = self._create_io_tab_for_brush(self.current_object)
+        self.io_tab_index = self.tab_widget.addTab(self.io_tab, "⚡ I/O")
+
+    def _remove_io_tab(self):
+        """Remove I/O tab if it exists."""
+        if hasattr(self, 'io_tab_index') and self.io_tab_index is not None:
+            self.tab_widget.removeTab(self.io_tab_index)
+            self.io_tab_index = None
+            if hasattr(self, 'io_tab'):
+                self.io_tab.deleteLater()
+                self.io_tab = None
+
+    def _update_io_tab_presence(self):
+        """Add I/O tab if needed (trigger/mover/door), remove if not."""
+        if not IO_AVAILABLE:
+            return
+        needs_io = (self.current_object.get('is_trigger') or
+                    self.current_object.get('is_mover') or
+                    self.current_object.get('is_door'))
+        has_io = hasattr(self, 'io_tab_index') and self.io_tab_index is not None
+        if needs_io and not has_io:
+            self._ensure_io_tab()
+        elif not needs_io and has_io:
+            self._remove_io_tab()
 
     def _create_io_tab_for_thing(self, thing):
         """Create I/O editor tab for Things."""
@@ -1420,101 +1460,155 @@ class PropertyEditor(QWidget):
     # === Event Handlers ===
 
     def on_shader_changed(self, shader_type):
-        if self.current_object is None: return
+        if self.current_object is None:
+            return
         self.current_object['shader'] = shader_type
-        
-        # Clear flags that belong to other shader types
+
         if shader_type != 'Fog':
             self.current_object['is_fog'] = False
-        
+
         # Initialize shader-specific defaults
         if shader_type == 'Glass':
-            if 'glass_color' not in self.current_object: self.current_object['glass_color'] = [0.9, 0.95, 1.0]
-            if 'glass_opacity' not in self.current_object: self.current_object['glass_opacity'] = 0.3
-            if 'glass_distortion' not in self.current_object: self.current_object['glass_distortion'] = 0.5
-            if 'glass_refraction' not in self.current_object: self.current_object['glass_refraction'] = 1.5
-            if 'glass_roughness' not in self.current_object: self.current_object['glass_roughness'] = 0.0
-            if 'glass_fresnel' not in self.current_object: self.current_object['glass_fresnel'] = 0.5
+            if 'glass_color' not in self.current_object:
+                self.current_object['glass_color'] = [0.9, 0.95, 1.0]
+            if 'glass_opacity' not in self.current_object:
+                self.current_object['glass_opacity'] = 0.3
+            if 'glass_distortion' not in self.current_object:
+                self.current_object['glass_distortion'] = 0.5
+            if 'glass_refraction' not in self.current_object:
+                self.current_object['glass_refraction'] = 1.5
+            if 'glass_roughness' not in self.current_object:
+                self.current_object['glass_roughness'] = 0.0
+            if 'glass_fresnel' not in self.current_object:
+                self.current_object['glass_fresnel'] = 0.5
         elif shader_type == 'Glow':
             self.current_object['glow_intensity'] = 10.0
         elif shader_type == 'Water':
-            if 'water_opacity' not in self.current_object: self.current_object['water_opacity'] = 0.5
-            if 'water_reflectivity' not in self.current_object: self.current_object['water_reflectivity'] = 0.5
-            if 'water_tint' not in self.current_object: self.current_object['water_tint'] = [0.0, 0.4, 0.6]
-            if 'water_wave_enabled' not in self.current_object: self.current_object['water_wave_enabled'] = False
-            if 'water_wave_height' not in self.current_object: self.current_object['water_wave_height'] = 0.5
+            if 'water_opacity' not in self.current_object:
+                self.current_object['water_opacity'] = 0.5
+            if 'water_reflectivity' not in self.current_object:
+                self.current_object['water_reflectivity'] = 0.5
+            if 'water_tint' not in self.current_object:
+                self.current_object['water_tint'] = [0.0, 0.4, 0.6]
+            if 'water_wave_enabled' not in self.current_object:
+                self.current_object['water_wave_enabled'] = False
+            if 'water_wave_height' not in self.current_object:
+                self.current_object['water_wave_height'] = 0.5
         elif shader_type == 'Fog':
             self.current_object['is_fog'] = True
-            if 'fog_density' not in self.current_object: self.current_object['fog_density'] = 2.0
-            if 'fog_color' not in self.current_object: self.current_object['fog_color'] = [0.5, 0.6, 0.7]
-        
-        # Disable trigger for shader brushes
+            if 'fog_density' not in self.current_object:
+                self.current_object['fog_density'] = 2.0
+            if 'fog_color' not in self.current_object:
+                self.current_object['fog_color'] = [0.5, 0.6, 0.7]
+
         if shader_type != '<None>':
             self.current_object['is_trigger'] = False
-        
-        # Rebuild UI
-        self.set_object(self.current_object)
-        self.editor.update_all_ui()
+
+        # Show/hide shader tab
+        show_shader = shader_type not in ['<None>', None, '']
+        if hasattr(self, 'shader_tab_index'):
+            self.tab_widget.setTabVisible(self.shader_tab_index, show_shader)
+            if show_shader:
+                self.tab_widget.setCurrentIndex(self.shader_tab_index)
+
+        self.editor.update_views()
+        self.editor.scene_hierarchy.refresh_list()
 
     def on_trigger_changed(self, is_trigger):
-        if self.current_object is None: return
+        if self.current_object is None:
+            return
         self.current_object['is_trigger'] = is_trigger
-        
+
         if is_trigger:
-            if 'trigger_type' not in self.current_object: self.current_object['trigger_type'] = 'Once'
+            if 'trigger_type' not in self.current_object:
+                self.current_object['trigger_type'] = 'Once'
             # Set trigger texture
             for face in ['top', 'bottom', 'north', 'south', 'east', 'west']:
-                if 'textures' not in self.current_object: self.current_object['textures'] = {}
+                if 'textures' not in self.current_object:
+                    self.current_object['textures'] = {}
                 self.current_object['textures'][face] = 'trigger.jpg'
-        
-        # Update tab visibility
-        if hasattr(self, 'trigger_tab_index') and self.tab_widget:
+
+        # Show/hide the trigger tab
+        if hasattr(self, 'trigger_tab_index'):
             self.tab_widget.setTabVisible(self.trigger_tab_index, is_trigger)
             if is_trigger:
                 self.tab_widget.setCurrentIndex(self.trigger_tab_index)
-        
-        # Rebuild to add/remove I/O tab
-        self.set_object(self.current_object)
-        self.editor.update_all_ui()
+
+        # Update I/O tab presence
+        self._update_io_tab_presence()
+
+        # Lightweight refresh
+        self.editor.update_views()
+        self.editor.scene_hierarchy.refresh_list()
 
     def on_mover_changed(self, is_mover):
-        if self.current_object is None: return
+        if self.current_object is None:
+            return
+
+        # If turning on mover, ensure door is turned off
+        if is_mover and self.current_object.get('is_door', False):
+            # Update the brush property
+            self.current_object['is_door'] = False
+            # Update the door checkbox in the UI without triggering its handler
+            door_cb = self._widgets.get('door_cb')
+            if door_cb:
+                door_cb.blockSignals(True)
+                door_cb.setChecked(False)
+                door_cb.blockSignals(False)
+            # Hide door tab
+            if hasattr(self, 'door_tab_index'):
+                self.tab_widget.setTabVisible(self.door_tab_index, False)
+
         self.current_object['is_mover'] = is_mover
-        
+
         if is_mover:
-            if 'speed' not in self.current_object: self.current_object['speed'] = 64.0
-            if 'distance' not in self.current_object: self.current_object['distance'] = 128.0
-            if 'direction' not in self.current_object: self.current_object['direction'] = [0, 1, 0]
-        
-        # Update tab visibility
-        if hasattr(self, 'mover_tab_index') and self.tab_widget:
+            self.current_object.setdefault('speed', 64.0)
+            self.current_object.setdefault('distance', 128.0)
+            self.current_object.setdefault('direction', [0, 1, 0])
+
+        if hasattr(self, 'mover_tab_index'):
             self.tab_widget.setTabVisible(self.mover_tab_index, is_mover)
             if is_mover:
                 self.tab_widget.setCurrentIndex(self.mover_tab_index)
-        
-        # Rebuild to add/remove I/O tab
-        self.set_object(self.current_object)
-        self.editor.update_all_ui()
+
+        self._update_io_tab_presence()
+        self.editor.update_views()
+        self.editor.scene_hierarchy.refresh_list()
 
     def on_door_changed(self, is_door):
-        if self.current_object is None: return
+        if self.current_object is None:
+            return
+
+        # If turning on door, ensure mover is turned off
+        if is_door and self.current_object.get('is_mover', False):
+            # Update the brush property
+            self.current_object['is_mover'] = False
+            # Update the mover checkbox in the UI without triggering its handler
+            mover_cb = self._widgets.get('mover_cb')
+            if mover_cb:
+                mover_cb.blockSignals(True)
+                mover_cb.setChecked(False)
+                mover_cb.blockSignals(False)
+            # Hide mover tab
+            if hasattr(self, 'mover_tab_index'):
+                self.tab_widget.setTabVisible(self.mover_tab_index, False)
+
         self.current_object['is_door'] = is_door
-        
+
         if is_door:
-            if 'door_direction' not in self.current_object: self.current_object['door_direction'] = 'up'
-            if 'door_distance' not in self.current_object: self.current_object['door_distance'] = 128.0
-            if 'door_lip' not in self.current_object: self.current_object['door_lip'] = 8.0
-            if 'door_speed' not in self.current_object: self.current_object['door_speed'] = 64.0
-        
-        # Update tab visibility
-        if hasattr(self, 'door_tab_index') and self.tab_widget:
+            self.current_object.setdefault('door_direction', 'up')
+            self.current_object.setdefault('door_distance', 128.0)
+            self.current_object.setdefault('door_lip', 8.0)
+            self.current_object.setdefault('door_speed', 64.0)
+
+        if hasattr(self, 'door_tab_index'):
             self.tab_widget.setTabVisible(self.door_tab_index, is_door)
             if is_door:
                 self.tab_widget.setCurrentIndex(self.door_tab_index)
-        
-        # Rebuild to add/remove I/O tab
-        self.set_object(self.current_object)
-        self.editor.update_all_ui()
+
+        self._update_io_tab_presence()
+        self.editor.update_views()
+        self.editor.scene_hierarchy.refresh_list()
 
     def on_hurt_changed(self, is_hurt):
         if self.current_object is None: return

@@ -842,6 +842,7 @@ class LevelChanger(Thing):
         self.properties.setdefault('fade_time', 0.5)
         self.properties.setdefault('show_radius', False)
         self.properties.setdefault('radius', 128.0)
+        self.properties.setdefault('usable', False)
         
         # Store direct reference to MainWindow for reliable level changing
         self._main_window = None
