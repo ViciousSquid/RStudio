@@ -25,7 +25,7 @@ from .camera import Camera
 # Import Thing subclasses for type checking
 try:
     from editor.things import (Speaker, Pickup, Light, Monster as MonsterThing,
-                               PathNode, LogicTimer, PlayerStart, Portal)
+                               PathNode, LogicTimer, PlayerStart, Portal, LevelChanger)
 except ImportError:
     Speaker = None
     Pickup = None
@@ -138,6 +138,7 @@ class LogicThread(threading.Thread):
         self.player2_dead = False
         self.play_mode = False
         self.terrain = None
+        self._first_tick = False
         
         # Frustum culling settings
         self.culling_enabled = True
@@ -237,6 +238,7 @@ class LogicThread(threading.Thread):
         self._portal_last_side: Dict[int, float] = {}
         self._portal_cooldowns: Dict[int, float] = {}
 
+        self.level_complete_ui = None
         # Performance Monitoring
         self.actual_tps = 0.0
         self._tick_count = 0
@@ -397,6 +399,7 @@ class LogicThread(threading.Thread):
             self._portal_last_side.clear()
             self._portal_cooldowns.clear()
 
+            self.level_complete_ui = None
             # Fire OnPlayerSpawn
             self._fire_player_spawn_outputs()
             
@@ -437,6 +440,7 @@ class LogicThread(threading.Thread):
             self._portal_last_side.clear()
             self._portal_cooldowns.clear()
 
+            self.level_complete_ui = None
             # Reset monster AI state
             self._reset_all_monsters(clear_dead=False)
     
@@ -676,6 +680,14 @@ class LogicThread(threading.Thread):
 
         # ---- Player dead: freeze all gameplay input ----
         if self.player_dead:
+            self.game_state.consume_mouse_delta()
+            self.game_state.consume_use_key()
+            self.game_state.consume_shot()
+            self.monster_ai.update(delta)
+            return
+
+        # ---- Level Complete UI: freeze player input ----
+        if self.level_complete_ui:
             self.game_state.consume_mouse_delta()
             self.game_state.consume_use_key()
             self.game_state.consume_shot()
@@ -1041,6 +1053,7 @@ class LogicThread(threading.Thread):
                             self._trigger_door_open(found_door_idx, found_door_brush)
                             door_consumed_use = True
 
+
         if Pickup and not door_consumed_use:
             p_pos = glm.vec3(px, py, pz)
             p_forward = glm.vec3(math.sin(self.player.angle), 0, math.cos(self.player.angle))
@@ -1066,13 +1079,36 @@ class LogicThread(threading.Thread):
                             self._collect_pickup(thing)
                         return
 
-    def _trigger_door_open(self, door_idx: int, door_brush: dict = None):
-        if door_idx in self.door_states:
-            state = self.door_states[door_idx]
-            if state['state'] == 'closed':
-                state['state'] = 'opening'
-                if self.io_manager and door_brush:
-                    self.io_manager.fire_output(door_brush, 'OnOpen')
+
+        if not door_consumed_use:
+            p_pos = glm.vec3(px, py, pz)
+            p_forward = glm.vec3(math.sin(self.player.angle), 0, math.cos(self.player.angle))
+            for thing in self.things:
+                if not isinstance(thing, LevelChanger):
+                    continue
+                if thing.properties.get('disabled', False):
+                    continue
+                # skip if not usable
+                if not thing.properties.get('usable', True):
+                    continue
+                t_pos = glm.vec3(thing.pos)
+                dist = glm.distance(p_pos, t_pos)
+                radius = float(thing.properties.get('radius', 128.0))
+                if dist < radius:
+                    to_thing = glm.normalize(t_pos - p_pos)
+                    if glm.dot(p_forward, to_thing) > 0.5:
+                        self.current_hud_message = "[E] Complete Level"
+                        if use_key_pressed:
+                            target_map = thing.properties.get('target_map', '')
+                            self.level_complete_ui = {
+                                'active': True,
+                                'target_map': target_map,
+                                'title': 'Complete',
+                                'button_text': 'Continue'
+                            }
+                            if self.io_manager:
+                                self.io_manager.fire_output(thing, 'OnUse')
+                        return
 
     # =========================================================================
     # PICKUPS
@@ -1773,3 +1809,4 @@ class LogicThread(threading.Thread):
             write_state.splitscreen_active  = True
         else:
             write_state.splitscreen_active  = False
+        write_state.level_complete_ui = self.level_complete_ui

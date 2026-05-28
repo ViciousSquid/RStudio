@@ -711,6 +711,7 @@ class QtGameView(QOpenGLWidget):
                 self._cached_bullet_marks = list(getattr(render_state, 'bullet_marks', []))
                 self._cached_projectiles = list(getattr(render_state, 'projectiles', []))
                 self._cached_monster_rays = list(getattr(render_state, 'monster_debug_rays', []))
+                self._cached_level_complete_ui = getattr(render_state, 'level_complete_ui', None)
         if self.grid_dirty:
             self.renderer.update_grid_buffers(self.world_size, self.grid_size)
             self.grid_dirty = False
@@ -880,6 +881,8 @@ class QtGameView(QOpenGLWidget):
                 self._draw_hud(painter, render_state)
         if self.play_mode and render_state and getattr(render_state, 'player_dead', False):
             self._draw_death_screen(painter)
+        if self.play_mode and getattr(self, '_cached_level_complete_ui', None):
+            self._draw_level_complete_overlay(painter)
         if self.debug_mode_active:
             self._draw_window_manager(painter)
         if self.face_mode_active:
@@ -1255,6 +1258,68 @@ class QtGameView(QOpenGLWidget):
                 painter.drawText(x + 20, cy, "  " + txt)
             cy += 20
 
+
+    def _draw_level_complete_overlay(self, painter):
+        w, h = self.width(), self.height()
+        # Dim background
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(QColor(0, 0, 0, 180)))
+        painter.drawRect(0, 0, w, h)
+
+        # Title
+        title = self._cached_level_complete_ui.get('title', 'Complete')
+        painter.setFont(QFont("Arial", 48, QFont.Bold))
+        fm = painter.fontMetrics()
+        tw = fm.horizontalAdvance(title)
+        painter.setPen(QColor(255, 215, 0))
+        painter.drawText((w - tw) // 2, h // 2 - 60, title)
+
+        # Button
+        btn_w, btn_h = 280, 50
+        btn_x = (w - btn_w) // 2
+        btn_y = h // 2
+        painter.setPen(QPen(QColor(200, 200, 200), 2))
+        painter.setBrush(QBrush(QColor(60, 60, 60, 220)))
+        painter.drawRoundedRect(btn_x, btn_y, btn_w, btn_h, 8, 8)
+
+        painter.setFont(QFont("Arial", 16, QFont.Bold))
+        painter.setPen(QColor(255, 255, 255))
+        btn_text = self._cached_level_complete_ui.get('button_text', 'Continue to Next Map')
+        fm = painter.fontMetrics()
+        tw = fm.horizontalAdvance(btn_text)
+        painter.drawText(btn_x + (btn_w - tw) // 2, btn_y + 34, btn_text)
+
+        # Store rect for click detection
+        self._level_complete_btn_rect = QRect(btn_x, btn_y, btn_w, btn_h)
+
+        # Hint
+        painter.setFont(QFont("Arial", 12))
+        painter.setPen(QColor(180, 180, 180))
+        hint = "E to continue, Esc to cancel"
+        fm = painter.fontMetrics()
+        tw = fm.horizontalAdvance(hint)
+        painter.drawText((w - tw) // 2, btn_y + btn_h + 30, hint)
+
+    def _confirm_level_complete(self):
+        ui = getattr(self, '_cached_level_complete_ui', None)
+        if not ui:
+            return
+        target_map = ui.get('target_map', '')
+        if target_map:
+            if hasattr(self.editor, 'load_level_signal'):
+                self.editor.load_level_signal.emit(target_map)
+            elif hasattr(self.editor, 'load_level'):
+                self.editor.load_level(target_map)
+        self._cached_level_complete_ui = None
+        self._level_complete_btn_rect = None
+        if self.logic_thread:
+            self.logic_thread.level_complete_ui = None
+
+    def _cancel_level_complete(self):
+        self._cached_level_complete_ui = None
+        self._level_complete_btn_rect = None
+        if self.logic_thread:
+            self.logic_thread.level_complete_ui = None
     def load_texture(self, texture_name, subfolder):
         return self.renderer.load_texture(texture_name, subfolder) if self.renderer else 0
 
@@ -1397,21 +1462,32 @@ class QtGameView(QOpenGLWidget):
             QCursor.setPos(center_pos)
             self.last_mouse_pos = self.mapFromGlobal(center_pos)
             QApplication.setOverrideCursor(Qt.BlankCursor)
+
+            # Convert editor angle (0° = east) to game angle (0° = north) and flip 180°
+            player_angle_rad = np.radians(90.0 - player_start_angle) + np.pi
+
             self.player = Player(
                 player_start_pos[0], player_start_pos[2],
-                np.radians(90.0 - player_start_angle),
+                player_angle_rad,
                 physics_enabled=physics_enabled
             )
             self.player.pos.y = player_start_pos[1]
+
+            # ─── Flush any mouse input that may have been queued ───
+            self.game_state.consume_mouse_delta()
+            self.game_state.set_mouse_delta(0.0, 0.0)
+
             self._play_mode_hint = "ESC to Exit, F12 Fullscreen"
             self._play_mode_hint_timer.start(3000)
+
             if self.logic_thread:
                 self.logic_thread.set_player(self.player)
                 self.logic_thread.set_play_mode(True)
+
             if self.splitscreen_mode:
                 self.player2 = Player(
                     player_start_pos[0] + 32, player_start_pos[2],
-                    np.radians(90.0 - player_start_angle),
+                    player_angle_rad,
                     physics_enabled=physics_enabled,
                 )
                 self.player2.pos.y = player_start_pos[1]
@@ -1738,6 +1814,12 @@ class QtGameView(QOpenGLWidget):
         return best_hit
 
     def mousePressEvent(self, event):
+        if (self.play_mode and getattr(self, '_cached_level_complete_ui', None)
+                and getattr(self, '_level_complete_btn_rect', None)):
+            if self._level_complete_btn_rect.contains(event.pos()):
+                self._confirm_level_complete()
+                return
+
         if self.terrain_sculpt_active and not self.play_mode and event.button() == Qt.LeftButton:
             self.terrain_sculpt_painting = True
             self._apply_sculpt_at_mouse(event.x(), event.y())
@@ -2002,6 +2084,14 @@ class QtGameView(QOpenGLWidget):
         self.game_state.set_p2_input(move_x, move_z, look_dx, look_dy, jump, crouch)
 
     def keyPressEvent(self, event):
+        if self.play_mode and getattr(self, '_cached_level_complete_ui', None):
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_E):
+                self._confirm_level_complete()
+                return
+            elif event.key() == Qt.Key_Escape:
+                self._cancel_level_complete()
+                return
+
         # ----- Player 2 arrow key handling (when no gamepad) -----
         if self.play_mode and not self.gamepad and self.splitscreen_mode:
             if event.key() == Qt.Key_Up:
