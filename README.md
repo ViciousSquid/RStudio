@@ -60,8 +60,6 @@ It is designed for brush-based, Source-engine-style level creation with instant 
 
  ## Why Fio exists
 
-Most Python 3D engines focus on simplicity or education.
-
 Fio is built as:
 - a rendering experimentation platform
 - a level editor inspired by classic BSP workflows
