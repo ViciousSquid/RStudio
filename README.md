@@ -6,7 +6,8 @@
 <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="MIT License">  <img src="https://img.shields.io/badge/status-Active%20Development-orange?style=for-the-badge" alt="Status">
 
 ### _A tooling-first 3D engine and brush-based CSG level editor inspired by Radiant and Hammer_
-### Built for rapid creation of strange, playable spaces.
+Fio is a live 3D world editor where the engine and level editor are the same system.
+It is designed for brush-based, Source-engine-style level creation with instant play, logic wiring, and procedural map generation inside a single runtime.
 
 **Key Features**
 - Hit play instantly: no import, compile or bake step
@@ -14,7 +15,7 @@
 - Entity I/O logic system inspired by Source engine
 - Classic brush-based CSG editing
 - Export creations as self-contained shareable packages
-- Local split-screen multiplayer - Two players with single keyboard (or gamepad)
+- Local split-screen multiplayer - Two players with a single keyboard (or gamepad)
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
 ### [💾 Download Binaries (Win/macOS)](https://github.com/ViciousSquid/Fio/releases) || [Wiki](https://github.com/ViciousSquid/Fio/wiki/) || [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
@@ -25,10 +26,6 @@
 
 
  ------------------------
-
-### Core Workflow
-- The editor is the engine runtime.
-- Gameplay systems/world editing unified into a single live environment.
 
 ### Logic & Gameplay
 - Entity I/O system (Half-Life 2–style wiring model)
@@ -69,6 +66,8 @@ Fio is built as:
 - a rendering experimentation platform
 - a level editor inspired by classic BSP workflows
 - a systems-driven engine with tooling-first design
+
+Fio removes the editor/runtime boundary that most engines enforce
 
 ------------------------------
 
