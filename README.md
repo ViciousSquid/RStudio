@@ -12,7 +12,7 @@
 - Generate fully playable procedural liminal maps with one click
 - Entity I/O logic system inspired by Source engine
 - Classic brush-based CSG editing
-- Export creations as portable packages
+- Export creations as self-contained shareable packages
 - Local split-screen multiplayer - Two players with single keyboard (or gamepad)
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
