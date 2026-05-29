@@ -5,8 +5,11 @@
 
 <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="MIT License">  <img src="https://img.shields.io/badge/status-Active%20Development-orange?style=for-the-badge" alt="Status">
 
-### _A tooling-first 3D engine and brush-based CSG level editor inspired by Radiant and Hammer_
-### Built for rapid creation of strange, playable spaces.
+## Fio — Make Weird Worlds, Share Them Instantly
+
+### A love letter to Radiant and Hammer.<br> 
+### Generate procedural liminal maps with one click. Add DOOM-style chaos. Twist space with portals. Export as a portable package and share it.
+
 
 **Key Features**
 - Hit "play" instantly: no import, compile or bake step
