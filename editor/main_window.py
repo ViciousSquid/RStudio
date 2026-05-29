@@ -2903,6 +2903,104 @@ class MainWindow(QMainWindow):
         finally:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def play_package_from_path(self, file_path):
+        """Load and launch a game package from the given file path.
+        This is used by the asset browser when double‑clicking a .fiopak.
+        """
+        import zipfile
+        import tempfile
+        import shutil
+
+        # Check for unsaved changes first
+        if not self.check_unsaved_changes():
+            return
+
+        if not os.path.exists(file_path):
+            self.show_toast(f"Package not found: {file_path}", is_error=True)
+            return
+
+        temp_dir = None
+        try:
+            if not zipfile.is_zipfile(file_path):
+                self.show_toast("Selected file is not a valid game package.", is_error=True)
+                return
+
+            # Extract package to temp directory
+            temp_dir = tempfile.mkdtemp(prefix="fio_package_")
+            with zipfile.ZipFile(file_path, 'r') as zf:
+                self._safe_extract_zip(file_path, temp_dir)
+
+            # Find the map JSON inside the package
+            map_path = self._find_map_in_package(temp_dir)
+            # Force a "Save As" dialog the first time the user saves.
+            self.file_path = None
+            if not map_path:
+                self.show_toast("No map file found in game package.", is_error=True)
+                return
+
+            # Configure ResourceManager for package assets
+            try:
+                from engine.resource_manager import ResourceManager
+                rm = ResourceManager()
+                if hasattr(rm, 'set_package_root'):
+                    rm.set_package_root(temp_dir)
+                elif hasattr(rm, 'load_package'):
+                    rm.load_package(file_path)
+            except Exception as e:
+                print(f"[Package] ResourceManager setup warning: {e}")
+
+            # Load level data
+            with open(map_path, 'r') as f:
+                level_data = json.load(f)
+
+            # Clear current scene and load package map
+            self.state.clear_scene()
+            self._clear_terrain()
+            self.state.load_from_data(level_data)
+
+            # Re-initialize terrain if present in the package map
+            if hasattr(self.state, 'terrain_data') and self.state.terrain_data:
+                if self.terrain is None:
+                    from engine.terrain import Terrain
+                    self.terrain = Terrain()
+                self.terrain.from_dict(self.state.terrain_data)
+
+                if hasattr(self.view_3d, 'renderer') and self.view_3d.renderer:
+                    self.view_3d.renderer.setup_terrain_shader(self.terrain)
+
+                if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
+                    self.view_3d.logic_thread.set_terrain(self.terrain)
+            else:
+                self._clear_terrain()
+
+            # Store temp dir for cleanup on application close
+            self._package_temp_dir = temp_dir
+            temp_dir = None  # Prevent cleanup in finally block
+
+            # Update UI state
+            self.file_path = file_path
+            self.unsaved_changes = False
+            self.update_title()
+            self.set_selected_object(None)
+            self.update_all_ui()
+
+            # Check if user wants editor mode instead of kiosk
+            launch_in_editor = self.config.getboolean('Kiosk', 'launch_in_editor', fallback=False)
+            if launch_in_editor:
+                # Just load the map in the editor — no kiosk, no play mode
+                self.show_toast(f"Loaded package: {os.path.basename(file_path)}")
+            else:
+                # Hide editor chrome and launch play mode
+                self.enter_kiosk_mode()
+
+        except Exception as e:
+            self.show_toast(f"Failed to load game package: {e}", is_error=True)
+            import traceback
+            traceback.print_exc()
+        finally:
+            if temp_dir and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
     
 
     def _find_map_in_package(self, root_dir):
