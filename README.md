@@ -7,10 +7,10 @@
 
 ### _A tooling-first 3D engine and brush-based CSG level editor inspired by Radiant and Hammer_
 Fio is a live 3D world editor where the engine and level editor are the same system.
-It is designed for brush-based, Source-engine-style level creation with instant play, logic wiring, and procedural map generation inside a single runtime.
+It enables brush-based level creation with instant play, logic wiring, and procedural map generation inside a single runtime.
 
 **Key Features**
-- Hit play instantly: no import, compile or bake step
+- Hit "play" instantly: no import, compile or bake step
 - Generate fully playable procedural liminal maps with one click
 - Entity I/O logic system inspired by Source engine
 - Classic brush-based CSG editing
