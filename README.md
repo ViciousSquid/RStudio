@@ -6,8 +6,7 @@
 <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="MIT License">  <img src="https://img.shields.io/badge/status-Active%20Development-orange?style=for-the-badge" alt="Status">
 
 ### _A tooling-first 3D engine and brush-based CSG level editor inspired by Radiant and Hammer_
-Fio is a live 3D world editor where the engine and level editor are the same system.
-It enables brush-based level creation with instant play, logic wiring, and procedural map generation inside a single runtime.
+### Built for rapid creation of strange, playable spaces.
 
 **Key Features**
 - Hit "play" instantly: no import, compile or bake step
