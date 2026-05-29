@@ -31,7 +31,7 @@
 
 ### Logic & Gameplay
 - Entity I/O system (Half-Life 2–style wiring model)
-- Visual scripting wizard (25 example setups)
+- GUI assistant that generates gameplay logic / level setups
 - 19 included example maps
 - NPCs / monsters
 - Node-based pathfinding
