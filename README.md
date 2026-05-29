@@ -36,6 +36,7 @@
 - NPCs / monsters
 - Node-based pathfinding
 - Triggers, timers, and logic gates
+- Terrain generation with Lo-fi mode
 
 ### Rendering
 - OpenGL 3.3 forward renderer
