@@ -63,12 +63,7 @@
 
  ## Why Fio exists
 
-Fio is built as:
-- a rendering experimentation platform
-- a level editor inspired by classic BSP workflows
-- a systems-driven engine with tooling-first design
-
-Fio removes the editor/runtime boundary that most engines enforce
+Fio removes the barrier between editor and runtime, letting you iterate at the speed of thought. It’s a playground for rendering experiments, a tribute to classic BSP workflows, and a tool for building systems-driven games—all in one.
 
 ------------------------------
 
