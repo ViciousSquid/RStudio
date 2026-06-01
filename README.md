@@ -22,7 +22,7 @@
 
 ### [💾 Download Binaries (Win/macOS)](https://github.com/ViciousSquid/Fio/releases) || [Wiki](https://github.com/ViciousSquid/Fio/wiki/) || [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
 #### Linux: use the included Dockerfile or [run from source](https://github.com/ViciousSquid/Fio#-quickstart)
-<img width="2039" height="1119" alt="image" src="https://github.com/user-attachments/assets/a68a33ac-1da7-4626-8796-46a6435cf95c" />
+<img src="https://github.com/user-attachments/assets/a68a33ac-1da7-4626-8796-46a6435cf95c" width="800">
 
 
 
@@ -89,11 +89,12 @@ Contributions, feedback, and experiments are welcome. Check issues or open a dis
 
 ----------------
 
-<img width="1609" height="1119" alt="image" src="https://github.com/user-attachments/assets/22283623-21a2-4776-a2ae-71649f5276f0" />
+<img src="https://github.com/user-attachments/assets/22283623-21a2-4776-a2ae-71649f5276f0" width="800">
 
 ----------------
 
-<img width="1875" height="1697" alt="image" src="https://github.com/user-attachments/assets/ce564bef-3e9d-4bc5-a93a-e9628638cadb" />
+<img src="https://github.com/user-attachments/assets/ce564bef-3e9d-4bc5-a93a-e9628638cadb" width="800">
+
 
 
 
