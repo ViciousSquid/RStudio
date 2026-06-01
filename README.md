@@ -53,6 +53,7 @@
 ### Technical Targets
 - Python 3.10+
 - Multi-threaded
+- Uses Numpy heavily to avoid GIL locks
 - Optimized for Windows-on-ARM (Snapdragon 8cx-class devices)
 - Stable 60 FPS target on mid-range hardware
 
