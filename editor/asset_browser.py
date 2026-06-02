@@ -257,91 +257,25 @@ class AssetBrowserTab(QWidget):
             try: os.makedirs(self.current_asset_folder)
             except: pass
 
-        # Main layout: splitter (tree + grid) at top, bottom banner at bottom
+        # Main layout: action bar at top (below tabs), then splitter (tree + grid)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # 1. Splitter for folder tree (left) and asset grid (right)
-        self.splitter = QSplitter(Qt.Horizontal)
-        main_layout.addWidget(self.splitter, stretch=1)  # Takes all available space above banner
-
-        # --- Left Pane (Folder Tree) ---
-        self.tree_frame = QFrame()
-        tree_layout = QVBoxLayout(self.tree_frame)
-        tree_layout.setContentsMargins(0, 0, 0, 0)
-        tree_layout.setSpacing(0)
-        
-        folder_name = os.path.basename(os.path.normpath(self.root_path))
-        self.home_btn = QPushButton(f"🏠 {folder_name.capitalize()}")
-        self.home_btn.setToolTip(f"Go to root {folder_name} folder")
-        self.home_btn.clicked.connect(self.go_to_root)
-        self.home_btn.setStyleSheet("""
-            QPushButton {
-                text-align: left;
-                padding: 6px 12px;
-                background-color: #333;
-                border: none;
-                border-bottom: 1px solid #444;
-                color: #ddd;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #444;
-                color: white;
-            }
-        """)
-        tree_layout.addWidget(self.home_btn)
-        
-        self.dir_model = QFileSystemModel()
-        self.dir_model.setRootPath(self.root_path)
-        self.dir_model.setFilter(QDir.NoDotAndDotDot | QDir.AllDirs)
-        
-        self.tree_view = QTreeView()
-        self.tree_view.setModel(self.dir_model)
-        self.tree_view.setRootIndex(self.dir_model.index(self.root_path))
-        self.tree_view.setHeaderHidden(True)
-        self.tree_view.setColumnHidden(1, True)
-        self.tree_view.setColumnHidden(2, True)
-        self.tree_view.setColumnHidden(3, True)
-        self.tree_view.clicked.connect(self.on_tree_clicked)
-        self.tree_view.setStyleSheet("""
-            QTreeView { background-color: #252525; color: #ddd; border: none; }
-            QTreeView::item { padding: 4px; }
-            QTreeView::item:selected { background-color: #444; color: white; }
-            QTreeView::item:hover { background-color: #333; }
-        """)
-        tree_layout.addWidget(self.tree_view)
-        self.splitter.addWidget(self.tree_frame)
-
-        # 2. Middle Pane (Grid View)
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setStyleSheet("background-color: #2b2b2b; border: none;")
-        self.grid_container = QWidget()
-        self.grid_layout = QGridLayout(self.grid_container)
-        self.grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        self.grid_layout.setSpacing(10)
-        self.scroll_area.setWidget(self.grid_container)
-        self.splitter.addWidget(self.scroll_area)
-
-        # Set initial splitter sizes (tree gets 180, grid gets the rest)
-        self.splitter.setSizes([180, self.width() - 180])
-
-        # 3. Bottom Banner (60px tall)
-        self.bottom_banner = QFrame()
-        self.bottom_banner.setFixedHeight(50)
-        self.bottom_banner.setStyleSheet("""
+        # 1. Action bar — FACE / FIT / TILE buttons immediately below the tabs
+        self.action_bar = QFrame()
+        self.action_bar.setFixedHeight(50)
+        self.action_bar.setStyleSheet("""
             QFrame {
                 background-color: #2a2a2a;
-                border-top: 1px solid #444;
+                border-bottom: 1px solid #444;
             }
         """)
-        banner_layout = QHBoxLayout(self.bottom_banner)
+        banner_layout = QHBoxLayout(self.action_bar)
         banner_layout.setContentsMargins(10, 5, 10, 5)
         banner_layout.setSpacing(12)
 
-        # Button style (DPI‑aware 9pt font, now with expanding size policy)
+        # Button style (DPI‑aware 9pt font, expanding size policy)
         button_style = """
             QPushButton {
                 background-color: #2E7D32; 
@@ -419,7 +353,73 @@ class AssetBrowserTab(QWidget):
         banner_layout.addWidget(button_container, stretch=1)
         banner_layout.addStretch()
 
-        main_layout.addWidget(self.bottom_banner)
+        main_layout.addWidget(self.action_bar)
+
+        # 2. Splitter for folder tree (left) and asset grid (right)
+        self.splitter = QSplitter(Qt.Horizontal)
+        main_layout.addWidget(self.splitter, stretch=1)
+
+        # --- Left Pane (Folder Tree) ---
+        self.tree_frame = QFrame()
+        tree_layout = QVBoxLayout(self.tree_frame)
+        tree_layout.setContentsMargins(0, 0, 0, 0)
+        tree_layout.setSpacing(0)
+        
+        folder_name = os.path.basename(os.path.normpath(self.root_path))
+        self.home_btn = QPushButton(f"🏠 {folder_name.capitalize()}")
+        self.home_btn.setToolTip(f"Go to root {folder_name} folder")
+        self.home_btn.clicked.connect(self.go_to_root)
+        self.home_btn.setStyleSheet("""
+            QPushButton {
+                text-align: left;
+                padding: 6px 12px;
+                background-color: #333;
+                border: none;
+                border-bottom: 1px solid #444;
+                color: #ddd;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #444;
+                color: white;
+            }
+        """)
+        tree_layout.addWidget(self.home_btn)
+        
+        self.dir_model = QFileSystemModel()
+        self.dir_model.setRootPath(self.root_path)
+        self.dir_model.setFilter(QDir.NoDotAndDotDot | QDir.AllDirs)
+        
+        self.tree_view = QTreeView()
+        self.tree_view.setModel(self.dir_model)
+        self.tree_view.setRootIndex(self.dir_model.index(self.root_path))
+        self.tree_view.setHeaderHidden(True)
+        self.tree_view.setColumnHidden(1, True)
+        self.tree_view.setColumnHidden(2, True)
+        self.tree_view.setColumnHidden(3, True)
+        self.tree_view.clicked.connect(self.on_tree_clicked)
+        self.tree_view.setStyleSheet("""
+            QTreeView { background-color: #252525; color: #ddd; border: none; }
+            QTreeView::item { padding: 4px; }
+            QTreeView::item:selected { background-color: #444; color: white; }
+            QTreeView::item:hover { background-color: #333; }
+        """)
+        tree_layout.addWidget(self.tree_view)
+        self.splitter.addWidget(self.tree_frame)
+
+        # 2. Middle Pane (Grid View)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setStyleSheet("background-color: #2b2b2b; border: none;")
+        self.grid_container = QWidget()
+        self.grid_layout = QGridLayout(self.grid_container)
+        self.grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.grid_layout.setSpacing(10)
+        self.scroll_area.setWidget(self.grid_container)
+        self.splitter.addWidget(self.scroll_area)
+
+        # Set initial splitter sizes (tree gets 180, grid gets the rest)
+        self.splitter.setSizes([180, self.width() - 180])
 
         # Load initial directory and setup resize handling for dynamic columns
         self.load_directory(self.current_asset_folder)

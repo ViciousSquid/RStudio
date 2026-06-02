@@ -197,6 +197,7 @@ class MainWindow(QMainWindow):
                 self.properties_tab_widget.setCurrentIndex(idx)
 
         self.ui.action_asset_browser.triggered.connect(self.toggle_asset_browser)
+        self._tools_panel = self._create_tools_panel()
 
         # Enable sysmon at launch if configured
         if self.config.getboolean('Display', 'always_show_sysmon', fallback=False):
@@ -710,6 +711,9 @@ class MainWindow(QMainWindow):
             by = 35 
             self.play_button.move(bx, by)
             self.play_button.raise_()
+        # Dismiss the tools panel so it doesn't drift out of position
+        if hasattr(self, '_tools_panel') and self._tools_panel.isVisible():
+            self._close_tools_panel()
 
     def reposition_overlays(self):
         """Positions the Play button at the top middle (where the toast used to be)."""
@@ -744,6 +748,115 @@ class MainWindow(QMainWindow):
                 self.asset_browser_dock.show()
                 # Ensure it is raised if tabbed or floating
                 self.asset_browser_dock.raise_()
+
+    # ── Tools floating panel ──────────────────────────────────────────────
+
+    def _create_tools_panel(self):
+        """Build the floating Tools panel (child of MainWindow, hidden by default)."""
+        from PyQt5.QtWidgets import QFrame, QPushButton, QVBoxLayout
+
+        # ── DPI scaling ────────────────────────────────────────────────────
+        # Base all measurements on the screen's logical DPI so the panel
+        # looks correct at 100 %, 125 %, 150 %, 200 % etc.
+        dpi   = QApplication.primaryScreen().logicalDotsPerInch()
+        scale = dpi / 96.0          # 1.0 @ 96 dpi, 1.25 @ 120, 1.5 @ 144 …
+
+        base_pt = getattr(self.debug_console, 'font_size', 10) if self.debug_console else 10
+        # Padding / geometry: scale from comfortable 96-dpi defaults
+        pad_v     = max(6,  int(7  * scale))   # vertical button padding
+        pad_h_r   = max(12, int(18 * scale))   # right padding
+        pad_h_l   = max(10, int(14 * scale))   # left  padding
+        radius    = max(3,  int(5  * scale))   # border-radius
+        min_w     = max(180, int(220 * scale)) # minimum button width
+
+        panel = QFrame(self)
+        panel.setObjectName("ToolsPanel")
+        panel.setStyleSheet(f"""
+            QFrame#ToolsPanel {{
+                background-color: #252525;
+                border: 1px solid #606060;
+                border-radius: {radius}px;
+            }}
+            QPushButton {{
+                background-color: transparent;
+                color: #ddd;
+                border: none;
+                border-radius: 3px;
+                padding: {pad_v}px {pad_h_r}px {pad_v}px {pad_h_l}px;
+                text-align: left;
+                font-size: {base_pt}pt;
+                min-width: {min_w}px;
+            }}
+            QPushButton:hover {{
+                background-color: #F08000;
+                color: white;
+            }}
+            QPushButton:pressed {{
+                background-color: #c06800;
+                color: white;
+            }}
+        """)
+
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(1)
+
+        def _tool_btn(label, slot):
+            btn = QPushButton(label)
+            btn.setFocusPolicy(Qt.NoFocus)
+            btn.clicked.connect(slot)
+            btn.clicked.connect(self._close_tools_panel)
+            layout.addWidget(btn)
+            return btn
+
+        _tool_btn("Logic Graph Editor",      self.open_logic_graph)
+        _tool_btn("Logic Wizard",             self.open_logic_wizard)
+        _tool_btn("Validate All Connections", self.validate_io_connections)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setFixedHeight(1)
+        sep.setStyleSheet("background-color: #505050; margin: 3px 6px;")
+        layout.addWidget(sep)
+
+        _tool_btn("Terrain Generator",         self.open_terrain_editor)
+        _tool_btn("Procedural Map Generator",  self.show_procedural_map_generator)
+
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.HLine)
+        sep2.setFixedHeight(1)
+        sep2.setStyleSheet("background-color: #505050; margin: 3px 6px;")
+        layout.addWidget(sep2)
+
+        _tool_btn("Export Game Package…",      self.export_game_package)
+        _tool_btn("Play Game Package…",        self.play_game_package)
+
+        panel.adjustSize()
+        panel.hide()
+        return panel
+
+    def _close_tools_panel(self):
+        """Hide the tools panel and uncheck its toolbar button."""
+        if hasattr(self, '_tools_panel'):
+            self._tools_panel.hide()
+        if hasattr(self, 'tools_btn'):
+            self.tools_btn.setChecked(False)
+
+    def toggle_tools_panel(self):
+        """Show or hide the floating Tools panel below the toolbar button."""
+        if not hasattr(self, '_tools_panel'):
+            return
+        if self._tools_panel.isVisible():
+            self._close_tools_panel()
+        else:
+            if hasattr(self, 'tools_btn'):
+                # Position right below the toolbar button
+                btn_global = self.tools_btn.mapToGlobal(QPoint(0, self.tools_btn.height() + 2))
+                btn_local  = self.mapFromGlobal(btn_global)
+                self._tools_panel.move(btn_local)
+                self.tools_btn.setChecked(True)
+            self._tools_panel.show()
+            self._tools_panel.raise_()
 
     def show_toast(self, message, is_error=False, duration=None):
         """Displays a notification"""
@@ -3053,6 +3166,12 @@ class MainWindow(QMainWindow):
         # Hide the floating play button
         if hasattr(self, 'play_button'):
             self.play_button.setVisible(False)
+
+        # Hide the floating tools panel
+        if hasattr(self, '_tools_panel'):
+            self._tools_panel.hide()
+        if hasattr(self, 'tools_btn'):
+            self.tools_btn.setChecked(False)
 
         # Hide sysmon overlay by default in kiosk mode (F3 to toggle back on)
         self.view_3d.debug_mode_active = False

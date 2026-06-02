@@ -195,7 +195,6 @@ class Ui_MainWindow(object):
         MainWindow.file_menu = menubar.addMenu('File')
         edit_menu = menubar.addMenu('Edit')
         view_menu = menubar.addMenu('View')
-        tools_menu = menubar.addMenu('Tools')
         help_menu = menubar.addMenu('Help')
 
         MainWindow.file_menu.addAction(QAction('New Map', MainWindow, shortcut='Ctrl+N', triggered=MainWindow.new_map))
@@ -208,8 +207,8 @@ class Ui_MainWindow(object):
         MainWindow.file_menu.addSeparator()
         MainWindow.file_menu.addAction(QAction('Settings...', MainWindow, triggered=MainWindow.show_settings_dialog))
         MainWindow.file_menu.addSeparator()
-        MainWindow.file_menu.addAction(QAction('Play Game Package...', MainWindow, triggered=MainWindow.play_game_package))
-        #MainWindow.file_menu.addAction(QAction('Exit', MainWindow, shortcut='Ctrl+Q', triggered=MainWindow.close))
+        #MainWindow.file_menu.addAction(QAction('Play Game Package...', MainWindow, triggered=MainWindow.play_game_package))
+        MainWindow.file_menu.addAction(QAction('Exit', MainWindow, shortcut='Ctrl+Q', triggered=MainWindow.close))
 
         MainWindow.undo_action = QAction(QIcon("assets/b_undo.png"), 'Undo', MainWindow)
         MainWindow.undo_action.setShortcut('Ctrl+Z')
@@ -249,36 +248,28 @@ class Ui_MainWindow(object):
         MainWindow.reset_layout_action.triggered.connect(MainWindow.reset_layout)
         view_menu.addAction(MainWindow.reset_layout_action)
 
-        # ── Tools Menu (formerly Logic) ──────────────────────────────────
         logic_graph_action = QAction('Logic Graph Editor…', MainWindow)
         logic_graph_action.setShortcut('Ctrl+L')
         logic_graph_action.setToolTip('Open the visual I/O node graph editor')
         logic_graph_action.triggered.connect(MainWindow.open_logic_graph)
-        tools_menu.addAction(logic_graph_action)
 
         logic_wizard_action = QAction('Logic Wizard…', MainWindow)
         logic_wizard_action.setShortcut('Ctrl+Shift+W')
         logic_wizard_action.setToolTip('Guided setup for common I/O scenarios')
         logic_wizard_action.triggered.connect(MainWindow.open_logic_wizard)
-        tools_menu.addAction(logic_wizard_action)
 
         validate_action = QAction('Validate All Connections…', MainWindow)
         validate_action.setToolTip('Check for connections with missing target entities')
         validate_action.triggered.connect(MainWindow.validate_io_connections)
-        tools_menu.addAction(validate_action)
 
-        tools_menu.addSeparator()
 
         terrain_action = QAction('Terrain Generator…', MainWindow)
         terrain_action.setToolTip('Open the terrain editor (low‑poly terrain generator)')
         terrain_action.triggered.connect(MainWindow.open_terrain_editor)
-        tools_menu.addAction(terrain_action)
 
-        tools_menu.addSeparator()
 
         procedural_action = QAction('Procedural map generator…', MainWindow)
         procedural_action.triggered.connect(MainWindow.show_procedural_map_generator)
-        tools_menu.addAction(procedural_action)
         
         view_menu.addSeparator()
         toggle_triggers_action = QAction('Opaque Triggers', MainWindow, checkable=True)
@@ -364,34 +355,43 @@ class Ui_MainWindow(object):
         top_toolbar.addWidget(subtract_btn)
         top_toolbar.addWidget(tint_btn)
         
-        # Add separator 
-        separator_terrain = QFrame()
-        separator_terrain.setFrameShape(QFrame.VLine)
-        separator_terrain.setFrameShadow(QFrame.Sunken)
-        separator_terrain.setFixedWidth(2)
-        separator_terrain.setStyleSheet("background-color: transparent;")
-        top_toolbar.addWidget(separator_terrain)
-        
-        # === TERRAIN BUTTON ===
-        terrain_btn = QPushButton()
-        terrain_btn.setIcon(QIcon("assets/terrain.png"))
-        terrain_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        terrain_btn.setFixedSize(icon_size_val, icon_size_val)
-        terrain_btn.setToolTip("Terrain Editor")
-        terrain_btn.clicked.connect(MainWindow.open_terrain_editor)
-        top_toolbar.addWidget(terrain_btn)
-        MainWindow.terrain_btn = terrain_btn
+        # === TOOLS PANEL BUTTON ===
+        separator_tools = QFrame()
+        separator_tools.setFrameShape(QFrame.VLine)
+        separator_tools.setFrameShadow(QFrame.Sunken)
+        separator_tools.setFixedWidth(2)
+        separator_tools.setStyleSheet("background-color: transparent;")
+        top_toolbar.addWidget(separator_tools)
 
-        # === ASSET BROWSER BUTTON (NEW) ===
-        browser_btn = QPushButton()
-        browser_btn.setIcon(QIcon("assets/browser.png"))
-        browser_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        browser_btn.setFixedSize(icon_size_val, icon_size_val)
-        browser_btn.setToolTip("Asset Browser (T)")
-        # Trigger the action we created in setupUi
-        browser_btn.clicked.connect(self.action_asset_browser.trigger)
-        top_toolbar.addWidget(browser_btn)
-        MainWindow.browser_btn = browser_btn
+        tools_btn = QPushButton("Tools ▼")
+        tools_btn.setFixedHeight(icon_size_val)
+        tools_btn.setMinimumWidth(75)
+        tools_btn.setCheckable(True)
+        tools_btn.setToolTip("Open Tools panel (Logic, Terrain, Map Generator…)")
+        # Match debug console font size (DPI-aware)
+        dc_font_size = getattr(MainWindow.debug_console, 'font_size', 10) if hasattr(MainWindow, 'debug_console') and MainWindow.debug_console else 10
+        tools_btn.setFont(QFont("Arial", max(6, dc_font_size)))
+        tools_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #444;
+                color: #e0e0e0;
+                border: 1px solid #555;
+                border-radius: 3px;
+                padding: 0px 10px;
+                font-weight: bold;
+            }
+            QPushButton:checked, QPushButton:hover {
+                background-color: #F08000;
+                color: white;
+                border-color: #FF9020;
+            }
+            QPushButton:pressed {
+                background-color: #c06800;
+            }
+        """)
+        tools_btn.clicked.connect(MainWindow.toggle_tools_panel)
+        top_toolbar.addWidget(tools_btn)
+        MainWindow.tools_btn = tools_btn
 
          # === GRID TOGGLE ===
         grid_btn = QPushButton()
