@@ -6,9 +6,20 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
+    outputs:
+      branch_name: ${{ steps: vars.outputs.branch }}
 
     steps:
       - uses: actions/checkout@v4
+
+      # Extract and sanitize the branch name for file renaming
+      - name: Set branch name variable
+        id: vars
+        shell: pwsh
+        run: |
+          $branch = "${{ github.ref_name }}"
+          $sanitized = $branch -replace '[/\\?%*:|"<>]', '_'
+          echo "branch=$sanitized" >> $env:GITHUB_OUTPUT
 
       - uses: actions/setup-python@v5
         with:
@@ -51,17 +62,32 @@ jobs:
             exit 1
           }
 
+      - name: Package Windows distribution
+        shell: pwsh
+        run: |
+          # Compress the directory to a zip named after the branch
+          Compress-Archive -Path build/main.dist/* -DestinationPath "build/Fio-${{ steps.vars.outputs.branch }}_Windows.zip"
+
       - uses: actions/upload-artifact@v4
         with:
           name: fio-windows
-          path: build/main.dist/
+          path: build/Fio-${{ steps.vars.outputs.branch }}_Windows.zip
 
 
   build-macos:
     runs-on: macos-latest
+    outputs:
+      branch_name: ${{ steps.vars.outputs.branch }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set branch name variable
+        id: vars
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          SANITIZED=$(echo "$BRANCH" | sed 's/[/\?%*:|"<>]/_/g')
+          echo "branch=$SANITIZED" >> $GITHUB_OUTPUT
 
       - uses: actions/setup-python@v5
         with:
@@ -119,29 +145,26 @@ jobs:
 
       - name: Prepare app bundle for distribution
         run: |
-          # Inject qt.conf so Qt resolves plugin paths without
-          # falling back to CFBundleGetMainBundle() (which returns
-          # NULL when the .app wrapper is missing or malformed).
           mkdir -p build/main.app/Contents/Resources
           cat > build/main.app/Contents/Resources/qt.conf << 'EOF'
           [Paths]
           Plugins = ../MacOS/PyQt5/Qt5/plugins
           EOF
 
-          # Rename to final app name and zip so the .app directory
-          # structure survives the artifact upload/download round-trip.
           cd build
           mv main.app Fio.app
-          zip -r -y Fio-macOS.zip Fio.app
+          zip -r -y "Fio-${{ steps.vars.outputs.branch }}_macOS.zip" Fio.app
 
       - uses: actions/upload-artifact@v4
         with:
           name: fio-macos
-          path: build/Fio-macOS.zip
+          path: build/Fio-${{ steps.vars.outputs.branch }}_macOS.zip
 
 
   build-linux:
     runs-on: ubuntu-latest
+    outputs:
+      branch_name: ${{ steps.vars.outputs.branch }}
 
     steps:
       - uses: actions/checkout@v4
@@ -160,6 +183,13 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install nuitka zstandard
+
+      - name: Set branch name variable
+        id: vars
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          SANITIZED=$(echo "$BRANCH" | sed 's/[/\?%*:|"<>]/_/g')
+          echo "branch=$SANITIZED" >> $GITHUB_OUTPUT
 
       - name: Build with Nuitka
         run: |
@@ -189,7 +219,40 @@ jobs:
             exit 1
           fi
 
+      - name: Package Linux distribution
+        run: |
+          cd build/main.dist
+          zip -r "../Fio-${{ steps.vars.outputs.branch }}_Linux.zip" .
+
       - uses: actions/upload-artifact@v4
         with:
           name: fio-linux
-          path: build/main.dist/
+          path: build/Fio-${{ steps.vars.outputs.branch }}_Linux.zip
+
+
+  create-release:
+    runs-on: ubuntu-latest
+    needs: [build-windows, build-macos, build-linux]
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      # Flatten directory structure so files can be uploaded directly
+      - name: Prepare assets
+        run: |
+          mkdir release_assets
+          find artifacts -type f -name "*.zip" -exec cp {} release_assets/ \;
+          ls -l release_assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build-windows.outputs.branch_name }}
+          name: Release ${{ needs.build-windows.outputs.branch_name }}
+          draft: false
+          prerelease: false
+          files: release_assets/*.zip
