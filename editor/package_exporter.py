@@ -40,7 +40,7 @@ class PackageExporter:
     def export(self, output_path, metadata, current_map_path, parent_widget=None):
         """
         Export the current project as a .fiopak zip.
-        All paths are absolute, errors are caught and shown.
+        Now safe for Nuitka builds: all paths are absolute, errors are caught and shown.
         """
         import zipfile
         import json
@@ -175,7 +175,7 @@ class PackageExporter:
             
             # Find LevelChangers to discover next maps
             for thing in map_data.get('things', []):
-                if thing.get('type') == 'LevelChanger':
+                if thing.get('type') == 'levelchanger':
                     target = thing.get('properties', {}).get('target_map', '')
                     if target:
                         # Normalize to maps/ relative path
