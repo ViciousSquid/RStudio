@@ -1894,8 +1894,15 @@ class MainWindow(QMainWindow):
 
         # Normalise paths
         abs_map = os.path.abspath(current_map)
-        rel_map = os.path.relpath(abs_map, self.root_dir).replace('\\', '/')
-        metadata['map_path'] = rel_map
+        if not os.path.isfile(abs_map):
+            QMessageBox.critical(
+                dialog, "Export Error",
+                f"The map file could not be found:\n\n{abs_map}\n\n"
+                "Please save the level and try again."
+            )
+            return
+
+        # metadata['map_path'] is set by the exporter to the correct archive-internal path
 
         # Ask user where to save the package
         packages_dir = os.path.join(self.root_dir, "packages")

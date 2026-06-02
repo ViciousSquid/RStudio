@@ -58,16 +58,26 @@ class PackageExporter:
                 raise FileNotFoundError(f"Project root not found: {root}")
 
             # ---- 2. Collect all map dependencies ----
-            start_map = metadata.get('map_path')
+            start_map_rel = metadata.get('map_path')
             all_maps = set()
-            if start_map and os.path.exists(start_map):
-                all_maps = self._collect_map_dependencies(start_map)
-            else:
-                if os.path.isfile(current_map_abs):
-                    all_maps.add(current_map_abs)
+
+            # Resolve start map relative to root_dir
+            if start_map_rel:
+                start_map_abs = os.path.join(self.root_dir, start_map_rel)
+                if os.path.isfile(start_map_abs):
+                    all_maps = self._collect_map_dependencies(start_map_abs)
+                else:
+                    self.errors.append(f"Start map not found: {start_map_abs}")
+
+            # ALWAYS include the current map if it exists (it is the authoritative source)
+            if os.path.isfile(current_map_abs):
+                all_maps.add(current_map_abs)
+            elif current_map_abs:
+                self.errors.append(f"Current map not found: {current_map_abs}")
 
             if not all_maps:
-                raise Exception("No map files found to export.")
+                tried = f"start_map={start_map_rel}, current_map={current_map_abs}"
+                raise Exception(f"No map files found to export. (Tried: {tried})")
 
             # ---- 3. Gather referenced assets from ALL maps ----
             referenced_assets = set()
@@ -102,11 +112,26 @@ class PackageExporter:
                 # Write metadata.json
                 zf.writestr('metadata.json', json.dumps(metadata, indent=2))
 
-                # Write each map with preserved relative structure
+                # Write each map into maps/ folder with clean archive paths
+                map_archive_paths = {}
                 for map_file in all_maps:
-                    # Compute relative path from root
-                    rel = os.path.relpath(map_file, root).replace('\\', '/')
-                    zf.write(map_file, rel)
+                    basename = os.path.basename(map_file)
+                    archive_path = f"maps/{basename}"
+                    # Handle name collisions
+                    counter = 1
+                    while archive_path in map_archive_paths.values():
+                        name, ext = os.path.splitext(basename)
+                        archive_path = f"maps/{name}_{counter}{ext}"
+                        counter += 1
+                    map_archive_paths[map_file] = archive_path
+                    zf.write(map_file, archive_path)
+
+                # Ensure metadata points to the correct archive-internal path
+                if current_map_abs in map_archive_paths:
+                    metadata['map_path'] = map_archive_paths[current_map_abs]
+                elif all_maps:
+                    first_map = next(iter(all_maps))
+                    metadata['map_path'] = map_archive_paths.get(first_map, 'maps/map.json')
 
                 # Write referenced assets
                 assets_dir = os.path.join(root, 'assets')
@@ -175,7 +200,7 @@ class PackageExporter:
             
             # Find LevelChangers to discover next maps
             for thing in map_data.get('things', []):
-                if thing.get('type') == 'levelchanger':
+                if thing.get('type') == 'LevelChanger':
                     target = thing.get('properties', {}).get('target_map', '')
                     if target:
                         # Normalize to maps/ relative path
