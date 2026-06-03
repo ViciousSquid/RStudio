@@ -197,10 +197,18 @@ class ResourceManager:
         """Raw byte loading from current mount context."""
         if self._zip_handle:
             # ZIP mode: direct archive read
+            # Try the path as-is first
             try:
                 return self._zip_handle.read(normalized_path)
             except KeyError:
-                return None
+                pass
+            # Fallback: try without assets/ prefix (packages may store files relative to assets/)
+            if normalized_path.startswith('assets/'):
+                try:
+                    return self._zip_handle.read(normalized_path[7:])
+                except KeyError:
+                    pass
+            return None
         elif self._root_dir:
             # Filesystem mode: standard file read
             full_path = os.path.join(self._root_dir, normalized_path)
@@ -227,9 +235,6 @@ class ResourceManager:
     def _normalize_path(path: str) -> str:
         """Convert to forward-slash relative path, strip leading slashes."""
         path = path.replace('\\', '/').lstrip('/')
-        # Remove redundant 'assets/' prefix if present for consistency
-        if path.startswith('assets/'):
-            path = path[7:]
         return path
     
     # ------------------------------------------------------------------
