@@ -14,6 +14,10 @@ Hub map with doors, one of them leads to `map_test_Extended` - _demonstrates the
 
 Playable level with multiple rooms, pickups, a moving platform and a light that can be triggered
 
+### `Maze.json`
+
+Liminal corridors with a simple floating platform puzzle
+
 ### `MonsterTest.json`
 
 Demonstrates how a monster can follow a path
