@@ -1043,7 +1043,7 @@ class View2D(QWidget):
             return None
             
         obj = renderer.loaded_models.get(model_path)
-        if not obj or not hasattr(obj, 'cpu_vertices') or not obj.cpu_vertices:
+        if not obj or not hasattr(obj, 'cpu_vertices') or obj.cpu_vertices is None or len(obj.cpu_vertices) == 0:
             return None
 
         # Optimization: Too many vertices check
