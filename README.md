@@ -101,7 +101,7 @@ Contributions, feedback, and experiments are welcome. Check issues or open a dis
 
 
 
-<img src="https://github.com/user-attachments/assets/ce564bef-3e9d-4bc5-a93a-e9628638cadb" width="800">
+<img src="https://github.com/user-attachments/assets/824184c7-643a-4619-b6ce-cfaebca71901" width="800">
 
 
 
