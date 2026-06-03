@@ -24,5 +24,9 @@ Demonstrates how a monster can follow a path
 
 ### `Portal_Test_X.json`
 
-Demonstrates the new World Portals added with v1.2.6.0
+Demonstrates dynamic World Portal features
+
+### `Spawner_Test.json`
+
+Stand in the blue area to spawn an enemy  - _demonstrates the **Spawner** entity_
 
