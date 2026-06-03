@@ -22,7 +22,7 @@ Liminal corridors with a simple floating platform puzzle
 
 Demonstrates how a monster can follow a path
 
-### `Portal_Test.json` , `Portal_Test_dynamic.json`
+### `Portal_Test_X.json`
 
 Demonstrates the new World Portals added with v1.2.6.0
 
