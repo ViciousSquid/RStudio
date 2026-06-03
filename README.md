@@ -17,11 +17,11 @@
 - Entity I/O logic system inspired by Source engine
 - Classic brush-based CSG editing
 - Export creations as self-contained shareable packages
-- Local split-screen multiplayer - Two players with a single keyboard (or gamepad)
+- Local split-screen: share one keyboard, or give player 2 a gamepad
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
-### [💾 Download Binaries (Win/macOS)](https://github.com/ViciousSquid/Fio/releases) || [Wiki](https://github.com/ViciousSquid/Fio/wiki/) || [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
-#### Linux: use the included Dockerfile or [run from source](https://github.com/ViciousSquid/Fio#-quickstart)
+### [💾 Download Binaries for Windows/macOS/Linux](https://github.com/ViciousSquid/Fio/releases) | [Wiki](https://github.com/ViciousSquid/Fio/wiki/) | [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
+#### or use the included Dockerfile or [run from source](https://github.com/ViciousSquid/Fio#-quickstart)
 
 <img src="https://github.com/user-attachments/assets/58098a64-227c-422d-872d-a485cfb9cce8" width="800">
 
