@@ -12,9 +12,6 @@ Game logic - runs in separate thread
 ### `monster_ai.py`
 Monster Behaviour, Movement, Pathfinding
 
-### `obj_loader.py`
-Runtime OBJ loader.
-
 ### `physics.py`
 Collision & physics simulation
 
@@ -47,3 +44,6 @@ Texture loading & binding.
 
 ### `threaded_game_state.py`
 Thread-safe wrapper for game state in Play mode.
+
+### `xxx_loader.py`
+Runtime OBJ and GLB loaders

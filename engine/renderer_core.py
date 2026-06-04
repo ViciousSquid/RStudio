@@ -33,11 +33,16 @@ from engine.shaders import DEFAULT_SHADERS
 from engine.terrain import TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER
 from editor.things import Thing
 
-# Try to import OBJ loader
+# Try to import OBJ and GLB loaders
 try:
     from .obj_loader import OBJ
 except ImportError:
     OBJ = None
+
+try:
+    from .glb_loader import GLB
+except ImportError:
+    GLB = None
 
 
 # ---------- Utility classes ----------
@@ -604,19 +609,41 @@ class BaseRenderer:
     # Models
     # --------------------------------------------------------------------------
     def load_model(self, filename):
-        if OBJ is None:
-            return None
+        """Load a 3D model (OBJ or GLB)."""
         if filename in self.loaded_models:
             return self.loaded_models[filename]
+
         full_path = os.path.join('assets', 'models', filename)
         if not os.path.exists(full_path):
             full_path = filename
-        if os.path.exists(full_path):
-            print(f"Loading model: {full_path}")
+
+        if not os.path.exists(full_path):
+            print(f"Failed to load model: {filename}")
+            return None
+
+        print(f"Loading model: {full_path}")
+
+        # Determine format by extension
+        ext = os.path.splitext(filename)[1].lower()
+
+        if ext == '.glb':
+            if GLB is None:
+                print(f"[Renderer] GLB support not available (glb_loader not found)")
+                return None
+            model = GLB(full_path)
+        elif ext in ('.obj', ''):
+            if OBJ is None:
+                print(f"[Renderer] OBJ support not available (obj_loader not found)")
+                return None
             model = OBJ(full_path)
-            if model.is_loaded:
-                self.loaded_models[filename] = model
-                return model
+        else:
+            print(f"[Renderer] Unsupported model format: {ext}")
+            return None
+
+        if model.is_loaded:
+            self.loaded_models[filename] = model
+            return model
+
         print(f"Failed to load model: {filename}")
         return None
 
@@ -669,12 +696,29 @@ class BaseRenderer:
                             self._upload_lights_once('textured', lights)
                             gl.glActiveTexture(gl.GL_TEXTURE0)
                             gl.glUniform1i(u['texture_diffuse'], 0)
-                        tex_id = 0
-                        path_in_textures = os.path.join('assets', 'textures', use_texture)
-                        if os.path.exists(path_in_textures):
-                            tex_id = self.load_texture(use_texture, 'textures')
+                        # Resolve texture path relative to MTL directory first
+                        resolved_path = self._resolve_model_texture_path(material, use_texture)
+                        if resolved_path and os.path.exists(resolved_path):
+                            # Load from resolved absolute path
+                            tex_cache_name = f"model_tex:{resolved_path}"
+                            if tex_cache_name in self.texture_manager:
+                                tex_id = self.texture_manager[tex_cache_name]
+                            else:
+                                from PIL import Image
+                                img = Image.open(resolved_path).convert("RGBA")
+                                img = img.transpose(Image.FLIP_TOP_BOTTOM)
+                                tex_id = gl.glGenTextures(1)
+                                self.texture_manager[tex_cache_name] = tex_id
+                                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
+                                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
+                                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR)
+                                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+                                gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, img.width, img.height, 0,
+                                               gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, img.tobytes())
+                                gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
                         else:
-                            tex_id = self.load_texture(use_texture, 'models')
+                            tex_id = self.load_texture(use_texture, 'textures')
                         gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                         gl.glUniformMatrix4fv(self.uniforms['textured']['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
                     elif lit_shader:
@@ -689,7 +733,12 @@ class BaseRenderer:
                         gl.glUniform3fv(self.uniforms['lit']['object_color'], 1, color)
                         gl.glUniform1f(self.uniforms['lit']['alpha'], 1.0)
                         gl.glUniformMatrix4fv(self.uniforms['lit']['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
-                    gl.glDrawArrays(gl.GL_TRIANGLES, group['start'], group['count'])
+                    # Draw the group - indexed or non-indexed
+                    if group.get('indexed', False) and getattr(obj, 'ebo', None) is not None:
+                        gl.glDrawElements(gl.GL_TRIANGLES, group['count'], gl.GL_UNSIGNED_INT,
+                                          ctypes.c_void_p(group['start'] * 4))
+                    else:
+                        gl.glDrawArrays(gl.GL_TRIANGLES, group['start'], group['count'])
             else:
                 tex_name = manual_texture
                 target_shader = textured_shader if tex_name else lit_shader
@@ -703,7 +752,28 @@ class BaseRenderer:
                         self._upload_lights_once('textured', lights)
                         gl.glActiveTexture(gl.GL_TEXTURE0)
                         gl.glUniform1i(u['texture_diffuse'], 0)
-                    tex_id = self.load_texture(tex_name, 'textures')
+                    resolved_path = self._resolve_model_texture_path({'texture': tex_name}, tex_name)
+                    if resolved_path and os.path.exists(resolved_path) and not resolved_path.startswith('assets'):
+                        # Load from resolved absolute path
+                        tex_cache_name = f"model_tex:{resolved_path}"
+                        if tex_cache_name in self.texture_manager:
+                            tex_id = self.texture_manager[tex_cache_name]
+                        else:
+                            from PIL import Image
+                            img = Image.open(resolved_path).convert("RGBA")
+                            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+                            tex_id = gl.glGenTextures(1)
+                            self.texture_manager[tex_cache_name] = tex_id
+                            gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
+                            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
+                            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR)
+                            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+                            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, img.width, img.height, 0,
+                                           gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, img.tobytes())
+                            gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
+                    else:
+                        tex_id = self.load_texture(tex_name, 'textures')
                     gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                     gl.glUniformMatrix4fv(self.uniforms['textured']['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
                 elif lit_shader:
@@ -723,10 +793,6 @@ class BaseRenderer:
 
         gl.glBindVertexArray(0)
         gl.glEnable(gl.GL_CULL_FACE)
-
-    # --------------------------------------------------------------------------
-    # Sprites
-    # --------------------------------------------------------------------------
     def set_sprite_textures(self, textures):
         self.sprite_textures = textures
 
@@ -1075,6 +1141,38 @@ class BaseRenderer:
             gl.glUniform1f(uniforms[f'lights[{i}].intensity'], light.get_intensity())
             gl.glUniform1f(uniforms[f'lights[{i}].radius'], light.get_radius())
 
+    def _resolve_model_texture_path(self, material, texture_name):
+        """
+        Resolve a texture path from an MTL material.
+        Checks in order:
+          1. Relative to the MTL file's directory (correct for MTL references)
+          2. assets/textures/ (global fallback)
+          3. assets/models/ (legacy fallback)
+        Returns the resolved path or None if not found.
+        """
+        if not texture_name:
+            return None
+
+        # 1. Try relative to the MTL file's directory (most correct for MTL refs)
+        mtl_dir = material.get('mtl_dir', '')
+        if mtl_dir:
+            resolved = os.path.join(mtl_dir, texture_name)
+            if os.path.exists(resolved):
+                return resolved
+
+        # 2. Try assets/textures/ (global fallback)
+        resolved = os.path.join('assets', 'textures', texture_name)
+        if os.path.exists(resolved):
+            return resolved
+
+        # 3. Try assets/models/ (legacy fallback)
+        resolved = os.path.join('assets', 'models', texture_name)
+        if os.path.exists(resolved):
+            return resolved
+
+        # 4. Return as-is and let the loader handle errors
+        return texture_name
+
     # --------------------------------------------------------------------------
     # Editor helpers (outlines, gizmo, etc.)
     # --------------------------------------------------------------------------
@@ -1267,6 +1365,16 @@ class BaseRenderer:
             r,g,b = color
             if not portal.is_active():
                 r,g,b = r*0.4, g*0.4, b*0.4
+
+            # Red wireframe for unlinked or broken portal pairs
+            target_name = portal.properties.get('portal_target', '')
+            target_exists = target_name and any(
+                isinstance(t, Portal) and t.properties.get('name') == target_name
+                for t in things
+                if t is not portal
+            )
+            if not target_exists:
+                r, g, b = 0.86, 0.24, 0.24  # red — no valid target
             corners = portal.get_corners_world()
             vdata = np.array(corners, dtype=np.float32).flatten()
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_outline_vbo)

@@ -237,6 +237,10 @@ class LogicThread(threading.Thread):
         # ── Portal transit state ───────────────────────────────────────────
         self._portal_last_side: Dict[int, float] = {}
         self._portal_cooldowns: Dict[int, float] = {}
+        # Portal name → Portal lookup cache; rebuilt on play start and when
+        # the things list changes.  Avoids an O(n) rebuild every physics tick.
+        self._portals_by_name: Dict[str, object] = {}
+        self._portals_cache_dirty: bool = True
 
         self.level_complete_ui = None
         # Performance Monitoring
@@ -398,6 +402,7 @@ class LogicThread(threading.Thread):
             # Reset portal transit state
             self._portal_last_side.clear()
             self._portal_cooldowns.clear()
+            self._portals_cache_dirty = True
 
             self.level_complete_ui = None
             # Fire OnPlayerSpawn
@@ -439,6 +444,7 @@ class LogicThread(threading.Thread):
             # Reset portal transit state
             self._portal_last_side.clear()
             self._portal_cooldowns.clear()
+            self._portals_cache_dirty = True
 
             self.level_complete_ui = None
             # Reset monster AI state
@@ -778,13 +784,15 @@ class LogicThread(threading.Thread):
             if self._portal_cooldowns[pid] <= 0.0:
                 del self._portal_cooldowns[pid]
 
-        # Build a name → Portal lookup
-        portals_by_name: Dict[str, object] = {}
-        for t in self.things:
-            if isinstance(t, Portal):
-                name = t.properties.get('name', '')
-                if name:
-                    portals_by_name[name] = t
+        # Build (or reuse) name → Portal lookup
+        if self._portals_cache_dirty:
+            self._portals_by_name = {
+                t.properties.get('name', ''): t
+                for t in self.things
+                if isinstance(t, Portal) and t.properties.get('name', '')
+            }
+            self._portals_cache_dirty = False
+        portals_by_name = self._portals_by_name
 
         player_pos = self.player.pos
 

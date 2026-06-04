@@ -95,6 +95,7 @@ class OBJLoader:
         # Derive MTL path from OBJ directory
         obj_dir = os.path.dirname(obj_path)
         mtl_path = os.path.join(obj_dir, mtl_name)
+        mtl_dir = os.path.dirname(mtl_path)  # Directory containing the MTL file
         
         mtl_text = None
         
@@ -150,6 +151,7 @@ class OBJLoader:
                 elif keyword in ('map_Kd', 'map_Ka') and len(parts) > 1:
                     # Join all remaining parts to handle spaces in filenames
                     mtl['texture'] = ' '.join(parts[1:])
+                    mtl['mtl_dir'] = mtl_dir  # Store MTL directory for texture path resolution
 
 
 class OBJ:
