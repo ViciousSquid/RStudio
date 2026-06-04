@@ -1187,48 +1187,26 @@ class Portal(Thing):
         except (TypeError, ValueError, IndexError):
             return 0.0
 
-    # FIX: Helper to get portal's own yaw in degrees (for rotation update)
     def get_yaw_degrees(self) -> float:
+        """Return the portal's yaw (facing direction) in degrees."""
         rot = self.properties.get('rotation', [0.0, 0.0, 0.0])
         try:
             return float(rot[0])
         except (TypeError, ValueError, IndexError):
             return 0.0
 
-    def set_yaw_degrees(self, yaw: float):
+    def set_yaw_degrees(self, yaw: float) -> None:
         self.properties['rotation'][0] = yaw
         self.properties['angle'] = yaw
 
-    def get_parent_local_pos(self):
-        """Return local position relative to mover's origin."""
-        local = self.properties.get('parent_local_pos')
-        if local is not None:
-            return local[:3]
-        return self.properties.get('parent_offset', [0.0, 0.0, 0.0])
-
-    def get_parent_local_yaw(self):
-        return float(self.properties.get('parent_local_yaw', 0.0))
-
-    def set_parent_local_transform(self, mover_pos, mover_yaw):
+    def set_parent_local_transform(self, mover_pos, mover_yaw) -> None:
         """Compute and store local position and yaw offset from the mover's current transform."""
         self.properties['parent_local_pos'] = [
             self.pos[0] - mover_pos[0],
             self.pos[1] - mover_pos[1],
             self.pos[2] - mover_pos[2]
         ]
-        portal_yaw = self.get_yaw_degrees()
-        self.properties['parent_local_yaw'] = portal_yaw - mover_yaw
-
-    def get_yaw_degrees(self):
-        rot = self.properties.get('rotation', [0.0, 0.0, 0.0])
-        try:
-            return float(rot[0])
-        except (TypeError, ValueError, IndexError):
-            return 0.0
-
-    def set_yaw_degrees(self, yaw):
-        self.properties['rotation'][0] = yaw
-        self.properties['angle'] = yaw
+        self.properties['parent_local_yaw'] = self.get_yaw_degrees() - mover_yaw
 
     def get_normal(self):
         """
@@ -1268,10 +1246,9 @@ class Portal(Thing):
             return v
         return str(v).lower() not in ('false', '0', 'no')
 
-    # FIX: Local position getter (with legacy fallback)
-    def get_parent_local_pos(self):
-        """Return local position relative to mover's origin.
-        If parent_local_pos is set, use it; otherwise fall back to parent_offset.
+    def get_parent_local_pos(self) -> list:
+        """Return local position relative to the parent mover's origin.
+        Uses parent_local_pos when set; falls back to legacy parent_offset.
         """
         local = self.properties.get('parent_local_pos')
         if local is not None:

@@ -1992,6 +1992,61 @@ class PropertyEditor(QWidget):
             portal_mover_combo.currentTextChanged.connect(on_portal_parent_mover_changed)
             layout.addRow(portal_mover_label, portal_mover_combo)
 
+            # --- Portal target dropdown ---
+            layout.addRow(QLabel(""))   # spacer
+
+            current_target = thing.properties.get('portal_target', '')
+            other_portals = [
+                t for t in self.editor.state.things
+                if isinstance(t, Portal) and t is not thing
+            ]
+
+            portal_target_combo = QComboBox()
+            portal_target_combo.addItem("(none)")
+            for p in other_portals:
+                portal_target_combo.addItem(p.properties.get('name', ''))
+
+            if current_target:
+                idx = portal_target_combo.findText(current_target)
+                if idx >= 0:
+                    portal_target_combo.setCurrentIndex(idx)
+                else:
+                    portal_target_combo.addItem(current_target + " (missing)")
+                    portal_target_combo.setCurrentIndex(portal_target_combo.count() - 1)
+
+            def on_portal_target_changed(text):
+                clean = text.replace(" (missing)", "")
+                thing.properties['portal_target'] = '' if clean == '(none)' else clean
+                self.editor.update_all_ui()
+
+            portal_target_combo.currentTextChanged.connect(on_portal_target_changed)
+
+            # "Select →" button jumps the editor selection to the linked portal
+            select_other_btn = QPushButton("Select →")
+            select_other_btn.setToolTip("Select the linked portal in the viewport")
+            select_other_btn.setMaximumWidth(70)
+
+            def on_select_other_portal(_checked=False, _thing=thing):
+                t_name = _thing.properties.get('portal_target', '')
+                for t in self.editor.state.things:
+                    if isinstance(t, Portal) and t.properties.get('name') == t_name:
+                        if hasattr(self.editor, 'select_object'):
+                            self.editor.select_object(t)
+                        else:
+                            self.editor.state.selected_object = t
+                            self.editor.update_all_ui()
+                        break
+
+            select_other_btn.clicked.connect(on_select_other_portal)
+
+            # Lay out combo + button on one row
+            target_row_widget = QWidget()
+            target_row_layout = QHBoxLayout(target_row_widget)
+            target_row_layout.setContentsMargins(0, 0, 0, 0)
+            target_row_layout.addWidget(portal_target_combo)
+            target_row_layout.addWidget(select_other_btn)
+            layout.addRow("Portal Target:", target_row_widget)
+
         is_pickup = isinstance(thing, Pickup)
         current_item_type = thing.properties.get('item_type', 'health') if is_pickup else None
 
@@ -2010,8 +2065,9 @@ class PropertyEditor(QWidget):
             if key == 'type': continue
             if isinstance(thing, Light) and key in ['colour', 'parent_mover', 'parent_offset']: continue
             if isinstance(thing, Model) and key in ['model_path', 'scale', 'rotation']: continue
-            # Hide rotation for Portals — angle controls yaw instead
-            if isinstance(thing, Portal) and key == 'rotation': continue
+            # Hide rotation and all managed portal properties — they have dedicated UI above
+            if isinstance(thing, Portal) and key in ('rotation', 'portal_target',
+                    'parent_mover', 'parent_offset', 'parent_local_pos', 'parent_local_yaw'): continue
             if not isinstance(thing, Monster) and key in _MONSTER_ONLY_KEYS: continue
             if isinstance(thing, Monster) and key in ('triggered', 'wake_on_sight', 'dead', 'non_hostile', 'sight', 'patrol', 'patrol_target', 'patrol_mode', 'variant'): continue
             if isinstance(thing, PathNode) and key in ('radius', 'show_radius', 'affects_type', 'next_node', 'wait_time', 'speed', 'patrol_speed'): continue
@@ -2024,8 +2080,28 @@ class PropertyEditor(QWidget):
             else:
                 label_text = key.replace('_', ' ').title() + ":"
 
-            # Dropdown for angle (0°, 90°, 180°, 270°)
-            if key == 'angle':
+            # Angle control — free-form spinbox for Portals (arbitrary yaw),
+            # 4-step dropdown for every other entity type.
+            if key == 'angle' and isinstance(thing, Portal):
+                from PyQt5.QtWidgets import QSpinBox
+                widget_w = QSpinBox()
+                widget_w.setRange(0, 359)
+                widget_w.setSuffix("°")
+                widget_w.setWrapping(True)
+                widget_w.setSingleStep(45)
+                widget_w.setToolTip(
+                    "Portal facing direction in degrees (0 = +Z, 90 = +X).\n"
+                    "Use the arrows for 45° snaps, or type any value."
+                )
+                try:
+                    widget_w.setValue(int(float(value)) % 360)
+                except (ValueError, TypeError):
+                    widget_w.setValue(0)
+                def _on_portal_angle_changed(val, _thing=thing):
+                    self.update_object_prop('angle', val)
+                widget_w.valueChanged.connect(_on_portal_angle_changed)
+                layout.addRow(label_text, widget_w)
+            elif key == 'angle':
                 widget_w = QComboBox()
                 widget_w.addItems(['0°', '90°', '180°', '270°'])
                 # Convert stored value to display text

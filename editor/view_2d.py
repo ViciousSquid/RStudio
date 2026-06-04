@@ -1336,6 +1336,17 @@ class View2D(QWidget):
         if not thing.is_active():
             r, g, b = int(r * 0.4), int(g * 0.4), int(b * 0.4)
 
+        # Warn visually when portal_target is missing or points to a nonexistent portal
+        target_name = thing.properties.get('portal_target', '')
+        target_exists = target_name and any(
+            isinstance(t, Portal) and t.properties.get('name') == target_name
+            for t in self.editor.state.things
+            if t is not thing
+        )
+        is_broken = not target_exists
+        if is_broken:
+            r, g, b = 220, 60, 60   # red tint — unlinked or broken target
+
         portal_color = QColor(r, g, b, 220)
         dim_color    = QColor(r, g, b, 80)
 
@@ -1490,7 +1501,8 @@ class View2D(QWidget):
             font = QFont()
             font.setPointSize(8)
             painter.setFont(font)
-            painter.drawText(mid + QPointF(4, -4), "portal link")
+            link_label = f"{name} ↔ {target}"
+            painter.drawText(mid + QPointF(4, -4), link_label)
             painter.restore()
 
     def draw_terrain(self, painter, visible_bounds):
@@ -2293,7 +2305,11 @@ class View2D(QWidget):
 
         # Portal submenu
         portal_menu = menu.addMenu("Portal")
-        add_portal_action = portal_menu.addAction("Portal")
+        add_portal_action = portal_menu.addAction("Portal (single)")
+        add_portal_pair_action = portal_menu.addAction("Portal Pair (linked)")
+        add_portal_pair_action.setToolTip(
+            "Create two portals already cross-linked and facing each other"
+        )
 
         # Open the menu using the captured position
         action = menu.exec_(self.mapToGlobal(click_pos))
@@ -2352,6 +2368,33 @@ class View2D(QWidget):
         elif action == add_portal_action:
             new_thing = Portal(pos=pos_3d)
             new_thing.properties['rotation'] = [0.0, 0.0, 0.0]
+
+        elif action == add_portal_pair_action:
+            # Create portal A at the clicked position
+            pa = Portal(pos=list(pos_3d))
+            pa.properties['rotation'] = [0.0, 0.0, 0.0]
+            pa.properties['angle'] = 0.0
+
+            # Create portal B 256 units away, facing back toward A
+            pb_pos = list(pos_3d)
+            pb_pos[0] += 256
+            pb = Portal(pos=pb_pos)
+            pb.properties['rotation'] = [180.0, 0.0, 0.0]
+            pb.properties['angle'] = 180.0
+
+            # Name pa first, then add pb to state so its name uniqueness check
+            # correctly avoids colliding with pa's name.
+            self._ensure_object_name(pa)
+            self.editor.state.things.append(pb)
+            self._ensure_object_name(pb)
+
+            # Cross-link the pair
+            pa.properties['portal_target'] = pb.properties['name']
+            pb.properties['portal_target'] = pa.properties['name']
+
+            # pa goes through the standard finalize path (append + select);
+            # pb is already in state above.
+            new_thing = pa
         
         # Model
         elif action == add_model_action:

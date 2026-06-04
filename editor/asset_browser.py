@@ -8,6 +8,8 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame,
                              QSizePolicy, QListWidget, QListWidgetItem)
 from PyQt5.QtCore import Qt, QSize, QDir, QRect, QPointF, pyqtSignal, QTimer
 from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QIcon, QPen, QPolygonF, QTextCursor, QDesktopServices
+from engine.glb_loader import render_glb_thumbnail
+
 
 def render_obj_thumbnail(filepath, width, height):
     """
@@ -175,17 +177,24 @@ class AssetItem(QWidget):
 
     def _load_thumbnail(self):
         pixmap = QPixmap()
-        
+
         if self.is_model:
             # 1. Look for .png sidecar
             base_path = os.path.splitext(self.file_path)[0]
             thumb_path = base_path + ".png"
-            
+
             if os.path.exists(thumb_path):
                 pixmap.load(thumb_path)
             else:
-                # 2. Generate wireframe from OBJ
-                generated_pix = render_obj_thumbnail(self.file_path, 90, 90)
+                # 2. Generate wireframe from model
+                ext = os.path.splitext(self.file_path)[1].lower()
+                generated_pix = None
+
+                if ext == '.glb':
+                    generated_pix = render_glb_thumbnail(self.file_path, 90, 90)
+                elif ext == '.obj':
+                    generated_pix = render_obj_thumbnail(self.file_path, 90, 90)
+
                 if generated_pix:
                     pixmap = generated_pix
                 else:
@@ -196,7 +205,8 @@ class AssetItem(QWidget):
                     painter.setPen(QColor(200, 200, 200))
                     font = QFont("Arial", 16, QFont.Bold)
                     painter.setFont(font)
-                    painter.drawText(QRect(0, 0, 90, 90), Qt.AlignCenter, "OBJ")
+                    label = "GLB" if ext == '.glb' else "OBJ"
+                    painter.drawText(QRect(0, 0, 90, 90), Qt.AlignCenter, label)
                     painter.end()
         else:
             # Assume image
@@ -204,13 +214,13 @@ class AssetItem(QWidget):
 
         if not pixmap.isNull():
             if self.is_model and not os.path.exists(os.path.splitext(self.file_path)[0] + ".png"):
-                # Already scaled if generated
                 self.thumb_label.setPixmap(pixmap)
             else:
                 scaled = pixmap.scaled(90, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.thumb_label.setPixmap(scaled)
         else:
             self.thumb_label.setText("?")
+
 
     def _update_border(self):
         """Update the name label color and overlay visibility."""
@@ -747,7 +757,7 @@ class AssetBrowser(QWidget):
         self.tab_textures = AssetBrowserTab(self.textures_path, ['.png', '.jpg', '.jpeg', '.tga', '.bmp'], editor, is_model_tab=False, parent_browser=self)
         self.tabs.addTab(self.tab_textures, "Textures")
         
-        self.tab_models = AssetBrowserTab(self.models_path, ['.obj'], editor, is_model_tab=True, parent_browser=self)
+        self.tab_models = AssetBrowserTab(self.models_path, ['.obj', '.glb'], editor, is_model_tab=True, parent_browser=self)
         self.tabs.addTab(self.tab_models, "Models")
 
         self.tab_maps = MapsBrowserTab(self.maps_folder, self.packages_folder, editor, parent_browser=self)
