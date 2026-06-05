@@ -45,10 +45,10 @@
 - Dynamic portals (moveable / scripted transforms)
 
 ### Architecture
-Python 3.10+ runtime
-NumPy used for batch numeric operations and scene updates
-Multi-threaded subsystems (render / simulation separation where applicable)
-Designed for CPU-bound performance on low-power hardware (ARM-class)
+- Python 3.10+ runtime
+- NumPy used for batch numeric operations and scene updates
+- Multi-threaded subsystems (render / simulation separation where applicable)
+- Designed for CPU-bound performance on low-power hardware (ARM-class)
 
 ### Technical Details
 - Python 3.10+
