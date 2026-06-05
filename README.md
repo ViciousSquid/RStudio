@@ -7,8 +7,7 @@
 
 ## Fio — Make Weird Worlds, Share Them Instantly
 
-### A love letter to Radiant and Hammer.<br> 
-### Real-time liminal CSG unified level editor and game engine. Optimised for mobile CPUs
+### Unified editor and runtime inspired by Radiant and Hammer. Optimised for mobile CPUs
 
 **Key Features**
 - Hit "play" instantly: no import, compile or bake step
@@ -48,7 +47,6 @@
 ### Architecture
 - Editor layer: PyQt-based tool suite + asset browser
 - Engine layer: rendering, physics, AI
-- Modular system design (fully open source, MIT licensed)
 
 ### Technical Targets
 - Python 3.10+
