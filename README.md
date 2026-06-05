@@ -30,7 +30,7 @@
 
 ### Logic & Gameplay
 - Entity I/O system (Half-Life 2–style wiring model)
-- GUI assistant for generating gameplay logic and level setups
+- GUI tools for generating Entity I/O logic setups
 - 19 included [example maps](https://github.com/ViciousSquid/Fio/tree/1.2.6.50_Latest/maps)
 - NPCs / monsters
 - Node-based pathfinding
