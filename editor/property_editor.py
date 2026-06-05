@@ -2083,7 +2083,6 @@ class PropertyEditor(QWidget):
             # Angle control — free-form spinbox for Portals (arbitrary yaw),
             # 4-step dropdown for every other entity type.
             if key == 'angle' and isinstance(thing, Portal):
-                from PyQt5.QtWidgets import QSpinBox
                 widget_w = QSpinBox()
                 widget_w.setRange(0, 359)
                 widget_w.setSuffix("°")
