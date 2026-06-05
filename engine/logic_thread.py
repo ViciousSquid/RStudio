@@ -579,6 +579,16 @@ class LogicThread(threading.Thread):
                 brush['pos'] = list(brush['original_pos'])
         self.door_states = {}
 
+    def _trigger_door_open(self, door_idx: int, brush: dict):
+        """Start opening a door if it is currently closed or closing."""
+        if door_idx not in self.door_states:
+            return
+        state = self.door_states[door_idx]
+        if state['state'] in ('closed', 'closing'):
+            state['state'] = 'opening'
+            if self.io_manager:
+                self.io_manager.fire_output(brush, 'OnOpen')
+
     # =========================================================================
     # MAIN LOOP
     # =========================================================================
