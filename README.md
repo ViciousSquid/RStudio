@@ -63,7 +63,12 @@
 
  ## Why Fio exists
 
-Fio removes the barrier between editor and runtime, letting you iterate at the speed of thought. It’s a playground for rendering experiments, a tribute to classic BSP workflows, and a tool for building systems-driven games.
+Fio explores a unified approach to level editing and runtime simulation:
+
+- Reducing friction between authoring and execution
+- Reintroducing brush/CSG-based workflows in a modern runtime
+- Treating gameplay logic as a visible, editable system
+- Supporting rapid experimental iteration in rendering and world design
 
 ------------------------------
 
