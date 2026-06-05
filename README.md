@@ -8,7 +8,7 @@
 ## Fio — Make Weird Worlds, Share Them Instantly
 
 ### A love letter to Radiant and Hammer.<br> 
-### A real-time liminal CSG level editor and game engine. Optimised for mobile CPUs
+### Real-time liminal CSG unified level editor and game engine. Optimised for mobile CPUs
 
 **Key Features**
 - Hit "play" instantly: no import, compile or bake step
