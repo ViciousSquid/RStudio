@@ -5,7 +5,7 @@
 
 <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="MIT License">  <img src="https://img.shields.io/badge/status-Active%20Development-orange?style=for-the-badge" alt="Status">
 
-## Fio — Make Weird Worlds, Share Them Instantly
+## Fio — Liminal World Editor & Procedural Engine
 
 ### Unified editor and runtime inspired by Radiant and Hammer. Optimised for mobile CPUs
 
