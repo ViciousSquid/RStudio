@@ -48,12 +48,11 @@
 - Editor layer: PyQt-based tool suite + asset browser
 - Engine layer: rendering, physics, AI
 
-### Technical Targets
+### Technical Details
 - Python 3.10+
 - Multi-threaded
 - Uses Numpy heavily to avoid GIL locks
-- Optimized for Windows-on-ARM (Snapdragon 8cx-class devices)
-- Stable 60 FPS target on mid-range hardware
+- Optimized for Windows-on-ARM (Snapdragon 8cx-class devices) @ 60FPS
 
 🗎 Modular architecture, fully open source (MIT License)
 
