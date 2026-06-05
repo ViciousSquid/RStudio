@@ -7,7 +7,7 @@
 
 ## Fio — Liminal World Editor & Procedural Engine
 
-### Unified editor and runtime inspired by Radiant and Hammer. Optimised for mobile CPUs
+### Unified editor and runtime inspired by Radiant and Hammer. Optimised for low-power CPUs
 
 **Key Features**
 - Hit "play" instantly: no import, compile or bake step
@@ -49,12 +49,6 @@
 - NumPy used for batch numeric operations and scene updates
 - Multi-threaded subsystems (render / simulation separation where applicable)
 - Designed for CPU-bound performance on low-power hardware (ARM-class)
-
-### Technical Details
-- Python 3.10+
-- Multi-threaded
-- Uses Numpy heavily to avoid GIL locks
-- Optimized for Windows-on-ARM (Snapdragon 8cx-class devices) @ 60FPS
 
 🗎 Modular architecture, fully open source (MIT License)
 
