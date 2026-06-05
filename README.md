@@ -49,6 +49,7 @@
 - NumPy used for batch numeric operations and scene updates
 - Multi-threaded subsystems (render / simulation separation where applicable)
 - Designed for CPU-bound performance on low-power hardware (ARM-class)
+- Runtime state is shared between editor and engine layers; no serialization boundary during play mode
 
 🗎 Modular architecture, fully open source (MIT License)
 
