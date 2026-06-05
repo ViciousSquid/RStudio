@@ -11,7 +11,7 @@
 
 **Key Features**
 - Hit "play" instantly: no import, compile or bake step
-- Generate fully playable procedural liminal maps with one click
+- Generate fully playable procedural maps with one click
 - Entity I/O logic system inspired by Source engine
 - Classic brush-based CSG editing
 - Export creations as self-contained shareable packages
