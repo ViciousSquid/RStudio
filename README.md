@@ -45,8 +45,10 @@
 - Dynamic portals (moveable / scripted transforms)
 
 ### Architecture
-- Editor layer: PyQt-based tool suite + asset browser
-- Engine layer: rendering, physics, AI
+Python 3.10+ runtime
+NumPy used for batch numeric operations and scene updates
+Multi-threaded subsystems (render / simulation separation where applicable)
+Designed for CPU-bound performance on low-power hardware (ARM-class)
 
 ### Technical Details
 - Python 3.10+
