@@ -8,8 +8,7 @@
 ## Fio — Make Weird Worlds, Share Them Instantly
 
 ### A love letter to Radiant and Hammer.<br> 
-### Generate procedural liminal maps with one click. Add DOOM-style chaos. Twist space with portals. Export as a portable package and share it.
-
+### A real-time liminal CSG level editor and game engine. Optimised for mobile CPUs
 
 **Key Features**
 - Hit "play" instantly: no import, compile or bake step
