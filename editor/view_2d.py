@@ -84,11 +84,21 @@ class View2D(QWidget):
         self.setFocusPolicy(Qt.ClickFocus)
         self.setContextMenuPolicy(Qt.NoContextMenu)
 
-        # Initialize color tag icons
+        # Initialize color tag icons - load directly from assets (don't depend on scene_hierarchy)
         self.color_pixmaps = {}
-        if hasattr(main_window, 'scene_hierarchy'):
-            for color_name, qicon in SceneHierarchy(main_window).colour_icons.items():
-                self.color_pixmaps[color_name] = qicon.pixmap(18, 18) 
+        colour_icon_map = {
+            'red': "assets/circ_red.png",
+            'orange': "assets/circ_orange.png",
+            'yellow': "assets/circ_yellow.png",
+            'green': "assets/circ_green.png",
+            'blue': "assets/circ_blue.png",
+            'pink': "assets/circ_pink.png",
+            'white': "assets/circ_white.png",
+        }
+        for color_name, path in colour_icon_map.items():
+            pixmap = QPixmap(path)
+            if not pixmap.isNull():
+                self.color_pixmaps[color_name] = pixmap.scaled(18, 18, Qt.KeepAspectRatio, Qt.SmoothTransformation) 
 
     def reset_state(self):
         self.is_dragging_object = False
