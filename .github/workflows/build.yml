@@ -76,14 +76,28 @@ jobs:
       - name: Convert icon to .icns
         run: |
           mkdir -p build/icon.iconset
-          sips -s format png assets/icon.ico --out build/icon.png
-
+          
+          # Convert ico to png first if needed
+          if [ -f "assets/icon.ico" ]; then
+            sips -s format png assets/icon.ico --out build/icon.png
+          elif [ -f "assets/icon.png" ]; then
+            cp assets/icon.png build/icon.png
+          else
+            echo "No icon file found!"
+            exit 1
+          fi
+          
+          # Generate all required sizes for .icns
           for size in 16 32 64 128 256 512; do
             sips -z $size $size build/icon.png --out build/icon.iconset/icon_${size}x${size}.png
             sips -z $(($size*2)) $(($size*2)) build/icon.png --out build/icon.iconset/icon_${size}x${size}@2x.png
           done
-
+          
+          # Create .icns file
           iconutil -c icns build/icon.iconset -o build/icon.icns
+          
+          # Also create a 1024x1024 version for high-res
+          sips -z 1024 1024 build/icon.png --out build/icon_1024.png
 
       - name: Build with Nuitka (App Bundle)
         run: |
@@ -91,6 +105,7 @@ jobs:
             --standalone \
             --macos-create-app-bundle \
             --macos-app-name=Fio \
+            --macos-app-version=1.0.0 \
             --output-filename=Fio \
             --assume-yes-for-downloads \
             --plugin-enable=pyqt5 \
@@ -117,22 +132,94 @@ jobs:
             exit 1
           fi
 
-      - name: Prepare app bundle for distribution
+      - name: Inject Info.plist with proper icon configuration
         run: |
-          # Inject qt.conf so Qt resolves plugin paths without
-          # falling back to CFBundleGetMainBundle() (which returns
-          # NULL when the .app wrapper is missing or malformed).
+          plist_path="build/main.app/Contents/Info.plist"
+          
+          # Backup original plist
+          cp "$plist_path" "$plist_path.bak"
+          
+          # Set CFBundleIconFile
+          if /usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" "$plist_path" 2>/dev/null; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile icon" "$plist_path"
+          else
+            /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string icon" "$plist_path"
+          fi
+          
+          # Set CFBundleIconName
+          if /usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$plist_path" 2>/dev/null; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleIconName icon" "$plist_path"
+          else
+            /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string icon" "$plist_path"
+          fi
+          
+          # Ensure CFBundleIdentifier is set properly
+          if ! /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$plist_path" 2>/dev/null; then
+            /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.fio.editor" "$plist_path"
+          fi
+          
+          echo "Info.plist configured:"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" "$plist_path"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$plist_path"
+
+      - name: Copy icon to bundle resources
+        run: |
+          # Copy icns to Resources folder with the name referenced in Info.plist
+          cp build/icon.icns "build/main.app/Contents/Resources/icon.icns"
+          
+          # Also copy as AppIcon.icns (fallback for some macOS versions)
+          cp build/icon.icns "build/main.app/Contents/Resources/AppIcon.icns"
+          
+          # Verify icon exists in Resources
+          ls -la "build/main.app/Contents/Resources/" | grep icns
+          
+          echo "Icon files copied to bundle"
+
+      - name: Create qt.conf for proper plugin paths
+        run: |
           mkdir -p build/main.app/Contents/Resources
           cat > build/main.app/Contents/Resources/qt.conf << 'EOF'
           [Paths]
           Plugins = ../MacOS/PyQt5/Qt5/plugins
           EOF
+          
+          echo "qt.conf created"
 
-          # Rename to final app name and zip so the .app directory
-          # structure survives the artifact upload/download round-trip.
+      - name: Set executable permissions
+        run: |
+          chmod +x build/main.app/Contents/MacOS/Fio
+          echo "Executable permissions set"
+
+      - name: Prepare app bundle for distribution
+        run: |
           cd build
+          
+          # Rename to final app name
           mv main.app Fio.app
+          
+          # Create a dmg for better distribution (optional)
+          # Create a zip file (preserves bundle structure better than dmg for artifacts)
           zip -r -y Fio-macOS.zip Fio.app
+          
+          # Verify zip contents
+          unzip -l Fio-macOS.zip | head -20
+          
+          cd ..
+
+      - name: Verify icon in final bundle
+        run: |
+          # Check that icon exists in the renamed bundle
+          if [ -f "build/Fio.app/Contents/Resources/icon.icns" ]; then
+            echo "✓ Icon found in final bundle"
+            file "build/Fio.app/Contents/Resources/icon.icns"
+          else
+            echo "✗ Icon missing from final bundle!"
+            exit 1
+          fi
+          
+          # Verify Info.plist still has icon settings after rename
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" "build/Fio.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "build/Fio.app/Contents/Info.plist"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -179,6 +266,34 @@ jobs:
             --include-data-files=editor/version.txt=editor/version.txt \
             --output-dir=build \
             main.py
+
+      - name: Create desktop entry and icon for Linux
+        run: |
+          # Create a .desktop file
+          mkdir -p build/main.dist/share/applications
+          mkdir -p build/main.dist/share/icons/hicolor/256x256/apps
+          
+          # Copy icon if available
+          if [ -f "assets/icon.png" ]; then
+            cp assets/icon.png build/main.dist/share/icons/hicolor/256x256/apps/fio.png
+          elif [ -f "assets/icon.ico" ]; then
+            # Convert ico to png using ImageMagick or fallback
+            convert assets/icon.ico build/main.dist/share/icons/hicolor/256x256/apps/fio.png || true
+          fi
+          
+          # Create desktop entry
+          cat > build/main.dist/fio.desktop << EOF
+          [Desktop Entry]
+          Name=Fio
+          Comment=Fio Game Editor
+          Exec=\$SELF/Fio
+          Icon=fio
+          Terminal=false
+          Type=Application
+          Categories=Development;IDE;
+          EOF
+          
+          echo "Linux desktop integration prepared"
 
       - name: Validate executable exists
         run: |
