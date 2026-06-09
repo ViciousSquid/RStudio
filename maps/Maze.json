@@ -1695,17 +1695,26 @@
         {
             "type": "playerstart",
             "pos": [
-                -608.0,
-                40,
-                -160.0
+                -128,
+                176,
+                304
             ],
             "properties": {
                 "type": "playerstart",
                 "name": "PlayerStart_1",
                 "id": "5c3a0f3e-5c76-474c-ae05-192cdd30259e",
-                "angle": 0.0
+                "angle": 90.0
             },
-            "io_connections": []
+            "io_connections": [
+                {
+                    "output": "OnPlayerSpawn",
+                    "target": "LogicCamera_1",
+                    "input": "Start",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": true
+                }
+            ]
         },
         {
             "type": "light",
@@ -1863,7 +1872,8 @@
                 "affects_type": "both",
                 "next_node": "PathNode_3",
                 "wait_time": 0.0,
-                "speed": 1.0
+                "speed": 1.0,
+                "hidden": true
             },
             "io_connections": []
         },
@@ -1901,7 +1911,7 @@
                 "item_type": "gun2",
                 "value": 25,
                 "activation": "walk_over",
-                "collected": true,
+                "collected": false,
                 "respawns": false,
                 "respawn_time": 20.0,
                 "key_name": "blue_key",
@@ -1912,9 +1922,9 @@
         {
             "type": "monster",
             "pos": [
-                -1501.24609375,
+                -1496.376220703125,
                 32.0,
-                945.1909790039062
+                819.1770629882812
             ],
             "properties": {
                 "type": "monster",
@@ -1922,7 +1932,7 @@
                 "id": "a5fb6340-6ea6-47c2-9277-fb243fb6debd",
                 "monster_type": "flying",
                 "monster_id": 0,
-                "health": -50,
+                "health": -125,
                 "damage": 10,
                 "triggered": false,
                 "wake_on_sight": true,
@@ -1934,8 +1944,405 @@
                 "sprite_width": 160,
                 "sprite_height": 160,
                 "sight": 512,
-                "non_hostile": false,
-                "dead": true
+                "non_hostile": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                -1840,
+                80,
+                928
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_camtarget",
+                "id": "32d72298-f515-405f-8eec-12ae2b6fc228",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_19",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                -1792,
+                192,
+                -528
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_camtarget1",
+                "id": "334ecae8-4e3c-41f7-9687-41e28ba38092",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_camtarget02",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                -1728,
+                208,
+                -608
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_camtarget02",
+                "id": "9dc9d15a-21d1-404b-8b04-6482df23f26e",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_18",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                -64.0,
+                224,
+                480.0
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_camtarget03",
+                "id": "623d41ae-fdad-48d9-8051-baa83220370e",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_camtarget04",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                -96.0,
+                224,
+                464.0
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_camtarget04",
+                "id": "0a3df836-1cea-45a0-b9e4-fb589d7e0988",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_9",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                -128.0,
+                192,
+                416.0
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_9",
+                "id": "5a25aa73-57d5-4494-ae2d-cc1f365eea53",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_10",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                -128.0,
+                208,
+                320.0
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_10",
+                "id": "00278881-07c9-4f53-8751-b0150a4edf8f",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_11",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "logic_camera",
+            "pos": [
+                -2496,
+                480,
+                64
+            ],
+            "properties": {
+                "type": "logic_camera",
+                "name": "LogicCamera_1",
+                "id": "8a1abec3-def3-4c6c-805f-52d2ca24660b",
+                "path_target": "PathNode_campathA",
+                "speed": 200.0,
+                "fov_override": 0.0,
+                "look_ahead": true
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                -2624,
+                608,
+                1328
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_campathA",
+                "id": "9f32f2e4-0318-4016-9502-054fe23bd439",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_camtarget",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                -1856.0,
+                40,
+                576.0
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_17",
+                "id": "93f50516-2582-4268-b3eb-bb727a8eabaa",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_camtarget1",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                -1616,
+                208,
+                -640
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_18",
+                "id": "f3025762-83ef-4a04-bcc6-731afa2fe0d1",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_21",
+                "wait_time": 0.0,
+                "speed": 2.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                -1808.0,
+                40,
+                864.0
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_19",
+                "id": "b639fd53-6357-48b4-8fed-c212132d6fdc",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_20",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                -1824.0,
+                40,
+                768.0
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_20",
+                "id": "2889310f-8a08-4679-b207-5f1b902b5831",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_17",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                16,
+                176,
+                -640
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_21",
+                "id": "1aa02504-a321-4e53-85f8-8390336ab402",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_22",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                96,
+                176,
+                -608
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_22",
+                "id": "0c0de82a-e27c-47ea-b1b9-76466b7abff5",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_23",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                144,
+                176,
+                -544
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_23",
+                "id": "2555b354-c0f9-48cc-972b-407672c9212b",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_24",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                160,
+                192,
+                -432
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_24",
+                "id": "9fb40044-5b33-413f-a6b7-85e778a3aae1",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_27",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                64,
+                224,
+                496
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_25",
+                "id": "aa395b79-02a3-454a-a0ee-71ae351c68ce",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_camtarget03",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                192,
+                224,
+                432
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_26",
+                "id": "fef32e6b-f275-4a92-adfc-55a03e9f0151",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_25",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                224,
+                224,
+                240
+            ],
+            "properties": {
+                "type": "path_node",
+                "name": "PathNode_27",
+                "id": "9fc27dd2-ee50-4ad9-85db-f390c2ebe899",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "PathNode_26",
+                "wait_time": 0.0,
+                "speed": 1.0
             },
             "io_connections": []
         }
