@@ -28,9 +28,19 @@
 
  ------------------------
 
+ 
+ ## Why Fio exists
+
+Fio explores a unified approach to level editing and runtime simulation:
+
+- Reducing friction between authoring and execution
+- Reintroducing brush/CSG-based workflows in a modern runtime
+- Treating gameplay logic as a visible, editable system
+- Supporting rapid experimental iteration in rendering and world design
+
+  -----------------
+
 ### Logic & Gameplay
-- Entity I/O system (Half-Life 2–style wiring model)
-- GUI tools for generating Entity I/O logic setups
 - 19 included [example maps](https://github.com/ViciousSquid/Fio/tree/1.2.6.50_Latest/maps)
 - NPCs / monsters
 - Node-based pathfinding
@@ -52,18 +62,6 @@
 - Runtime state is shared between editor and engine layers; no serialization boundary during play mode
 
 🗎 Modular architecture, fully open source (MIT License)
-
-
-  ------------------------------
-
- ## Why Fio exists
-
-Fio explores a unified approach to level editing and runtime simulation:
-
-- Reducing friction between authoring and execution
-- Reintroducing brush/CSG-based workflows in a modern runtime
-- Treating gameplay logic as a visible, editable system
-- Supporting rapid experimental iteration in rendering and world design
 
 ------------------------------
 
