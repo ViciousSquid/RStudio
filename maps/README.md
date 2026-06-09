@@ -16,7 +16,7 @@ Playable level with two rooms, pickups, a moving platform and a light that can b
 
 ### `Maze.json`
 
-Opens with a cutscene demonstrating the Camera entity
+Player spawn triggers a cutscene, demonstrating the Camera entity
 
 ### `MonsterTest.json`
 
