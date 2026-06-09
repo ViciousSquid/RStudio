@@ -22,6 +22,7 @@ FLOOR_THICK = 64
 FLOOR_SURFACE = GROUND_Y + FLOOR_THICK // 2   # = 0
 WALL_DEFAULT_HEIGHT = 256
 ENTITY_Y_OFFSET = 32
+PLAYER_SPAWN_Y_OFFSET = 96       # extra clearance so player doesn't clip through the floor
 
 # ----------------------------------------------------------------------
 # Grid and map generation
@@ -419,11 +420,13 @@ def create_map_data(params):
     start_room = grid.rooms[0]
     player_x = start_room.world_x + start_room.world_w / 2
     player_z = start_room.world_y + start_room.world_h / 2
-    player_y = FLOOR_SURFACE + ENTITY_Y_OFFSET
+    player_y = FLOOR_SURFACE + PLAYER_SPAWN_Y_OFFSET
 
     gun_x = player_x + CELL_SIZE//2
     gun_z = player_z
     gun_y = FLOOR_SURFACE + ENTITY_Y_OFFSET
+     # Random starting weapon
+    starting_gun = random.choice(["gun1", "gun2"])
 
     exit_room = grid.rooms[-2] if len(grid.rooms) > 2 else grid.rooms[0]
     exit_x = exit_room.world_x + exit_room.world_w / 2
@@ -469,15 +472,15 @@ def create_map_data(params):
             "pos": [gun_x, gun_y, gun_z],
             "properties": {
                 "type": "pickup",
-                "name": "Pickup_Gun",
+                "name": f"Pickup_{starting_gun.capitalize()}",
                 "respawns": False,
                 "respawn_time": 20.0,
-                "item_type": "gun1",
+                "item_type": starting_gun,
                 "value": 25,
                 "activation": "walk_over",
                 "collected": False,
                 "key_name": "",
-                "custom_sprite": "assets/sprites/gun1.png",
+                "custom_sprite": f"assets/sprites/{starting_gun}.png",
                 "id": "gun_start"
             },
             "io_connections": []
