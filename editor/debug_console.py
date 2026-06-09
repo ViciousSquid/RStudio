@@ -14,15 +14,15 @@ class DebugLogger(QObject):
     This allows the io_system to log without direct widget dependencies.
     """
     message_logged = pyqtSignal(str, str)  # (category, message)
-    
+
     _instance = None
-    
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
-    
+
     def __init__(self):
         if self._initialized:
             return
@@ -30,27 +30,27 @@ class DebugLogger(QObject):
         self._initialized = True
         self._enabled = True
         self._buffer = deque(maxlen=1000)  # Keep last 1000 messages
-    
+
     def log(self, category: str, message: str):
         """Log a message with a category tag."""
         if not self._enabled:
             return
-        
+
         full_msg = f"[{category}] {message}"
-        
+
         self._buffer.append((category, full_msg))
         self.message_logged.emit(category, full_msg)
-    
+
     def set_enabled(self, enabled: bool):
         self._enabled = enabled
-    
+
     def is_enabled(self) -> bool:
         return self._enabled
-    
+
     def get_buffer(self):
         """Get all buffered messages."""
         return list(self._buffer)
-    
+
     def clear_buffer(self):
         """Clear the message buffer."""
         self._buffer.clear()
@@ -93,7 +93,7 @@ class CommandInput(QLineEdit):
                 self.clear()
         else:
             super().keyPressEvent(event)
-            
+
     def add_history(self, command):
         if command and (not self.history or self.history[-1] != command):
             self.history.append(command)
@@ -147,10 +147,10 @@ class DebugConsole(QWidget):
         super().__init__(parent)
         # Track enabled categories
         self.enabled_categories = set(self.CATEGORY_COLORS.keys())
-        
+
         # Auto-scroll flag
         self.auto_scroll = True
-        
+
         # Message count
         self.message_count = 0
 
@@ -159,28 +159,28 @@ class DebugConsole(QWidget):
 
         # Font size
         self.font_size = self.FONT_SIZE_DEFAULT
-        
+
         self._setup_ui()
         self._connect_logger()
-        
+
         # Load any buffered messages
         self._load_buffer()
-    
+
     def _setup_ui(self):
         """Set up the console UI."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
-        
+
         # Top toolbar
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
-        
+
         # Filter label
         filter_label = QLabel("Filter:")
         filter_label.setStyleSheet("color: #888; font-weight: bold;")
         toolbar.addWidget(filter_label)
-        
+
         # Category filter dropdown
         self.filter_combo = QComboBox()
         self.filter_combo.addItem("All")
@@ -190,13 +190,13 @@ class DebugConsole(QWidget):
         self.filter_combo.currentTextChanged.connect(self._on_filter_changed)
         self.filter_combo.setMinimumWidth(200)
         toolbar.addWidget(self.filter_combo)
-        
+
         # Separator
         sep1 = QFrame()
         sep1.setFrameShape(QFrame.VLine)
         sep1.setStyleSheet("color: #444;")
         toolbar.addWidget(sep1)
-        
+
         # Auto-scroll checkbox
         self.auto_scroll_cb = QCheckBox("Auto-scroll")
         self.auto_scroll_cb.setChecked(True)
@@ -259,14 +259,14 @@ class DebugConsole(QWidget):
         increase_btn.clicked.connect(self._increase_font_size)
         increase_btn.setStyleSheet(font_btn_style)
         toolbar.addWidget(increase_btn)
-        
+
         toolbar.addStretch()
-        
+
         # Message count label
         self.count_label = QLabel("0 messages")
         self.count_label.setStyleSheet("color: #666;")
         toolbar.addWidget(self.count_label)
-        
+
         # Clear button
         clear_btn = QPushButton("Clear")
         clear_btn.setFixedWidth(60)
@@ -308,7 +308,7 @@ class DebugConsole(QWidget):
             }
         """)
         toolbar.addWidget(self._filter_btn)
-        
+
         layout.addLayout(toolbar)
 
         # --- Middle area: console + right-side filter column (resizable) ---
@@ -410,14 +410,14 @@ class DebugConsole(QWidget):
         filter_panel.hide()
 
         layout.addWidget(splitter, stretch=1)
-        
+
         # --- Command input area at the bottom ---
         input_layout = QHBoxLayout()
         input_layout.setContentsMargins(0, 0, 0, 0)
-        
+
         prompt_label = QLabel("]")
         prompt_label.setStyleSheet("color: #F08000; font-weight: bold; font-family: Consolas; font-size: 14px;")
-        
+
         self.command_input = CommandInput()
         self.command_input.setPlaceholderText("Enter command...")
         self.command_input.setFont(QFont("Consolas", self.font_size))
@@ -433,11 +433,11 @@ class DebugConsole(QWidget):
             }
         """)
         self.command_input.returnPressed.connect(self._on_command_entered)
-        
+
         input_layout.addWidget(prompt_label)
         input_layout.addWidget(self.command_input)
         layout.addLayout(input_layout)
-        
+
         # Overall widget styling
         self.setStyleSheet("""
             QWidget {
@@ -487,18 +487,18 @@ class DebugConsole(QWidget):
         self._refresh_console()
 
     # ------------------------------------------------------------------
-    
+
     def _connect_logger(self):
         """Connect to the global debug logger."""
         logger = get_debug_logger()
         logger.message_logged.connect(self._on_message)
-    
+
     def _load_buffer(self):
         """Load any buffered messages that were logged before the console opened."""
         logger = get_debug_logger()
         for category, message in logger.get_buffer():
             self._append_message(category, message)
-    
+
     def _on_message(self, category: str, message: str):
         """Handle a new log message."""
         self._append_message(category, message)
@@ -508,21 +508,21 @@ class DebugConsole(QWidget):
         cmd = self.command_input.text().strip()
         if not cmd:
             return
-            
+
         # Echo the command to the console exactly like Quake
         cursor = self.console.textCursor()
         cursor.movePosition(QTextCursor.End)
         cursor.insertHtml(f"<br><span style='color: #F08000; font-weight: bold;'>] {cmd}</span><br>")
-        
+
         # Add to local history and clear the line
         self.command_input.add_history(cmd)
         self.command_input.clear()
-        
+
         # Auto-scroll to show the command we just typed
         if self.auto_scroll:
             self.console.setTextCursor(cursor)
             self.console.ensureCursorVisible()
-        
+
         # Pass the raw string to whatever is listening
         self.command_issued.emit(cmd)
 
@@ -535,26 +535,26 @@ class DebugConsole(QWidget):
 
     def _apply_entity_filter(self, entity_name):
         """Updates the dropdown to filter by this entity."""
-        
+
         # If we clicked the same entity that is currently filtered, toggle it off (Reset to All)
         if self.active_entity_filter == entity_name:
             self.filter_combo.setCurrentText("All")
             return
 
         filter_text = f"Entity: {entity_name}"
-        
+
         # Check if this item already exists in combo, if not add it
         idx = self.filter_combo.findText(filter_text)
         if idx == -1:
             self.filter_combo.addItem(filter_text)
             idx = self.filter_combo.count() - 1
-            
+
         # Select it (this will trigger _on_filter_changed -> _refresh_console)
         self.filter_combo.setCurrentIndex(idx)
 
     def _on_filter_changed(self, text):
         """Handle filter dropdown changes."""
-        
+
         # Clean up old entity filters if we switched away from them
         count = self.filter_combo.count()
         # Iterate backwards to safely remove
@@ -570,15 +570,15 @@ class DebugConsole(QWidget):
             self.active_entity_filter = text.split("Entity: ", 1)[1]
         else:
             self.active_entity_filter = None
-            
+
         self._refresh_console()
-    
+
     def _append_message(self, category: str, message: str):
         """Append a message to the console with highlighting."""
-        
+
         # 1. Check Category Filter vs Entity Filter
         current_combo_text = self.filter_combo.currentText()
-        
+
         # If we are in "Entity: X" mode
         if self.active_entity_filter:
             # We filter OUT messages that don't contain the entity name
@@ -619,100 +619,110 @@ class DebugConsole(QWidget):
                 return
             if "(no connections for output" in message:
                 return
-        
+
         # Get color for category
         color = self.CATEGORY_COLORS.get(category, '#FFFFFF')
-        
+
         # --- HIGHLIGHTING LOGIC ---
-        
+
+        # Protect any pre-existing HTML tags in the message so our regexes
+        # don't corrupt entity links / colours injected by MonsterAI.
+        _protected_tags = []
+        def _protect_tag(m):
+            _protected_tags.append(m.group(0))
+            return f"__HTML_{len(_protected_tags)-1}__"
+        _msg_temp = re.sub(r'</?[a-zA-Z][^>]*>', _protect_tag, message)
+
         # Define styles
-        # NOTE: Text-decoration:none prevents underline, but cursor becomes hand due to <a> tag
         ENT_STYLE = 'color: #F08000; font-weight: bold; text-decoration: none;'
         FIRE_STYLE = 'color: #66BB6A; font-weight: bold;'
         EMPTY_STYLE = 'color: #E35335;'
-        
-        # Create a replacement pattern that wraps the name in an anchor tag
-        # href="filter:NAME" is captured by _on_anchor_clicked
+
         def get_link_html(name):
             return f'<a href="filter:{name}" style="{ENT_STYLE}" title="Click to filter by {name}">{name}</a>'
 
-        # Apply Regex substitutions (using pre-compiled patterns)
-        
+        # Apply Regex substitutions to _msg_temp (protected string)
+
         # A. Entity Names: "Name.Input"
-        message = self._RE_ENTITY_DOT.sub(
+        _msg_temp = self._RE_ENTITY_DOT.sub(
             lambda m: get_link_html(m.group(1)),
-            message
+            _msg_temp
         )
-        
+
         # B. Entity Names: "Name (type=...)"
-        message = self._RE_ENTITY_TYPE.sub(
+        _msg_temp = self._RE_ENTITY_TYPE.sub(
             lambda m: get_link_html(m.group(1)),
-            message
+            _msg_temp
         )
-        
+
         # C. Entity Names: "'Name'"
-        message = self._RE_ENTITY_QUOTE.sub(
+        _msg_temp = self._RE_ENTITY_QUOTE.sub(
             lambda m: f"'{get_link_html(m.group(1))}'", 
-            message
+            _msg_temp
         )
 
         # D. "fire_output" -> Green
-        message = self._RE_FIRE_OUTPUT.sub(
-            f'<span style="{FIRE_STYLE}">\\1</span>',
-            message
+        _msg_temp = self._RE_FIRE_OUTPUT.sub(
+            f'<span style="{FIRE_STYLE}">\1</span>',
+            _msg_temp
         )
 
         # E. "no connections" -> Red/Orange
-        message = self._RE_NO_CONNS.sub(
-            f'<span style="{EMPTY_STYLE}">\\1</span>',
-            message
+        _msg_temp = self._RE_NO_CONNS.sub(
+            f'<span style="{EMPTY_STYLE}">\1</span>',
+            _msg_temp
         )
 
         # F. Style [Delayed] prefix (orange)
-        message = self._RE_DELAYED.sub('<span style="color: #FFB74D;">[Delayed]</span>', message)
+        _msg_temp = self._RE_DELAYED.sub('<span style="color: #FFB74D;">[Delayed]</span>', _msg_temp)
 
         # G. Style arrow -> as green arrow character
-        message = self._RE_ARROW.sub(' <span style="color: #66BB6A;">→</span> ', message)
-        
+        _msg_temp = self._RE_ARROW.sub(' <span style="color: #66BB6A;">→</span> ', _msg_temp)
+
+        # Restore protected HTML tags
+        for _i, _tag in enumerate(_protected_tags):
+            _msg_temp = _msg_temp.replace(f"__HTML_{_i}__", _tag)
+        message = _msg_temp
+
         # ---------------------------
-        
+
         # Format with HTML coloring for the main message body
         html = f'<span style="color: {color};">{message}</span><br>'
-        
+
         # Append to console
         cursor = self.console.textCursor()
         cursor.movePosition(QTextCursor.End)
         cursor.insertHtml(html)
-        
+
         # Auto-scroll if enabled
         if self.auto_scroll:
             self.console.setTextCursor(cursor)
             self.console.ensureCursorVisible()
-        
+
         # Update count
         self.message_count += 1
         self.count_label.setText(f"{self.message_count} messages")
-    
+
     def _refresh_console(self):
         """Reload console messages from buffer (triggered by filters or font size change)."""
         self.console.clear()
         self.message_count = 0
-        
+
         logger = get_debug_logger()
         for category, message in logger.get_buffer():
             self._append_message(category, message)
-    
+
     def _on_auto_scroll_toggled(self, checked: bool):
         """Handle auto-scroll toggle."""
         self.auto_scroll = checked
-    
+
     def clear(self):
         """Clear the console and buffer."""
         self.console.clear()
         self.message_count = 0
         self.count_label.setText("0 messages")
         get_debug_logger().clear_buffer()
-    
+
     def toggle(self):
         """Toggle visibility of the console."""
         if self.isVisible():
@@ -721,7 +731,7 @@ class DebugConsole(QWidget):
             self.show()
             self.raise_()
             self.activateWindow()
-    
+
     def _toggle_filter_panel(self):
         """Show or hide the right-side filter column."""
         if self._filter_panel.isVisible():

@@ -285,6 +285,28 @@ class AssetBrowserTab(QWidget):
         banner_layout.setContentsMargins(10, 5, 10, 5)
         banner_layout.setSpacing(12)
 
+        # Tree panel toggle button (collapsible left column)
+        self.tree_toggle_btn = QPushButton("☰")
+        self.tree_toggle_btn.setFixedSize(32, 32)
+        self.tree_toggle_btn.setToolTip("Toggle Folder Panel")
+        self.tree_toggle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #333;
+                color: white;
+                border: 1px solid #555;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover { background-color: #444; }
+            QPushButton:checked { background-color: #F08000; border: 1px solid #F08000; }
+        """)
+        self.tree_toggle_btn.setCheckable(True)
+        self.tree_toggle_btn.setChecked(False)  # collapsed by default
+        self.tree_toggle_btn.clicked.connect(self.toggle_tree_panel)
+        banner_layout.addWidget(self.tree_toggle_btn)
+        banner_layout.addSpacing(8)
+
         # Button style (DPI‑aware 9pt font, expanding size policy)
         button_style = """
             QPushButton {
@@ -431,6 +453,9 @@ class AssetBrowserTab(QWidget):
         # Set initial splitter sizes (tree gets 180, grid gets the rest)
         self.splitter.setSizes([180, self.width() - 180])
 
+        # Collapse tree panel by default
+        self.tree_frame.setVisible(False)
+
         # Load initial directory and setup resize handling for dynamic columns
         self.load_directory(self.current_asset_folder)
         self.scroll_area.resizeEvent = self._on_resize
@@ -444,6 +469,13 @@ class AssetBrowserTab(QWidget):
     def do_relayout(self):
         """Actually perform relayout after resize debouncing."""
         self.relayout_grid()
+
+    def toggle_tree_panel(self, checked):
+        """Show or hide the left folder tree panel."""
+        self.tree_frame.setVisible(checked)
+        if checked:
+            # Restore a reasonable width when expanding
+            self.splitter.setSizes([180, max(1, self.width() - 180)])
 
     def relayout_grid(self, force=False):
         """Re-layout items only when column count changes (reduces flicker)."""

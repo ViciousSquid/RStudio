@@ -641,6 +641,7 @@ class ConsoleCommandHandler:
 <b style="color:orange;">show</b> &lt;name&gt; — Show a hidden brush or entity<br>
 <b style="color:orange;">tint</b> &lt;name&gt; &lt;R&gt; &lt;G&gt; &lt;B&gt; — Set tint colour (0-255) or 'clear'<br>
 <b style="color:cyan;">=== Rendering ===</b><br>
+<b style="color:orange;">ss</b> — Toggle split-screen mode (F9)<br>
 <b style="color:orange;">r_list</b> — Show all current render settings<br>
 <b style="color:orange;">r_wireframe</b>{sep}<b style="color:orange;">wireframe</b> — Toggle wireframe mode<br>
 <b style="color:orange;">r_shadows</b>{sep}<b style="color:orange;">shadows</b> — Toggle shadows<br>
@@ -649,13 +650,8 @@ class ConsoleCommandHandler:
 <b style="color:orange;">r_reloadshaders</b> — Hot-reload all shaders<br>
 <b style="color:orange;">r_clearcolor</b> r g b — Set background colour<br>
 <b style="color:cyan;">=== Movement & Physics ===</b><br>
-<b style="color:orange;">noclip</b> — Toggle noclip<br>
-<b style="color:orange;">god</b> — Toggle invincibility<br>
-<b style="color:orange;">buddha</b> — Toggle buddha mode (health cannot go below 2)<br>
-<b style="color:orange;">notarget</b> — Toggle notarget (monsters ignore the player)<br>
 <b style="color:orange;">physics</b> on/off/toggle<br>
 <b style="color:orange;">setpos</b>{sep}<b style="color:orange;">teleport</b> x y z<br>
-<b style="color:orange;">ss</b> — Toggle split-screen mode (same as F9)<br>
 <b style="color:cyan;">=== Portals ===</b><br>
 <b style="color:orange;">portal_list</b> — List all portals and their links<br>
 <b style="color:orange;">portal_create</b> &lt;name1&gt; &lt;name2&gt; [x y z] — Create a linked portal pair<br>
@@ -666,6 +662,10 @@ class ConsoleCommandHandler:
 <b style="color:orange;">portal_delete</b> &lt;name&gt; [and_pair] — Remove portal(s)<br>
 <b style="color:cyan;">=== Debug ===</b><br>
 <b style="color:orange;">sg</b> — Toggle spatial grid visualisation<br>
+<b style="color:orange;">god</b> — Toggle invincibility<br>
+<b style="color:orange;">buddha</b> — Toggle buddha mode (health cannot go below 2)<br>
+<b style="color:orange;">noclip</b> — Toggle noclip<br>
+<b style="color:orange;">notarget</b> — Toggle notarget (monsters ignore the player)<br>
 """
         debug_log("Info", help_text)
 

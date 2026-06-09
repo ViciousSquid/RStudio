@@ -1257,6 +1257,24 @@ class View2D(QWidget):
                     painter.drawPixmap(target_rect.toRect(), pixmap)
                     painter.restore()
 
+                # 2b. Draw Monster Name beneath sprite
+                if isinstance(thing, Monster):
+                    painter.save()
+                    painter.setPen(QPen(QColor(255, 100, 100)))
+                    font = QFont()
+                    font.setPointSize(8)
+                    font.setBold(True)
+                    painter.setFont(font)
+                    monster_name = thing.properties.get('name', '') or getattr(thing, 'name', '') or ''
+                    if monster_name:
+                        fm = painter.fontMetrics()
+                        text_height = fm.height()
+                        # Position at left edge of sprite, with DPI-aware gap
+                        text_x = s_pos.x() - 30
+                        text_y = s_pos.y() + 30 + text_height + 2
+                        painter.drawText(QPointF(text_x, text_y), monster_name)
+                    painter.restore()
+
                 # 3. Direction Arrow
                 angle_deg = None
                 if 'angle' in thing.properties:
@@ -2680,11 +2698,26 @@ class View2D(QWidget):
                         is_hit = True
             
             # Fallback (or non-model) hit test
+            # Use sprite size for accurate hit detection so entities on brushes
+            # are always selectable when clicked on their visible sprite.
             if not is_hit:
                 w_pos = QPointF(thing.pos[ax_map[ax1]], thing.pos[ax_map[ax2]])
                 s_pos = self.world_to_screen(w_pos)
-                hit_threshold = 12 
-                if abs(screen_pos.x() - s_pos.x()) <= hit_threshold and abs(screen_pos.y() - s_pos.y()) <= hit_threshold:
+
+                # Determine hit size based on the thing's actual visual representation
+                if isinstance(thing, PathNode):
+                    # PathNode draws as a 20px square (half=10)
+                    hit_half = 10
+                elif hasattr(thing, 'get_icon_pixmap'):
+                    pixmap = thing.get_icon_pixmap()
+                    hit_half = max(pixmap.size().width(), pixmap.size().height()) / 2.0 if pixmap else 12
+                elif hasattr(thing, 'get_instance_pixmap'):
+                    pixmap = thing.get_instance_pixmap()
+                    hit_half = max(pixmap.size().width(), pixmap.size().height()) / 2.0 if pixmap else 12
+                else:
+                    hit_half = 12  # Default fallback
+
+                if abs(screen_pos.x() - s_pos.x()) <= hit_half and abs(screen_pos.y() - s_pos.y()) <= hit_half:
                     is_hit = True
 
             if is_hit:

@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStatusBar, QToolBar,
     QLabel, QSpinBox, QCheckBox, QComboBox, QAction, QMessageBox, QFrame,
     QDockWidget, QTabWidget, QPushButton, QActionGroup, QDialog,
-    QDialogButtonBox, QApplication, QSizePolicy, QInputDialog
+    QDialogButtonBox, QApplication, QSizePolicy, QInputDialog, QMenu
 )
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QFont, QIcon, QKeySequence, QPixmap
@@ -195,6 +195,7 @@ class Ui_MainWindow(object):
         MainWindow.file_menu = menubar.addMenu('File')
         edit_menu = menubar.addMenu('Edit')
         view_menu = menubar.addMenu('View')
+        MainWindow.tools_menu = menubar.addMenu('Tools')
         help_menu = menubar.addMenu('Help')
 
         MainWindow.file_menu.addAction(QAction('New Map', MainWindow, shortcut='Ctrl+N', triggered=MainWindow.new_map))
@@ -207,7 +208,6 @@ class Ui_MainWindow(object):
         MainWindow.file_menu.addSeparator()
         MainWindow.file_menu.addAction(QAction('Settings...', MainWindow, triggered=MainWindow.show_settings_dialog))
         MainWindow.file_menu.addSeparator()
-        #MainWindow.file_menu.addAction(QAction('Play Game Package...', MainWindow, triggered=MainWindow.play_game_package))
         MainWindow.file_menu.addAction(QAction('Exit', MainWindow, shortcut='Ctrl+Q', triggered=MainWindow.close))
 
         MainWindow.undo_action = QAction(QIcon("assets/b_undo.png"), 'Undo', MainWindow)
@@ -238,51 +238,61 @@ class Ui_MainWindow(object):
         view_menu.addSeparator()
         
         view_menu.addAction(self.action_asset_browser)
+
+        system_monitor_action = QAction('System Monitor', MainWindow, checkable=True)
+        system_monitor_action.setShortcut('F3')
+        system_monitor_action.triggered.connect(MainWindow.toggle_system_monitor)
+        view_menu.addAction(system_monitor_action)
         
         view_menu.addSeparator()
         MainWindow.save_layout_action = QAction("Save Layout", MainWindow)
         MainWindow.save_layout_action.triggered.connect(MainWindow.save_layout)
         view_menu.addAction(MainWindow.save_layout_action)
         
+        MainWindow.restore_layout_action = QAction("Restore Layout", MainWindow)
+        MainWindow.restore_layout_action.triggered.connect(MainWindow.restore_layout)
+        view_menu.addAction(MainWindow.restore_layout_action)
+        
         MainWindow.reset_layout_action = QAction("Reset Layout", MainWindow)
         MainWindow.reset_layout_action.triggered.connect(MainWindow.reset_layout)
         view_menu.addAction(MainWindow.reset_layout_action)
 
-        logic_graph_action = QAction('Logic Graph Editor…', MainWindow)
-        logic_graph_action.setShortcut('Ctrl+L')
-        logic_graph_action.setToolTip('Open the visual I/O node graph editor')
-        logic_graph_action.triggered.connect(MainWindow.open_logic_graph)
+        # --- Tools Menu Actions ---
+        MainWindow.logic_graph_action = QAction('Logic Graph Editor…', MainWindow)
+        MainWindow.logic_graph_action.setShortcut('Ctrl+L')
+        MainWindow.logic_graph_action.setToolTip('Open the visual I/O node graph editor')
+        MainWindow.logic_graph_action.triggered.connect(MainWindow.open_logic_graph)
 
-        logic_wizard_action = QAction('Logic Wizard…', MainWindow)
-        logic_wizard_action.setShortcut('Ctrl+Shift+W')
-        logic_wizard_action.setToolTip('Guided setup for common I/O scenarios')
-        logic_wizard_action.triggered.connect(MainWindow.open_logic_wizard)
+        MainWindow.logic_wizard_action = QAction('Logic Wizard…', MainWindow)
+        MainWindow.logic_wizard_action.setShortcut('Ctrl+Shift+W')
+        MainWindow.logic_wizard_action.setToolTip('Guided setup for common I/O scenarios')
+        MainWindow.logic_wizard_action.triggered.connect(MainWindow.open_logic_wizard)
 
-        validate_action = QAction('Validate All Connections…', MainWindow)
-        validate_action.setToolTip('Check for connections with missing target entities')
-        validate_action.triggered.connect(MainWindow.validate_io_connections)
+        MainWindow.validate_action = QAction('Validate All Connections…', MainWindow)
+        MainWindow.validate_action.setToolTip('Check for connections with missing target entities')
+        MainWindow.validate_action.triggered.connect(MainWindow.validate_io_connections)
 
+        MainWindow.terrain_action = QAction('Terrain Generator…', MainWindow)
+        MainWindow.terrain_action.setToolTip('Open the terrain editor (low‑poly terrain generator)')
+        MainWindow.terrain_action.triggered.connect(MainWindow.open_terrain_editor)
 
-        terrain_action = QAction('Terrain Generator…', MainWindow)
-        terrain_action.setToolTip('Open the terrain editor (low‑poly terrain generator)')
-        terrain_action.triggered.connect(MainWindow.open_terrain_editor)
-
-
-        procedural_action = QAction('Procedural map generator…', MainWindow)
-        procedural_action.triggered.connect(MainWindow.show_procedural_map_generator)
+        MainWindow.procedural_action = QAction('Procedural Map Generator…', MainWindow)
+        MainWindow.procedural_action.triggered.connect(MainWindow.show_procedural_map_generator)
         
+        MainWindow.tools_menu.addAction(MainWindow.logic_graph_action)
+        MainWindow.tools_menu.addAction(MainWindow.logic_wizard_action)
+        MainWindow.tools_menu.addAction(MainWindow.validate_action)
+        MainWindow.tools_menu.addSeparator()
+        MainWindow.tools_menu.addAction(MainWindow.terrain_action)
+        MainWindow.tools_menu.addAction(MainWindow.procedural_action)
+        MainWindow.tools_menu.addSeparator()
+
         view_menu.addSeparator()
         toggle_triggers_action = QAction('Opaque Triggers', MainWindow, checkable=True)
         toggle_triggers_action.setChecked(MainWindow.view_3d.show_triggers_as_solid)
         toggle_triggers_action.triggered.connect(MainWindow.toggle_trigger_display)
         view_menu.addAction(toggle_triggers_action)
 
-        system_monitor_action = QAction('System Monitor', MainWindow, checkable=True)
-        system_monitor_action.setShortcut('F3')
-        system_monitor_action.triggered.connect(MainWindow.toggle_system_monitor)
-        view_menu.addAction(system_monitor_action)
-
-        # Debug Console action
         debug_console_action = QAction('Debug Console', MainWindow, checkable=True)
         debug_console_action.setShortcut('`')  # Tilde/backtick
         debug_console_action.setToolTip("Toggle I/O debug console (~)")
@@ -350,50 +360,27 @@ class Ui_MainWindow(object):
 
         top_toolbar.addWidget(room_btn)
         top_toolbar.addWidget(hollow_btn)
-        top_toolbar.addWidget(clone_btn) 
+        top_toolbar.addWidget(clone_btn)
         top_toolbar.addWidget(rotate_btn)
         top_toolbar.addWidget(subtract_btn)
         top_toolbar.addWidget(tint_btn)
+
+        terrain_menu_btn = QPushButton()
+        terrain_menu_btn.setIcon(QIcon("assets/terrain.png"))
+        terrain_menu_btn.setIconSize(QSize(icon_size_val, icon_size_val))
+        terrain_menu_btn.setFixedSize(icon_size_val, icon_size_val)
+        terrain_menu_btn.setToolTip("Procedural Tools")
+
+        terrain_menu = QMenu(MainWindow)
+        terrain_menu.addAction(MainWindow.terrain_action)
+        terrain_menu.addAction(MainWindow.procedural_action)
+
+        terrain_menu_btn.clicked.connect(lambda: terrain_menu.exec_(
+            terrain_menu_btn.mapToGlobal(terrain_menu_btn.rect().bottomLeft())
+        ))
+
+        top_toolbar.addWidget(terrain_menu_btn)
         
-        # === TOOLS PANEL BUTTON ===
-        separator_tools = QFrame()
-        separator_tools.setFrameShape(QFrame.VLine)
-        separator_tools.setFrameShadow(QFrame.Sunken)
-        separator_tools.setFixedWidth(2)
-        separator_tools.setStyleSheet("background-color: transparent;")
-        top_toolbar.addWidget(separator_tools)
-
-        tools_btn = QPushButton("Tools ▼")
-        tools_btn.setFixedHeight(icon_size_val)
-        tools_btn.setMinimumWidth(75)
-        tools_btn.setCheckable(True)
-        tools_btn.setToolTip("Open Tools panel (Logic, Terrain, Map Generator…)")
-        # Match debug console font size (DPI-aware)
-        dc_font_size = getattr(MainWindow.debug_console, 'font_size', 10) if hasattr(MainWindow, 'debug_console') and MainWindow.debug_console else 10
-        tools_btn.setFont(QFont("Arial", max(6, dc_font_size)))
-        tools_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #444;
-                color: #e0e0e0;
-                border: 1px solid #555;
-                border-radius: 3px;
-                padding: 0px 10px;
-                font-weight: bold;
-            }
-            QPushButton:checked, QPushButton:hover {
-                background-color: #F08000;
-                color: white;
-                border-color: #FF9020;
-            }
-            QPushButton:pressed {
-                background-color: #c06800;
-            }
-        """)
-        tools_btn.clicked.connect(MainWindow.toggle_tools_panel)
-        top_toolbar.addWidget(tools_btn)
-        MainWindow.tools_btn = tools_btn
-
-         # === GRID TOGGLE ===
         grid_btn = QPushButton()
         grid_btn.setIcon(QIcon("assets/b_grid.png"))
         grid_btn.setIconSize(QSize(icon_size_val, icon_size_val))
@@ -429,7 +416,6 @@ class Ui_MainWindow(object):
         MainWindow.play_button.setShortcut("f5")
         MainWindow.play_button.clicked.connect(MainWindow.enter_play_mode)
         
-        # Style the play button with green background and larger font
         current_font = MainWindow.play_button.font()
         current_font.setPointSize(current_font.pointSize() + 1)
         MainWindow.play_button.setFont(current_font)
@@ -449,7 +435,6 @@ class Ui_MainWindow(object):
             }
         """)
 
-        # Display dropdown logic placeholder
         display_mode_widget = QWidget()
         display_mode_layout = QHBoxLayout(display_mode_widget)
         display_mode_layout.setContentsMargins(5,0,5,0)

@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtWidgets import QShortcut
 from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, QRect, QPoint, pyqtSignal
-from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor
+from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor, QIcon
 
 from editor.things import Light, PlayerStart, Thing, Pickup, Monster, Model, update_all_counters_from_entities
 from editor.SettingsWindow import SettingsWindow
@@ -148,6 +148,7 @@ class MainWindow(QMainWindow):
         self.load_level_signal.connect(self.load_level_file)
 
         self.setWindowTitle("Fio")
+        self.setWindowIcon(QIcon(os.path.join(self.root_dir, 'assets', 'icon.ico')))
         self.setGeometry(100, 100, 1600, 900)
         self.setMinimumSize(1280, 800)
         self.state = EditorState()
@@ -197,7 +198,6 @@ class MainWindow(QMainWindow):
                 self.properties_tab_widget.setCurrentIndex(idx)
 
         self.ui.action_asset_browser.triggered.connect(self.toggle_asset_browser)
-        self._tools_panel = self._create_tools_panel()
 
         # Enable sysmon at launch if configured
         if self.config.getboolean('Display', 'always_show_sysmon', fallback=False):
@@ -240,6 +240,8 @@ class MainWindow(QMainWindow):
         # Track right-click state for camera movement detection
         self.right_mouse_held = False
         self.view_3d.installEventFilter(self)
+        # Install event filter on self to catch arrow keys globally for nudging
+        self.installEventFilter(self)
         
         # Show startup tooltip after window is shown
         QTimer.singleShot(1500, self._show_startup_tooltip)
@@ -248,6 +250,12 @@ class MainWindow(QMainWindow):
         self.autosave_timer = QTimer(self)
         self.autosave_timer.timeout.connect(self.autosave)
         self.setup_autosave()
+
+        # Play button state sync timer — ensures button always matches play_mode
+        self._play_button_sync_timer = QTimer(self)
+        self._play_button_sync_timer.timeout.connect(self._sync_play_button_state)
+        self._play_button_sync_timer.start(200)  # Check every 200ms
+        self._last_play_mode_state = False
 
         # Overlay management for Properties dock
         self._original_properties_widget = None   # the widget that was replaced
@@ -711,9 +719,6 @@ class MainWindow(QMainWindow):
             by = 35 
             self.play_button.move(bx, by)
             self.play_button.raise_()
-        # Dismiss the tools panel so it doesn't drift out of position
-        if hasattr(self, '_tools_panel') and self._tools_panel.isVisible():
-            self._close_tools_panel()
 
     def reposition_overlays(self):
         """Positions the Play button at the top middle (where the toast used to be)."""
@@ -727,7 +732,7 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj, event):
         """Track right-click state on view_3d for camera movement detection."""
         from PyQt5.QtCore import QEvent
-        
+
         if obj == self.view_3d:
             if event.type() == QEvent.MouseButtonPress:
                 if event.button() == Qt.RightButton:
@@ -735,7 +740,21 @@ class MainWindow(QMainWindow):
             elif event.type() == QEvent.MouseButtonRelease:
                 if event.button() == Qt.RightButton:
                     self.right_mouse_held = False
-        
+
+        # --- Arrow key nudging: works from any widget focus ---
+        if event.type() == QEvent.KeyPress:
+            key = event.key()
+            if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
+                # Only nudge if we have a selected object and not in play mode
+                selected = self.state.selected_object
+                if selected and not getattr(self.view_3d, 'play_mode', False):
+                    # Determine which 2D view to use for nudging
+                    current_view = self.right_tabs.currentWidget()
+                    if isinstance(current_view, View2D):
+                        # Let the 2D view handle the nudge (it has all the logic)
+                        current_view.keyPressEvent(event)
+                        return True  # Event consumed, don't propagate further
+
         return super().eventFilter(obj, event)
 
     def toggle_asset_browser(self):
@@ -749,114 +768,6 @@ class MainWindow(QMainWindow):
                 # Ensure it is raised if tabbed or floating
                 self.asset_browser_dock.raise_()
 
-    # ── Tools floating panel ──────────────────────────────────────────────
-
-    def _create_tools_panel(self):
-        """Build the floating Tools panel (child of MainWindow, hidden by default)."""
-        from PyQt5.QtWidgets import QFrame, QPushButton, QVBoxLayout
-
-        # ── DPI scaling ────────────────────────────────────────────────────
-        # Base all measurements on the screen's logical DPI so the panel
-        # looks correct at 100 %, 125 %, 150 %, 200 % etc.
-        dpi   = QApplication.primaryScreen().logicalDotsPerInch()
-        scale = dpi / 96.0          # 1.0 @ 96 dpi, 1.25 @ 120, 1.5 @ 144 …
-
-        base_pt = getattr(self.debug_console, 'font_size', 10) if self.debug_console else 10
-        # Padding / geometry: scale from comfortable 96-dpi defaults
-        pad_v     = max(6,  int(7  * scale))   # vertical button padding
-        pad_h_r   = max(12, int(18 * scale))   # right padding
-        pad_h_l   = max(10, int(14 * scale))   # left  padding
-        radius    = max(3,  int(5  * scale))   # border-radius
-        min_w     = max(180, int(220 * scale)) # minimum button width
-
-        panel = QFrame(self)
-        panel.setObjectName("ToolsPanel")
-        panel.setStyleSheet(f"""
-            QFrame#ToolsPanel {{
-                background-color: #252525;
-                border: 1px solid #606060;
-                border-radius: {radius}px;
-            }}
-            QPushButton {{
-                background-color: transparent;
-                color: #ddd;
-                border: none;
-                border-radius: 3px;
-                padding: {pad_v}px {pad_h_r}px {pad_v}px {pad_h_l}px;
-                text-align: left;
-                font-size: {base_pt}pt;
-                min-width: {min_w}px;
-            }}
-            QPushButton:hover {{
-                background-color: #F08000;
-                color: white;
-            }}
-            QPushButton:pressed {{
-                background-color: #c06800;
-                color: white;
-            }}
-        """)
-
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(5, 5, 5, 5)
-        layout.setSpacing(1)
-
-        def _tool_btn(label, slot):
-            btn = QPushButton(label)
-            btn.setFocusPolicy(Qt.NoFocus)
-            btn.clicked.connect(slot)
-            btn.clicked.connect(self._close_tools_panel)
-            layout.addWidget(btn)
-            return btn
-
-        _tool_btn("Logic Graph Editor",      self.open_logic_graph)
-        _tool_btn("Logic Wizard",             self.open_logic_wizard)
-        _tool_btn("Validate All Connections", self.validate_io_connections)
-
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setFixedHeight(1)
-        sep.setStyleSheet("background-color: #505050; margin: 3px 6px;")
-        layout.addWidget(sep)
-
-        _tool_btn("Terrain Generator",         self.open_terrain_editor)
-        _tool_btn("Procedural Map Generator",  self.show_procedural_map_generator)
-
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.HLine)
-        sep2.setFixedHeight(1)
-        sep2.setStyleSheet("background-color: #505050; margin: 3px 6px;")
-        layout.addWidget(sep2)
-
-        _tool_btn("Export Game Package…",      self.export_game_package)
-        _tool_btn("Play Game Package…",        self.play_game_package)
-
-        panel.adjustSize()
-        panel.hide()
-        return panel
-
-    def _close_tools_panel(self):
-        """Hide the tools panel and uncheck its toolbar button."""
-        if hasattr(self, '_tools_panel'):
-            self._tools_panel.hide()
-        if hasattr(self, 'tools_btn'):
-            self.tools_btn.setChecked(False)
-
-    def toggle_tools_panel(self):
-        """Show or hide the floating Tools panel below the toolbar button."""
-        if not hasattr(self, '_tools_panel'):
-            return
-        if self._tools_panel.isVisible():
-            self._close_tools_panel()
-        else:
-            if hasattr(self, 'tools_btn'):
-                # Position right below the toolbar button
-                btn_global = self.tools_btn.mapToGlobal(QPoint(0, self.tools_btn.height() + 2))
-                btn_local  = self.mapFromGlobal(btn_global)
-                self._tools_panel.move(btn_local)
-                self.tools_btn.setChecked(True)
-            self._tools_panel.show()
-            self._tools_panel.raise_()
 
     def show_toast(self, message, is_error=False, duration=None):
         """Displays a notification"""
@@ -1169,6 +1080,15 @@ class MainWindow(QMainWindow):
             self.scene_hierarchy.highlight_item(obj)
         elif hasattr(self.scene_hierarchy, 'scroll_to_item'):
             self.scene_hierarchy.scroll_to_item(obj)
+
+    def _sync_play_button_state(self):
+        """Timer-based safety check: ensure play button matches actual play_mode state."""
+        if not hasattr(self, 'play_button') or not hasattr(self, 'view_3d'):
+            return
+        current_play_mode = getattr(self.view_3d, 'play_mode', False)
+        if current_play_mode != self._last_play_mode_state:
+            self._last_play_mode_state = current_play_mode
+            self.update_play_button_color()
 
     def update_play_button_color(self):
         """Update the Play button color based on current mode."""
@@ -1718,6 +1638,11 @@ class MainWindow(QMainWindow):
 
 
     def enter_play_mode(self):
+        """Toggle play mode on/off. Called by the Play/Stop button."""
+        # If already in play mode, exit instead
+        if getattr(self.view_3d, 'play_mode', False):
+            self._exit_play_mode()
+            return
 
         self._store_and_switch_to_debug_console()
 
@@ -1753,6 +1678,32 @@ class MainWindow(QMainWindow):
         self.update_play_button_color()
         
         #self.ui.notification_label.setText("ESC = EXIT PLAY MODE  |  F12 = FULLSCREEN")
+
+
+    def _exit_play_mode(self):
+        """Exit play mode and return to editor."""
+        if hasattr(self.view_3d, 'play_mode') and self.view_3d.play_mode:
+            self.view_3d.toggle_play_mode(None, None)
+
+        self.ui.notification_label.setText("")
+        self._restore_properties_tab()
+
+        if hasattr(self, 'mode_label'):
+            self.mode_label.setText("EDITOR MODE")
+            self.mode_label.setStyleSheet("""
+                QLabel {
+                    background-color: #333333;
+                    color: #888888;
+                    padding: 5px 10px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 14px;
+                    border: 1px solid #444;
+                }
+            """)
+
+        self.setFocus()
+        self.update_play_button_color()
 
     def _store_and_switch_to_debug_console(self):
         """Store current tab index and switch to Debug Console tab."""
@@ -1804,12 +1755,15 @@ class MainWindow(QMainWindow):
         apply_texture_shortcut = self.config.get('Controls', 'apply_texture', fallback='Shift+T')
         if hasattr(self, 'apply_texture_action'):
             self.apply_texture_action.setShortcut(QKeySequence(apply_texture_shortcut))
-        reset_layout_shortcut = self.config.get('Controls', 'reset_layout', fallback='Ctrl+Shift+R')
-        if hasattr(self, 'reset_layout_action'):
-            self.reset_layout_action.setShortcut(QKeySequence(reset_layout_shortcut))
         save_layout_shortcut = self.config.get('Controls', 'save_layout', fallback='Ctrl+Shift+S')
         if hasattr(self, 'save_layout_action'):
             self.save_layout_action.setShortcut(QKeySequence(save_layout_shortcut))
+        restore_layout_shortcut = self.config.get('Controls', 'restore_layout', fallback='Ctrl+Shift+L')
+        if hasattr(self, 'restore_layout_action'):
+            self.restore_layout_action.setShortcut(QKeySequence(restore_layout_shortcut))
+        reset_layout_shortcut = self.config.get('Controls', 'reset_layout', fallback='Ctrl+Shift+R')
+        if hasattr(self, 'reset_layout_action'):
+            self.reset_layout_action.setShortcut(QKeySequence(reset_layout_shortcut))
 
     def toggle_backface_culling(self, state):
         """Toggle OpenGL backface culling."""
@@ -1929,11 +1883,15 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def setup_package_actions(self):
-        """Add Export Package action to the File menu."""
+        """Add package actions to the Tools menu."""
         export_action = QAction("Export Game Package...", self)
         export_action.setShortcut("Ctrl+Shift+E")
         export_action.triggered.connect(self.export_game_package)
-        self.file_menu.addAction(export_action)
+        self.tools_menu.addAction(export_action)
+
+        play_action = QAction("Play Game Package...", self)
+        play_action.triggered.connect(self.play_game_package)
+        self.tools_menu.addAction(play_action)
 
     def export_game_package(self):
         """Export a game package. If the level is unsaved, create a temporary saved copy first."""
@@ -2125,6 +2083,7 @@ class MainWindow(QMainWindow):
             brush_min = [pos[0] - size[0]/2, pos[1] - size[1]/2, pos[2] - size[2]/2]
             brush_max = [pos[0] + size[0]/2, pos[1] + size[1]/2, pos[2] + size[2]/2]
             
+            # No intersection -> keep brush unchanged
             if not (brush_min[0] < sub_max[0] and brush_max[0] > sub_min[0] and
                     brush_min[1] < sub_max[1] and brush_max[1] > sub_min[1] and
                     brush_min[2] < sub_max[2] and brush_max[2] > sub_min[2]):
@@ -2132,51 +2091,72 @@ class MainWindow(QMainWindow):
                 continue
                 
             fragments = []
+            base_textures = brush['textures'].copy()
+            base_color = brush.get('color', None)
+            base_name = brush.get('name', '')
             
+            # ----- Left slab (x < sub_min[0]) -----
             if brush_min[0] < sub_min[0]:
                 left_max = min(brush_max[0], sub_min[0])
                 if left_max - brush_min[0] > 0.01:
-                    fragments.append({
+                    frag = {
                         'pos': [(brush_min[0] + left_max)/2, pos[1], pos[2]],
                         'size': [left_max - brush_min[0], size[1], size[2]],
                         'operation': 'add',
-                        'textures': brush['textures'].copy()
-                    })
+                        'textures': base_textures.copy()
+                    }
+                    if base_color: frag['color'] = base_color
+                    if base_name: frag['name'] = f"{base_name}_left"
+                    fragments.append(frag)
             
+            # ----- Right slab (x > sub_max[0]) -----
             if brush_max[0] > sub_max[0]:
                 right_min = max(brush_min[0], sub_max[0])
                 if brush_max[0] - right_min > 0.01:
-                    fragments.append({
+                    frag = {
                         'pos': [(right_min + brush_max[0])/2, pos[1], pos[2]],
                         'size': [brush_max[0] - right_min, size[1], size[2]],
                         'operation': 'add',
-                        'textures': brush['textures'].copy()
-                    })
+                        'textures': base_textures.copy()
+                    }
+                    if base_color: frag['color'] = base_color
+                    if base_name: frag['name'] = f"{base_name}_right"
+                    fragments.append(frag)
             
+            # ----- Bottom slab (y < sub_min[1]) -----
             if brush_min[1] < sub_min[1]:
                 bottom_max = min(brush_max[1], sub_min[1])
+                # X overlap region (the part that hasn't been cut away by left/right)
                 x_min = max(brush_min[0], sub_min[0])
                 x_max = min(brush_max[0], sub_max[0])
                 if bottom_max - brush_min[1] > 0.01 and x_max - x_min > 0.01:
-                    fragments.append({
-                        'pos': [pos[0], (brush_min[1] + bottom_max)/2, pos[2]],
+                    frag = {
+                        'pos': [(x_min + x_max)/2, (brush_min[1] + bottom_max)/2, pos[2]],
                         'size': [x_max - x_min, bottom_max - brush_min[1], size[2]],
                         'operation': 'add',
-                        'textures': brush['textures'].copy()
-                    })
+                        'textures': base_textures.copy()
+                    }
+                    if base_color: frag['color'] = base_color
+                    if base_name: frag['name'] = f"{base_name}_bottom"
+                    fragments.append(frag)
             
+            # ----- Top slab (y > sub_max[1]) -----
             if brush_max[1] > sub_max[1]:
                 top_min = max(brush_min[1], sub_max[1])
                 x_min = max(brush_min[0], sub_min[0])
                 x_max = min(brush_max[0], sub_max[0])
                 if brush_max[1] - top_min > 0.01 and x_max - x_min > 0.01:
-                    fragments.append({
-                        'pos': [pos[0], (top_min + brush_max[1])/2, pos[2]],
+                    frag = {
+                        'pos': [(x_min + x_max)/2, (top_min + brush_max[1])/2, pos[2]],
                         'size': [x_max - x_min, brush_max[1] - top_min, size[2]],
                         'operation': 'add',
-                        'textures': brush['textures'].copy()
-                    })
+                        'textures': base_textures.copy()
+                    }
+                    if base_color: frag['color'] = base_color
+                    if base_name: frag['name'] = f"{base_name}_top"
+                    fragments.append(frag)
             
+            # ----- Front slab (z < sub_min[2]) -----
             if brush_min[2] < sub_min[2]:
                 front_max = min(brush_max[2], sub_min[2])
                 x_min = max(brush_min[0], sub_min[0])
@@ -2184,13 +2164,17 @@ class MainWindow(QMainWindow):
                 y_min = max(brush_min[1], sub_min[1])
                 y_max = min(brush_max[1], sub_max[1])
                 if front_max - brush_min[2] > 0.01 and x_max - x_min > 0.01 and y_max - y_min > 0.01:
-                    fragments.append({
-                        'pos': [pos[0], pos[1], (brush_min[2] + front_max)/2],
+                    frag = {
+                        'pos': [(x_min + x_max)/2, (y_min + y_max)/2, (brush_min[2] + front_max)/2],
                         'size': [x_max - x_min, y_max - y_min, front_max - brush_min[2]],
                         'operation': 'add',
-                        'textures': brush['textures'].copy()
-                    })
+                        'textures': base_textures.copy()
+                    }
+                    if base_color: frag['color'] = base_color
+                    if base_name: frag['name'] = f"{base_name}_front"
+                    fragments.append(frag)
             
+            # ----- Back slab (z > sub_max[2]) -----
             if brush_max[2] > sub_max[2]:
                 back_min = max(brush_min[2], sub_max[2])
                 x_min = max(brush_min[0], sub_min[0])
@@ -2198,18 +2182,20 @@ class MainWindow(QMainWindow):
                 y_min = max(brush_min[1], sub_min[1])
                 y_max = min(brush_max[1], sub_max[1])
                 if brush_max[2] - back_min > 0.01 and x_max - x_min > 0.01 and y_max - y_min > 0.01:
-                    fragments.append({
-                        'pos': [pos[0], pos[1], (back_min + brush_max[2])/2],
+                    frag = {
+                        'pos': [(x_min + x_max)/2, (y_min + y_max)/2, (back_min + brush_max[2])/2],
                         'size': [x_max - x_min, y_max - y_min, brush_max[2] - back_min],
                         'operation': 'add',
-                        'textures': brush['textures'].copy()
-                    })
+                        'textures': base_textures.copy()
+                    }
+                    if base_color: frag['color'] = base_color
+                    if base_name: frag['name'] = f"{base_name}_back"
+                    fragments.append(frag)
             
             new_brushes.extend(fragments)
         
         new_brushes.append(subtract_brush)
         self.state.brushes = new_brushes
-        
         self.update_all_ui()
 
     def hollow_selected_brush(self):
@@ -2433,10 +2419,7 @@ class MainWindow(QMainWindow):
                 return
 
             if event.key() == Qt.Key_Escape:
-                self.view_3d.toggle_play_mode(None, None)
-                self.ui.notification_label.setText("")
-                # --- NEW: Restore previous tab ---
-                self._restore_properties_tab()
+                self._exit_play_mode()
 
                 if getattr(self, 'is_kiosk_mode', False):
                     self.exit_kiosk_mode()
@@ -2445,21 +2428,6 @@ class MainWindow(QMainWindow):
                 if not self.camera_movement_learned:
                     QTimer.singleShot(500, lambda: self.show_tooltip(
                         "Hold right mouse to move camera with WASD", duration=0, toast_id="camera_tip"))
-                if hasattr(self, 'mode_label'):
-                    self.mode_label.setText("EDITOR MODE")
-                    self.mode_label.setStyleSheet("""
-                        QLabel {
-                            background-color: #333333;
-                            color: #888888;
-                            padding: 5px 10px;
-                            border-radius: 4px;
-                            font-weight: bold;
-                            font-size: 14px;
-                            border: 1px solid #444;
-                        }
-                    """)
-                self.setFocus()
-                self.update_play_button_color()
                 return
 
             elif event.key() == Qt.Key_F3:
@@ -2872,6 +2840,31 @@ class MainWindow(QMainWindow):
         self.save_config()
         self.statusBar().showMessage("Layout saved.", 2000)
 
+    def restore_layout(self):
+        """Restore the previously saved layout from settings.ini without restarting."""
+        if not self.config.has_section('Layout') or \
+           not (self.config.has_option('Layout', 'geometry') and self.config.has_option('Layout', 'state')):
+            self.show_toast("No saved layout found. Save a layout first.", is_error=True)
+            return
+        
+        try:
+            # Restore geometry and state
+            if self.config.has_option('Layout', 'geometry'):
+                self.restoreGeometry(QByteArray.fromHex(self.config['Layout']['geometry'].encode()))
+            if self.config.has_option('Layout', 'state'):
+                self.restoreState(QByteArray.fromHex(self.config['Layout']['state'].encode()))
+            
+            # Restore menu bar and status bar visibility (not saved in state)
+            if self.menuBar():
+                self.menuBar().setVisible(True)
+            self.statusBar().setVisible(True)
+            
+            self.show_toast("Layout restored")
+        except Exception as e:
+            self.show_toast(f"Failed to restore layout: {e}", is_error=True)
+            import traceback
+            traceback.print_exc()
+
     def load_layout(self):
         if self.config.has_section('Layout') and self.config.has_option('Layout', 'geometry'):
             self.restoreGeometry(QByteArray.fromHex(self.config['Layout']['geometry'].encode()))
@@ -2879,30 +2872,46 @@ class MainWindow(QMainWindow):
             self.restoreState(QByteArray.fromHex(self.config['Layout']['state'].encode()))
 
     def reset_layout(self):
-        self.scene_hierarchy_dock.setFloating(False)
-        self.view_3d_dock.setFloating(False)
-        self.right_dock.setFloating(False)
-        self.properties_dock.setFloating(False)
-        self.asset_browser_dock.setFloating(False) # CHANGE: Dock it
+        """Reset layout to default by deleting Layout section from settings.ini and restarting."""
+        reply = QMessageBox.question(
+            self,
+            "Reset Layout",
+            "Reset layout to default?\n\nThis will delete saved layout settings and restart the editor.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
         
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.scene_hierarchy_dock)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.view_3d_dock)
+        if reply != QMessageBox.Yes:
+            return
         
-        # CHANGE: Add Asset Browser to bottom
-        self.addDockWidget(Qt.BottomDockWidgetArea, self.asset_browser_dock)
-        self.asset_browser_dock.setVisible(True)
+        try:
+            if self.config.has_section('Layout'):
+                self.config.remove_section('Layout')
+                self.save_config()
+                self._resetting_layout = True   # <-- ADD THIS LINE
+                self.show_toast("Layout reset. Restarting editor...")
+                QTimer.singleShot(500, self._restart_application)
+            else:
+                self.show_toast("No layout settings to reset.", is_error=True)
+                
+        except Exception as e:
+            self.show_toast(f"Failed to reset layout: {e}", is_error=True)
+            import traceback
+            traceback.print_exc()
 
-        self.splitDockWidget(self.view_3d_dock, self.right_dock, Qt.Horizontal)
-        self.splitDockWidget(self.right_dock, self.properties_dock, Qt.Vertical)
-        
-        # Resize logic
-        self.resizeDocks([self.view_3d_dock, self.right_dock], [800, 600], Qt.Horizontal)
-        self.resizeDocks([self.right_dock, self.properties_dock], [600, 300], Qt.Vertical)
-        
-        # Optional: Set initial height for bottom dock
-        self.resizeDocks([self.view_3d_dock, self.asset_browser_dock], [600, 250], Qt.Vertical)
-
-        self.statusBar().showMessage("Layout reset to default.", 2000)
+    def _restart_application(self):
+        """Restart the application."""
+        try:
+            executable = sys.executable
+            script = os.path.abspath(sys.argv[0])
+            args = sys.argv[1:]
+            
+            self.close()
+            subprocess.Popen([executable, script] + args)
+            QApplication.quit()
+            
+        except Exception as e:
+            self.show_toast(f"Failed to restart: {e}", is_error=True)
 
     def _safe_extract_zip(self, zip_path, dest_dir):
         """Extract a zip file safely, rejecting any member that would escape dest_dir."""
@@ -3167,12 +3176,6 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'play_button'):
             self.play_button.setVisible(False)
 
-        # Hide the floating tools panel
-        if hasattr(self, '_tools_panel'):
-            self._tools_panel.hide()
-        if hasattr(self, 'tools_btn'):
-            self.tools_btn.setChecked(False)
-
         # Hide sysmon overlay by default in kiosk mode (F3 to toggle back on)
         self.view_3d.debug_mode_active = False
 
@@ -3208,9 +3211,10 @@ class MainWindow(QMainWindow):
 
         # Exit play mode only if not keeping it (F12 toggle vs Escape)
         if not keep_play_mode and hasattr(self.view_3d, 'play_mode') and self.view_3d.play_mode:
-            self.view_3d.toggle_play_mode(None, None)
-        # --- Restore previous tab ---
-        self._restore_properties_tab()
+            self._exit_play_mode()
+        else:
+            # --- Restore previous tab ---
+            self._restore_properties_tab()
 
         # Exit fullscreen FIRST - critical for proper geometry restoration
         self.showNormal()
@@ -3232,21 +3236,7 @@ class MainWindow(QMainWindow):
 
         # Update play button and mode label — only reset to editor state if
         # we are actually leaving play mode (not an F12 fullscreen toggle).
-        if not keep_play_mode:
-            self.update_play_button_color()
-            if hasattr(self, 'mode_label'):
-                self.mode_label.setText("EDITOR MODE")
-                self.mode_label.setStyleSheet("""
-                    QLabel {
-                        background-color: #333333;
-                        color: #888888;
-                        padding: 5px 10px;
-                        border-radius: 4px;
-                        font-weight: bold;
-                        font-size: 14px;
-                        border: 1px solid #444;
-                    }
-                """)
+        # Note: _exit_play_mode() already handles button/mode updates when keep_play_mode=False
 
         # If keeping play mode, recapture mouse for seamless FPS control
         if keep_play_mode and self.view_3d.play_mode:
@@ -3387,6 +3377,8 @@ class MainWindow(QMainWindow):
                 self.tooltip_timer.stop()
             if hasattr(self, 'autosave_timer'):
                 self.autosave_timer.stop()
+            if hasattr(self, '_play_button_sync_timer'):
+                self._play_button_sync_timer.stop()
 
             # Cleanup extracted package temp dir
             if hasattr(self, '_package_temp_dir') and self._package_temp_dir:
@@ -3394,7 +3386,8 @@ class MainWindow(QMainWindow):
                 shutil.rmtree(self._package_temp_dir, ignore_errors=True)
 
             try:
-                self.save_layout()
+                if not getattr(self, '_resetting_layout', False):
+                    self.save_layout()
             except Exception as e:
                 print(f"save_layout failed: {e}")
 

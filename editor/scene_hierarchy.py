@@ -1,9 +1,18 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem, 
                              QMenu, QAction, QHeaderView, QAbstractItemView, 
-                             QPushButton, QHBoxLayout)
+                             QPushButton, QHBoxLayout, QLabel, QFrame, QGridLayout)
 from PyQt5.QtGui import QIcon, QColor, QBrush, QFont, QPainter, QPixmap
 from PyQt5 import QtCore
+import os
 from PyQt5.QtCore import Qt, QTimer
+
+from editor.things import Light, Model, Monster
+
+try:
+    from editor.io_system import get_connections
+    IO_AVAILABLE = True
+except ImportError:
+    IO_AVAILABLE = False
 
 class SceneHierarchy(QWidget):
     """Scene hierarchy widget with sort button and tree view."""
@@ -36,7 +45,7 @@ class SceneHierarchy(QWidget):
         
         # Create sort button
         self.sort_button = QPushButton(f"Sort: {self.SORT_MODE_NAMES[self.sort_mode]}")
-        self.sort_button.setFixedHeight(28)
+        self.sort_button.setFixedHeight(38)
         self.sort_button.clicked.connect(self.cycle_sort_mode)
         self.sort_button.setStyleSheet("""
             QPushButton {
@@ -44,7 +53,7 @@ class SceneHierarchy(QWidget):
                 color: white;
                 border: none;
                 padding: 4px 8px;
-                text-align: left;
+                text-align: center;
             }
             QPushButton:hover {
                 background-color: #5a7a78;
@@ -55,9 +64,15 @@ class SceneHierarchy(QWidget):
         """)
         layout.addWidget(self.sort_button)
         
+        # Create content container (tree + bottom overlay)
+        self.content_container = QWidget()
+        content_layout = QVBoxLayout(self.content_container)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+        
         # Create tree widget
         self.tree = QTreeWidget()
-        layout.addWidget(self.tree)
+        content_layout.addWidget(self.tree, stretch=2)
         
         # Configure tree widget
         self.tree.header().setVisible(False) 
@@ -107,6 +122,156 @@ class SceneHierarchy(QWidget):
             "circ_pink.png": "pink",
             "circ_white.png": "white",
         }
+
+        # Create overview overlay (bottom third)
+        self.overview_overlay = QFrame()
+        self.overview_overlay.setFrameShape(QFrame.StyledPanel)
+        self.overview_overlay.setStyleSheet("""
+            QFrame {
+                background-color: #2b2b2b;
+                color: #f0f0f0;
+                border: 1px solid #555;
+                border-bottom: none;
+            }
+            QLabel {
+                color: #f0f0f0;
+                background-color: transparent;
+                border: none;
+            }
+        """)
+        content_layout.addWidget(self.overview_overlay, stretch=1)
+        self.overview_overlay.hide()
+
+        # Build overlay layout
+        overlay_layout = QVBoxLayout(self.overview_overlay)
+        overlay_layout.setContentsMargins(12, 12, 12, 12)
+        overlay_layout.setSpacing(8)
+
+        # Header row with arrow indicator
+        header_row = QHBoxLayout()
+        header_row.setSpacing(6)
+        
+        self.arrow_label = QLabel("▲")
+        self.arrow_label.setStyleSheet("color: #FF8C00; font-size: 14px;")
+        header_row.addWidget(self.arrow_label)
+        
+        header_label = QLabel("Overview")
+        header_font = QFont()
+        header_font.setBold(True)
+        header_font.setPointSize(14)
+        header_label.setFont(header_font)
+        header_label.setStyleSheet("color: #FF8C00;")
+        header_row.addWidget(header_label)
+        header_row.addStretch()
+        
+        overlay_layout.addLayout(header_row)
+
+        # Map name label (populated by _update_overview_metrics)
+        self.map_name_label = QLabel("Untitled")
+        map_name_font = QFont()
+        map_name_font.setBold(True)
+        map_name_font.setPointSize(10)
+        self.map_name_label.setFont(map_name_font)
+        self.map_name_label.setStyleSheet("color: #585F2A;")
+        overlay_layout.addWidget(self.map_name_label)
+
+        metrics_grid = QGridLayout()
+        metrics_grid.setSpacing(8)
+        self.overview_labels = {}
+
+        metrics = [
+            ("Lights", "lights"),
+            ("Brushes", "brushes"),
+            ("Things", "things"),
+            ("Models", "models"),
+            ("Movers", "movers"),
+            ("Monsters", "monsters"),
+            ("Triggers", "triggers"),
+            ("Links", "connections"),
+        ]
+
+        for i, (name, key) in enumerate(metrics):
+            name_label = QLabel(f"{name}:")
+            name_label.setStyleSheet("color: #aaaaaa;")
+            value_label = QLabel("0")
+            value_label.setStyleSheet("color: #ffffff; font-weight: bold;")
+            metrics_grid.addWidget(name_label, i, 0)
+            metrics_grid.addWidget(value_label, i, 1)
+            self.overview_labels[key] = value_label
+
+        overlay_layout.addLayout(metrics_grid)
+        overlay_layout.addStretch()
+
+        layout.addWidget(self.content_container)
+
+        # Create metrics banner at bottom (taller)
+        self.metrics_banner = QPushButton("Overview ▲")
+        self.metrics_banner.setFixedHeight(38)
+        self.metrics_banner.setStyleSheet("""
+            QPushButton {
+                background-color: #000000;
+                color: white;
+                border: none;
+                border-top: 1px solid #333;
+                padding: 4px 8px;
+                text-align: center;
+            }
+            QPushButton:hover {
+                background-color: #1a1a1a;
+            }
+            QPushButton:pressed {
+                background-color: #333333;
+            }
+        """)
+        self.metrics_banner.clicked.connect(self._toggle_overview)
+        layout.addWidget(self.metrics_banner)
+
+    def _toggle_overview(self):
+        """Toggle the overview overlay on/off."""
+        if self.overview_overlay.isVisible():
+            self.overview_overlay.hide()
+            self.metrics_banner.setText("Overview ▲")
+        else:
+            self._update_overview_metrics()
+            self.overview_overlay.show()
+            self.metrics_banner.setText("Overview ▼")
+
+    def _update_overview_metrics(self):
+        """Calculate and display scene metrics in the overview overlay."""
+        # Update map name display
+        if hasattr(self.main_window, 'file_path') and self.main_window.file_path:
+            map_name = os.path.basename(self.main_window.file_path)
+            self.map_name_label.setText(f"{map_name}")
+            self.map_name_label.setStyleSheet("color: #A7B454;")
+        else:
+            self.map_name_label.setText("Untitled")
+            self.map_name_label.setStyleSheet("color: #A7B454;")
+
+        state = self.main_window.state
+        
+        lights = sum(1 for t in state.things if isinstance(t, Light))
+        brushes = len(state.brushes)
+        things = len(state.things)
+        models = sum(1 for t in state.things if isinstance(t, Model))
+        movers = sum(1 for b in state.brushes if b.get('is_mover', False))
+        monsters = sum(1 for t in state.things if isinstance(t, Monster))
+        triggers = sum(1 for b in state.brushes if b.get('is_trigger', False))
+        
+        connections = 0
+        if IO_AVAILABLE:
+            for brush in state.brushes:
+                connections += len(get_connections(brush))
+            for thing in state.things:
+                connections += len(get_connections(thing))
+        
+        self.overview_labels['lights'].setText(str(lights))
+        self.overview_labels['brushes'].setText(str(brushes))
+        self.overview_labels['things'].setText(str(things))
+        self.overview_labels['models'].setText(str(models))
+        self.overview_labels['movers'].setText(str(movers))
+        self.overview_labels['monsters'].setText(str(monsters))
+        self.overview_labels['triggers'].setText(str(triggers))
+        self.overview_labels['connections'].setText(str(connections))
 
     def cycle_sort_mode(self):
         """Cycle through sort modes and refresh."""

@@ -23,6 +23,14 @@ try:
 except ImportError:
     IO_AVAILABLE = False
 
+# Keys written to brush dicts by the renderer at runtime.
+# They hold GLM matrix objects (not JSON-serialisable) and must be stripped
+# before any serialisation path: undo stack, file save, or deepcopy-for-JSON.
+_RENDERER_PRIVATE_KEYS = frozenset({
+    '_mat_cache_key', '_mat_cache',      # model matrix cache (renderer_F)
+    '_nmat_cache_key', '_nmat_cache',    # normal matrix cache (renderer_F)
+})
+
 # Import lightmap bake state
 try:
     from lightmap.bake_state import BakeState
@@ -149,6 +157,10 @@ class EditorState:
             brush.setdefault('id', str(uuid.uuid4()))
 
             brush_copy = brush.copy()
+
+            # Strip renderer-internal cache keys (GLM objects, not JSON-safe)
+            for k in _RENDERER_PRIVATE_KEYS:
+                brush_copy.pop(k, None)
 
             # Handle I/O connections
             if IO_AVAILABLE and '_io_connections' in brush:
@@ -358,6 +370,12 @@ class EditorState:
         result = []
         for brush in self.brushes:
             brush_copy = copy.deepcopy(brush)
+
+            # Strip renderer-internal cache keys.  These hold GLM matrix
+            # objects (mat4x4 / mat3x3) that are not JSON-serialisable and
+            # have no meaning outside the renderer's own lifetime.
+            for k in _RENDERER_PRIVATE_KEYS:
+                brush_copy.pop(k, None)
 
             # Convert OutputConnection objects to dicts for JSON
             if '_io_connections' in brush_copy:

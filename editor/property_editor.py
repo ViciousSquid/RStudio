@@ -1,4 +1,3 @@
-
 import os
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFormLayout, QCheckBox, QComboBox, QPushButton,
@@ -7,7 +6,8 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFrame, QDoubleSpinBox, QSizePolicy)
 from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QFont
-from editor.things import Thing, Light, Pickup, Monster, Model, Speaker, LogicGate, PathNode, LogicCamera, LogicSpawner, Portal
+from editor.things import (Thing, Light, Pickup, Monster, Model, Speaker,
+                           LogicGate, PathNode, LogicCamera, LogicSpawner, Portal)
 from engine.monster_constants import MONSTER_VARIANTS
 
 # I/O System imports
@@ -19,9 +19,122 @@ except ImportError:
     IO_AVAILABLE = False
 
 
+# ────────────────────────────
+# Centralised styles
+# ────────────────────────────
+class _Style:
+    TAB_BAR = """
+        QTabBar::tab:selected { background: #F08000; color: white; }
+        QTabBar::tab { background: #425f5d; color: #ccc; padding: 8px 16px; border: 1px solid #333; }
+        QTabBar::tab:hover { background: #5a7a82; }
+    """
+    SCROLL_V = """
+        QScrollBar:vertical { width: 18px; background: #2b2b2b; border: none; margin: 0px; }
+        QScrollBar::handle:vertical { background: #4b4d4d; min-height: 20px; border-radius: 4px; }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+    """
+    CHECKBOX = """
+        QCheckBox::indicator:checked { background-color: #F08000; border: 1px solid #333; }
+        QCheckBox::indicator:unchecked { background-color: #425f5d; border: 1px solid #333; }
+        QCheckBox::indicator { width: 22px; height: 22px; }
+    """
+    HEADER = "QLabel {{ background-color: {color}; color: white; font-weight: bold; padding: 8px 12px; border-radius: 4px; font-size: 12px; }}"
+    SECTION = "QLabel { color: #F08000; font-weight: bold; padding: 4px 0px; border-bottom: 1px solid #F08000; margin-top: 8px; }"
+    NAME_LBL = "QLabel { background-color: #6C3BAA; color: white; font-weight: bold; padding: 6px 8px; border-radius: 3px; }"
+    NAME_INP = ("QLineEdit { background-color: #6C3BAA; color: white; font-weight: bold; padding: 6px; "
+                "border: 2px solid #8B5AC2; border-radius: 3px; } "
+                "QLineEdit:focus { border: 2px solid #A875D6; background-color: #7B4AB9; }")
+    TARGETED = ("QLabel { color: #00FF00; font-weight: bold; padding: 2px; "
+                "background-color: #1a3d1a; border: 1px solid #00AA00; border-radius: 3px; }")
+
+    @staticmethod
+    def group_box(color: str, title_bg: str = "#2b3d3b") -> str:
+        return (f"QGroupBox {{ font-weight: bold; color: {color}; border: 1px solid {color}; "
+                f"border-radius: 4px; margin-top: 12px; padding-top: 8px; }}"
+                f"QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left; left: 8px; "
+                f"padding: 0 4px; background-color: {title_bg}; }}")
+
+
+# ────────────────────────────
+# Widget factories
+# ────────────────────────────
+def _hbox(*widgets, stretch=True, margins=(0, 0, 0, 0), spacing=4) -> QHBoxLayout:
+    """Helper to build a horizontal layout with common defaults."""
+    lay = QHBoxLayout()
+    lay.setContentsMargins(*margins)
+    lay.setSpacing(spacing)
+    for w in widgets:
+        lay.addWidget(w)
+    if stretch:
+        lay.addStretch()
+    return lay
+
+
+def _make_slider(parent, value: float, range0: int, range1: int, fmt: str = "{:.2f}",
+                 callback=None, tooltip: str = "") -> tuple[QSlider, QLabel]:
+    """Return a slider + value-label pair wired to a callback."""
+    slider = QSlider(Qt.Horizontal)
+    slider.setRange(range0, range1)
+    slider.setValue(int(value * (100 if range1 <= 100 else 1)))
+    label = QLabel(fmt.format(value))
+    if tooltip:
+        slider.setToolTip(tooltip)
+
+    def _on_change(v):
+        real = v / (100 if range1 <= 100 else 1)
+        label.setText(fmt.format(real))
+        if callback:
+            callback(real)
+
+    slider.valueChanged.connect(_on_change)
+    return slider, label
+
+
+def _make_checkbox(label: str, checked: bool, callback, style=None) -> QCheckBox:
+    cb = QCheckBox(label)
+    cb.setChecked(checked)
+    if style:
+        cb.setStyleSheet(style)
+    if callback is not None:
+        cb.toggled.connect(callback)
+    return cb
+
+
+def _make_combo(items, current, callback=None, editable=False, tooltip="") -> QComboBox:
+    c = QComboBox()
+    c.setEditable(editable)
+    c.addItems(items)
+    if current in items:
+        c.setCurrentText(current)
+    if callback:
+        c.currentTextChanged.connect(callback)
+    if tooltip:
+        c.setToolTip(tooltip)
+    return c
+
+
+def _make_spin(value, range0, range1, suffix="", decimals=0, step=1, callback=None, tooltip=""):
+    if decimals:
+        s = QDoubleSpinBox()
+        s.setDecimals(decimals)
+        s.setSingleStep(step)
+    else:
+        s = QSpinBox()
+        s.setSingleStep(step)
+    s.setRange(range0, range1)
+    s.setValue(value)
+    if suffix:
+        s.setSuffix(suffix)
+    if tooltip:
+        s.setToolTip(tooltip)
+    if callback:
+        s.valueChanged.connect(callback)
+    return s
+
 
 class ClickableLineEdit(QLineEdit):
     clicked_while_empty = pyqtSignal()
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton and not self.text().strip():
             self.clicked_while_empty.emit()
@@ -33,350 +146,215 @@ class PropertyEditor(QWidget):
         super().__init__()
         self.editor = editor
         self.current_object = None
-        self._populating = False  # Flag to prevent recursion during population
-        
+        self._populating = False
+        self._widgets: dict[str, QWidget] = {}
+        self._linked_key_pickup = None
+        self._linked_door_brush = None
+        self.tab_widget = None
+
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(5, 5, 5, 5)
         self.main_layout.setSpacing(2)
         self.setLayout(self.main_layout)
-        
-        # Tab widget for organized properties
-        self.tab_widget = None
-        
-        # Store widget references for visibility updates
-        self._widgets = {}
-        
         self.set_object(None)
-    
-    def _find_targeting_sources(self, target_name):
-        """Find all entities that target the given entity name (legacy + I/O)."""
-        if not target_name: return []
+
+    # ────────────────────────────
+    # Internal helpers
+    # ────────────────────────────
+    def _find_targeting_sources(self, target_name: str):
+        if not target_name:
+            return []
         sources = []
-        
-        # Check legacy 'target' property on brushes
         for brush in self.editor.state.brushes:
-            brush_target = brush.get('target', '')
-            if brush_target == target_name:
-                is_trigger = brush.get('is_trigger', False)
-                is_mover = brush.get('is_mover', False)
-                if is_trigger or is_mover:
-                    source_name = brush.get('name', 'unnamed')
-                    source_type = 'trigger' if is_trigger else 'mover'
-                    sources.append((source_name, source_type))
-            
-            # Also check I/O connections (handles both OutputConnection objects and dicts)
-            io_connections = brush.get('_io_connections', [])
-            for conn in io_connections:
-                conn_target = getattr(conn, 'target_name', None) or (conn.get('target') if isinstance(conn, dict) else None)
-                conn_output = getattr(conn, 'output_name', None) or (conn.get('output', '?') if isinstance(conn, dict) else '?')
-                if conn_target == target_name:
-                    source_name = brush.get('name', 'unnamed')
-                    sources.append((source_name, f"I/O: {conn_output}"))
-        
-        # Check I/O connections on Things
+            if brush.get('target') == target_name:
+                src_type = 'trigger' if brush.get('is_trigger') else 'mover' if brush.get('is_mover') else None
+                if src_type:
+                    sources.append((brush.get('name', 'unnamed'), src_type))
+            for conn in brush.get('_io_connections', []):
+                t = getattr(conn, 'target_name', None) or (conn.get('target') if isinstance(conn, dict) else None)
+                o = getattr(conn, 'output_name', None) or (conn.get('output', '?') if isinstance(conn, dict) else '?')
+                if t == target_name:
+                    sources.append((brush.get('name', 'unnamed'), f"I/O: {o}"))
         for thing in self.editor.state.things:
-            io_connections = thing.properties.get('_io_connections', [])
-            for conn in io_connections:
-                conn_target = getattr(conn, 'target_name', None) or (conn.get('target') if isinstance(conn, dict) else None)
-                conn_output = getattr(conn, 'output_name', None) or (conn.get('output', '?') if isinstance(conn, dict) else '?')
-                if conn_target == target_name:
-                    source_name = thing.properties.get('name', 'unnamed')
-                    sources.append((source_name, f"I/O: {conn_output}"))
-        
+            for conn in thing.properties.get('_io_connections', []):
+                t = getattr(conn, 'target_name', None) or (conn.get('target') if isinstance(conn, dict) else None)
+                o = getattr(conn, 'output_name', None) or (conn.get('output', '?') if isinstance(conn, dict) else '?')
+                if t == target_name:
+                    sources.append((thing.properties.get('name', 'unnamed'), f"I/O: {o}"))
         return sources
-    
-    def _check_target_exists(self, target_name):
-        if not target_name: return False
+
+    def _check_target_exists(self, target_name: str) -> bool:
+        if not target_name:
+            return False
         for brush in self.editor.state.brushes:
-            if brush.get('name') == target_name: return True
+            if brush.get('name') == target_name:
+                return True
         for thing in self.editor.state.things:
-            thing_name = getattr(thing, 'name', '') or thing.properties.get('name', '')
-            if thing_name == target_name: return True
+            if (getattr(thing, 'name', '') or thing.properties.get('name', '')) == target_name:
+                return True
         return False
-    
 
     def clear_layout(self):
         while self.main_layout.count():
             child = self.main_layout.takeAt(0)
-            if child.widget(): child.widget().deleteLater()
+            if child.widget():
+                child.widget().deleteLater()
             elif child.layout():
-                layout = child.layout()
-                while layout.count():
-                    item = layout.takeAt(0)
-                    if item.widget(): item.widget().deleteLater()
-        self._widgets = {}
+                while child.layout().count():
+                    item = child.layout().takeAt(0)
+                    if item.widget():
+                        item.widget().deleteLater()
+        self._widgets.clear()
         self.tab_widget = None
 
     def set_object(self, obj):
-        # Preserve tab index and scroll position when refreshing the same object
         saved_tab_index = None
         saved_scroll_pos = 0
-        
-        if self.current_object is obj:
-            # Save tab index
-            if self.tab_widget is not None:
-                saved_tab_index = self.tab_widget.currentIndex()
-                
-            # Save current scroll position before clearing
+        if self.current_object is obj and self.tab_widget is not None:
+            saved_tab_index = self.tab_widget.currentIndex()
             for i in range(self.main_layout.count()):
-                widget = self.main_layout.itemAt(i).widget()
-                if isinstance(widget, QScrollArea):
-                    saved_scroll_pos = widget.verticalScrollBar().value()
+                w = self.main_layout.itemAt(i).widget()
+                if isinstance(w, QScrollArea):
+                    saved_scroll_pos = w.verticalScrollBar().value()
                     break
-        
-        # When deselecting (obj is None), restore the previous tab if we were on Properties
+
         if obj is None and self.current_object is not None:
             if hasattr(self.editor, 'properties_tab_widget'):
-                prev_idx = getattr(self.editor, '_previous_tab_index', None)
-                if prev_idx is not None and self.editor.properties_tab_widget.currentIndex() == 0:
-                    self.editor.properties_tab_widget.setCurrentIndex(prev_idx)
+                prev = getattr(self.editor, '_previous_tab_index', None)
+                if prev is not None and self.editor.properties_tab_widget.currentIndex() == 0:
+                    self.editor.properties_tab_widget.setCurrentIndex(prev)
 
-        self._populating = True  # Set flag to prevent recursion
+        self._populating = True
         self.current_object = obj
         self.clear_layout()
-        
+
         if obj is None:
             self.main_layout.addWidget(QLabel("Nothing selected."))
             self._populating = False
             return
-            
-        if isinstance(obj, dict): 
+
+        if isinstance(obj, dict):
             self.populate_for_brush(obj)
-        elif isinstance(obj, Thing): 
+        elif isinstance(obj, Thing):
             self.populate_for_thing(obj)
-        
-        # Restore tab index
+
         if saved_tab_index is not None and self.tab_widget is not None:
             if saved_tab_index < self.tab_widget.count():
                 self.tab_widget.setCurrentIndex(saved_tab_index)
-                
-        # Restore scroll position
+
         if saved_scroll_pos > 0:
             for i in range(self.main_layout.count()):
-                widget = self.main_layout.itemAt(i).widget()
-                if isinstance(widget, QScrollArea):
-                    # A QTimer is required here because the layout needs a frame to 
-                    # recalculate its new height before the scrollbar can be moved.
-                    QTimer.singleShot(0, lambda w=widget, pos=saved_scroll_pos: w.verticalScrollBar().setValue(pos))
+                w = self.main_layout.itemAt(i).widget()
+                if isinstance(w, QScrollArea):
+                    QTimer.singleShot(0, lambda w=w, p=saved_scroll_pos: w.verticalScrollBar().setValue(p))
                     break
-        
-        self._populating = False  # Reset flag after population complete
 
-    def _create_styled_header(self, text, color="#6C3BAA"):
-        """Create a styled header label."""
-        label = QLabel(text)
-        label.setStyleSheet(f"""
-            QLabel {{
-                background-color: {color};
-                color: white;
-                font-weight: bold;
-                padding: 8px 12px;
-                border-radius: 4px;
-                font-size: 12px;
-            }}
-        """)
-        return label
+        self._populating = False
 
-    def _create_section_header(self, text):
-        """Create a section header for grouping properties."""
-        label = QLabel(text)
-        label.setStyleSheet("""
-            QLabel {
-                color: #F08000;
-                font-weight: bold;
-                padding: 4px 0px;
-                border-bottom: 1px solid #F08000;
-                margin-top: 8px;
-            }
-        """)
-        return label
-
-    def _create_color_button(self, color_rgb, size=(100, 28)):
-        """Create a color picker button with current color display."""
-        btn = QPushButton()
-        btn.setFixedSize(*size)
-        self._update_color_button(btn, color_rgb)
-        return btn
-
-    def _update_color_button(self, btn, color_rgb):
-        """Update a color button's background."""
-        if isinstance(color_rgb, (list, tuple)) and len(color_rgb) >= 3:
-            if any(c > 1.0 for c in color_rgb):
-                r, g, b = int(color_rgb[0]), int(color_rgb[1]), int(color_rgb[2])
-            else:
-                r, g, b = int(color_rgb[0] * 255), int(color_rgb[1] * 255), int(color_rgb[2] * 255)
-            btn.setStyleSheet(f"background-color: rgb({r}, {g}, {b}); border: 2px solid #555; border-radius: 4px;")
-
-    def _checkbox_style(self):
-        return """
-            QCheckBox::indicator:checked { background-color: #F08000; border: 1px solid #333; }
-            QCheckBox::indicator:unchecked { background-color: #425f5d; border: 1px solid #333; }
-            QCheckBox::indicator { width: 22px; height: 22px; }
-        """
-
+    # ────────────────────────────
+    # Brush population
+    # ────────────────────────────
     def populate_for_brush(self, brush):
-        """Populate property editor for a brush with tabbed interface."""
-        
-        # Create scrollable content
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.verticalScrollBar().setStyleSheet("""
-            QScrollBar:vertical {
-                width: 18px;
-                background: #2b2b2b;
-                border: none;
-                margin: 0px;
-            }
-            QScrollBar::handle:vertical {
-                background: #4b4d4d;
-                min-height: 20px;
-                border-radius: 4px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-        """)
-        
-        content_widget = QWidget()
-        content_layout = QVBoxLayout(content_widget)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(4)
-        
-        # === BASIC PROPERTIES (Always visible) ===
-        basic_layout = QFormLayout()
-        basic_layout.setSpacing(4)
-        
-        # Name field with styled header
-        name_label = QLabel("Name:")
-        name_label.setStyleSheet("QLabel { background-color: #6C3BAA; color: white; font-weight: bold; padding: 6px 8px; border-radius: 3px; }")
-        name_input = QLineEdit(brush.get('name', ''))
-        name_input.setStyleSheet("QLineEdit { background-color: #6C3BAA; color: white; font-weight: bold; padding: 6px; border: 2px solid #8B5AC2; border-radius: 3px; } QLineEdit:focus { border: 2px solid #A875D6; background-color: #7B4AB9; }")
-        name_input.setPlaceholderText("Enter name...")
-        name_input.editingFinished.connect(lambda: self.update_object_prop('name', name_input.text()))
-        basic_layout.addRow(name_label, name_input)
-        self._widgets['name_input'] = name_input
-        
-        # Targeted by indicator
+        scroll.verticalScrollBar().setStyleSheet(_Style.SCROLL_V)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        # Name row
+        form = QFormLayout()
+        form.setSpacing(4)
+        name_lbl = QLabel("Name:")
+        name_lbl.setStyleSheet(_Style.NAME_LBL)
+        name_inp = QLineEdit(brush.get('name', ''))
+        name_inp.setStyleSheet(_Style.NAME_INP)
+        name_inp.setPlaceholderText("Enter name...")
+        name_inp.editingFinished.connect(lambda: self.update_object_prop('name', name_inp.text()))
+        form.addRow(name_lbl, name_inp)
+        self._widgets['name_input'] = name_inp
+
         brush_name = brush.get('name', '')
         if brush_name:
-            targeting_sources = self._find_targeting_sources(brush_name)
-            if targeting_sources:
-                source_texts = [f"{name} ({stype})" for name, stype in targeting_sources]
-                targeted_label = QLabel(", ".join(source_texts))
-                targeted_label.setStyleSheet("QLabel { color: #00FF00; font-weight: bold; padding: 2px; background-color: #1a3d1a; border: 1px solid #00AA00; border-radius: 3px; }")
-                targeted_label.setWordWrap(True)
-                basic_layout.addRow("Targeted by:", targeted_label)
-        
-        content_layout.addLayout(basic_layout)
-        
-        # === TAB WIDGET FOR ADVANCED PROPERTIES ===
+            sources = self._find_targeting_sources(brush_name)
+            if sources:
+                txt = ", ".join(f"{n} ({t})" for n, t in sources)
+                lbl = QLabel(txt)
+                lbl.setStyleSheet(_Style.TARGETED)
+                lbl.setWordWrap(True)
+                form.addRow("Targeted by:", lbl)
+
+        layout.addLayout(form)
+
+        # Tabs
         self.tab_widget = QTabWidget()
-        self.tab_widget.setStyleSheet("""
-            QTabBar::tab:selected { background: #F08000; color: white; }
-            QTabBar::tab { background: #425f5d; color: #ccc; padding: 8px 16px; border: 1px solid #333; }
-            QTabBar::tab:hover { background: #5a7a82; }
-        """)
-        
-        # Determine which tabs to show
+        self.tab_widget.setStyleSheet(_Style.TAB_BAR)
+
         is_trigger = brush.get('is_trigger', False)
         is_mover = brush.get('is_mover', False)
         is_door = brush.get('is_door', False)
         shader_type = brush.get('shader', '<None>')
-        
-        # === GENERAL TAB (Type selection) ===
-        general_tab = self._create_general_tab(brush)
-        self.tab_widget.addTab(general_tab, "General")
-        
-        # === TRIGGER TAB (conditional) ===
+
+        self.tab_widget.addTab(self._create_general_tab(brush), "General")
+
         self.trigger_tab = self._create_trigger_tab(brush)
         self.trigger_tab_index = self.tab_widget.addTab(self.trigger_tab, "🎯 Trigger")
         self.tab_widget.setTabVisible(self.trigger_tab_index, is_trigger)
-        
-        # === MOVER TAB (conditional) ===
+
         self.mover_tab = self._create_mover_tab(brush)
         self.mover_tab_index = self.tab_widget.addTab(self.mover_tab, "⚡ Mover")
         self.tab_widget.setTabVisible(self.mover_tab_index, is_mover)
-        
-        # === DOOR TAB (conditional) ===
+
         self.door_tab = self._create_door_tab(brush)
         self.door_tab_index = self.tab_widget.addTab(self.door_tab, "🚪 Door")
         self.tab_widget.setTabVisible(self.door_tab_index, is_door)
-        
-        # === SHADER TAB (conditional) ===
+
         self.shader_tab = self._create_shader_tab(brush)
         self.shader_tab_index = self.tab_widget.addTab(self.shader_tab, "✨ Shader")
-        self.tab_widget.setTabVisible(self.shader_tab_index, shader_type not in ['<None>', 'Glow', None, ''])
-        
-        # === APPEARANCE TAB ===
-        appearance_tab = self._create_appearance_tab(brush)
-        self.tab_widget.addTab(appearance_tab, "Appearance")
-        
-        # === I/O TAB (store reference for dynamic add/remove) ===
+        self.tab_widget.setTabVisible(self.shader_tab_index, shader_type not in ('<<None>', None, ''))
+
+        self.tab_widget.addTab(self._create_appearance_tab(brush), "Appearance")
+
         self.io_tab_index = None
         self.io_tab = None
         if IO_AVAILABLE and (is_trigger or is_mover or is_door):
             self.io_tab = self._create_io_tab_for_brush(brush)
             self.io_tab_index = self.tab_widget.addTab(self.io_tab, "⚡ I/O")
-        
-        content_layout.addWidget(self.tab_widget)
-        content_layout.addStretch()
-        
-        scroll.setWidget(content_widget)
+
+        layout.addWidget(self.tab_widget)
+        layout.addStretch()
+        scroll.setWidget(content)
         self.main_layout.addWidget(scroll)
 
     def _create_io_tab_for_brush(self, brush):
-        """Create I/O editor tab for brushes (triggers, movers, doors)."""
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(4, 4, 4, 4)
-        
-        # Determine entity type for I/O registry lookup
-        if brush.get('is_trigger'):
-            entity_type = 'trigger'
-        elif brush.get('is_door'):
-            entity_type = 'door'
-        elif brush.get('is_mover'):
-            entity_type = 'mover'
-        else:
-            entity_type = 'brush'
-        
-        # Create I/O editor widget with the ACTUAL brush entity
-        io_editor = IOEditorWidget(
-            entity=brush,  # FIX: Pass the actual brush dict, not the Thing class
-            entity_type=entity_type,
-            editor_state=self.editor.state,
-            editor=self.editor
-        )
+
+        entity_type = 'trigger' if brush.get('is_trigger') else 'door' if brush.get('is_door') else 'mover' if brush.get('is_mover') else 'brush'
+        io_editor = IOEditorWidget(entity=brush, entity_type=entity_type,
+                                   editor_state=self.editor.state, editor=self.editor)
         io_editor.connections_changed.connect(self._on_io_connections_changed)
         layout.addWidget(io_editor)
         self._widgets['io_editor'] = io_editor
-        
-        # Add inputs reference section
-        inputs_widget = IOInputsWidget()
-        inputs_widget.set_entity(entity_type)
-        layout.addWidget(inputs_widget)
-        
+
+        inputs = IOInputsWidget()
+        inputs.set_entity(entity_type)
+        layout.addWidget(inputs)
         return tab
 
     def _ensure_io_tab(self):
-        """Add I/O tab if not already present and if current brush needs it."""
-        if not IO_AVAILABLE:
+        if not IO_AVAILABLE or self.io_tab_index is not None or self.current_object is None:
             return
-        if hasattr(self, 'io_tab_index') and self.io_tab_index is not None:
-            return  # already exists
-        if self.current_object is None:
-            return
-        needs_io = (self.current_object.get('is_trigger') or
-                    self.current_object.get('is_mover') or
-                    self.current_object.get('is_door'))
-        if not needs_io:
+        if not any(self.current_object.get(k) for k in ('is_trigger', 'is_mover', 'is_door')):
             return
         self.io_tab = self._create_io_tab_for_brush(self.current_object)
         self.io_tab_index = self.tab_widget.addTab(self.io_tab, "⚡ I/O")
 
     def _remove_io_tab(self):
-        """Remove I/O tab if it exists."""
         if hasattr(self, 'io_tab_index') and self.io_tab_index is not None:
             self.tab_widget.removeTab(self.io_tab_index)
             self.io_tab_index = None
@@ -385,481 +363,223 @@ class PropertyEditor(QWidget):
                 self.io_tab = None
 
     def _update_io_tab_presence(self):
-        """Add I/O tab if needed (trigger/mover/door), remove if not."""
         if not IO_AVAILABLE:
             return
-        needs_io = (self.current_object.get('is_trigger') or
-                    self.current_object.get('is_mover') or
-                    self.current_object.get('is_door'))
-        has_io = hasattr(self, 'io_tab_index') and self.io_tab_index is not None
-        if needs_io and not has_io:
+        needs = any(self.current_object.get(k) for k in ('is_trigger', 'is_mover', 'is_door'))
+        has = self.io_tab_index is not None
+        if needs and not has:
             self._ensure_io_tab()
-        elif not needs_io and has_io:
+        elif not needs and has:
             self._remove_io_tab()
 
     def _create_io_tab_for_thing(self, thing):
-        """Create I/O editor tab for Things."""
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(4, 4, 4, 4)
-        
-        entity_type = get_entity_type_for_io(thing)
-        
-        io_editor = IOEditorWidget(
-            entity=thing,
-            entity_type=entity_type,
-            editor_state=self.editor.state,
-            editor=self.editor
-        )
+        etype = get_entity_type_for_io(thing)
+        io_editor = IOEditorWidget(entity=thing, entity_type=etype,
+                                   editor_state=self.editor.state, editor=self.editor)
         io_editor.connections_changed.connect(self._on_io_connections_changed)
         layout.addWidget(io_editor)
         self._widgets['io_editor'] = io_editor
-        
-        # Add inputs reference section
-        inputs_widget = IOInputsWidget()
-        inputs_widget.set_entity(entity_type)
-        layout.addWidget(inputs_widget)
-        
+        inputs = IOInputsWidget()
+        inputs.set_entity(etype)
+        layout.addWidget(inputs)
         return tab
 
     def _on_io_connections_changed(self):
-        """Called when I/O connections are modified."""
-        # Save state for undo/redo
         if hasattr(self.editor.state, 'save_state'):
             self.editor.state.save_state()
-        
-        # Mark document as dirty
         if hasattr(self.editor, 'mark_dirty'):
             self.editor.mark_dirty()
-        
-        # Refresh targeting indicators
         if not self._populating:
             self.editor.update_all_ui()
 
+    # ────────────────────────────
+    # Brush tabs
+    # ────────────────────────────
     def _create_general_tab(self, brush):
-        """Create the General tab with type toggles."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
+        w = QWidget()
+        layout = QVBoxLayout(w)
         layout.setContentsMargins(8, 8, 8, 8)
-        
-        # Type Selection Group
+
         type_group = QGroupBox("Brush Type")
-        type_group.setStyleSheet("""
-            QGroupBox { 
-                font-weight: bold; 
-                color: #F08000; 
-                border: 1px solid #F08000;
-                border-radius: 4px;
-                margin-top: 12px;
-                padding-top: 8px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 8px;
-                padding: 0 4px;
-                background-color: #2b3d3b;
-            }
-        """)
+        type_group.setStyleSheet(_Style.group_box("#F08000"))
         type_layout = QVBoxLayout(type_group)
-        
-        # Shader dropdown and Lock checkbox on same row
-        shader_lock_layout = QHBoxLayout()
-        shader_label = QLabel("Shader:")
-        shader_combo = QComboBox()
-        shader_combo.addItems(['<None>', 'Glass', 'Glow', 'Water', 'Fog'])
-        shader_combo.setCurrentText(brush.get('shader', '<None>'))
-        shader_combo.currentTextChanged.connect(self.on_shader_changed)
-        shader_lock_layout.addWidget(shader_label)
-        shader_lock_layout.addWidget(shader_combo)
-        shader_lock_layout.addStretch()
-        
-        # Lock checkbox on the right
-        lock_label = QLabel("Lock:")
-        lock_cb = QCheckBox("Prevent selection/editing")
-        lock_cb.setStyleSheet(self._checkbox_style())
-        lock_cb.setChecked(brush.get('lock', False))
-        lock_cb.toggled.connect(lambda checked: self.update_object_prop('lock', checked))
-        shader_lock_layout.addWidget(lock_label)
-        shader_lock_layout.addWidget(lock_cb)
-        
-        type_layout.addLayout(shader_lock_layout)
+
+        # Shader + Lock row
+        shader_row = _hbox(QLabel("Shader:"), stretch=False)
+        shader_combo = _make_combo(['<None>', 'Glass', 'Glow', 'Water', 'Fog'],
+                                   brush.get('shader', '<None>'),
+                                   self.on_shader_changed)
+        shader_row.addWidget(shader_combo)
+        shader_row.addStretch()
+        lock_cb = _make_checkbox("Prevent selection/editing", brush.get('lock', False),
+                                 lambda c: self.update_object_prop('lock', c), _Style.CHECKBOX)
+        shader_row.addWidget(QLabel("Lock:"))
+        shader_row.addWidget(lock_cb)
+        type_layout.addLayout(shader_row)
         self._widgets['shader_combo'] = shader_combo
         self._widgets['lock_cb'] = lock_cb
-        
-        type_layout.addWidget(self._create_section_header("Behaviors"))
-        
-        # Trigger checkbox
-        trigger_cb = QCheckBox("Is Trigger (activates other objects)")
-        trigger_cb.setStyleSheet(self._checkbox_style())
-        trigger_cb.setChecked(brush.get('is_trigger', False))
-        trigger_cb.toggled.connect(self.on_trigger_changed)
-        type_layout.addWidget(trigger_cb)
-        self._widgets['trigger_cb'] = trigger_cb
-        
-        # Mover checkbox
-        mover_cb = QCheckBox("Is Mover (moves back and forth)")
-        mover_cb.setStyleSheet(self._checkbox_style())
-        mover_cb.setChecked(brush.get('is_mover', False))
-        mover_cb.toggled.connect(self.on_mover_changed)
-        type_layout.addWidget(mover_cb)
-        self._widgets['mover_cb'] = mover_cb
-        
-        # Door checkbox
-        door_cb = QCheckBox("Is Door (opens when triggered)")
-        door_cb.setStyleSheet(self._checkbox_style())
-        door_cb.setChecked(brush.get('is_door', False))
-        door_cb.toggled.connect(self.on_door_changed)
-        type_layout.addWidget(door_cb)
-        self._widgets['door_cb'] = door_cb
 
-        # Brush Group (compound doors/movers)
-        type_layout.addWidget(self._create_section_header("Grouping"))
+        type_layout.addWidget(self._section("Behaviors"))
+        for key, label, tip in (
+            ('is_trigger', "Is Trigger (activates other objects)", self.on_trigger_changed),
+            ('is_mover', "Is Mover (moves back and forth)", self.on_mover_changed),
+            ('is_door', "Is Door (opens when triggered)", self.on_door_changed),
+        ):
+            cb = _make_checkbox(label, brush.get(key, False), tip, _Style.CHECKBOX)
+            type_layout.addWidget(cb)
+            self._widgets[f'{key}_cb'] = cb
 
-        group_row = QHBoxLayout()
-        group_label = QLabel("Brush Group:")
-        group_input = QLineEdit(brush.get('brush_group', ''))
-        group_input.setPlaceholderText("e.g. front_door")
-        group_input.setToolTip(
-            "Assign the same group name to a door/mover and\n"
-            "its companion brushes (e.g. a glass panel, trim).\n"
-            "The door/mover is the leader — all other brushes\n"
-            "in the group move in lockstep with it."
-        )
-        group_input.editingFinished.connect(
-            lambda: self.update_object_prop('brush_group', group_input.text().strip()))
-        group_row.addWidget(group_label)
-        group_row.addWidget(group_input)
-        type_layout.addLayout(group_row)
-        self._widgets['brush_group_input'] = group_input
-        
+        type_layout.addWidget(self._section("Grouping"))
+        group_inp = QLineEdit(brush.get('brush_group', ''))
+        group_inp.setPlaceholderText("e.g. front_door")
+        group_inp.setToolTip("Assign the same group name to a door/mover and its companion brushes.")
+        group_inp.editingFinished.connect(lambda: self.update_object_prop('brush_group', group_inp.text().strip()))
+        type_layout.addLayout(_hbox(QLabel("Brush Group:"), group_inp, stretch=False))
+        self._widgets['brush_group_input'] = group_inp
+
         layout.addWidget(type_group)
         layout.addStretch()
-        return widget
+        return w
+
+    def _section(self, text):
+        lbl = QLabel(text)
+        lbl.setStyleSheet(_Style.SECTION)
+        return lbl
 
     def _create_trigger_tab(self, brush):
-        """Create the Trigger properties tab."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
+        w = QWidget()
+        layout = QVBoxLayout(w)
         layout.setContentsMargins(8, 8, 8, 8)
-        
         form = QFormLayout()
         form.setSpacing(8)
-        
-        # Trigger type
-        type_combo = QComboBox()
-        type_combo.addItems(['Once', 'Multiple'])
-        type_combo.setCurrentText(brush.get('trigger_type', 'Once'))
-        type_combo.currentTextChanged.connect(lambda t: self.update_object_prop('trigger_type', t))
+
+        type_combo = _make_combo(['Once', 'Multiple'], brush.get('trigger_type', 'Once'),
+                                 lambda t: self.update_object_prop('trigger_type', t))
         form.addRow("Trigger Type:", type_combo)
         self._widgets['trigger_type_combo'] = type_combo
 
-        # Trigger action
-        action_combo = QComboBox()
-        action_combo.addItems(['target', 'hurt', 'teleport'])
-        action_combo.setCurrentText(brush.get('trigger_action', 'target'))
-        action_combo.setToolTip(
-            "target — fire I/O outputs (OnTrigger, OnStartTouch)\n"
-            "hurt — damage the player on contact\n"
-            "teleport — move the player to a PathNode"
-        )
+        action_combo = _make_combo(['target', 'hurt', 'teleport'],
+                                   brush.get('trigger_action', 'target'),
+                                   tooltip="target — fire I/O outputs\nhurt — damage player\nteleport — move player to PathNode")
         form.addRow("Action:", action_combo)
         self._widgets['trigger_action_combo'] = action_combo
 
-        # Target PathNode (for teleport action)
-        target_node_label = QLabel("Target Node:")
-        target_node_combo = QComboBox()
-        target_node_combo.setEditable(True)
-        target_node_combo.addItem("(none)")
-        try:
-            for t in self.editor.state.things:
-                if isinstance(t, PathNode):
-                    n_name = t.properties.get('name', '')
-                    if n_name:
-                        target_node_combo.addItem(n_name)
-        except Exception:
-            pass
-        current_target = brush.get('target_node', '')
-        if current_target:
-            tidx = target_node_combo.findText(current_target)
-            if tidx >= 0:
-                target_node_combo.setCurrentIndex(tidx)
-            else:
-                target_node_combo.setEditText(current_target)
-        target_node_combo.setToolTip("PathNode to teleport the player to.")
-
-        def _on_target_node_changed(text):
-            clean = text.strip()
-            self.update_object_prop('target_node', '' if clean == '(none)' else clean)
-        target_node_combo.currentTextChanged.connect(_on_target_node_changed)
-
-        # Show/hide target_node based on action
+        # Target node (teleport only)
+        node_lbl = QLabel("Target Node:")
+        node_combo = self._pathnode_combo(brush.get('target_node', ''))
+        node_combo.currentTextChanged.connect(
+            lambda t: self.update_object_prop('target_node', '' if t.strip() == '(none)' else t.strip()))
         is_teleport = brush.get('trigger_action', 'target') == 'teleport'
-        target_node_label.setVisible(is_teleport)
-        target_node_combo.setVisible(is_teleport)
+        node_lbl.setVisible(is_teleport)
+        node_combo.setVisible(is_teleport)
+        form.addRow(node_lbl, node_combo)
+        self._widgets['trigger_target_node_label'] = node_lbl
+        self._widgets['trigger_target_node_combo'] = node_combo
 
-        form.addRow(target_node_label, target_node_combo)
-        self._widgets['trigger_target_node_label'] = target_node_label
-        self._widgets['trigger_target_node_combo'] = target_node_combo
-
-        def _on_action_changed(action_text):
-            self.update_object_prop('trigger_action', action_text)
-            show_node = (action_text == 'teleport')
-            target_node_label.setVisible(show_node)
-            target_node_combo.setVisible(show_node)
-            # Auto-set hurt key for backwards compatibility
-            if action_text == 'hurt':
+        def _on_action_changed(txt):
+            self.update_object_prop('trigger_action', txt)
+            show = txt == 'teleport'
+            node_lbl.setVisible(show)
+            node_combo.setVisible(show)
+            if txt == 'hurt':
                 self.update_object_prop('hurt', True)
             elif brush.get('trigger_action') == 'hurt':
                 self.update_object_prop('hurt', False)
+
         action_combo.currentTextChanged.connect(_on_action_changed)
-        
-        # Damage section
-        damage_group = QGroupBox("Damage")
-        damage_group.setStyleSheet("""
-            QGroupBox { 
-                font-weight: bold; 
-                color: #F08000; 
-                border: 1px solid #F08000;
-                border-radius: 4px;
-                margin-top: 12px;
-                padding-top: 8px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 8px;
-                padding: 0 4px;
-                background-color: #2b3d3b;
-            }
-        """)
-        damage_layout = QVBoxLayout(damage_group)
-        
-        hurt_cb = QCheckBox("Hurts player on contact")
-        hurt_cb.setStyleSheet(self._checkbox_style())
-        hurt_cb.setChecked(brush.get('hurt', False))
-        hurt_cb.toggled.connect(self.on_hurt_changed)
-        damage_layout.addWidget(hurt_cb)
-        self._widgets['hurt_cb'] = hurt_cb
-        
-        damage_amount_layout = QHBoxLayout()
-        damage_amount_layout.addWidget(QLabel("Damage Amount:"))
-        damage_spin = QSpinBox()
-        damage_spin.setRange(1, 1000)
-        damage_spin.setValue(brush.get('hurt_amount', 10))
-        damage_spin.editingFinished.connect(lambda w=damage_spin: self.update_object_prop('hurt_amount', w.value()))
-        damage_amount_layout.addWidget(damage_spin)
-        damage_amount_layout.addStretch()
-        damage_layout.addLayout(damage_amount_layout)
-        self._widgets['damage_spin'] = damage_spin
-        
-        # Show/hide damage amount based on hurt checkbox
-        damage_spin.setEnabled(brush.get('hurt', False))
-        
+
         layout.addLayout(form)
-        layout.addWidget(damage_group)
+
+        # Damage group
+        dmg_group = QGroupBox("Damage")
+        dmg_group.setStyleSheet(_Style.group_box("#F08000"))
+        dmg_layout = QVBoxLayout(dmg_group)
+        hurt_cb = _make_checkbox("Hurts player on contact", brush.get('hurt', False),
+                                 self.on_hurt_changed, _Style.CHECKBOX)
+        dmg_layout.addWidget(hurt_cb)
+        self._widgets['hurt_cb'] = hurt_cb
+
+        dmg_spin = _make_spin(brush.get('hurt_amount', 10), 1, 1000)
+        dmg_spin.setEnabled(brush.get('hurt', False))
+        dmg_spin.editingFinished.connect(lambda: self.update_object_prop('hurt_amount', dmg_spin.value()))
+        dmg_layout.addLayout(_hbox(QLabel("Damage Amount:"), dmg_spin, stretch=False))
+        self._widgets['damage_spin'] = dmg_spin
+
+        layout.addWidget(dmg_group)
         layout.addStretch()
-        return widget
+        return w
 
     def _create_mover_tab(self, brush):
-        """Create the Mover properties tab."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
+        w = QWidget()
+        layout = QVBoxLayout(w)
         layout.setContentsMargins(8, 8, 8, 8)
 
-        # Preview button at the top
-        preview_btn = QPushButton("▶ Preview Movement")
-        preview_btn.setCheckable(True)
-        preview_btn.setStyleSheet("""
-            QPushButton { background-color: #425F5D; color: white; border-radius: 4px; padding: 8px; font-weight: bold; }
-            QPushButton:checked { background-color: #0056b3; }
-            QPushButton:hover { background-color: #5a7a82; }
-        """)
-        preview_btn.toggled.connect(self.toggle_mover_preview)
+        preview_btn = self._preview_button("▶ Preview Movement", self.toggle_mover_preview)
         layout.addWidget(preview_btn)
         self._widgets['mover_preview_btn'] = preview_btn
 
         form = QFormLayout()
         form.setSpacing(8)
-        
-        # Speed
-        speed_input = QLineEdit(str(brush.get('speed', 64.0)))
-        speed_input.editingFinished.connect(lambda: self.update_object_prop('speed', float(speed_input.text()) if speed_input.text() else 64.0))
-        speed_input.setToolTip("Units/sec for translation mode, or degrees/sec for Rotate mode")
-        form.addRow("Speed:", speed_input)
-        self._widgets['speed_input'] = speed_input
-        
-        # Distance
-        distance_input = QLineEdit(str(brush.get('distance', 128.0)))
-        distance_input.editingFinished.connect(lambda: self.update_object_prop('distance', float(distance_input.text()) if distance_input.text() else 128.0))
-        form.addRow("Distance:", distance_input)
-        self._widgets['distance_input'] = distance_input
-        
-        # Direction
-        dir_widget = QWidget()
-        dir_layout = QHBoxLayout(dir_widget)
-        dir_layout.setContentsMargins(0, 0, 0, 0)
-        dir_layout.setSpacing(4)
-        
-        direction = brush.get('direction', [0, 1, 0])
-        dir_x = QLineEdit(str(direction[0]))
-        dir_y = QLineEdit(str(direction[1]))
-        dir_z = QLineEdit(str(direction[2]))
-        for inp in [dir_x, dir_y, dir_z]:
-            inp.setFixedWidth(50)
-        
-        def update_direction():
-            try:
-                d = [float(dir_x.text()), float(dir_y.text()), float(dir_z.text())]
-                self.update_object_prop('direction', d)
-            except ValueError: pass
-        
-        dir_x.editingFinished.connect(update_direction)
-        dir_y.editingFinished.connect(update_direction)
-        dir_z.editingFinished.connect(update_direction)
-        
-        dir_layout.addWidget(QLabel("X:")); dir_layout.addWidget(dir_x)
-        dir_layout.addWidget(QLabel("Y:")); dir_layout.addWidget(dir_y)
-        dir_layout.addWidget(QLabel("Z:")); dir_layout.addWidget(dir_z)
-        dir_layout.addStretch()
+
+        for key, label, default in (('speed', "Speed:", 64.0), ('distance', "Distance:", 128.0)):
+            inp = QLineEdit(str(brush.get(key, default)))
+            inp.editingFinished.connect(lambda k=key, le=inp, d=default:
+                                      self.update_object_prop(k, float(le.text()) if le.text() else d))
+            form.addRow(label, inp)
+            self._widgets[f'{key}_input'] = inp
+
+        # Direction vector
+        dir_vec = brush.get('direction', [0, 1, 0])
+        dir_widget, dir_inputs = self._vec3_row(dir_vec, lambda v: self.update_object_prop('direction', v))
         form.addRow("Direction:", dir_widget)
-        self._widgets['dir_x'] = dir_x
-        self._widgets['dir_y'] = dir_y
-        self._widgets['dir_z'] = dir_z
-        
+        self._widgets['dir_x'], self._widgets['dir_y'], self._widgets['dir_z'] = dir_inputs
+
         layout.addLayout(form)
 
-        # PathNode waypoint section
+        # PathNode waypoint
         path_group = QGroupBox("PathNode Waypoint")
-        path_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                color: #26A69A;
-                border: 1px solid #26A69A;
-                border-radius: 4px;
-                margin-top: 12px;
-                padding-top: 8px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 8px;
-                padding: 0 4px;
-                background-color: #1a2f2d;
-            }
-        """)
+        path_group.setStyleSheet(_Style.group_box("#26A69A", "#1a2f2d"))
         path_form = QFormLayout(path_group)
-        path_form.setSpacing(6)
-
-        path_target_combo = QComboBox()
-        path_target_combo.setEditable(True)
-        path_target_combo.addItem("(none)")
-        try:
-            for t in self.editor.state.things:
-                if isinstance(t, PathNode):
-                    n_name = t.properties.get('name', '')
-                    if n_name:
-                        path_target_combo.addItem(n_name)
-        except Exception:
-            pass
-        current_path = brush.get('path_target', '')
-        if current_path:
-            tidx = path_target_combo.findText(current_path)
-            if tidx >= 0:
-                path_target_combo.setCurrentIndex(tidx)
-            else:
-                path_target_combo.setEditText(current_path)
-        path_target_combo.setToolTip(
-            "First PathNode in a waypoint chain.\n"
-            "When set (and Start On is checked), the mover\n"
-            "follows PathNodes instead of using Direction/Distance.\n"
-            "Leave as (none) for traditional direction-based movement."
-        )
-
-        def _on_path_target_changed(text):
-            clean = text.strip()
-            self.update_object_prop('path_target', '' if clean == '(none)' else clean)
-        path_target_combo.currentTextChanged.connect(_on_path_target_changed)
-        path_form.addRow("Path Target:", path_target_combo)
-        self._widgets['mover_path_target_combo'] = path_target_combo
-
+        path_target = self._pathnode_combo(brush.get('path_target', ''))
+        path_target.currentTextChanged.connect(
+            lambda t: self.update_object_prop('path_target', '' if t.strip() == '(none)' else t.strip()))
+        path_form.addRow("Path Target:", path_target)
+        self._widgets['mover_path_target_combo'] = path_target
         layout.addWidget(path_group)
 
         # Options
-        options_group = QGroupBox("Options")
-        options_group.setStyleSheet("""
-            QGroupBox { 
-                font-weight: bold; 
-                color: #F08000; 
-                border: 1px solid #F08000;
-                border-radius: 4px;
-                margin-top: 12px;
-                padding-top: 8px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 8px;
-                padding: 0 4px;
-                background-color: #2b3d3b;
-            }
-        """)
-        options_layout = QVBoxLayout(options_group)
-        
-        start_on_cb = QCheckBox("Start moving immediately")
-        start_on_cb.setStyleSheet(self._checkbox_style())
-        start_on_cb.setChecked(brush.get('start_on', False))
-        start_on_cb.toggled.connect(lambda checked: self.update_object_prop('start_on', checked))
-        options_layout.addWidget(start_on_cb)
-        self._widgets['start_on_cb'] = start_on_cb
+        opt_group = QGroupBox("Options")
+        opt_group.setStyleSheet(_Style.group_box("#F08000"))
+        opt_layout = QVBoxLayout(opt_group)
 
-        # ── Rotate mode ──────────────────────────────────────────────────
-        rotate_cb = QCheckBox("Rotate continuously (func_rotating)")
-        rotate_cb.setStyleSheet(self._checkbox_style())
-        rotate_cb.setChecked(brush.get('rotate', False))
-        options_layout.addWidget(rotate_cb)
+        start_cb = _make_checkbox("Start moving immediately", brush.get('start_on', False),
+                                  lambda c: self.update_object_prop('start_on', c), _Style.CHECKBOX)
+        opt_layout.addWidget(start_cb)
+        self._widgets['start_on_cb'] = start_cb
+
+        rotate_cb = _make_checkbox("Rotate continuously (func_rotating)", brush.get('rotate', False),
+                                   None, _Style.CHECKBOX)
+        opt_layout.addWidget(rotate_cb)
         self._widgets['rotate_cb'] = rotate_cb
 
-        rot_axis_widget = QWidget()
-        rot_axis_layout = QHBoxLayout(rot_axis_widget)
-        rot_axis_layout.setContentsMargins(16, 0, 0, 4)
-        rot_axis_layout.setSpacing(4)
         rot_axis = brush.get('rot_axis', [0, 1, 0])
-        rot_ax = QLineEdit(str(rot_axis[0])); rot_ax.setFixedWidth(45)
-        rot_ay = QLineEdit(str(rot_axis[1])); rot_ay.setFixedWidth(45)
-        rot_az = QLineEdit(str(rot_axis[2])); rot_az.setFixedWidth(45)
+        rot_widget, rot_inputs = self._vec3_row(rot_axis, lambda v: self.update_object_prop('rot_axis', v),
+                                                indent=16)
+        opt_layout.addWidget(rot_widget)
+        self._widgets['rot_ax'], self._widgets['rot_ay'], self._widgets['rot_az'] = rot_inputs
 
-        def update_rot_axis():
-            try:
-                self.update_object_prop('rot_axis', [float(rot_ax.text()), float(rot_ay.text()), float(rot_az.text())])
-            except ValueError:
-                pass
-
-        rot_ax.editingFinished.connect(update_rot_axis)
-        rot_ay.editingFinished.connect(update_rot_axis)
-        rot_az.editingFinished.connect(update_rot_axis)
-
-        rot_axis_layout.addWidget(QLabel("Axis  X:")); rot_axis_layout.addWidget(rot_ax)
-        rot_axis_layout.addWidget(QLabel("Y:"));       rot_axis_layout.addWidget(rot_ay)
-        rot_axis_layout.addWidget(QLabel("Z:"));       rot_axis_layout.addWidget(rot_az)
-        rot_axis_layout.addStretch()
-        options_layout.addWidget(rot_axis_widget)
-        self._widgets['rot_axis_widget'] = rot_axis_widget
-        self._widgets['rot_ax'] = rot_ax
-        self._widgets['rot_ay'] = rot_ay
-        self._widgets['rot_az'] = rot_az
-
-        def on_rotate_changed(checked):
+        def on_rotate(checked):
             self.update_object_prop('rotate', checked)
-            rot_axis_widget.setVisible(checked)
+            rot_widget.setVisible(checked)
             if checked:
-                # Zero out direction so the mover doesn't also translate
                 self.update_object_prop('direction', [0, 0, 0])
                 for k, v in (('dir_x', '0'), ('dir_y', '0'), ('dir_z', '0')):
                     if k in self._widgets:
                         self._widgets[k].setText(v)
             else:
-                # Restore default mover direction
                 self.update_object_prop('direction', [0, 1.0, 0])
                 for k, v in (('dir_x', '0'), ('dir_y', '1.0'), ('dir_z', '0')):
                     if k in self._widgets:
@@ -870,579 +590,1268 @@ class PropertyEditor(QWidget):
                 if k in self._widgets:
                     self._widgets[k].setEnabled(not checked)
 
-        rotate_cb.toggled.connect(on_rotate_changed)
-        rot_axis_widget.setVisible(brush.get('rotate', False))
-        # ─────────────────────────────────────────────────────────────────
+        rotate_cb.toggled.connect(on_rotate)
+        rot_widget.setVisible(brush.get('rotate', False))
 
-        layout.addWidget(options_group)
-        
+        layout.addWidget(opt_group)
         layout.addStretch()
-        return widget
+        return w
 
     def _create_door_tab(self, brush):
-        """Create the Door properties tab."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
+        w = QWidget()
+        layout = QVBoxLayout(w)
         layout.setContentsMargins(8, 8, 8, 8)
 
-        # Preview button at the top
-        preview_btn = QPushButton("▶ Preview Door")
-        preview_btn.setCheckable(True)
-        preview_btn.setStyleSheet("""
-            QPushButton { background-color: #425F5D; color: white; border-radius: 4px; padding: 8px; font-weight: bold; }
-            QPushButton:checked { background-color: #0056b3; }
-            QPushButton:hover { background-color: #5a7a82; }
-        """)
-        preview_btn.toggled.connect(self.toggle_door_preview)
+        preview_btn = self._preview_button("▶ Preview Door", self.toggle_door_preview)
         layout.addWidget(preview_btn)
         self._widgets['door_preview_btn'] = preview_btn
 
         form = QFormLayout()
         form.setSpacing(8)
-        
-        # Open direction
-        dir_combo = QComboBox()
-        dir_combo.addItems(['up', 'down', 'north', 'south', 'east', 'west'])
-        dir_combo.setCurrentText(brush.get('door_direction', 'up'))
-        dir_combo.currentTextChanged.connect(lambda t: self.update_object_prop('door_direction', t))
+
+        dir_combo = _make_combo(['up', 'down', 'north', 'south', 'east', 'west'],
+                                brush.get('door_direction', 'up'),
+                                lambda t: self.update_object_prop('door_direction', t))
         form.addRow("Open Direction:", dir_combo)
         self._widgets['door_dir_combo'] = dir_combo
-        
-        # Open distance
-        dist_input = QLineEdit(str(brush.get('door_distance', 128.0)))
-        dist_input.editingFinished.connect(lambda: self.update_object_prop('door_distance', float(dist_input.text()) if dist_input.text() else 128.0))
-        form.addRow("Open Distance:", dist_input)
-        self._widgets['door_dist_input'] = dist_input
-        
-        # Lip
-        lip_input = QLineEdit(str(brush.get('door_lip', 8.0)))
-        lip_input.editingFinished.connect(lambda: self.update_object_prop('door_lip', float(lip_input.text()) if lip_input.text() else 8.0))
-        form.addRow("Lip (stay closed):", lip_input)
-        self._widgets['door_lip_input'] = lip_input
-        
-        # Speed
-        speed_input = QLineEdit(str(brush.get('door_speed', 64.0)))
-        speed_input.editingFinished.connect(lambda: self.update_object_prop('door_speed', float(speed_input.text()) if speed_input.text() else 64.0))
-        form.addRow("Speed:", speed_input)
-        self._widgets['door_speed_input'] = speed_input
-        
+
+        for key, label, default in (('door_distance', "Open Distance:", 128.0),
+                                    ('door_lip', "Lip (stay closed):", 8.0),
+                                    ('door_speed', "Speed:", 64.0)):
+            inp = QLineEdit(str(brush.get(key, default)))
+            inp.editingFinished.connect(lambda k=key, le=inp, d=default:
+                                      self.update_object_prop(k, float(le.text()) if le.text() else d))
+            form.addRow(label, inp)
+            self._widgets[f'{key}_input'] = inp
+
         layout.addLayout(form)
-        
-        # Options
-        options_group = QGroupBox("Door Options")
-        options_group.setStyleSheet("""
-            QGroupBox { 
-                font-weight: bold; 
-                color: #F08000; 
-                border: 1px solid #F08000;
-                border-radius: 4px;
-                margin-top: 12px;
-                padding-top: 8px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 8px;
-                padding: 0 4px;
-                background-color: #2b3d3b;
-            }
-        """)
-        options_layout = QVBoxLayout(options_group)
-        
-        auto_open_cb = QCheckBox("Auto-open when player is near")
-        auto_open_cb.setStyleSheet(self._checkbox_style())
-        auto_open_cb.setChecked(brush.get('door_auto_open', False))
-        auto_open_cb.toggled.connect(lambda checked: self.update_object_prop('door_auto_open', checked))
-        options_layout.addWidget(auto_open_cb)
-        self._widgets['door_auto_open_cb'] = auto_open_cb
-        
-        locked_cb = QCheckBox("Locked (requires trigger to open)")
-        locked_cb.setStyleSheet(self._checkbox_style())
-        locked_cb.setChecked(brush.get('door_locked', False))
-        locked_cb.toggled.connect(lambda checked: self.update_object_prop('door_locked', checked))
-        options_layout.addWidget(locked_cb)
-        self._widgets['door_locked_cb'] = locked_cb
-        
-        needs_key_cb = QCheckBox("Requires key to open")
-        needs_key_cb.setStyleSheet(self._checkbox_style())
-        needs_key_cb.setChecked(brush.get('door_needs_key', False))
-        needs_key_cb.toggled.connect(self.on_door_needs_key_changed)
-        options_layout.addWidget(needs_key_cb)
-        self._widgets['door_needs_key_cb'] = needs_key_cb
-        
-        # Create the dropdown for Key Name
-        door_key_label = QLabel("Key Name:")
-        door_key_combo = QComboBox()
-        door_key_combo.setEditable(False)
 
-        key_options = ['red_key', 'blue_key', 'yellow_key', 'custom']
-        door_key_combo.addItems(key_options)
+        opt_group = QGroupBox("Door Options")
+        opt_group.setStyleSheet(_Style.group_box("#F08000"))
+        opt_layout = QVBoxLayout(opt_group)
 
-        # Set current value from the door's key property
-        current_key = brush.get('door_key_name', 'red_key')
-        if current_key in key_options:
-            door_key_combo.setCurrentText(current_key)
+        for key, label in (('door_auto_open', "Auto-open when player is near"),
+                           ('door_locked', "Locked (requires trigger to open)"),
+                           ('door_needs_key', "Requires key to open")):
+            cb = _make_checkbox(label, brush.get(key, False),
+                                getattr(self, f'on_{key}_changed', None) or (lambda c, k=key: self.update_object_prop(k, c)),
+                                _Style.CHECKBOX)
+            opt_layout.addWidget(cb)
+            self._widgets[f'{key}_cb'] = cb
 
-        # Connect to update door_key_name
-        door_key_combo.currentTextChanged.connect(
-            lambda name: self.update_object_prop('door_key_name', name))
-            
-        # Initialize visibility based on the checkbox
-        needs_key_init = brush.get('door_needs_key', False)
-        door_key_label.setVisible(needs_key_init)
-        door_key_combo.setVisible(needs_key_init)
+        # Key dropdown
+        key_lbl = QLabel("Key Name:")
+        key_combo = _make_combo(['red_key', 'blue_key', 'yellow_key', 'custom'],
+                                brush.get('door_key_name', 'red_key'),
+                                lambda t: self.update_object_prop('door_key_name', t))
+        key_lbl.setVisible(brush.get('door_needs_key', False))
+        key_combo.setVisible(brush.get('door_needs_key', False))
+        opt_layout.addLayout(_hbox(key_lbl, key_combo, stretch=False))
+        self._widgets['door_key_input'] = key_combo
+        self._widgets['door_key_label'] = key_lbl
 
-        # Add as a horizontal row inside the options group
-        key_row = QHBoxLayout()
-        key_row.addWidget(door_key_label)
-        key_row.addWidget(door_key_combo)
-        options_layout.addLayout(key_row)
-        
-        # Store in _widgets so on_door_needs_key_changed can toggle it
-        self._widgets['door_key_input'] = door_key_combo
-        self._widgets['door_key_label'] = door_key_label
+        # Link label + select button
+        link_lbl = QLabel("")
+        link_lbl.setWordWrap(True)
+        link_lbl.setStyleSheet("QLabel { padding: 4px; }")
+        opt_layout.addWidget(link_lbl)
+        self._widgets['door_key_link_label'] = link_lbl
 
-        # --- Linked Key Pickup cross-reference ---
-        link_label = QLabel("")
-        link_label.setWordWrap(True)
-        link_label.setStyleSheet("QLabel { padding: 4px; }")
-        options_layout.addWidget(link_label)
-        self._widgets['door_key_link_label'] = link_label
-
-        select_key_btn = QPushButton("Select Key Pickup ▸")
-        select_key_btn.setStyleSheet("""
+        sel_btn = QPushButton("Select Key Pickup ▸")
+        sel_btn.setStyleSheet("""
             QPushButton { background-color: #2a5a2a; color: #88FF88; border: 1px solid #44AA44;
                           border-radius: 3px; padding: 4px 8px; font-size: 11px; }
             QPushButton:hover { background-color: #3a6a3a; }
         """)
-        select_key_btn.setVisible(False)
-        select_key_btn.clicked.connect(self._select_linked_key_pickup)
-        options_layout.addWidget(select_key_btn)
-        self._widgets['door_key_select_btn'] = select_key_btn
+        sel_btn.setVisible(False)
+        sel_btn.clicked.connect(self._select_linked_key_pickup)
+        opt_layout.addWidget(sel_btn)
+        self._widgets['door_key_select_btn'] = sel_btn
 
-        # Populate the linked key info
+        key_combo.currentTextChanged.connect(lambda _: self._update_door_key_link(brush))
         self._update_door_key_link(brush)
 
-        # Also refresh link when key name dropdown changes
-        door_key_combo.currentTextChanged.connect(
-            lambda _name: self._update_door_key_link(self.current_object))
-
-        layout.addWidget(options_group)
-        
+        layout.addWidget(opt_group)
         layout.addStretch()
-        return widget
+        return w
 
     def _create_shader_tab(self, brush):
-        """Create the Shader properties tab with dynamic content based on shader type."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
+        w = QWidget()
+        layout = QVBoxLayout(w)
         layout.setContentsMargins(8, 8, 8, 8)
-        
-        shader_type = brush.get('shader', '<None>')
-        
-        if shader_type == 'Glass':
-            layout.addWidget(self._create_glass_properties(brush))
-        elif shader_type == 'Glow':
-            layout.addWidget(self._create_glow_properties(brush))
-        elif shader_type == 'Water':
-            layout.addWidget(self._create_water_properties(brush))
-        elif shader_type == 'Fog':
-            layout.addWidget(self._create_fog_properties(brush))
+        stype = brush.get('shader', '<None>')
+        factory = {
+            'Glass': self._create_glass_properties,
+            'Glow': self._create_glow_properties,
+            'Water': self._create_water_properties,
+            'Fog': self._create_fog_properties,
+        }.get(stype)
+        if factory:
+            layout.addWidget(factory(brush))
         else:
             layout.addWidget(QLabel("No shader-specific properties."))
-        
         layout.addStretch()
-        return widget
+        return w
 
     def _create_glass_properties(self, brush):
-        """Create Glass shader properties for realistic glass rendering."""
         group = QGroupBox("Glass Properties")
-        group.setStyleSheet("""
-            QGroupBox { 
-                font-weight: bold; 
-                color: #00BFFF; 
-                border: 1px solid #00BFFF;
-                border-radius: 4px;
-                margin-top: 12px;
-                padding-top: 8px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 8px;
-                padding: 0 4px;
-                background-color: #2b3d3b;
-            }
-        """)
+        group.setStyleSheet(_Style.group_box("#00BFFF"))
         layout = QVBoxLayout(group)
         layout.setSpacing(8)
-        
         form = QFormLayout()
         form.setSpacing(6)
-        
-        # Glass color/tint
-        color_btn = self._create_color_button(brush.get('glass_color', [0.9, 0.95, 1.0]))
-        color_btn.clicked.connect(lambda: self._pick_color('glass_color', color_btn, [0.9, 0.95, 1.0]))
+
+        color_btn = self._color_button(brush.get('glass_color', [0.9, 0.95, 1.0]),
+                                       lambda: self._pick_color('glass_color', color_btn, [0.9, 0.95, 1.0]))
         form.addRow("Tint Color:", color_btn)
         self._widgets['glass_color_btn'] = color_btn
-        
-        # Opacity slider (0 = fully transparent, 1 = opaque)
-        opacity_layout = QHBoxLayout()
-        opacity_slider = QSlider(Qt.Horizontal)
-        opacity_slider.setRange(0, 100)
-        opacity_slider.setValue(int(brush.get('glass_opacity', 0.3) * 100))
-        opacity_label = QLabel(f"{brush.get('glass_opacity', 0.3):.2f}")
-        opacity_slider.valueChanged.connect(lambda v: (
-            self.update_object_prop('glass_opacity', v / 100.0),
-            opacity_label.setText(f"{v / 100.0:.2f}")
-        ))
-        opacity_layout.addWidget(opacity_slider)
-        opacity_layout.addWidget(opacity_label)
-        form.addRow("Opacity:", opacity_layout)
-        self._widgets['glass_opacity_slider'] = opacity_slider
-        
+
+        slider, label = _make_slider(self, brush.get('glass_opacity', 0.3), 0, 100,
+                                     callback=lambda v: self.update_object_prop('glass_opacity', v))
+        form.addRow("Opacity:", _hbox(slider, label, stretch=False))
+
         layout.addLayout(form)
-        
-        # Distortion section
-        distort_group = QGroupBox("Distortion Effects")
-        distort_group.setStyleSheet("""
-            QGroupBox { 
-                font-weight: bold; 
-                color: #87CEEB; 
-                border: 1px solid #4a6a8a;
-                border-radius: 4px;
-                margin-top: 8px;
-                padding-top: 4px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 8px;
-                padding: 0 4px;
-                background-color: #2b3d3b;
-            }
-        """)
-        distort_layout = QFormLayout(distort_group)
-        distort_layout.setSpacing(6)
-        
-        # Distortion strength (warping effect)
-        warp_layout = QHBoxLayout()
-        warp_slider = QSlider(Qt.Horizontal)
-        warp_slider.setRange(0, 100)
-        warp_slider.setValue(int(brush.get('glass_distortion', 0.5) * 100))
-        warp_label = QLabel(f"{brush.get('glass_distortion', 0.5):.2f}")
-        warp_slider.setToolTip("How much the view through glass is warped/distorted")
-        warp_slider.valueChanged.connect(lambda v: (
-            self.update_object_prop('glass_distortion', v / 100.0),
-            warp_label.setText(f"{v / 100.0:.2f}")
-        ))
-        warp_layout.addWidget(warp_slider)
-        warp_layout.addWidget(warp_label)
-        distort_layout.addRow("Warp Strength:", warp_layout)
-        self._widgets['glass_distort_slider'] = warp_slider
-        
-        # Refraction index (how much light bends)
-        refract_layout = QHBoxLayout()
-        refract_slider = QSlider(Qt.Horizontal)
-        refract_slider.setRange(100, 250)  # 1.0 to 2.5 (1.5 is typical glass)
-        refract_slider.setValue(int(brush.get('glass_refraction', 1.5) * 100))
-        refract_label = QLabel(f"{brush.get('glass_refraction', 1.5):.2f}")
-        refract_slider.setToolTip("Index of refraction (1.0=air, 1.5=glass, 2.4=diamond)")
-        refract_slider.valueChanged.connect(lambda v: (
-            self.update_object_prop('glass_refraction', v / 100.0),
-            refract_label.setText(f"{v / 100.0:.2f}")
-        ))
-        refract_layout.addWidget(refract_slider)
-        refract_layout.addWidget(refract_label)
-        distort_layout.addRow("Refraction:", refract_layout)
-        self._widgets['glass_refraction_slider'] = refract_slider
-        
-        # Roughness (frosted glass effect)
-        rough_layout = QHBoxLayout()
-        rough_slider = QSlider(Qt.Horizontal)
-        rough_slider.setRange(0, 100)
-        rough_slider.setValue(int(brush.get('glass_roughness', 0.0) * 100))
-        rough_label = QLabel(f"{brush.get('glass_roughness', 0.0):.2f}")
-        rough_slider.setToolTip("Surface roughness (0=clear, 1=frosted)")
-        rough_slider.valueChanged.connect(lambda v: (
-            self.update_object_prop('glass_roughness', v / 100.0),
-            rough_label.setText(f"{v / 100.0:.2f}")
-        ))
-        rough_layout.addWidget(rough_slider)
-        rough_layout.addWidget(rough_label)
-        distort_layout.addRow("Roughness:", rough_layout)
-        self._widgets['glass_roughness_slider'] = rough_slider
-        
-        layout.addWidget(distort_group)
-        
-        # Fresnel section (edge reflection)
-        fresnel_group = QGroupBox("Fresnel Effect")
-        fresnel_group.setStyleSheet("""
-            QGroupBox { 
-                font-weight: bold; 
-                color: #98FB98; 
-                border: 1px solid #4a8a6a;
-                border-radius: 4px;
-                margin-top: 8px;
-                padding-top: 4px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 8px;
-                padding: 0 4px;
-                background-color: #2b3d3b;
-            }
-        """)
-        fresnel_layout = QFormLayout(fresnel_group)
-        fresnel_layout.setSpacing(6)
-        
-        # Fresnel strength
-        fres_layout = QHBoxLayout()
-        fres_slider = QSlider(Qt.Horizontal)
-        fres_slider.setRange(0, 100)
-        fres_slider.setValue(int(brush.get('glass_fresnel', 0.5) * 100))
-        fres_label = QLabel(f"{brush.get('glass_fresnel', 0.5):.2f}")
-        fres_slider.setToolTip("Edge reflection intensity (more reflective at grazing angles)")
-        fres_slider.valueChanged.connect(lambda v: (
-            self.update_object_prop('glass_fresnel', v / 100.0),
-            fres_label.setText(f"{v / 100.0:.2f}")
-        ))
-        fres_layout.addWidget(fres_slider)
-        fres_layout.addWidget(fres_label)
-        fresnel_layout.addRow("Intensity:", fres_layout)
-        self._widgets['glass_fresnel_slider'] = fres_slider
-        
-        layout.addWidget(fresnel_group)
-        
+
+        # Distortion
+        dist_group = QGroupBox("Distortion Effects")
+        dist_group.setStyleSheet(_Style.group_box("#87CEEB", "#2b3d3b"))
+        dist_form = QFormLayout(dist_group)
+        for key, label_txt, default, tip in (
+            ('glass_distortion', "Warp Strength:", 0.5, "How much the view through glass is warped"),
+            ('glass_refraction', "Refraction:", 1.5, "Index of refraction (1.0=air, 1.5=glass, 2.4=diamond)"),
+            ('glass_roughness', "Roughness:", 0.0, "Surface roughness (0=clear, 1=frosted)"),
+        ):
+            slider, label = _make_slider(self, brush.get(key, default), 0, 100 if 'refraction' not in key else 250,
+                                         fmt="{:.2f}", callback=lambda v, k=key: self.update_object_prop(k, v),
+                                         tooltip=tip)
+            dist_form.addRow(label_txt, _hbox(slider, label, stretch=False))
+            self._widgets[f'{key}_slider'] = slider
+        layout.addWidget(dist_group)
+
+        # Fresnel
+        fres_group = QGroupBox("Fresnel Effect")
+        fres_group.setStyleSheet(_Style.group_box("#98FB98", "#2b3d3b"))
+        fres_form = QFormLayout(fres_group)
+        slider, label = _make_slider(self, brush.get('glass_fresnel', 0.5), 0, 100,
+                                     callback=lambda v: self.update_object_prop('glass_fresnel', v),
+                                     tooltip="Edge reflection intensity")
+        fres_form.addRow("Intensity:", _hbox(slider, label, stretch=False))
+        self._widgets['glass_fresnel_slider'] = slider
+        layout.addWidget(fres_group)
+
         return group
 
     def _create_glow_properties(self, brush):
-        """Create Glow shader properties."""
         group = QGroupBox("Glow Properties")
-        group.setStyleSheet("""
-            QGroupBox { 
-                font-weight: bold; 
-                color: #FFD700; 
-                border: 1px solid #FFD700;
-                border-radius: 4px;
-                margin-top: 12px;
-                padding-top: 8px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 8px;
-                padding: 0 4px;
-                background-color: #2b3d3b;
-            }
-        """)
+        group.setStyleSheet(_Style.group_box("#FFD700"))
         layout = QVBoxLayout(group)
         layout.setSpacing(8)
-        
         form = QFormLayout()
-        
-        # Glow color
-        color_btn = self._create_color_button(brush.get('glow_color', [1.0, 0.9, 0.7]))
-        color_btn.clicked.connect(lambda: self._pick_color('glow_color', color_btn, [1.0, 0.9, 0.7]))
+
+        color_btn = self._color_button(brush.get('glow_color', [1.0, 0.9, 0.7]),
+                                       lambda: self._pick_color('glow_color', color_btn, [1.0, 0.9, 0.7]))
         form.addRow("Glow Color:", color_btn)
         self._widgets['glow_color_btn'] = color_btn
-        
-        # Intensity slider
-        intensity_layout = QHBoxLayout()
-        intensity_slider = QSlider(Qt.Horizontal)
-        intensity_slider.setRange(300, 1000)
-        intensity_slider.setValue(int(brush.get('glow_intensity', 3.0) * 100))
-        intensity_label = QLabel(f"{brush.get('glow_intensity', 3.0):.2f}")
-        intensity_slider.valueChanged.connect(lambda v: (
-            self.update_object_prop('glow_intensity', v / 100.0),
-            intensity_label.setText(f"{v / 100.0:.2f}")
-        ))
-        intensity_layout.addWidget(intensity_slider)
-        intensity_layout.addWidget(intensity_label)
-        form.addRow("Intensity:", intensity_layout)
-        self._widgets['glow_intensity_slider'] = intensity_slider
-        
+
+        slider, label = _make_slider(self, brush.get('glow_intensity', 3.0), 300, 1000,
+                                     fmt="{:.2f}", callback=lambda v: self.update_object_prop('glow_intensity', v))
+        form.addRow("Intensity:", _hbox(slider, label, stretch=False))
+        self._widgets['glow_intensity_slider'] = slider
+
         layout.addLayout(form)
-        
         return group
 
     def _create_water_properties(self, brush):
-        """Create Water shader properties."""
         group = QGroupBox("Water Properties")
-        group.setStyleSheet("""
-            QGroupBox { 
-                font-weight: bold; 
-                color: #00CED1; 
-                border: 1px solid #00CED1;
-                border-radius: 4px;
-                margin-top: 12px;
-                padding-top: 8px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 8px;
-                padding: 0 4px;
-                background-color: #2b3d3b;
-            }
-        """)
+        group.setStyleSheet(_Style.group_box("#00CED1"))
         layout = QFormLayout(group)
         layout.setSpacing(8)
-        
-        # Water tint color
-        color_btn = self._create_color_button(brush.get('water_tint', [0.0, 0.4, 0.6]))
-        color_btn.clicked.connect(lambda: self._pick_color('water_tint', color_btn, [0.0, 0.4, 0.6]))
+
+        color_btn = self._color_button(brush.get('water_tint', [0.0, 0.4, 0.6]),
+                                       lambda: self._pick_color('water_tint', color_btn, [0.0, 0.4, 0.6]))
         layout.addRow("Water Tint:", color_btn)
         self._widgets['water_color_btn'] = color_btn
-        
-        # Opacity slider
-        opacity_layout = QHBoxLayout()
-        opacity_slider = QSlider(Qt.Horizontal)
-        opacity_slider.setRange(0, 100)
-        opacity_slider.setValue(int(brush.get('water_opacity', 0.5) * 100))
-        opacity_label = QLabel(f"{brush.get('water_opacity', 0.5):.2f}")
-        opacity_slider.valueChanged.connect(lambda v: (
-            self.update_object_prop('water_opacity', v / 100.0),
-            opacity_label.setText(f"{v / 100.0:.2f}")
-        ))
-        opacity_layout.addWidget(opacity_slider)
-        opacity_layout.addWidget(opacity_label)
-        layout.addRow("Opacity:", opacity_layout)
-        self._widgets['water_opacity_slider'] = opacity_slider
-        
-        # Reflectivity slider
-        reflect_layout = QHBoxLayout()
-        reflect_slider = QSlider(Qt.Horizontal)
-        reflect_slider.setRange(0, 100)
-        reflect_slider.setValue(int(brush.get('water_reflectivity', 0.5) * 100))
-        reflect_label = QLabel(f"{brush.get('water_reflectivity', 0.5):.2f}")
-        reflect_slider.valueChanged.connect(lambda v: (
-            self.update_object_prop('water_reflectivity', v / 100.0),
-            reflect_label.setText(f"{v / 100.0:.2f}")
-        ))
-        reflect_layout.addWidget(reflect_slider)
-        reflect_layout.addWidget(reflect_label)
-        layout.addRow("Reflectivity:", reflect_layout)
-        self._widgets['water_reflect_slider'] = reflect_slider
 
-        # Wave Displacement Checkbox
-        wave_cb = QCheckBox("Enable Vertex Waves")
-        wave_cb.setStyleSheet(self._checkbox_style())
-        wave_cb.setChecked(brush.get('water_wave_enabled', False))
-        wave_cb.toggled.connect(lambda checked: self.update_object_prop('water_wave_enabled', checked))
+        for key, label_txt, default in (('water_opacity', "Opacity:", 0.5),
+                                        ('water_reflectivity', "Reflectivity:", 0.5)):
+            slider, label = _make_slider(self, brush.get(key, default), 0, 100,
+                                         callback=lambda v, k=key: self.update_object_prop(k, v))
+            layout.addRow(label_txt, _hbox(slider, label, stretch=False))
+            self._widgets[f'{key}_slider'] = slider
+
+        wave_cb = _make_checkbox("Enable Vertex Waves", brush.get('water_wave_enabled', False),
+                                 lambda c: self.update_object_prop('water_wave_enabled', c), _Style.CHECKBOX)
         layout.addRow("", wave_cb)
         self._widgets['water_wave_cb'] = wave_cb
 
-        # Wave Height Slider
-        wave_h_layout = QHBoxLayout()
-        wave_h_slider = QSlider(Qt.Horizontal)
-        wave_h_slider.setRange(0, 200) # 0.0 to 2.0
-        wave_h_slider.setValue(int(brush.get('water_wave_height', 0.5) * 100))
-        wave_h_label = QLabel(f"{brush.get('water_wave_height', 0.5):.2f}")
-        wave_h_slider.setToolTip("Amplitude of the waves. Keep low for realism.")
-        wave_h_slider.valueChanged.connect(lambda v: (
-            self.update_object_prop('water_wave_height', v / 100.0),
-            wave_h_label.setText(f"{v / 100.0:.2f}")
-        ))
-        wave_h_layout.addWidget(wave_h_slider)
-        wave_h_layout.addWidget(wave_h_label)
-        layout.addRow("Wave Height:", wave_h_layout)
-        self._widgets['water_wave_h_slider'] = wave_h_slider
-        
-        # Plane only checkbox
-        plane_cb = QCheckBox("Draw top surface only")
-        plane_cb.setStyleSheet(self._checkbox_style())
-        plane_cb.setChecked(brush.get('water_plane', False))
-        plane_cb.toggled.connect(lambda checked: self.update_object_prop('water_plane', checked))
+        slider, label = _make_slider(self, brush.get('water_wave_height', 0.5), 0, 200,
+                                     callback=lambda v: self.update_object_prop('water_wave_height', v),
+                                     tooltip="Amplitude of the waves")
+        layout.addRow("Wave Height:", _hbox(slider, label, stretch=False))
+        self._widgets['water_wave_h_slider'] = slider
+
+        plane_cb = _make_checkbox("Draw top surface only", brush.get('water_plane', False),
+                                  lambda c: self.update_object_prop('water_plane', c), _Style.CHECKBOX)
         layout.addRow("", plane_cb)
         self._widgets['water_plane_cb'] = plane_cb
-        
+
         return group
 
     def _create_fog_properties(self, brush):
-        """Create Fog shader properties."""
         group = QGroupBox("Fog Properties")
-        group.setStyleSheet("""
-            QGroupBox { 
-                font-weight: bold; 
-                color: #B0C4DE; 
-                border: 1px solid #B0C4DE;
-                border-radius: 4px;
-                margin-top: 12px;
-                padding-top: 8px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 8px;
-                padding: 0 4px;
-                background-color: #2b3d3b;
-            }
-        """)
+        group.setStyleSheet(_Style.group_box("#B0C4DE"))
         layout = QFormLayout(group)
         layout.setSpacing(8)
-        
-        # Fog color
-        color_btn = self._create_color_button(brush.get('fog_color', [0.5, 0.6, 0.7]))
-        color_btn.clicked.connect(lambda: self._pick_color('fog_color', color_btn, [0.5, 0.6, 0.7]))
+
+        color_btn = self._color_button(brush.get('fog_color', [0.5, 0.6, 0.7]),
+                                       lambda: self._pick_color('fog_color', color_btn, [0.5, 0.6, 0.7]))
         layout.addRow("Fog Color:", color_btn)
         self._widgets['fog_color_btn'] = color_btn
-        
-        # Density
-        density_input = QLineEdit(str(brush.get('fog_density', 2.0)))
-        density_input.editingFinished.connect(lambda: self.update_object_prop('fog_density', float(density_input.text()) if density_input.text() else 2.0))
-        layout.addRow("Density:", density_input)
-        self._widgets['fog_density_input'] = density_input
-        
+
+        density_inp = QLineEdit(str(brush.get('fog_density', 2.0)))
+        density_inp.editingFinished.connect(
+            lambda: self.update_object_prop('fog_density', float(density_inp.text()) if density_inp.text() else 2.0))
+        layout.addRow("Density:", density_inp)
+        self._widgets['fog_density_input'] = density_inp
+
         return group
 
     def _create_appearance_tab(self, brush):
-        """Create the Appearance tab with color controls."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
+        w = QWidget()
+        layout = QVBoxLayout(w)
         layout.setContentsMargins(8, 8, 8, 8)
-        
         form = QFormLayout()
         form.setSpacing(8)
-        
-        # Brush colour
-        colour_widget = QWidget()
-        colour_layout = QHBoxLayout(colour_widget)
-        colour_layout.setContentsMargins(0, 0, 0, 0)
-        colour_layout.setSpacing(8)
-        
-        current_colour = brush.get('colour', [0.8, 0.8, 0.8])
-        colour_btn = self._create_color_button(current_colour, (140, 32))
-        colour_btn.clicked.connect(lambda: self._pick_color('colour', colour_btn, [0.8, 0.8, 0.8]))
-        
-        reset_btn = QPushButton("Reset")
-        reset_btn.setFixedSize(60, 32)
-        reset_btn.setToolTip("Reset to default grey")
-        reset_btn.clicked.connect(lambda: self._reset_brush_colour(colour_btn))
-        
-        colour_layout.addWidget(colour_btn)
-        colour_layout.addWidget(reset_btn)
-        colour_layout.addStretch()
-        
-        form.addRow("Brush Colour:", colour_widget)
-        self._widgets['brush_colour_btn'] = colour_btn
-        
+
+        current = brush.get('colour', [0.8, 0.8, 0.8])
+        btn = self._color_button(current, lambda: self._pick_color('colour', btn, [0.8, 0.8, 0.8]), size=(140, 32))
+        reset = QPushButton("Reset")
+        reset.setFixedSize(60, 32)
+        reset.setToolTip("Reset to default grey")
+        reset.clicked.connect(lambda: self._reset_brush_colour(btn))
+        form.addRow("Brush Colour:", _hbox(btn, reset, stretch=False))
+        self._widgets['brush_colour_btn'] = btn
+
         layout.addLayout(form)
         layout.addStretch()
-        return widget
+        return w
+
+    # ────────────────────────────
+    # Thing population
+    # ────────────────────────────
+    def populate_for_thing(self, thing):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.verticalScrollBar().setStyleSheet(_Style.SCROLL_V)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        # Name row (shared with brush layout)
+        name_layout = QFormLayout()
+        name_layout.setSpacing(4)
+        name_lbl = QLabel("Name:")
+        name_lbl.setStyleSheet(_Style.NAME_LBL)
+        name_inp = QLineEdit(str(thing.properties.get('name', '')))
+        name_inp.setStyleSheet(_Style.NAME_INP)
+        name_inp.setPlaceholderText("Enter name...")
+        name_inp.editingFinished.connect(lambda: self.update_object_prop('name', name_inp.text()))
+        name_layout.addRow(name_lbl, name_inp)
+
+        tname = getattr(thing, 'name', '') or thing.properties.get('name', '')
+        sources = self._find_targeting_sources(tname) if tname else []
+        if sources:
+            txt = ", ".join(f"{n} ({t})" for n, t in sources)
+            lbl = QLabel(txt)
+            lbl.setStyleSheet(_Style.TARGETED)
+            lbl.setWordWrap(True)
+            name_layout.addRow("Targeted by:", lbl)
+
+        layout.addLayout(name_layout)
+
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setStyleSheet(_Style.TAB_BAR)
+
+        props_tab = self._create_thing_properties_tab(thing)
+        self.tab_widget.addTab(props_tab, "Properties")
+
+        if IO_AVAILABLE:
+            etype = get_entity_type_for_io(thing)
+            if etype and etype in IO_REGISTRY:
+                self.tab_widget.addTab(self._create_io_tab_for_thing(thing), "⚡ I/O")
+
+        layout.addWidget(self.tab_widget)
+        layout.addStretch()
+        scroll.setWidget(content)
+        self.main_layout.addWidget(scroll)
+
+    def _create_thing_properties_tab(self, thing) -> QWidget:
+        w = QWidget()
+        tab_layout = QVBoxLayout(w)
+        tab_layout.setContentsMargins(8, 8, 8, 8)
+        tab_layout.setSpacing(4)
+        form = QFormLayout()
+
+        if isinstance(thing, Model):
+            self.add_model_path_widget(form, thing)
+            self.add_vector3_widget(form, thing, 'scale')
+            self.add_vector3_widget(form, thing, 'rotation')
+            if IO_AVAILABLE:
+                note = QLabel("💡 Use the I/O tab for advanced targeting")
+                note.setStyleSheet("QLabel { color: #88AAFF; font-style: italic; padding: 4px; }")
+                form.addRow("", note)
+
+        if isinstance(thing, Light):
+            self.add_color_picker_widget(form, thing, 'colour')
+            self._build_attach_to_mover(form, thing)
+
+        if isinstance(thing, Portal):
+            self._build_attach_to_mover(form, thing, prefix='portal_')
+            form.addRow(QLabel(""))  # spacer
+            self._build_portal_target(form, thing)
+
+        # Pickup
+        if isinstance(thing, Pickup):
+            self._build_pickup_ui(form, thing)
+
+        # Dynamic property iteration (excludes keys handled above)
+        self._iterate_thing_properties(form, thing)
+
+        tab_layout.addLayout(form)
+
+        if isinstance(thing, PathNode):
+            self._build_pathnode_group(tab_layout, thing)
+        if isinstance(thing, LogicCamera):
+            self._build_logic_camera_group(tab_layout, thing)
+        if isinstance(thing, LogicSpawner):
+            self._build_spawner_group(tab_layout, thing)
+        if isinstance(thing, Monster):
+            self._build_monster_groups(tab_layout, thing)
+
+        tab_layout.addStretch()
+        return w
+
+    def _build_attach_to_mover(self, form, thing, prefix=''):
+        """Shared attach-to-mover logic for Light and Portal."""
+        current = thing.properties.get('parent_mover', '')
+        is_attached = bool(current)
+
+        cb = _make_checkbox("Attach to Mover", is_attached, None)
+        form.addRow("", cb)
+
+        combo = QComboBox()
+        combo.addItem("(none)")
+        for brush in self.editor.state.brushes:
+            if brush.get('is_mover'):
+                mname = brush.get('name', '')
+                if mname:
+                    combo.addItem(mname)
+        if current:
+            idx = combo.findText(current)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            else:
+                combo.addItem(current + " (missing)")
+                combo.setCurrentIndex(combo.count() - 1)
+
+        lbl = QLabel("Parent Mover:")
+        lbl.setVisible(is_attached)
+        combo.setVisible(is_attached)
+
+        def on_toggle(checked):
+            lbl.setVisible(checked)
+            combo.setVisible(checked)
+            if not checked:
+                thing.properties['parent_mover'] = ''
+                thing.properties['parent_offset'] = [0.0, 0.0, 0.0]
+                combo.setCurrentIndex(0)
+                self.editor.update_all_ui()
+
+        def on_changed(text):
+            clean = text.replace(" (missing)", "")
+            if clean == "(none)":
+                thing.properties['parent_mover'] = ''
+                thing.properties['parent_offset'] = [0.0, 0.0, 0.0]
+            else:
+                thing.properties['parent_mover'] = clean
+                for b in self.editor.state.brushes:
+                    if b.get('is_mover') and b.get('name') == clean:
+                        thing.properties['parent_offset'] = [
+                            thing.pos[0] - b['pos'][0],
+                            thing.pos[1] - b['pos'][1],
+                            thing.pos[2] - b['pos'][2],
+                        ]
+                        break
+            self.editor.update_all_ui()
+
+        cb.toggled.connect(on_toggle)
+        combo.currentTextChanged.connect(on_changed)
+        form.addRow(lbl, combo)
+
+    def _build_portal_target(self, form, thing):
+        current = thing.properties.get('portal_target', '')
+        others = [t for t in self.editor.state.things if isinstance(t, Portal) and t is not thing]
+        combo = QComboBox()
+        combo.addItem("(none)")
+        for p in others:
+            combo.addItem(p.properties.get('name', ''))
+        if current:
+            idx = combo.findText(current)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            else:
+                combo.addItem(current + " (missing)")
+                combo.setCurrentIndex(combo.count() - 1)
+
+        def on_changed(text):
+            clean = text.replace(" (missing)", "")
+            thing.properties['portal_target'] = '' if clean == '(none)' else clean
+            self.editor.update_all_ui()
+
+        combo.currentTextChanged.connect(on_changed)
+
+        sel_btn = QPushButton("Select →")
+        sel_btn.setMaximumWidth(70)
+        sel_btn.setToolTip("Select the linked portal in the viewport")
+
+        def on_select():
+            tname = thing.properties.get('portal_target', '')
+            for t in self.editor.state.things:
+                if isinstance(t, Portal) and t.properties.get('name') == tname:
+                    if hasattr(self.editor, 'select_object'):
+                        self.editor.select_object(t)
+                    else:
+                        self.editor.state.selected_object = t
+                        self.editor.update_all_ui()
+                    break
+
+        sel_btn.clicked.connect(on_select)
+        form.addRow("Portal Target:", _hbox(combo, sel_btn, stretch=False))
+
+    def _build_pickup_ui(self, form, thing):
+        self._pickup_value_widgets = []
+        self._pickup_key_widgets = []
+        self._pickup_sprite_widgets = []
+
+    def _iterate_thing_properties(self, form, thing):
+        is_pickup = isinstance(thing, Pickup)
+        current_item = thing.properties.get('item_type', 'health') if is_pickup else None
+
+        _MONSTER_ONLY = {'awake', 'damage', 'health', 'monster_type', 'variant',
+                         'triggered', 'wake_on_sight', 'can_hear', 'dead', 'non_hostile', 'sight',
+                         'patrol', 'patrol_target', 'patrol_mode'}
+
+        for key, value in sorted(thing.properties.items()):
+            if key in ('name', 'id', '_io_connections', 'type'):
+                continue
+            if isinstance(thing, Light) and key in ('colour', 'parent_mover', 'parent_offset'):
+                continue
+            if isinstance(thing, Model) and key in ('model_path', 'scale', 'rotation'):
+                continue
+            if isinstance(thing, Portal) and key in ('rotation', 'portal_target', 'parent_mover', 'parent_offset', 'parent_local_pos', 'parent_local_yaw'):
+                continue
+            if not isinstance(thing, Monster) and key in _MONSTER_ONLY:
+                continue
+            if isinstance(thing, Monster) and key in ('triggered', 'wake_on_sight', 'can_hear', 'dead', 'non_hostile', 'sight', 'patrol', 'patrol_target', 'patrol_mode', 'variant', 'team'):
+                continue
+            if isinstance(thing, PathNode) and key in ('radius', 'show_radius', 'affects_type', 'next_node', 'wait_time', 'speed', 'patrol_speed'):
+                continue
+            if isinstance(thing, LogicCamera) and key in ('path_target', 'speed', 'fov_override', 'look_ahead'):
+                continue
+            if isinstance(thing, LogicSpawner) and key in ('spawn_type', 'target_node', 'max_spawn', 'spawn_properties'):
+                continue
+            if is_pickup and key in ('key_name', 'custom_sprite', 'respawns', 'respawn_time'):
+                continue
+
+            label_text = "Visible:" if key == 'show_rim' else key.replace('_', ' ').title() + ":"
+
+            if key == 'angle' and isinstance(thing, Portal):
+                spin = _make_spin(int(float(value)) % 360, 0, 359, suffix="°", step=45)
+                spin.setWrapping(True)
+                spin.setToolTip("Portal facing direction in degrees")
+                spin.valueChanged.connect(lambda v: self.update_object_prop('angle', v))
+                form.addRow(label_text, spin)
+            elif key == 'angle':
+                combo = _make_combo(['0°', '90°', '180°', '270°'],
+                                    f"{int(float(value)) % 360}°",
+                                    lambda t: self.update_object_prop('angle', int(t.replace('°', ''))))
+                form.addRow(label_text, combo)
+            elif isinstance(thing, Monster) and key == 'monster_type':
+                self._build_monster_type_row(form, thing)
+            elif isinstance(thing, Light) and key == 'state':
+                combo = _make_combo(['on', 'off'], value, lambda t: self.update_object_prop(key, t))
+                form.addRow(label_text, combo)
+            elif isinstance(thing, Speaker) and key == 'sound_file':
+                self.add_sound_file_widget(form, thing, key, value)
+            elif isinstance(thing, LogicGate) and key == 'logic_type':
+                combo = _make_combo(['AND', 'OR', 'XOR', 'NAND', 'NOR'], value,
+                                    lambda t: self.update_object_prop(key, t))
+                form.addRow("Logic Type:", combo)
+            elif is_pickup and key == 'item_type':
+                self._build_pickup_item_type_row(form, thing)
+            elif is_pickup and key == 'activation':
+                self._build_pickup_activation_row(form, thing, value)
+            elif is_pickup and key == 'value':
+                self._build_pickup_value_row(form, thing, value)
+            elif isinstance(value, bool):
+                cb = _make_checkbox("", value, lambda c, k=key: self.update_object_prop(k, c == Qt.Checked), _Style.CHECKBOX)
+                form.addRow(label_text, cb)
+            elif isinstance(value, int):
+                spin = _make_spin(value, -99999, 99999)
+                spin.editingFinished.connect(lambda w=spin, k=key: self.update_object_prop(k, w.value()))
+                form.addRow(label_text, spin)
+            elif isinstance(value, float):
+                inp = QLineEdit(str(value))
+                inp.editingFinished.connect(
+                    lambda le=inp, k=key: self.update_object_prop(
+                        k, float(le.text()) if le.text() and le.text().replace('.', '', 1).replace('-', '', 1).isdigit() else 0.0))
+                form.addRow(label_text, inp)
+            else:
+                inp = QLineEdit(str(value))
+                inp.editingFinished.connect(lambda le=inp, k=key: self.update_object_prop(k, le.text()))
+                form.addRow(label_text, inp)
+
+        # Sprite + respawn controls (pickup only)
+        if is_pickup:
+            self._build_pickup_sprite_row(form, thing)
+            self._build_pickup_respawn_row(form, thing)
+
+    def _build_monster_type_row(self, form, thing):
+        combo = _make_combo(['human', 'flying'], thing.properties.get('monster_type', 'human'))
+        form.addRow("Monster Type:", combo)
+
+        variant_combo = QComboBox()
+        variant_combo.setToolTip("Sprite variant — selects an alternate sprite subfolder.")
+        self._widgets['monster_variant_combo'] = variant_combo
+
+        def populate(mtype=None):
+            if mtype is None:
+                mtype = thing.properties.get('monster_type', 'human')
+            variant_combo.blockSignals(True)
+            variant_combo.clear()
+            variant_combo.addItem('<None>')
+            for v in MONSTER_VARIANTS.get(mtype, []):
+                variant_combo.addItem(v)
+            cur = thing.properties.get('variant', '<None>')
+            idx = variant_combo.findText(cur)
+            variant_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            variant_combo.blockSignals(False)
+
+        populate()
+
+        def on_variant(text):
+            thing.properties['variant'] = text
+            try:
+                Monster.clear_sprite_cache()
+            except Exception:
+                pass
+            if hasattr(self.editor, 'mark_dirty'):
+                self.editor.mark_dirty()
+            try:
+                self.editor.view_3d.update()
+            except Exception:
+                pass
+
+        def on_type_changed(new_type):
+            self.update_object_prop('monster_type', new_type)
+            from engine.monster_constants import MONSTER_SPRITE_SIZES
+            default_w, default_h = MONSTER_SPRITE_SIZES.get(new_type, (128, 128))
+            self.update_object_prop('sprite_width', default_w)
+            self.update_object_prop('sprite_height', default_h)
+            thing.properties['variant'] = '<None>'
+            populate(new_type)
+            is_flying = new_type == 'flying'
+            for k in ('projectile_sprite_label', 'projectile_sprite_path'):
+                if k in self._widgets:
+                    self._widgets[k].setVisible(is_flying)
+            self.set_object(thing)
+
+        combo.currentTextChanged.connect(on_type_changed)
+        variant_combo.currentTextChanged.connect(on_variant)
+        form.addRow("Variant:", variant_combo)
+
+    def _build_pickup_item_type_row(self, form, thing):
+        combo = _make_combo(['health', 'key', 'gun1', 'gun2'],
+                            thing.properties.get('item_type', 'health'),
+                            self.on_pickup_item_type_changed)
+        form.addRow("Item Type:", combo)
+
+        lbl = QLabel("Key Name:")
+        key_combo = _make_combo(['blue_key', 'red_key', 'yellow_key', 'green_key'],
+                                thing.properties.get('key_name', 'blue_key'),
+                                self.on_pickup_key_name_changed)
+        key_combo.setEditable(True)
+        form.addRow(lbl, key_combo)
+        self._pickup_key_widgets.append((lbl, key_combo))
+
+        is_key = thing.properties.get('item_type') == 'key'
+        lbl.setVisible(is_key)
+        key_combo.setVisible(is_key)
+
+        # Door link
+        door_lbl = QLabel("")
+        door_lbl.setWordWrap(True)
+        door_lbl.setVisible(False)
+        form.addRow("", door_lbl)
+        self._widgets['pickup_door_link_label'] = door_lbl
+        self._pickup_key_widgets.append((QLabel(""), door_lbl))
+
+        door_btn = QPushButton("Select Door ▸")
+        door_btn.setVisible(False)
+        door_btn.clicked.connect(self._select_linked_door)
+        form.addRow("", door_btn)
+        self._widgets['pickup_door_select_btn'] = door_btn
+        self._pickup_key_widgets.append((QLabel(""), door_btn))
+
+        if is_key:
+            self._update_pickup_door_link(thing)
+        key_combo.currentTextChanged.connect(lambda _: self._update_pickup_door_link(self.current_object))
+
+    def _build_pickup_activation_row(self, form, thing, value):
+        combo = _make_combo(['walk_over', 'use'], value, lambda t: self.update_object_prop('activation', t))
+        form.addRow("Activation:", combo)
+        self._pickup_activation_widget = combo
+        if thing.properties.get('item_type') == 'health':
+            combo.setCurrentText('walk_over')
+            combo.setEnabled(False)
+            self.update_object_prop('activation', 'walk_over')
+
+    def _build_pickup_value_row(self, form, thing, value):
+        lbl = QLabel("Value:")
+        spin = _make_spin(value, -99999, 99999)
+        spin.editingFinished.connect(lambda w=spin: self.update_object_prop('value', w.value()))
+        form.addRow(lbl, spin)
+        self._pickup_value_widgets.append((lbl, spin))
+        if thing.properties.get('item_type') == 'key':
+            lbl.setVisible(False)
+            spin.setVisible(False)
+
+    def _build_pickup_sprite_row(self, form, thing):
+        lbl = QLabel("Sprite:")
+        widget = QWidget()
+        h = QHBoxLayout(widget)
+        h.setContentsMargins(0, 0, 0, 0)
+        path = QLineEdit(thing.properties.get('custom_sprite', ''))
+        path.setReadOnly(True)
+        path.setPlaceholderText("Default sprite")
+        btn = QPushButton("Sprite...")
+        btn.setFixedWidth(80)
+        btn.clicked.connect(self.on_pickup_sprite_select)
+        clear = QPushButton("Clear")
+        clear.setFixedWidth(60)
+        clear.setToolTip("Clear custom sprite")
+        clear.clicked.connect(self.on_pickup_sprite_clear)
+        h.addWidget(path)
+        h.addWidget(btn)
+        h.addWidget(clear)
+        form.addRow(lbl, widget)
+        self._pickup_sprite_widgets.append((lbl, widget))
+        self.pickup_sprite_path = path
+
+        is_key = thing.properties.get('item_type') == 'key'
+        lbl.setVisible(not is_key)
+        widget.setVisible(not is_key)
+
+    def _build_pickup_respawn_row(self, form, thing):
+        form.addRow(self._section("Respawn"))
+        respawns = thing.properties.get('respawns', False)
+        rtime = thing.properties.get('respawn_time', 20.0)
+
+        rw = QWidget()
+        rl = QHBoxLayout(rw)
+        rl.setContentsMargins(0, 0, 0, 0)
+        cb = _make_checkbox("Respawns", respawns, self.on_respawn_toggled, _Style.CHECKBOX)
+        lbl = QLabel("after")
+        spin = _make_spin(rtime, 0.1, 9999.0, suffix=" sec", decimals=1)
+        spin.editingFinished.connect(lambda: self.update_object_prop('respawn_time', spin.value()))
+        lbl.setVisible(respawns)
+        spin.setVisible(respawns)
+        rl.addWidget(cb)
+        rl.addWidget(lbl)
+        rl.addWidget(spin)
+        rl.addStretch()
+        form.addRow("", rw)
+        self.respawn_checkbox = cb
+        self.respawn_time_label = lbl
+        self.respawn_time_spin = spin
+
+    def _build_pathnode_group(self, tab_layout, thing):
+        for k, v in (('radius', 256.0), ('show_radius', False), ('affects_type', 'both'),
+                     ('next_node', ''), ('wait_time', 0.0), ('speed', 1.0)):
+            thing.properties.setdefault(k, v)
+
+        group = QGroupBox("Path Node")
+        group.setStyleSheet(_Style.group_box("#26A69A", "#1a2f2d"))
+        form = QFormLayout(group)
+        form.setSpacing(6)
+        form.setContentsMargins(8, 8, 8, 8)
+
+        # Radius + show button
+        radius_spin = _make_spin(thing.properties.get('radius', 256.0), 1.0, 99999.0,
+                                 suffix=" u", decimals=1, step=16.0)
+        show_btn = QToolButton()
+        show_btn.setText("⊙")
+        show_btn.setCheckable(True)
+        show_btn.setChecked(bool(thing.properties.get('show_radius', False)))
+        show_btn.setStyleSheet("""
+            QToolButton { background-color: #425f5d; color: white; border-radius: 4px; padding: 3px 8px; font-size: 14px; border: 1px solid #555; }
+            QToolButton:checked { background-color: #26A69A; border-color: #26A69A; }
+            QToolButton:hover { background-color: #5a7a82; }
+        """)
+        form.addRow("Radius:", _hbox(radius_spin, show_btn, stretch=False))
+
+        def _on_radius(v):
+            thing.properties['radius'] = float(v)
+            if getattr(self.editor, '_sight_preview_thing', None) is thing:
+                self._repaint_viewport()
+
+        def _on_show(checked):
+            thing.properties['show_radius'] = bool(checked)
+            self._repaint_viewport()
+
+        radius_spin.valueChanged.connect(_on_radius)
+        show_btn.toggled.connect(_on_show)
+
+        # Affects type
+        affects = _make_combo(PathNode.AFFECTS_TYPES,
+                              str(thing.properties.get('affects_type', 'both')).lower(),
+                              tooltip="Which monster types may use this node")
+        form.addRow("Affects Type:", affects)
+
+        # Next node
+        my_name = thing.properties.get('name', '') or ''
+        next_combo = QComboBox()
+        next_combo.addItem("(none)")
+        for t in self.editor.state.things:
+            if isinstance(t, PathNode):
+                n = t.properties.get('name', '') or ''
+                if n and n != my_name:
+                    next_combo.addItem(n)
+        current = thing.properties.get('next_node', '') or ''
+        if current:
+            idx = next_combo.findText(current)
+            if idx >= 0:
+                next_combo.setCurrentIndex(idx)
+            else:
+                next_combo.addItem(current + "  (missing)")
+                next_combo.setCurrentIndex(next_combo.count() - 1)
+
+        def _on_next(text):
+            clean = (text or '').replace("  (missing)", "").strip()
+            thing.properties['next_node'] = '' if clean == '(none)' else clean
+            self._repaint_viewport()
+
+        next_combo.currentTextChanged.connect(_on_next)
+        form.addRow("Next Node:", next_combo)
+
+        # Wait time
+        wait = _make_spin(thing.properties.get('wait_time', 0.0), 0.0, 9999.0,
+                          suffix=" sec", decimals=1, step=0.5,
+                          tooltip="How long a monster pauses at this node")
+        wait.valueChanged.connect(lambda v: thing.properties.update({'wait_time': float(v)}))
+        form.addRow("Wait Time:", wait)
+
+        # Speed
+        speed = _make_spin(thing.properties.get('speed', 1.0), 0.01, 10.0,
+                           suffix="×", decimals=2, step=0.25,
+                           tooltip="Speed multiplier for entities heading toward this node")
+        speed.valueChanged.connect(lambda v: thing.properties.update({'speed': float(v)}))
+        form.addRow("Speed:", speed)
+
+        tab_layout.addWidget(group)
+
+    def _build_logic_camera_group(self, tab_layout, thing):
+        group = QGroupBox("Cinematic Camera")
+        group.setStyleSheet(_Style.group_box("#42A5F5", "#1a2a3d"))
+        form = QFormLayout(group)
+        form.setSpacing(6)
+        form.setContentsMargins(8, 8, 8, 8)
+
+        # Path target
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.addItem("(none)")
+        for t in self.editor.state.things:
+            if isinstance(t, PathNode):
+                n = t.properties.get('name', '')
+                if n:
+                    combo.addItem(n)
+        current = thing.properties.get('path_target', '')
+        if current:
+            idx = combo.findText(current)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            else:
+                combo.setEditText(current)
+
+        def _on_path(text):
+            clean = text.strip()
+            thing.properties['path_target'] = '' if clean == '(none)' else clean
+
+        combo.currentTextChanged.connect(_on_path)
+        form.addRow("Path Target:", combo)
+
+        # Speed
+        speed = _make_spin(thing.properties.get('speed', 200.0), 1.0, 9999.0,
+                           suffix=" u/s", decimals=1, step=10.0)
+        speed.valueChanged.connect(lambda v: thing.properties.update({'speed': float(v)}))
+        form.addRow("Speed:", speed)
+
+        # FOV
+        fov = _make_spin(thing.properties.get('fov_override', 0.0), 0.0, 179.0,
+                         suffix="°", decimals=1, step=5.0,
+                         tooltip="Override FOV during sequence. 0 = use default.")
+        fov.valueChanged.connect(lambda v: thing.properties.update({'fov_override': float(v)}))
+        form.addRow("FOV Override:", fov)
+
+        # Look ahead
+        look = _make_checkbox("Look at next node", thing.properties.get('look_ahead', True),
+                              lambda c: thing.properties.update({'look_ahead': bool(c)}), _Style.CHECKBOX)
+        look.setToolTip("Camera faces the next PathNode instead of forward")
+        form.addRow("", look)
+
+        tab_layout.addWidget(group)
+
+    def _build_spawner_group(self, tab_layout, thing):
+        from editor.things import ENTITY_TYPES
+        group = QGroupBox("Spawner")
+        group.setStyleSheet(_Style.group_box("#AB47BC", "#2a1a3d"))
+        form = QFormLayout(group)
+        form.setSpacing(6)
+        form.setContentsMargins(8, 8, 8, 8)
+
+        spawn_combo = _make_combo(sorted(ENTITY_TYPES.keys()),
+                                  thing.properties.get('spawn_type', 'Monster'),
+                                  lambda t: thing.properties.update({'spawn_type': t}),
+                                  tooltip="Entity class to instantiate when Spawn is fired")
+        form.addRow("Spawn Type:", spawn_combo)
+
+        # Target node
+        node_combo = QComboBox()
+        node_combo.setEditable(True)
+        node_combo.addItem("(none)")
+        for t in self.editor.state.things:
+            if isinstance(t, PathNode):
+                n = t.properties.get('name', '')
+                if n:
+                    node_combo.addItem(n)
+        current = thing.properties.get('target_node', '')
+        if current:
+            idx = node_combo.findText(current)
+            if idx >= 0:
+                node_combo.setCurrentIndex(idx)
+            else:
+                node_combo.setEditText(current)
+
+        def _on_node(text):
+            clean = text.strip()
+            thing.properties['target_node'] = '' if clean == '(none)' else clean
+
+        node_combo.currentTextChanged.connect(_on_node)
+        form.addRow("Target Node:", node_combo)
+
+        max_spin = _make_spin(thing.properties.get('max_spawn', 0), 0, 9999,
+                              tooltip="Maximum entities this spawner will create. 0 = unlimited.")
+        max_spin.valueChanged.connect(lambda v: thing.properties.update({'max_spawn': int(v)}))
+        form.addRow("Max Spawn:", max_spin)
+
+        tab_layout.addWidget(group)
+
+        # Monster spawn settings (conditional)
+        monster_group = QGroupBox("Monster Spawn Settings")
+        monster_group.setStyleSheet(_Style.group_box("#F08000"))
+        mform = QFormLayout(monster_group)
+        mform.setSpacing(6)
+        mform.setContentsMargins(8, 8, 8, 8)
+
+        spawn_props = thing.properties.setdefault('spawn_properties', {})
+
+        mtype_combo = _make_combo(['human', 'flying'],
+                                  spawn_props.get('monster_type', 'human'),
+                                  lambda t: spawn_props.update({'monster_type': t}))
+        mform.addRow("Monster Type:", mtype_combo)
+
+        variant_combo = QComboBox()
+        variant_combo.setToolTip("Sprite variant")
+        mform.addRow("Variant:", variant_combo)
+
+        random_cb = _make_checkbox("Spawn random type & variant each time",
+                                   spawn_props.get('random', False), None, _Style.CHECKBOX)
+        mform.addRow(random_cb)
+
+        def populate_variants(mtype=None):
+            if mtype is None:
+                mtype = spawn_props.get('monster_type', 'human')
+            variant_combo.blockSignals(True)
+            variant_combo.clear()
+            variant_combo.addItem('<None>')
+            for v in MONSTER_VARIANTS.get(mtype, []):
+                variant_combo.addItem(v)
+            cur = spawn_props.get('variant', '<None>')
+            idx = variant_combo.findText(cur)
+            variant_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            variant_combo.blockSignals(False)
+
+        def on_mtype(text):
+            if not random_cb.isChecked():
+                spawn_props['monster_type'] = text
+            populate_variants(text)
+
+        def on_variant(text):
+            if not random_cb.isChecked():
+                spawn_props['variant'] = text
+
+        def on_random(checked):
+            spawn_props['random'] = checked
+            mtype_combo.setEnabled(not checked)
+            variant_combo.setEnabled(not checked)
+            if checked:
+                spawn_props.pop('monster_type', None)
+                spawn_props.pop('variant', None)
+            else:
+                spawn_props['monster_type'] = mtype_combo.currentText()
+                spawn_props['variant'] = variant_combo.currentText()
+
+        mtype_combo.currentTextChanged.connect(on_mtype)
+        variant_combo.currentTextChanged.connect(on_variant)
+        random_cb.toggled.connect(on_random)
+        on_random(random_cb.isChecked())
+        populate_variants()
+
+        def update_visibility():
+            is_monster = spawn_combo.currentText() == 'Monster'
+            monster_group.setVisible(is_monster)
+            if not is_monster:
+                for k in ('monster_type', 'variant', 'random'):
+                    spawn_props.pop(k, None)
+            thing.properties['spawn_properties'] = spawn_props
+            if hasattr(self.editor, 'mark_dirty'):
+                self.editor.mark_dirty()
+
+        spawn_combo.currentTextChanged.connect(lambda _: update_visibility())
+        update_visibility()
+        tab_layout.addWidget(monster_group)
+
+    def _build_monster_groups(self, tab_layout, thing):
+        for k, v in (('sight', 512), ('triggered', False), ('wake_on_sight', True),
+                     ('can_hear', False), ('dead', False), ('non_hostile', False)):
+            thing.properties.setdefault(k, v)
+
+        # AI group
+        ai_group = QGroupBox("AI")
+        ai_group.setStyleSheet(_Style.group_box("#F08000"))
+        aform = QFormLayout(ai_group)
+        aform.setSpacing(6)
+        aform.setContentsMargins(8, 8, 8, 8)
+
+        sight_spin = _make_spin(thing.properties.get('sight', 512), 0, 9999, suffix=" u")
+        sight_spin.setToolTip("Distance at which this monster detects the player")
+        sight_btn = QToolButton()
+        sight_btn.setText("👁")
+        sight_btn.setCheckable(True)
+        sight_btn.setChecked(getattr(self.editor, '_sight_preview_thing', None) is thing)
+        sight_btn.setStyleSheet("""
+            QToolButton { background-color: #425f5d; color: white; border-radius: 4px; padding: 3px 8px; font-size: 14px; border: 1px solid #555; }
+            QToolButton:checked { background-color: #F08000; border-color: #F08000; }
+            QToolButton:hover { background-color: #5a7a82; }
+        """)
+        aform.addRow("Range:", _hbox(sight_spin, sight_btn, stretch=False))
+
+        def _on_sight(v):
+            thing.properties['sight'] = v
+            if getattr(self.editor, '_sight_preview_thing', None) is thing:
+                self._repaint_viewport()
+
+        def _on_preview(checked):
+            self.editor._sight_preview_thing = thing if checked else None
+            self._repaint_viewport()
+
+        sight_spin.valueChanged.connect(_on_sight)
+        sight_btn.toggled.connect(_on_preview)
+
+        hear_cb = _make_checkbox("Can hear gunfire", thing.properties.get('can_hear', False),
+                                 lambda c: self.update_object_prop('can_hear', c), _Style.CHECKBOX)
+        aform.addRow("", hear_cb)
+
+        # Team
+        thing.properties.setdefault('team', '')
+        team_combo = QComboBox()
+        team_combo.setEditable(True)
+        team_combo.addItems(['(none)', '1', '2', '3', 'player'])
+        cur = str(thing.properties.get('team', ''))
+        if cur:
+            idx = team_combo.findText(cur)
+            if idx >= 0:
+                team_combo.setCurrentIndex(idx)
+            else:
+                team_combo.addItem(cur)
+                team_combo.setCurrentIndex(team_combo.count() - 1)
+        team_combo.setToolTip("Monsters on DIFFERENT teams are enemies")
+        team_combo.currentTextChanged.connect(
+            lambda t: thing.properties.update({'team': '' if t.strip() == '(none)' else t.strip()}))
+        aform.addRow("Team:", team_combo)
+
+        # Projectile sprite (flying only)
+        proj_lbl = QLabel("Projectile Sprite:")
+        proj_widget = QWidget()
+        proj_h = QHBoxLayout(proj_widget)
+        proj_h.setContentsMargins(0, 0, 0, 0)
+        proj_path = QLineEdit()
+        proj_path.setReadOnly(True)
+        proj_path.setPlaceholderText("Default: assets/sprites/monsters/projectile.png")
+        cur_proj = thing.properties.get('projectile_sprite', '')
+        if cur_proj:
+            proj_path.setText(cur_proj)
+
+        def pick_proj():
+            start = os.path.join(os.getcwd(), 'assets', 'sprites', 'monsters')
+            os.makedirs(start, exist_ok=True)
+            fp, _ = QFileDialog.getOpenFileName(self, "Select Projectile Sprite", start,
+                                                "Image Files (*.png *.jpg *.jpeg *.bmp *.tga)")
+            if fp:
+                rel = os.path.relpath(fp, os.getcwd()).replace('\\', '/')
+                thing.properties['projectile_sprite'] = rel
+                proj_path.setText(rel)
+                if hasattr(self.editor, 'mark_dirty'):
+                    self.editor.mark_dirty()
+
+        def clear_proj():
+            thing.properties.pop('projectile_sprite', None)
+            proj_path.setText('')
+            if hasattr(self.editor, 'mark_dirty'):
+                self.editor.mark_dirty()
+
+        proj_btn = QPushButton("...")
+        proj_btn.setFixedWidth(30)
+        proj_btn.clicked.connect(pick_proj)
+        proj_clear = QPushButton("✕")
+        proj_clear.setFixedWidth(30)
+        proj_clear.setToolTip("Clear custom projectile sprite")
+        proj_clear.clicked.connect(clear_proj)
+        proj_h.addWidget(proj_path)
+        proj_h.addWidget(proj_btn)
+        proj_h.addWidget(proj_clear)
+        aform.addRow(proj_lbl, proj_widget)
+        self._widgets['projectile_sprite_label'] = proj_lbl
+        self._widgets['projectile_sprite_path'] = proj_path
+
+        is_flying = thing.properties.get('monster_type', 'human') == 'flying'
+        proj_lbl.setVisible(is_flying)
+        proj_widget.setVisible(is_flying)
+
+        # Patrol
+        thing.properties.setdefault('patrol', False)
+        thing.properties.setdefault('patrol_target', '')
+        thing.properties.setdefault('patrol_mode', 'loop')
+
+        patrol_cb = _make_checkbox("Patrol", thing.properties.get('patrol', False), None, _Style.CHECKBOX)
+        patrol_cb.setToolTip("Monster walks toward selected PathNode when player is not in sight")
+        aform.addRow("", patrol_cb)
+
+        patrol_combo = QComboBox()
+        patrol_combo.addItem("(none)")
+        mtype = str(thing.properties.get('monster_type', 'human')).lower()
+        for t in self.editor.state.things:
+            if isinstance(t, PathNode):
+                n = t.properties.get('name', '') or ''
+                if n and t.accepts_monster_type(mtype):
+                    patrol_combo.addItem(n)
+                elif n:
+                    patrol_combo.addItem(f"{n}  (wants {t.get_affects_type()})")
+                    item = patrol_combo.model().item(patrol_combo.count() - 1)
+                    if item is not None:
+                        item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
+
+        cur_patrol = thing.properties.get('patrol_target', '') or ''
+        if cur_patrol:
+            idx = patrol_combo.findText(cur_patrol)
+            if idx >= 0:
+                patrol_combo.setCurrentIndex(idx)
+            else:
+                patrol_combo.addItem(cur_patrol + "  (missing)")
+                patrol_combo.setCurrentIndex(patrol_combo.count() - 1)
+
+        patrol_lbl = QLabel("Target Node:")
+        is_patrolling = bool(thing.properties.get('patrol', False))
+        patrol_lbl.setVisible(is_patrolling)
+        patrol_combo.setVisible(is_patrolling)
+
+        def _on_patrol(checked):
+            thing.properties['patrol'] = bool(checked)
+            patrol_lbl.setVisible(checked)
+            patrol_combo.setVisible(checked)
+            if not checked:
+                thing.properties['patrol_target'] = ''
+                patrol_combo.setCurrentIndex(0)
+            if hasattr(self.editor, 'mark_dirty'):
+                self.editor.mark_dirty()
+
+        def _on_patrol_target(text):
+            clean = (text or '').replace("  (missing)", "")
+            if "  (wants " in clean:
+                clean = clean.split("  (wants ")[0]
+            thing.properties['patrol_target'] = '' if clean == '(none)' else clean
+            if hasattr(self.editor, 'mark_dirty'):
+                self.editor.mark_dirty()
+
+        patrol_cb.toggled.connect(_on_patrol)
+        patrol_combo.currentTextChanged.connect(_on_patrol_target)
+
+        mode_combo = _make_combo(['loop', 'ping_pong', 'once'],
+                                 str(thing.properties.get('patrol_mode', 'loop')).lower(),
+                                 lambda t: thing.properties.update({'patrol_mode': t}))
+        mode_lbl = QLabel("Patrol Mode:")
+        mode_lbl.setVisible(is_patrolling)
+        mode_combo.setVisible(is_patrolling)
+
+        def _on_mode(text):
+            thing.properties['patrol_mode'] = text
+            if hasattr(self.editor, 'mark_dirty'):
+                self.editor.mark_dirty()
+
+        mode_combo.currentTextChanged.connect(_on_mode)
+
+        # Rebind patrol toggle to also show mode
+        patrol_cb.toggled.disconnect()
+        patrol_cb.toggled.connect(lambda c: (_on_patrol(c), mode_lbl.setVisible(c), mode_combo.setVisible(c)))
+
+        aform.addRow(patrol_lbl, patrol_combo)
+        aform.addRow(mode_lbl, mode_combo)
+
+        tab_layout.addWidget(ai_group)
+
+        # Flags
+        flags_group = QGroupBox("Behaviour Flags")
+        flags_group.setStyleSheet(_Style.group_box("#F08000"))
+        flay = QVBoxLayout(flags_group)
+        flay.setSpacing(6)
+        for prop_key, label_text, tooltip in (
+            ('triggered', 'Trigger', 'Monster starts dormant — must be woken via I/O'),
+            ('wake_on_sight', 'Wake when sees player', 'Auto-wakes when player enters sight range'),
+            ('dead', 'Dead', 'Placed in dead/inactive state at level start'),
+            ('non_hostile', 'Non-hostile', 'Will not attack the player'),
+        ):
+            cb = _make_checkbox(label_text, thing.properties.get(prop_key, False),
+                                lambda c, k=prop_key: self.update_object_prop(k, c), _Style.CHECKBOX)
+            cb.setToolTip(tooltip)
+            flay.addWidget(cb)
+            self._widgets[f'monster_flag_{prop_key}'] = cb
+
+        tab_layout.addWidget(flags_group)
+
+        # Customise button
+        cust_btn = QPushButton("🎨  Customise Sprites…")
+        cust_btn.setFixedWidth(350)
+        cust_btn.setToolTip("Assign custom idle / shoot / dead PNGs and billboard size")
+        cust_btn.setStyleSheet("""
+            QPushButton { background-color: #3c3f41; border: 1px solid #F08000; color: #F08000; padding: 6px; font-weight: bold; margin-top: 4px; }
+            QPushButton:hover { background-color: #4b4d4d; }
+            QPushButton:pressed { background-color: #2b2b2b; }
+        """)
+
+        def _open_customise():
+            from editor.monster_customise_dialog import MonsterCustomiseDialog
+            dlg = MonsterCustomiseDialog(thing, self)
+            if dlg.exec_() == MonsterCustomiseDialog.Accepted:
+                self.set_object(thing)
+                try:
+                    self.editor.view_3d.update()
+                except Exception:
+                    pass
+                for attr in ('view_top', 'view_front', 'view_side', 'view_2d'):
+                    widget = getattr(self.editor, attr, None)
+                    if widget is not None:
+                        try:
+                            widget.update()
+                        except Exception:
+                            pass
+
+        cust_btn.clicked.connect(_open_customise)
+        tab_layout.addLayout(_hbox(cust_btn, stretch=False))
+
+    # ────────────────────────────
+    # Shared small helpers
+    # ────────────────────────────
+    def _pathnode_combo(self, current_value):
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.addItem("(none)")
+        for t in self.editor.state.things:
+            if isinstance(t, PathNode):
+                n = t.properties.get('name', '')
+                if n:
+                    combo.addItem(n)
+        if current_value:
+            idx = combo.findText(current_value)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            else:
+                combo.setEditText(current_value)
+        return combo
+
+    def _vec3_row(self, values, callback, indent=0):
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(indent, 0, 0, 4)
+        h.setSpacing(4)
+        inputs = []
+        for i, v in enumerate(values):
+            lbl = QLabel(("X:", "Y:", "Z:")[i])
+            inp = QLineEdit(str(v))
+            inp.setFixedWidth(50)
+            h.addWidget(lbl)
+            h.addWidget(inp)
+            inputs.append(inp)
+
+        def _update():
+            try:
+                callback([float(inp.text()) for inp in inputs])
+            except ValueError:
+                pass
+
+        for inp in inputs:
+            inp.editingFinished.connect(_update)
+        h.addStretch()
+        return w, inputs
+
+    def _color_button(self, color_rgb, callback, size=(100, 28)):
+        btn = QPushButton()
+        btn.setFixedSize(*size)
+        self._update_color_button(btn, color_rgb)
+        btn.clicked.connect(callback)
+        return btn
+
+    def _update_color_button(self, btn, color_rgb):
+        if isinstance(color_rgb, (list, tuple)) and len(color_rgb) >= 3:
+            if any(c > 1.0 for c in color_rgb):
+                r, g, b = int(color_rgb[0]), int(color_rgb[1]), int(color_rgb[2])
+            else:
+                r, g, b = int(color_rgb[0] * 255), int(color_rgb[1] * 255), int(color_rgb[2] * 255)
+            btn.setStyleSheet(f"background-color: rgb({r}, {g}, {b}); border: 2px solid #555; border-radius: 4px;")
+
+    def _preview_button(self, text, callback):
+        btn = QPushButton(text)
+        btn.setCheckable(True)
+        btn.setStyleSheet("""
+            QPushButton { background-color: #425F5D; color: white; border-radius: 4px; padding: 8px; font-weight: bold; }
+            QPushButton:checked { background-color: #0056b3; }
+            QPushButton:hover { background-color: #5a7a82; }
+        """)
+        btn.toggled.connect(callback)
+        return btn
 
     def _pick_color(self, prop_name, button, default_color):
-        """Open color picker and update property."""
-        if self.current_object is None: return
-        
+        if self.current_object is None:
+            return
         current = self.current_object.get(prop_name, default_color)
         if any(c > 1.0 for c in current):
-            current_qcolor = QColor(int(current[0]), int(current[1]), int(current[2]))
+            qc = QColor(int(current[0]), int(current[1]), int(current[2]))
         else:
-            current_qcolor = QColor(int(current[0] * 255), int(current[1] * 255), int(current[2] * 255))
-        
-        color = QColorDialog.getColor(current_qcolor, self, f"Choose {prop_name.replace('_', ' ').title()}")
+            qc = QColor(int(current[0] * 255), int(current[1] * 255), int(current[2] * 255))
+        color = QColorDialog.getColor(qc, self, f"Choose {prop_name.replace('_', ' ').title()}")
         if color.isValid():
             new_color = [color.redF(), color.greenF(), color.blueF()]
             self.current_object[prop_name] = new_color
@@ -1450,24 +1859,50 @@ class PropertyEditor(QWidget):
             self.editor.update_all_ui()
 
     def _reset_brush_colour(self, button):
-        """Reset brush colour to default."""
-        if self.current_object is None: return
+        if self.current_object is None:
+            return
         default = [0.8, 0.8, 0.8]
         self.current_object['colour'] = default
         self._update_color_button(button, default)
         self.editor.update_all_ui()
 
-    # === Event Handlers ===
+    def _repaint_viewport(self):
+        for attr in ('gl_widget', 'viewport', 'canvas', 'render_widget', 'opengl_widget', 'view_3d'):
+            widget = getattr(self.editor, attr, None)
+            if widget is not None:
+                widget.update()
+                break
+        for attr in ('view_top', 'view_front', 'view_side', 'view_2d'):
+            widget = getattr(self.editor, attr, None)
+            if widget is not None:
+                widget.update()
 
+    # ────────────────────────────
+    # Event handlers
+    # ────────────────────────────
     def on_shader_changed(self, shader_type):
-        if self.current_object is None:
+        if self.current_object is None or self._populating:
             return
+        
+        # Normalize "none" variants to '<None>'
+        if shader_type and shader_type.lower() in ('none', '<none>'):
+            shader_type = '<None>'
+        
         self.current_object['shader'] = shader_type
 
-        if shader_type != 'Fog':
+        if shader_type == '<None>':
+            # Convert back to a solid normal brush: clear all shader/fog state
+            self.current_object['is_fog'] = False
+            shader_keys = ('glass_color', 'glass_opacity', 'glass_distortion', 'glass_refraction',
+                           'glass_roughness', 'glass_fresnel', 'glow_color', 'glow_intensity',
+                           'water_tint', 'water_opacity', 'water_reflectivity', 'water_wave_enabled',
+                           'water_wave_height', 'water_plane', 'fog_color', 'fog_density')
+            for key in shader_keys:
+                self.current_object.pop(key, None)
+        elif shader_type != 'Fog':
             self.current_object['is_fog'] = False
 
-        # Initialize shader-specific defaults
+        # Initialize shader-specific defaults (existing code)
         if shader_type == 'Glass':
             if 'glass_color' not in self.current_object:
                 self.current_object['glass_color'] = [0.9, 0.95, 1.0]
@@ -1504,73 +1939,57 @@ class PropertyEditor(QWidget):
         if shader_type != '<None>':
             self.current_object['is_trigger'] = False
 
-        # Show/hide shader tab
-        show_shader = shader_type not in ['<None>', None, '']
-        if hasattr(self, 'shader_tab_index'):
-            self.tab_widget.setTabVisible(self.shader_tab_index, show_shader)
-            if show_shader:
-                self.tab_widget.setCurrentIndex(self.shader_tab_index)
+        # Defer refresh to avoid interrupting shader combo's own update cycle
+        QTimer.singleShot(0, self._deferred_shader_refresh)
 
-        self.editor.update_views()
-        self.editor.scene_hierarchy.refresh_list()
+    def _deferred_shader_refresh(self):
+        """Refresh property editor and jump to shader tab after shader change."""
+        if self.current_object is None:
+            return
+        self.set_object(self.current_object)
+        if hasattr(self, 'shader_tab_index') and self.shader_tab_index is not None:
+            shader = self.current_object.get('shader', '<None>')
+            if shader not in ('<<None>', None, ''):
+                self.tab_widget.setCurrentIndex(self.shader_tab_index)
 
     def on_trigger_changed(self, is_trigger):
         if self.current_object is None:
             return
         self.current_object['is_trigger'] = is_trigger
-
         if is_trigger:
-            if 'trigger_type' not in self.current_object:
-                self.current_object['trigger_type'] = 'Once'
-            # Set trigger texture
+            self.current_object.setdefault('trigger_type', 'Once')
+            self.current_object.setdefault('textures', {})
             for face in ['top', 'bottom', 'north', 'south', 'east', 'west']:
-                if 'textures' not in self.current_object:
-                    self.current_object['textures'] = {}
                 self.current_object['textures'][face] = 'trigger.jpg'
-
-        # Show/hide the trigger tab
         if hasattr(self, 'trigger_tab_index'):
             self.tab_widget.setTabVisible(self.trigger_tab_index, is_trigger)
             if is_trigger:
                 self.tab_widget.setCurrentIndex(self.trigger_tab_index)
-
-        # Update I/O tab presence
         self._update_io_tab_presence()
-
-        # Lightweight refresh
         self.editor.update_views()
         self.editor.scene_hierarchy.refresh_list()
 
     def on_mover_changed(self, is_mover):
         if self.current_object is None:
             return
-
-        # If turning on mover, ensure door is turned off
         if is_mover and self.current_object.get('is_door', False):
-            # Update the brush property
             self.current_object['is_door'] = False
-            # Update the door checkbox in the UI without triggering its handler
             door_cb = self._widgets.get('door_cb')
             if door_cb:
                 door_cb.blockSignals(True)
                 door_cb.setChecked(False)
                 door_cb.blockSignals(False)
-            # Hide door tab
             if hasattr(self, 'door_tab_index'):
                 self.tab_widget.setTabVisible(self.door_tab_index, False)
-
         self.current_object['is_mover'] = is_mover
-
         if is_mover:
             self.current_object.setdefault('speed', 64.0)
             self.current_object.setdefault('distance', 128.0)
             self.current_object.setdefault('direction', [0, 1, 0])
-
         if hasattr(self, 'mover_tab_index'):
             self.tab_widget.setTabVisible(self.mover_tab_index, is_mover)
             if is_mover:
                 self.tab_widget.setCurrentIndex(self.mover_tab_index)
-
         self._update_io_tab_presence()
         self.editor.update_views()
         self.editor.scene_hierarchy.refresh_list()
@@ -1578,91 +1997,72 @@ class PropertyEditor(QWidget):
     def on_door_changed(self, is_door):
         if self.current_object is None:
             return
-
-        # If turning on door, ensure mover is turned off
         if is_door and self.current_object.get('is_mover', False):
-            # Update the brush property
             self.current_object['is_mover'] = False
-            # Update the mover checkbox in the UI without triggering its handler
             mover_cb = self._widgets.get('mover_cb')
             if mover_cb:
                 mover_cb.blockSignals(True)
                 mover_cb.setChecked(False)
                 mover_cb.blockSignals(False)
-            # Hide mover tab
             if hasattr(self, 'mover_tab_index'):
                 self.tab_widget.setTabVisible(self.mover_tab_index, False)
-
         self.current_object['is_door'] = is_door
-
         if is_door:
             self.current_object.setdefault('door_direction', 'up')
             self.current_object.setdefault('door_distance', 128.0)
             self.current_object.setdefault('door_lip', 8.0)
             self.current_object.setdefault('door_speed', 64.0)
-
         if hasattr(self, 'door_tab_index'):
             self.tab_widget.setTabVisible(self.door_tab_index, is_door)
             if is_door:
                 self.tab_widget.setCurrentIndex(self.door_tab_index)
-
         self._update_io_tab_presence()
         self.editor.update_views()
         self.editor.scene_hierarchy.refresh_list()
 
     def on_hurt_changed(self, is_hurt):
-        if self.current_object is None: return
+        if self.current_object is None:
+            return
         self.current_object['hurt'] = is_hurt
-        if is_hurt:
-            if 'hurt_amount' not in self.current_object: self.current_object['hurt_amount'] = 10
-        
-        # Enable/disable damage spin
+        if is_hurt and 'hurt_amount' not in self.current_object:
+            self.current_object['hurt_amount'] = 10
         if 'damage_spin' in self._widgets:
             self._widgets['damage_spin'].setEnabled(is_hurt)
-        
         self.editor.update_all_ui()
 
     def on_door_needs_key_changed(self, needs_key):
-        if self.current_object is None: return
+        if self.current_object is None:
+            return
         self.current_object['door_needs_key'] = needs_key
-        if needs_key:
-            if 'door_key_name' not in self.current_object: self.current_object['door_key_name'] = ''
-        
-        # Show/hide key name widgets
-        if 'door_key_input' in self._widgets:
-            self._widgets['door_key_input'].setVisible(needs_key)
-        if 'door_key_label' in self._widgets:
-            self._widgets['door_key_label'].setVisible(needs_key)
-        
-        # Refresh cross-reference
+        if needs_key and 'door_key_name' not in self.current_object:
+            self.current_object['door_key_name'] = ''
+        for k in ('door_key_input', 'door_key_label'):
+            if k in self._widgets:
+                self._widgets[k].setVisible(needs_key)
         self._update_door_key_link(self.current_object)
-        
         self.editor.update_all_ui()
 
     def _update_door_key_link(self, brush):
-        """Update the 'Linked Key Pickup' label on the Door tab."""
-        link_label = self._widgets.get('door_key_link_label')
-        select_btn = self._widgets.get('door_key_select_btn')
-        if not link_label:
+        link_lbl = self._widgets.get('door_key_link_label')
+        sel_btn = self._widgets.get('door_key_select_btn')
+        if not link_lbl:
             return
-
         if not brush or not brush.get('door_needs_key', False):
-            link_label.setText("")
-            link_label.setVisible(False)
-            if select_btn:
-                select_btn.setVisible(False)
+            link_lbl.setText("")
+            link_lbl.setVisible(False)
+            if sel_btn:
+                sel_btn.setVisible(False)
             return
 
         key_name = brush.get('door_key_name', '')
         if not key_name:
-            link_label.setText("⚠ No key name set")
-            link_label.setStyleSheet("QLabel { color: #FF8800; padding: 4px; }")
-            link_label.setVisible(True)
-            if select_btn:
-                select_btn.setVisible(False)
+            link_lbl.setText("⚠ No key name set")
+            link_lbl.setStyleSheet("QLabel { color: #FF8800; padding: 4px; }")
+            link_lbl.setVisible(True)
+            if sel_btn:
+                sel_btn.setVisible(False)
             return
 
-        # Search for matching key pickups in the map
         self._linked_key_pickup = None
         for thing in self.editor.state.things:
             if isinstance(thing, Pickup):
@@ -1674,76 +2074,63 @@ class PropertyEditor(QWidget):
             name = self._linked_key_pickup.properties.get('name', 'unnamed')
             pos = self._linked_key_pickup.pos
             pos_str = f"({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f})" if pos else ""
-            link_label.setText(f"🔑 Linked to: {name} {pos_str}")
-            link_label.setStyleSheet("QLabel { color: #88FF88; padding: 4px; }")
-            link_label.setVisible(True)
-            if select_btn:
-                select_btn.setVisible(True)
+            link_lbl.setText(f"🔑 Linked to: {name} {pos_str}")
+            link_lbl.setStyleSheet("QLabel { color: #88FF88; padding: 4px; }")
+            link_lbl.setVisible(True)
+            if sel_btn:
+                sel_btn.setVisible(True)
         else:
-            link_label.setText(f"⚠ No key pickup named '{key_name}' found in map")
-            link_label.setStyleSheet("QLabel { color: #FF4444; padding: 4px; }")
-            link_label.setVisible(True)
-            if select_btn:
-                select_btn.setVisible(False)
+            link_lbl.setText(f"⚠ No key pickup named '{key_name}' found in map")
+            link_lbl.setStyleSheet("QLabel { color: #FF4444; padding: 4px; }")
+            link_lbl.setVisible(True)
+            if sel_btn:
+                sel_btn.setVisible(False)
 
     def _select_linked_key_pickup(self):
-        """Jump to the key pickup that matches this door's key requirement."""
         pickup = getattr(self, '_linked_key_pickup', None)
         if pickup:
             self.editor.select_object(pickup)
 
     def _update_pickup_door_link(self, thing):
-        """Update the 'Doors Unlocked' label on the Pickup properties."""
-        link_label = self._widgets.get('pickup_door_link_label')
-        select_btn = self._widgets.get('pickup_door_select_btn')
-        if not link_label:
-            return
-
-        if not isinstance(thing, Pickup) or thing.properties.get('item_type') != 'key':
-            link_label.setVisible(False)
-            if select_btn:
-                select_btn.setVisible(False)
+        link_lbl = self._widgets.get('pickup_door_link_label')
+        sel_btn = self._widgets.get('pickup_door_select_btn')
+        if not link_lbl or not isinstance(thing, Pickup) or thing.properties.get('item_type') != 'key':
+            link_lbl.setVisible(False) if link_lbl else None
+            if sel_btn:
+                sel_btn.setVisible(False)
             return
 
         key_name = thing.properties.get('key_name', '')
         if not key_name:
-            link_label.setText("⚠ No key name set")
-            link_label.setStyleSheet("QLabel { color: #FF8800; padding: 4px; }")
-            link_label.setVisible(True)
-            if select_btn:
-                select_btn.setVisible(False)
+            link_lbl.setText("⚠ No key name set")
+            link_lbl.setStyleSheet("QLabel { color: #FF8800; padding: 4px; }")
+            link_lbl.setVisible(True)
+            if sel_btn:
+                sel_btn.setVisible(False)
             return
 
-        # Search for doors that require this key
-        self._linked_door_brush = None
-        matching_doors = []
-        for brush in self.editor.state.brushes:
-            if brush.get('is_door') and brush.get('door_needs_key') and brush.get('door_key_name') == key_name:
-                matching_doors.append(brush)
-
-        if matching_doors:
-            self._linked_door_brush = matching_doors[0]
-            door_name = matching_doors[0].get('name', 'unnamed door')
-            pos = matching_doors[0].get('pos', [0, 0, 0])
+        matching = [b for b in self.editor.state.brushes
+                    if b.get('is_door') and b.get('door_needs_key') and b.get('door_key_name') == key_name]
+        if matching:
+            self._linked_door_brush = matching[0]
+            door_name = matching[0].get('name', 'unnamed door')
+            pos = matching[0].get('pos', [0, 0, 0])
             pos_str = f"({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f})"
-            if len(matching_doors) == 1:
-                link_label.setText(f"🚪 Unlocks: {door_name} {pos_str}")
-            else:
-                link_label.setText(f"🚪 Unlocks: {door_name} {pos_str} (+{len(matching_doors)-1} more)")
-            link_label.setStyleSheet("QLabel { color: #88AAFF; padding: 4px; }")
-            link_label.setVisible(True)
-            if select_btn:
-                select_btn.setVisible(True)
+            extra = f" (+{len(matching) - 1} more)" if len(matching) > 1 else ""
+            link_lbl.setText(f"🚪 Unlocks: {door_name} {pos_str}{extra}")
+            link_lbl.setStyleSheet("QLabel { color: #88AAFF; padding: 4px; }")
+            link_lbl.setVisible(True)
+            if sel_btn:
+                sel_btn.setVisible(True)
         else:
-            link_label.setText(f"⚠ No door requires key '{key_name}'")
-            link_label.setStyleSheet("QLabel { color: #FF4444; padding: 4px; }")
-            link_label.setVisible(True)
+            link_lbl.setText(f"⚠ No door requires key '{key_name}'")
+            link_lbl.setStyleSheet("QLabel { color: #FF4444; padding: 4px; }")
+            link_lbl.setVisible(True)
             self._linked_door_brush = None
-            if select_btn:
-                select_btn.setVisible(False)
+            if sel_btn:
+                sel_btn.setVisible(False)
 
     def _select_linked_door(self):
-        """Jump to the door brush that this key pickup unlocks."""
         brush = getattr(self, '_linked_door_brush', None)
         if brush:
             self.editor.select_object(brush)
@@ -1752,1446 +2139,29 @@ class PropertyEditor(QWidget):
         if self.editor:
             btn = self._widgets.get('mover_preview_btn')
             if checked:
-                if btn: btn.setText("■ Stop Preview")
+                if btn:
+                    btn.setText("■ Stop Preview")
                 self.editor.start_mover_preview(self.current_object)
             else:
-                if btn: btn.setText("▶ Preview Movement")
+                if btn:
+                    btn.setText("▶ Preview Movement")
                 self.editor.stop_mover_preview()
 
     def toggle_door_preview(self, checked):
         if self.editor:
-            # Correctly retrieve the button from the internal dictionary
             btn = self._widgets.get('door_preview_btn')
             if checked:
-                if btn: btn.setText("■ Stop Preview")
-                # Doors use the same mover logic for the preview
+                if btn:
+                    btn.setText("■ Stop Preview")
                 if hasattr(self.editor, 'start_mover_preview'):
                     self.editor.start_mover_preview(self.current_object)
             else:
-                if btn: btn.setText("▶ Preview Door")
+                if btn:
+                    btn.setText("▶ Preview Door")
                 if hasattr(self.editor, 'stop_mover_preview'):
                     self.editor.stop_mover_preview()
 
-    def populate_for_thing(self, thing):
-        """Populate property editor for a Thing with tabbed interface."""
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.verticalScrollBar().setStyleSheet("""
-            QScrollBar:vertical {
-                width: 18px;
-                background: #2b2b2b;
-                border: none;
-                margin: 0px;
-            }
-            QScrollBar::handle:vertical {
-                background: #4b4d4d;
-                min-height: 20px;
-                border-radius: 4px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-        """)
-
-        content_widget = QWidget()
-        content_layout = QVBoxLayout(content_widget)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(4)
-
-        # === NAME FIELD (always visible above tabs, matching brush layout) ===
-        name_layout = QFormLayout()
-        name_layout.setSpacing(4)
-
-        name_lbl = QLabel("Name:")
-        name_lbl.setStyleSheet("QLabel { background-color: #6C3BAA; color: white; font-weight: bold; padding: 6px 8px; border-radius: 3px; }")
-        cur_name = thing.properties.get('name', '')
-        name_inp = QLineEdit(str(cur_name))
-        name_inp.setStyleSheet("QLineEdit { background-color: #6C3BAA; color: white; font-weight: bold; padding: 6px; border: 2px solid #8B5AC2; border-radius: 3px; } QLineEdit:focus { border: 2px solid #A875D6; background-color: #7B4AB9; }")
-        name_inp.setPlaceholderText("Enter name...")
-        name_inp.editingFinished.connect(lambda: self.update_object_prop('name', name_inp.text()))
-        name_layout.addRow(name_lbl, name_inp)
-
-        thing_name = getattr(thing, 'name', '') or thing.properties.get('name', '')
-        targeting_sources = self._find_targeting_sources(thing_name) if thing_name else []
-        if targeting_sources:
-            source_texts = [f"{name} ({stype})" for name, stype in targeting_sources]
-            targeted_label = QLabel(", ".join(source_texts))
-            targeted_label.setStyleSheet("QLabel { color: #00FF00; font-weight: bold; padding: 2px; background-color: #1a3d1a; border: 1px solid #00AA00; border-radius: 3px; }")
-            targeted_label.setWordWrap(True)
-            name_layout.addRow("Targeted by:", targeted_label)
-
-        content_layout.addLayout(name_layout)
-
-        # === TAB WIDGET ===
-        self.tab_widget = QTabWidget()
-        self.tab_widget.setStyleSheet("""
-            QTabBar::tab:selected { background: #F08000; color: white; }
-            QTabBar::tab { background: #425f5d; color: #ccc; padding: 8px 16px; border: 1px solid #333; }
-            QTabBar::tab:hover { background: #5a7a82; }
-        """)
-
-        # Properties tab
-        props_tab = self._create_thing_properties_tab(thing)
-        self.tab_widget.addTab(props_tab, "Properties")
-
-        # I/O tab (conditional)
-        if IO_AVAILABLE:
-            entity_type = get_entity_type_for_io(thing)
-            if entity_type and entity_type in IO_REGISTRY:
-                io_tab = self._create_io_tab_for_thing(thing)
-                self.tab_widget.addTab(io_tab, "⚡ I/O")
-
-        content_layout.addWidget(self.tab_widget)
-        content_layout.addStretch()
-
-        scroll.setWidget(content_widget)
-        self.main_layout.addWidget(scroll)
-
-    def _create_thing_properties_tab(self, thing):
-        """Create the Properties tab content for a Thing."""
-        widget = QWidget()
-        tab_layout = QVBoxLayout(widget)
-        tab_layout.setContentsMargins(8, 8, 8, 8)
-        tab_layout.setSpacing(4)
-
-        layout = QFormLayout()
-
-        if isinstance(thing, Model):
-            self.add_model_path_widget(layout, thing)
-            self.add_vector3_widget(layout, thing, 'scale')
-            self.add_vector3_widget(layout, thing, 'rotation')
-            if IO_AVAILABLE:
-                io_note = QLabel("💡 Use the I/O tab for advanced targeting")
-                io_note.setStyleSheet("QLabel { color: #88AAFF; font-style: italic; padding: 4px; }")
-                layout.addRow("", io_note)
-
-        if isinstance(thing, Light):
-            self.add_color_picker_widget(layout, thing, 'colour')
-
-            # --- Attach to Mover: checkbox + conditional dropdown ---
-            current_parent = thing.properties.get('parent_mover', '')
-            is_attached = bool(current_parent)
-
-            attach_cb = QCheckBox("Attach to Mover")
-            attach_cb.setChecked(is_attached)
-            layout.addRow("", attach_cb)
-
-            mover_combo = QComboBox()
-            mover_combo.addItem("(none)")
-            for brush in self.editor.state.brushes:
-                if brush.get('is_mover'):
-                    mover_name = brush.get('name', '')
-                    if mover_name:
-                        mover_combo.addItem(mover_name)
-
-            if current_parent:
-                idx = mover_combo.findText(current_parent)
-                if idx >= 0:
-                    mover_combo.setCurrentIndex(idx)
-                else:
-                    # Parent name in file but mover was deleted
-                    mover_combo.addItem(current_parent + " (missing)")
-                    mover_combo.setCurrentIndex(mover_combo.count() - 1)
-
-            mover_label = QLabel("Parent Mover:")
-            mover_label.setVisible(is_attached)
-            mover_combo.setVisible(is_attached)
-
-            def on_attach_toggled(checked):
-                mover_label.setVisible(checked)
-                mover_combo.setVisible(checked)
-                if not checked:
-                    thing.properties['parent_mover'] = ''
-                    thing.properties['parent_offset'] = [0.0, 0.0, 0.0]
-                    mover_combo.setCurrentIndex(0)
-                    self.editor.update_all_ui()
-
-            attach_cb.toggled.connect(on_attach_toggled)
-
-            def on_parent_mover_changed(text):
-                clean = text.replace(" (missing)", "")
-                if clean == "(none)":
-                    thing.properties['parent_mover'] = ''
-                    thing.properties['parent_offset'] = [0.0, 0.0, 0.0]
-                else:
-                    thing.properties['parent_mover'] = clean
-                    # Compute offset = light pos − mover pos
-                    for b in self.editor.state.brushes:
-                        if b.get('is_mover') and b.get('name') == clean:
-                            thing.properties['parent_offset'] = [
-                                thing.pos[0] - b['pos'][0],
-                                thing.pos[1] - b['pos'][1],
-                                thing.pos[2] - b['pos'][2],
-                            ]
-                            break
-                self.editor.update_all_ui()
-
-            mover_combo.currentTextChanged.connect(on_parent_mover_changed)
-            layout.addRow(mover_label, mover_combo)
-
-        # --- Portal: Attach to Mover (same system as Light) ---
-        if isinstance(thing, Portal):
-            current_parent = thing.properties.get('parent_mover', '')
-            is_attached = bool(current_parent)
-
-            portal_attach_cb = QCheckBox("Attach to Mover")
-            portal_attach_cb.setChecked(is_attached)
-            layout.addRow("", portal_attach_cb)
-
-            portal_mover_combo = QComboBox()
-            portal_mover_combo.addItem("(none)")
-            for brush in self.editor.state.brushes:
-                if brush.get('is_mover'):
-                    mover_name = brush.get('name', '')
-                    if mover_name:
-                        portal_mover_combo.addItem(mover_name)
-
-            if current_parent:
-                idx = portal_mover_combo.findText(current_parent)
-                if idx >= 0:
-                    portal_mover_combo.setCurrentIndex(idx)
-                else:
-                    portal_mover_combo.addItem(current_parent + " (missing)")
-                    portal_mover_combo.setCurrentIndex(portal_mover_combo.count() - 1)
-
-            portal_mover_label = QLabel("Parent Mover:")
-            portal_mover_label.setVisible(is_attached)
-            portal_mover_combo.setVisible(is_attached)
-
-            def on_portal_attach_toggled(checked):
-                portal_mover_label.setVisible(checked)
-                portal_mover_combo.setVisible(checked)
-                if not checked:
-                    thing.properties['parent_mover'] = ''
-                    thing.properties['parent_offset'] = [0.0, 0.0, 0.0]
-                    portal_mover_combo.setCurrentIndex(0)
-                    self.editor.update_all_ui()
-
-            portal_attach_cb.toggled.connect(on_portal_attach_toggled)
-
-            def on_portal_parent_mover_changed(text):
-                clean = text.replace(" (missing)", "")
-                if clean == "(none)":
-                    thing.properties['parent_mover'] = ''
-                    thing.properties['parent_offset'] = [0.0, 0.0, 0.0]
-                else:
-                    thing.properties['parent_mover'] = clean
-                    # Compute offset = portal pos − mover pos
-                    for b in self.editor.state.brushes:
-                        if b.get('is_mover') and b.get('name') == clean:
-                            thing.properties['parent_offset'] = [
-                                thing.pos[0] - b['pos'][0],
-                                thing.pos[1] - b['pos'][1],
-                                thing.pos[2] - b['pos'][2],
-                            ]
-                            break
-                self.editor.update_all_ui()
-
-            portal_mover_combo.currentTextChanged.connect(on_portal_parent_mover_changed)
-            layout.addRow(portal_mover_label, portal_mover_combo)
-
-            # --- Portal target dropdown ---
-            layout.addRow(QLabel(""))   # spacer
-
-            current_target = thing.properties.get('portal_target', '')
-            other_portals = [
-                t for t in self.editor.state.things
-                if isinstance(t, Portal) and t is not thing
-            ]
-
-            portal_target_combo = QComboBox()
-            portal_target_combo.addItem("(none)")
-            for p in other_portals:
-                portal_target_combo.addItem(p.properties.get('name', ''))
-
-            if current_target:
-                idx = portal_target_combo.findText(current_target)
-                if idx >= 0:
-                    portal_target_combo.setCurrentIndex(idx)
-                else:
-                    portal_target_combo.addItem(current_target + " (missing)")
-                    portal_target_combo.setCurrentIndex(portal_target_combo.count() - 1)
-
-            def on_portal_target_changed(text):
-                clean = text.replace(" (missing)", "")
-                thing.properties['portal_target'] = '' if clean == '(none)' else clean
-                self.editor.update_all_ui()
-
-            portal_target_combo.currentTextChanged.connect(on_portal_target_changed)
-
-            # "Select →" button jumps the editor selection to the linked portal
-            select_other_btn = QPushButton("Select →")
-            select_other_btn.setToolTip("Select the linked portal in the viewport")
-            select_other_btn.setMaximumWidth(70)
-
-            def on_select_other_portal(_checked=False, _thing=thing):
-                t_name = _thing.properties.get('portal_target', '')
-                for t in self.editor.state.things:
-                    if isinstance(t, Portal) and t.properties.get('name') == t_name:
-                        if hasattr(self.editor, 'select_object'):
-                            self.editor.select_object(t)
-                        else:
-                            self.editor.state.selected_object = t
-                            self.editor.update_all_ui()
-                        break
-
-            select_other_btn.clicked.connect(on_select_other_portal)
-
-            # Lay out combo + button on one row
-            target_row_widget = QWidget()
-            target_row_layout = QHBoxLayout(target_row_widget)
-            target_row_layout.setContentsMargins(0, 0, 0, 0)
-            target_row_layout.addWidget(portal_target_combo)
-            target_row_layout.addWidget(select_other_btn)
-            layout.addRow("Portal Target:", target_row_widget)
-
-        is_pickup = isinstance(thing, Pickup)
-        current_item_type = thing.properties.get('item_type', 'health') if is_pickup else None
-
-        self._pickup_value_widgets = []
-        self._pickup_key_widgets = []
-        self._pickup_sprite_widgets = []
-
-        _MONSTER_ONLY_KEYS = {'awake', 'damage', 'health', 'monster_type', 'variant',
-                               'triggered', 'wake_on_sight', 'dead', 'non_hostile', 'sight',
-                               'patrol', 'patrol_target', 'patrol_mode'}
-
-        for key, value in sorted(thing.properties.items()):
-            if key == 'name': continue
-            if key == 'id': continue
-            if key == '_io_connections': continue
-            if key == 'type': continue
-            if isinstance(thing, Light) and key in ['colour', 'parent_mover', 'parent_offset']: continue
-            if isinstance(thing, Model) and key in ['model_path', 'scale', 'rotation']: continue
-            # Hide rotation and all managed portal properties — they have dedicated UI above
-            if isinstance(thing, Portal) and key in ('rotation', 'portal_target',
-                    'parent_mover', 'parent_offset', 'parent_local_pos', 'parent_local_yaw'): continue
-            if not isinstance(thing, Monster) and key in _MONSTER_ONLY_KEYS: continue
-            if isinstance(thing, Monster) and key in ('triggered', 'wake_on_sight', 'dead', 'non_hostile', 'sight', 'patrol', 'patrol_target', 'patrol_mode', 'variant'): continue
-            if isinstance(thing, PathNode) and key in ('radius', 'show_radius', 'affects_type', 'next_node', 'wait_time', 'speed', 'patrol_speed'): continue
-            if isinstance(thing, LogicCamera) and key in ('path_target', 'speed', 'fov_override', 'look_ahead'): continue
-            if isinstance(thing, LogicSpawner) and key in ('spawn_type', 'target_node', 'max_spawn', 'spawn_properties'): continue
-            if is_pickup and key in ['key_name', 'custom_sprite', 'respawns', 'respawn_time']: continue
-
-            if key == 'show_rim':
-                label_text = "Visible:"
-            else:
-                label_text = key.replace('_', ' ').title() + ":"
-
-            # Angle control — free-form spinbox for Portals (arbitrary yaw),
-            # 4-step dropdown for every other entity type.
-            if key == 'angle' and isinstance(thing, Portal):
-                widget_w = QSpinBox()
-                widget_w.setRange(0, 359)
-                widget_w.setSuffix("°")
-                widget_w.setWrapping(True)
-                widget_w.setSingleStep(45)
-                widget_w.setToolTip(
-                    "Portal facing direction in degrees (0 = +Z, 90 = +X).\n"
-                    "Use the arrows for 45° snaps, or type any value."
-                )
-                try:
-                    widget_w.setValue(int(float(value)) % 360)
-                except (ValueError, TypeError):
-                    widget_w.setValue(0)
-                def _on_portal_angle_changed(val, _thing=thing):
-                    self.update_object_prop('angle', val)
-                widget_w.valueChanged.connect(_on_portal_angle_changed)
-                layout.addRow(label_text, widget_w)
-            elif key == 'angle':
-                widget_w = QComboBox()
-                widget_w.addItems(['0°', '90°', '180°', '270°'])
-                # Convert stored value to display text
-                try:
-                    angle_val = int(float(value)) % 360
-                    display_text = f"{angle_val}°"
-                except (ValueError, TypeError):
-                    display_text = '0°'
-                idx = widget_w.findText(display_text)
-                widget_w.setCurrentIndex(idx if idx >= 0 else 0)
-                def _on_angle_changed(text, _thing=thing):
-                    try:
-                        new_angle = int(text.replace('°', ''))
-                    except ValueError:
-                        new_angle = 0
-                    self.update_object_prop('angle', new_angle)
-                widget_w.currentTextChanged.connect(_on_angle_changed)
-                layout.addRow(label_text, widget_w)
-            elif isinstance(thing, Monster) and key == 'monster_type':
-                widget_w = QComboBox()
-                widget_w.addItems(['human', 'flying'])
-                widget_w.setCurrentText(value)
-
-                # --- Variant combo (added immediately after monster_type) ---
-                from engine.monster_constants import MONSTER_VARIANTS
-                variant_combo = QComboBox()
-                variant_combo.setToolTip(
-                    "Sprite variant — selects an alternate sprite subfolder.\n"
-                    "<None> uses the default sprites for this monster type."
-                )
-                self._widgets['monster_variant_combo'] = variant_combo
-
-                def _populate_variant_combo(_combo=variant_combo, _mtype=None):
-                    """Rebuild variant choices for the given monster_type."""
-                    if _mtype is None:
-                        _mtype = thing.properties.get('monster_type', 'human')
-                    _combo.blockSignals(True)
-                    _combo.clear()
-                    _combo.addItem('<None>')
-                    for v in MONSTER_VARIANTS.get(_mtype, []):
-                        _combo.addItem(v)
-                    cur = thing.properties.get('variant', '<None>')
-                    idx = _combo.findText(cur)
-                    _combo.setCurrentIndex(idx if idx >= 0 else 0)
-                    _combo.blockSignals(False)
-
-                _populate_variant_combo()
-
-                def on_variant_changed(text, _thing=thing):
-                    _thing.properties['variant'] = text
-                    # Flush sprite cache so viewport reloads with new variant
-                    try:
-                        Monster.clear_sprite_cache()
-                    except Exception:
-                        pass
-                    if hasattr(self.editor, 'mark_dirty'):
-                        self.editor.mark_dirty()
-                    try:
-                        self.editor.view_3d.update()
-                    except Exception:
-                        pass
-
-                variant_combo.currentTextChanged.connect(on_variant_changed)
-
-                def on_monster_type_changed(new_type):
-                    # Update the property
-                    self.update_object_prop('monster_type', new_type)
-                    # If the user hasn't manually overridden sprite dimensions, apply defaults
-                    from engine.monster_constants import MONSTER_SPRITE_SIZES
-                    default_w, default_h = MONSTER_SPRITE_SIZES.get(new_type, (128, 128))
-                    # Only set if the current dimensions match the previous default (i.e. not custom)
-                    current_w = thing.properties.get('sprite_width', 128)
-                    current_h = thing.properties.get('sprite_height', 128)
-                    # If both width and height match the old human defaults (128,192) or flying defaults (160,160)
-                    # we consider them auto‑generated and update them.
-                    self.update_object_prop('sprite_width', default_w)
-                    self.update_object_prop('sprite_height', default_h)
-                    # Reset variant when type changes (old variant may not exist
-                    # for the new type) and rebuild the dropdown
-                    thing.properties['variant'] = '<None>'
-                    _populate_variant_combo(_mtype=new_type)
-                    # Force a refresh of the property editor to show the new values
-                    self.set_object(thing)
-
-                widget_w.currentTextChanged.connect(on_monster_type_changed)
-                layout.addRow(label_text, widget_w)
-                layout.addRow("Variant:", variant_combo)
-            elif isinstance(thing, Light) and key == 'state':
-                widget_w = QComboBox()
-                widget_w.addItems(['on', 'off'])
-                widget_w.setCurrentText(value)
-                widget_w.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
-                layout.addRow(label_text, widget_w)
-            elif isinstance(thing, Speaker) and key == 'sound_file':
-                self.add_sound_file_widget(layout, thing, key, value)
-            elif isinstance(thing, LogicGate) and key == 'logic_type':
-                widget_w = QComboBox()
-                widget_w.addItems(['AND', 'OR', 'XOR', 'NAND', 'NOR'])
-                widget_w.setCurrentText(value)
-                widget_w.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
-                layout.addRow("Logic Type:", widget_w)
-            elif isinstance(thing, Pickup) and key == 'item_type':
-                widget_w = QComboBox()
-                item_types = ['health', 'key', 'gun1', 'gun2']
-                widget_w.addItems(item_types)
-                widget_w.setCurrentText(value)
-                widget_w.currentTextChanged.connect(self.on_pickup_item_type_changed)
-                layout.addRow(label_text, widget_w)
-
-                self.pickup_key_name_label = QLabel("Key Name:")
-                self.pickup_key_name_combo = QComboBox()
-                key_names = ['blue_key', 'red_key', 'yellow_key', 'green_key']
-                self.pickup_key_name_combo.addItems(key_names)
-                self.pickup_key_name_combo.setEditable(True)
-                current_key = thing.properties.get('key_name', 'blue_key')
-                self.pickup_key_name_combo.setCurrentText(current_key)
-                self.pickup_key_name_combo.currentTextChanged.connect(self.on_pickup_key_name_changed)
-                layout.addRow(self.pickup_key_name_label, self.pickup_key_name_combo)
-                self._pickup_key_widgets.append((self.pickup_key_name_label, self.pickup_key_name_combo))
-                is_key_type = (value == 'key')
-                self.pickup_key_name_label.setVisible(is_key_type)
-                self.pickup_key_name_combo.setVisible(is_key_type)
-
-                # --- Doors Unlocked cross-reference ---
-                door_link_label = QLabel("")
-                door_link_label.setWordWrap(True)
-                door_link_label.setStyleSheet("QLabel { padding: 4px; }")
-                door_link_label.setVisible(False)
-                layout.addRow("", door_link_label)
-                self._widgets['pickup_door_link_label'] = door_link_label
-                self._pickup_key_widgets.append((QLabel(""), door_link_label))
-
-                door_select_btn = QPushButton("Select Door ▸")
-                door_select_btn.setStyleSheet("""
-                    QPushButton { background-color: #2a3a5a; color: #88AAFF; border: 1px solid #4466AA;
-                                  border-radius: 3px; padding: 4px 8px; font-size: 11px; }
-                    QPushButton:hover { background-color: #3a4a6a; }
-                """)
-                door_select_btn.setVisible(False)
-                door_select_btn.clicked.connect(self._select_linked_door)
-                layout.addRow("", door_select_btn)
-                self._widgets['pickup_door_select_btn'] = door_select_btn
-                self._pickup_key_widgets.append((QLabel(""), door_select_btn))
-
-                # Populate cross-reference
-                if is_key_type:
-                    self._update_pickup_door_link(thing)
-
-                # Refresh cross-reference when key name changes
-                self.pickup_key_name_combo.currentTextChanged.connect(
-                    lambda _name: self._update_pickup_door_link(self.current_object))
-
-            elif isinstance(thing, Pickup) and key == 'activation':
-                widget_w = QComboBox()
-                widget_w.addItems(['walk_over', 'use'])
-                widget_w.setCurrentText(value)
-                widget_w.currentTextChanged.connect(lambda t, k=key: self.update_object_prop(k, t))
-                layout.addRow(label_text, widget_w)
-                self._pickup_activation_widget = widget_w
-                if current_item_type == 'health':
-                    widget_w.setCurrentText('walk_over')
-                    widget_w.setEnabled(False)
-                    self.update_object_prop('activation', 'walk_over')
-            elif isinstance(thing, Pickup) and key == 'value':
-                label = QLabel(label_text)
-                widget_w = QSpinBox()
-                widget_w.setRange(-99999, 99999)
-                widget_w.setValue(value)
-                widget_w.editingFinished.connect(lambda w=widget_w, k=key: self.update_object_prop(k, w.value()))
-                layout.addRow(label, widget_w)
-                self._pickup_value_widgets.append((label, widget_w))
-                if current_item_type == 'key':
-                    label.setVisible(False)
-                    widget_w.setVisible(False)
-            elif isinstance(value, bool):
-                widget_w = QCheckBox()
-                widget_w.setStyleSheet(self._checkbox_style())
-                widget_w.setChecked(value)
-                widget_w.stateChanged.connect(lambda state, k=key: self.update_object_prop(k, state == Qt.Checked))
-                layout.addRow(label_text, widget_w)
-            elif isinstance(value, int):
-                widget_w = QSpinBox()
-                widget_w.setRange(-99999, 99999)
-                widget_w.setValue(value)
-                widget_w.editingFinished.connect(lambda w=widget_w, k=key: self.update_object_prop(k, w.value()))
-                layout.addRow(label_text, widget_w)
-            elif isinstance(value, float):
-                widget_w = QLineEdit(str(value))
-                widget_w.editingFinished.connect(lambda le=widget_w, k=key: self.update_object_prop(k, float(le.text()) if le.text() and le.text().replace('.', '', 1).replace('-', '', 1).isdigit() else 0.0))
-                layout.addRow(label_text, widget_w)
-            else:
-                widget_w = QLineEdit(str(value))
-                widget_w.editingFinished.connect(lambda le=widget_w, k=key: self.update_object_prop(k, le.text()))
-                layout.addRow(label_text, widget_w)
-
-        # Pickup sprite controls
-        if is_pickup:
-            self.pickup_sprite_label = QLabel("Sprite:")
-            sprite_widget = QWidget()
-            sprite_layout = QHBoxLayout(sprite_widget)
-            sprite_layout.setContentsMargins(0, 0, 0, 0)
-
-            custom_sprite = thing.properties.get('custom_sprite', '')
-            self.pickup_sprite_path = QLineEdit(custom_sprite)
-            self.pickup_sprite_path.setReadOnly(True)
-            self.pickup_sprite_path.setPlaceholderText("Default sprite")
-
-            sprite_btn = QPushButton("Sprite...")
-            sprite_btn.setFixedWidth(80)
-            sprite_btn.clicked.connect(self.on_pickup_sprite_select)
-
-            clear_btn = QPushButton("Clear")
-            clear_btn.setFixedWidth(60)
-            clear_btn.setToolTip("Clear custom sprite")
-            clear_btn.clicked.connect(self.on_pickup_sprite_clear)
-
-            sprite_layout.addWidget(self.pickup_sprite_path)
-            sprite_layout.addWidget(sprite_btn)
-            sprite_layout.addWidget(clear_btn)
-
-            layout.addRow(self.pickup_sprite_label, sprite_widget)
-            self._pickup_sprite_widgets.append((self.pickup_sprite_label, sprite_widget))
-
-            if current_item_type == 'key':
-                self.pickup_sprite_label.setVisible(False)
-                sprite_widget.setVisible(False)
-
-        # Respawn controls (Pickup only)
-        if is_pickup:
-            layout.addRow(self._create_section_header("Respawn"))
-
-            respawns = thing.properties.get('respawns', False)
-            respawn_time = thing.properties.get('respawn_time', 20.0)
-
-            respawn_widget = QWidget()
-            respawn_layout = QHBoxLayout(respawn_widget)
-            respawn_layout.setContentsMargins(0, 0, 0, 0)
-
-            self.respawn_checkbox = QCheckBox("Respawns")
-            self.respawn_checkbox.setStyleSheet(self._checkbox_style())
-            self.respawn_checkbox.setChecked(respawns)
-            self.respawn_checkbox.stateChanged.connect(self.on_respawn_toggled)
-
-            self.respawn_time_label = QLabel("after")
-            self.respawn_time_spin = QDoubleSpinBox()
-            self.respawn_time_spin.setRange(0.1, 9999.0)
-            self.respawn_time_spin.setValue(respawn_time)
-            self.respawn_time_spin.setSuffix(" sec")
-            self.respawn_time_spin.editingFinished.connect(lambda: self.update_object_prop('respawn_time', self.respawn_time_spin.value()))
-
-            self.respawn_time_label.setVisible(respawns)
-            self.respawn_time_spin.setVisible(respawns)
-
-            respawn_layout.addWidget(self.respawn_checkbox)
-            respawn_layout.addWidget(self.respawn_time_label)
-            respawn_layout.addWidget(self.respawn_time_spin)
-            respawn_layout.addStretch()
-
-            layout.addRow("", respawn_widget)
-
-        tab_layout.addLayout(layout)
-
-        # === PATH NODE PROPERTIES ===
-        if isinstance(thing, PathNode):
-            thing.properties.setdefault('radius', 256.0)
-            thing.properties.setdefault('show_radius', False)
-            thing.properties.setdefault('affects_type', 'both')
-
-            _pn_group_style = """
-                QGroupBox {
-                    font-weight: bold;
-                    color: #26A69A;
-                    border: 1px solid #26A69A;
-                    border-radius: 4px;
-                    margin-top: 12px;
-                    padding-top: 8px;
-                }
-                QGroupBox::title {
-                    subcontrol-origin: margin;
-                    subcontrol-position: top left;
-                    left: 8px;
-                    padding: 0 4px;
-                    background-color: #1a2f2d;
-                }
-            """
-
-            pn_group = QGroupBox("Path Node")
-            pn_group.setStyleSheet(_pn_group_style)
-            pn_form = QFormLayout(pn_group)
-            pn_form.setSpacing(6)
-            pn_form.setContentsMargins(8, 8, 8, 8)
-
-            # --- Radius row (spinbox + show-circle toggle) -------------------
-            radius_row = QWidget()
-            radius_row_layout = QHBoxLayout(radius_row)
-            radius_row_layout.setContentsMargins(0, 0, 0, 0)
-            radius_row_layout.setSpacing(6)
-
-            radius_spin = QDoubleSpinBox()
-            radius_spin.setRange(1.0, 99999.0)
-            radius_spin.setDecimals(1)
-            radius_spin.setSingleStep(16.0)
-            radius_spin.setValue(float(thing.properties.get('radius', 256.0)))
-            radius_spin.setSuffix(" u")
-            radius_spin.setToolTip(
-                "Radius (in world units) within which a patrolling monster\n"
-                "is considered to have 'arrived' at this node."
-            )
-            self._widgets['pathnode_radius_spin'] = radius_spin
-
-            show_radius_btn = QToolButton()
-            show_radius_btn.setText("⊙")
-            show_radius_btn.setCheckable(True)
-            show_radius_btn.setChecked(bool(thing.properties.get('show_radius', False)))
-            show_radius_btn.setToolTip("Visualise radius circle in 2D viewports")
-            show_radius_btn.setStyleSheet("""
-                QToolButton {
-                    background-color: #425f5d;
-                    color: white;
-                    border-radius: 4px;
-                    padding: 3px 8px;
-                    font-size: 14px;
-                    border: 1px solid #555;
-                }
-                QToolButton:checked { background-color: #26A69A; border-color: #26A69A; }
-                QToolButton:hover   { background-color: #5a7a82; }
-            """)
-            self._widgets['pathnode_show_radius_btn'] = show_radius_btn
-
-            def _on_pn_radius_changed(v, _thing=thing):
-                _thing.properties['radius'] = float(v)
-                if hasattr(self.editor, 'mark_dirty'):
-                    self.editor.mark_dirty()
-                if _thing.properties.get('show_radius', False):
-                    self._repaint_viewport()
-
-            def _on_pn_show_radius_toggled(checked, _thing=thing):
-                _thing.properties['show_radius'] = bool(checked)
-                if hasattr(self.editor, 'mark_dirty'):
-                    self.editor.mark_dirty()
-                self._repaint_viewport()
-
-            radius_spin.valueChanged.connect(_on_pn_radius_changed)
-            show_radius_btn.toggled.connect(_on_pn_show_radius_toggled)
-
-            radius_row_layout.addWidget(radius_spin)
-            radius_row_layout.addWidget(show_radius_btn)
-            radius_row_layout.addStretch()
-            pn_form.addRow("Radius:", radius_row)
-
-            # --- Affects Type dropdown --------------------------------------
-            affects_combo = QComboBox()
-            for affects in PathNode.AFFECTS_TYPES:
-                affects_combo.addItem(affects)
-            current_affects = str(thing.properties.get('affects_type', 'both')).lower()
-            if current_affects not in PathNode.AFFECTS_TYPES:
-                current_affects = 'both'
-            idx = affects_combo.findText(current_affects)
-            if idx >= 0:
-                affects_combo.setCurrentIndex(idx)
-            affects_combo.setToolTip(
-                "Which monster types may use this node as a patrol target:\n"
-                "  human  — only ground-type monsters will patrol here\n"
-                "  flying — only flying monsters will patrol here\n"
-                "  both   — any monster may patrol here"
-            )
-            self._widgets['pathnode_affects_combo'] = affects_combo
-
-            def _on_pn_affects_changed(text, _thing=thing):
-                _thing.properties['affects_type'] = text
-                if hasattr(self.editor, 'mark_dirty'):
-                    self.editor.mark_dirty()
-                if _thing.properties.get('show_radius', False):
-                    self._repaint_viewport()
-
-            affects_combo.currentTextChanged.connect(_on_pn_affects_changed)
-            pn_form.addRow("Affects Type:", affects_combo)
-
-            # --- Next Node dropdown (chain of waypoints) --------------------
-            thing.properties.setdefault('next_node', '')
-            next_combo = QComboBox()
-            next_combo.addItem("(none)")
-
-            # Populate with all other PathNodes in the level
-            my_name = thing.properties.get('name', '') or ''
-            try:
-                for t in self.editor.state.things:
-                    if isinstance(t, PathNode):
-                        n_name = t.properties.get('name', '') or ''
-                        if n_name and n_name != my_name:
-                            next_combo.addItem(n_name)
-            except Exception:
-                pass
-
-            current_next = thing.properties.get('next_node', '') or ''
-            if current_next:
-                tidx = next_combo.findText(current_next)
-                if tidx >= 0:
-                    next_combo.setCurrentIndex(tidx)
-                else:
-                    next_combo.addItem(current_next + "  (missing)")
-                    next_combo.setCurrentIndex(next_combo.count() - 1)
-
-            next_combo.setToolTip(
-                "Next PathNode in the patrol chain.\n"
-                "Leave as (none) for a dead-end node."
-            )
-            self._widgets['pathnode_next_combo'] = next_combo
-
-            def _on_pn_next_changed(text, _thing=thing):
-                clean = (text or '').replace("  (missing)", "").strip()
-                _thing.properties['next_node'] = '' if clean == '(none)' else clean
-                if hasattr(self.editor, 'mark_dirty'):
-                    self.editor.mark_dirty()
-                self._repaint_viewport()
-
-            next_combo.currentTextChanged.connect(_on_pn_next_changed)
-            pn_form.addRow("Next Node:", next_combo)
-
-            # --- Wait Time --------------------------------------------------
-            thing.properties.setdefault('wait_time', 0.0)
-            wait_spin = QDoubleSpinBox()
-            wait_spin.setRange(0.0, 9999.0)
-            wait_spin.setDecimals(1)
-            wait_spin.setSingleStep(0.5)
-            wait_spin.setValue(float(thing.properties.get('wait_time', 0.0)))
-            wait_spin.setSuffix(" sec")
-            wait_spin.setToolTip(
-                "How long a monster pauses at this node before\n"
-                "advancing to the next node in the chain.\n"
-                "0 = pass through immediately."
-            )
-            self._widgets['pathnode_wait_spin'] = wait_spin
-
-            def _on_pn_wait_changed(v, _thing=thing):
-                _thing.properties['wait_time'] = float(v)
-                if hasattr(self.editor, 'mark_dirty'):
-                    self.editor.mark_dirty()
-
-            wait_spin.valueChanged.connect(_on_pn_wait_changed)
-            pn_form.addRow("Wait Time:", wait_spin)
-
-            # --- Speed Multiplier -------------------------------------------
-            thing.properties.setdefault('speed', 1.0)
-            speed_spin = QDoubleSpinBox()
-            speed_spin.setRange(0.01, 10.0)
-            speed_spin.setDecimals(2)
-            speed_spin.setSingleStep(0.25)
-            speed_spin.setValue(float(thing.properties.get('speed',
-                                      thing.properties.get('patrol_speed', 1.0))))
-            speed_spin.setSuffix("×")
-            speed_spin.setToolTip(
-                "Speed multiplier for entities heading toward this node.\n"
-                "1.0 = normal speed, 0.5 = half speed, 2.0 = double, etc.\n"
-                "Applies to monster patrols, mover waypoints, and camera paths."
-            )
-            self._widgets['pathnode_speed_spin'] = speed_spin
-
-            def _on_pn_speed_changed(v, _thing=thing):
-                _thing.properties['speed'] = float(v)
-                if hasattr(self.editor, 'mark_dirty'):
-                    self.editor.mark_dirty()
-
-            speed_spin.valueChanged.connect(_on_pn_speed_changed)
-            pn_form.addRow("Speed:", speed_spin)
-
-            tab_layout.addWidget(pn_group)
-
-        # === LOGIC CAMERA ===
-        if isinstance(thing, LogicCamera):
-            _cam_group_style = """
-                QGroupBox {
-                    font-weight: bold;
-                    color: #42A5F5;
-                    border: 1px solid #42A5F5;
-                    border-radius: 4px;
-                    margin-top: 12px;
-                    padding-top: 8px;
-                }
-                QGroupBox::title {
-                    subcontrol-origin: margin;
-                    subcontrol-position: top left;
-                    left: 8px;
-                    padding: 0 4px;
-                    background-color: #1a2a3d;
-                }
-            """
-            cam_group = QGroupBox("Cinematic Camera")
-            cam_group.setStyleSheet(_cam_group_style)
-            cam_form = QFormLayout(cam_group)
-            cam_form.setSpacing(6)
-            cam_form.setContentsMargins(8, 8, 8, 8)
-
-            # Path target dropdown
-            cam_path_combo = QComboBox()
-            cam_path_combo.setEditable(True)
-            cam_path_combo.addItem("(none)")
-            try:
-                for t in self.editor.state.things:
-                    if isinstance(t, PathNode):
-                        n_name = t.properties.get('name', '')
-                        if n_name:
-                            cam_path_combo.addItem(n_name)
-            except Exception:
-                pass
-            current_cam_path = thing.properties.get('path_target', '')
-            if current_cam_path:
-                cidx = cam_path_combo.findText(current_cam_path)
-                if cidx >= 0:
-                    cam_path_combo.setCurrentIndex(cidx)
-                else:
-                    cam_path_combo.setEditText(current_cam_path)
-            cam_path_combo.setToolTip("First PathNode in the camera's travel chain.")
-
-            def _on_cam_path_changed(text, _thing=thing):
-                clean = text.strip()
-                _thing.properties['path_target'] = '' if clean == '(none)' else clean
-                if hasattr(self.editor, 'mark_dirty'):
-                    self.editor.mark_dirty()
-            cam_path_combo.currentTextChanged.connect(_on_cam_path_changed)
-            cam_form.addRow("Path Target:", cam_path_combo)
-
-            # Speed
-            cam_speed = QDoubleSpinBox()
-            cam_speed.setRange(1.0, 9999.0)
-            cam_speed.setDecimals(1)
-            cam_speed.setSingleStep(10.0)
-            cam_speed.setValue(float(thing.properties.get('speed', 200.0)))
-            cam_speed.setSuffix(" u/s")
-            cam_speed.setToolTip("Travel speed in world-units per second.")
-            def _on_cam_speed(v, _thing=thing):
-                _thing.properties['speed'] = float(v)
-            cam_speed.valueChanged.connect(_on_cam_speed)
-            cam_form.addRow("Speed:", cam_speed)
-
-            # FOV override
-            cam_fov = QDoubleSpinBox()
-            cam_fov.setRange(0.0, 179.0)
-            cam_fov.setDecimals(1)
-            cam_fov.setSingleStep(5.0)
-            cam_fov.setValue(float(thing.properties.get('fov_override', 0.0)))
-            cam_fov.setSuffix("°")
-            cam_fov.setToolTip("Override FOV during sequence.\n0 = use the player's default FOV.")
-            def _on_cam_fov(v, _thing=thing):
-                _thing.properties['fov_override'] = float(v)
-            cam_fov.valueChanged.connect(_on_cam_fov)
-            cam_form.addRow("FOV Override:", cam_fov)
-
-            # Look ahead
-            cam_look = QCheckBox("Look at next node")
-            cam_look.setStyleSheet(self._checkbox_style())
-            cam_look.setChecked(bool(thing.properties.get('look_ahead', True)))
-            cam_look.setToolTip(
-                "When checked, the camera faces the next PathNode.\n"
-                "When unchecked, the camera faces forward along its travel direction."
-            )
-            def _on_cam_look(checked, _thing=thing):
-                _thing.properties['look_ahead'] = bool(checked)
-            cam_look.toggled.connect(_on_cam_look)
-            cam_form.addRow("", cam_look)
-
-            tab_layout.addWidget(cam_group)
-
-               # === LOGIC SPAWNER ===
-        if isinstance(thing, LogicSpawner):
-            _spn_group_style = """
-                QGroupBox {
-                    font-weight: bold;
-                    color: #AB47BC;
-                    border: 1px solid #AB47BC;
-                    border-radius: 4px;
-                    margin-top: 12px;
-                    padding-top: 8px;
-                }
-                QGroupBox::title {
-                    subcontrol-origin: margin;
-                    subcontrol-position: top left;
-                    left: 8px;
-                    padding: 0 4px;
-                    background-color: #2a1a3d;
-                }
-            """
-            spn_group = QGroupBox("Spawner")
-            spn_group.setStyleSheet(_spn_group_style)
-            spn_form = QFormLayout(spn_group)
-            spn_form.setSpacing(6)
-            spn_form.setContentsMargins(8, 8, 8, 8)
-
-            # Spawn type dropdown (from ENTITY_TYPES keys)
-            from editor.things import ENTITY_TYPES
-            spawn_combo = QComboBox()
-            for etype in sorted(ENTITY_TYPES.keys()):
-                spawn_combo.addItem(etype)
-            spawn_combo.setCurrentText(thing.properties.get('spawn_type', 'Monster'))
-            spawn_combo.setToolTip("Entity class to instantiate when Spawn is fired.")
-            def _on_spawn_type(text, _thing=thing):
-                _thing.properties['spawn_type'] = text
-            spawn_combo.currentTextChanged.connect(_on_spawn_type)
-            spn_form.addRow("Spawn Type:", spawn_combo)
-
-            # Target node dropdown
-            spn_node_combo = QComboBox()
-            spn_node_combo.setEditable(True)
-            spn_node_combo.addItem("(none)")
-            try:
-                for t in self.editor.state.things:
-                    if isinstance(t, PathNode):
-                        n_name = t.properties.get('name', '')
-                        if n_name:
-                            spn_node_combo.addItem(n_name)
-            except Exception:
-                pass
-            current_spn_node = thing.properties.get('target_node', '')
-            if current_spn_node:
-                sidx = spn_node_combo.findText(current_spn_node)
-                if sidx >= 0:
-                    spn_node_combo.setCurrentIndex(sidx)
-                else:
-                    spn_node_combo.setEditText(current_spn_node)
-            spn_node_combo.setToolTip("PathNode whose position is used as the spawn point.")
-            def _on_spn_node(text, _thing=thing):
-                clean = text.strip()
-                _thing.properties['target_node'] = '' if clean == '(none)' else clean
-            spn_node_combo.currentTextChanged.connect(_on_spn_node)
-            spn_form.addRow("Target Node:", spn_node_combo)
-
-            # Max spawn
-            max_spin = QSpinBox()
-            max_spin.setRange(0, 9999)
-            max_spin.setValue(int(thing.properties.get('max_spawn', 0)))
-            max_spin.setToolTip("Maximum entities this spawner will create.\n0 = unlimited.")
-            def _on_max_spawn(v, _thing=thing):
-                _thing.properties['max_spawn'] = int(v)
-            max_spin.valueChanged.connect(_on_max_spawn)
-            spn_form.addRow("Max Spawn:", max_spin)
-
-            tab_layout.addWidget(spn_group)
-
-            # --- Monster Spawn Settings (only visible when spawn_type is 'Monster') ---
-            monster_group = QGroupBox("Monster Spawn Settings")
-            monster_group.setStyleSheet("""
-                QGroupBox {
-                    font-weight: bold;
-                    color: #F08000;
-                    border: 1px solid #F08000;
-                    border-radius: 4px;
-                    margin-top: 12px;
-                    padding-top: 8px;
-                }
-                QGroupBox::title {
-                    subcontrol-origin: margin;
-                    subcontrol-position: top left;
-                    left: 8px;
-                    padding: 0 4px;
-                    background-color: #2b3d3b;
-                }
-            """)
-            monster_form = QFormLayout(monster_group)
-            monster_form.setSpacing(6)
-            monster_form.setContentsMargins(8, 8, 8, 8)
-
-            # Get current spawn_properties
-            spawn_props = thing.properties.get('spawn_properties', {})
-
-            # Monster type combo
-            monster_type_combo = QComboBox()
-            monster_type_combo.addItems(['human', 'flying'])
-            current_mtype = spawn_props.get('monster_type', 'human')
-            monster_type_combo.setCurrentText(current_mtype)
-            monster_form.addRow("Monster Type:", monster_type_combo)
-
-            # Variant combo (populated based on monster type)
-            variant_combo = QComboBox()
-            variant_combo.setToolTip("Sprite variant (<None> = default, variant1 = alternative skin)")
-            monster_form.addRow("Variant:", variant_combo)
-
-            # Random checkbox
-            random_check = QCheckBox("Spawn random type & variant each time")
-            random_check.setStyleSheet(self._checkbox_style())
-            random_check.setChecked(spawn_props.get('random', False))
-            monster_form.addRow(random_check)
-
-            def populate_variant_combo():
-                from engine.monster_constants import MONSTER_VARIANTS
-                mtype = monster_type_combo.currentText()
-                variant_combo.blockSignals(True)
-                variant_combo.clear()
-                variant_combo.addItem('<None>')
-                for v in MONSTER_VARIANTS.get(mtype, []):
-                    variant_combo.addItem(v)
-                cur_variant = spawn_props.get('variant', '<None>')
-                idx = variant_combo.findText(cur_variant)
-                variant_combo.setCurrentIndex(idx if idx >= 0 else 0)
-                variant_combo.blockSignals(False)
-
-            def on_monster_type_changed(mtype):
-                # Update spawn_properties
-                spawn_props['monster_type'] = mtype
-                thing.properties['spawn_properties'] = spawn_props
-                # Update variant dropdown
-                populate_variant_combo()
-                # If random is off, also store the selected variant
-                if not random_check.isChecked():
-                    spawn_props['variant'] = variant_combo.currentText()
-                else:
-                    # Random mode: remove fixed type/variant
-                    spawn_props.pop('monster_type', None)
-                    spawn_props.pop('variant', None)
-                thing.properties['spawn_properties'] = spawn_props
-                self.editor.mark_dirty()
-
-            def on_variant_changed(variant):
-                if not random_check.isChecked():
-                    spawn_props['variant'] = variant
-                    thing.properties['spawn_properties'] = spawn_props
-                    self.editor.mark_dirty()
-
-            def on_random_toggled(checked):
-                spawn_props['random'] = checked
-                if checked:
-                    # Remove fixed type/variant
-                    spawn_props.pop('monster_type', None)
-                    spawn_props.pop('variant', None)
-                    # Disable combos
-                    monster_type_combo.setEnabled(False)
-                    variant_combo.setEnabled(False)
-                else:
-                    # Restore current combos to spawn_props
-                    spawn_props['monster_type'] = monster_type_combo.currentText()
-                    spawn_props['variant'] = variant_combo.currentText()
-                    monster_type_combo.setEnabled(True)
-                    variant_combo.setEnabled(True)
-                thing.properties['spawn_properties'] = spawn_props
-                self.editor.mark_dirty()
-
-            # Connect signals
-            monster_type_combo.currentTextChanged.connect(on_monster_type_changed)
-            variant_combo.currentTextChanged.connect(on_variant_changed)
-            random_check.toggled.connect(on_random_toggled)
-
-            # Apply the initial enabled state based on the checkbox
-            on_random_toggled(random_check.isChecked())
-
-            # Populate variants initially
-            populate_variant_combo()
-
-            # Show/hide the monster group based on spawn_type
-            def update_monster_group_visibility():
-                is_monster = (spawn_combo.currentText() == 'Monster')
-                monster_group.setVisible(is_monster)
-                if not is_monster:
-                    # Clear spawn_properties if they contain monster keys (cleanup)
-                    for k in ['monster_type', 'variant', 'random']:
-                        spawn_props.pop(k, None)
-                    thing.properties['spawn_properties'] = spawn_props
-                else:
-                    # Ensure spawn_properties dict exists
-                    if 'spawn_properties' not in thing.properties:
-                        thing.properties['spawn_properties'] = {}
-                    # If random is unchecked, store current values
-                    if not random_check.isChecked():
-                        spawn_props['monster_type'] = monster_type_combo.currentText()
-                        spawn_props['variant'] = variant_combo.currentText()
-                    thing.properties['spawn_properties'] = spawn_props
-                self.editor.mark_dirty()
-
-            spawn_combo.currentTextChanged.connect(lambda _: update_monster_group_visibility())
-            update_monster_group_visibility()   # initial state
-
-            tab_layout.addWidget(monster_group)
-
-        # === MONSTER AI + FLAGS ===
-        if isinstance(thing, Monster):
-            thing.properties.setdefault('sight', 512)
-            thing.properties.setdefault('triggered', False)
-            thing.properties.setdefault('wake_on_sight', True)
-            thing.properties.setdefault('dead', False)
-            thing.properties.setdefault('non_hostile', False)
-
-            _group_style = """
-                QGroupBox {
-                    font-weight: bold;
-                    color: #F08000;
-                    border: 1px solid #F08000;
-                    border-radius: 4px;
-                    margin-top: 12px;
-                    padding-top: 8px;
-                }
-                QGroupBox::title {
-                    subcontrol-origin: margin;
-                    subcontrol-position: top left;
-                    left: 8px;
-                    padding: 0 4px;
-                    background-color: #2b3d3b;
-                }
-            """
-
-            ai_group = QGroupBox("AI")
-            ai_group.setStyleSheet(_group_style)
-            ai_form = QFormLayout(ai_group)
-            ai_form.setSpacing(6)
-            ai_form.setContentsMargins(8, 8, 8, 8)
-
-            sight_row = QWidget()
-            sight_row_layout = QHBoxLayout(sight_row)
-            sight_row_layout.setContentsMargins(0, 0, 0, 0)
-            sight_row_layout.setSpacing(6)
-
-            sight_spin = QSpinBox()
-            sight_spin.setRange(0, 9999)
-            sight_spin.setValue(thing.properties.get('sight', 512))
-            sight_spin.setSuffix(" u")
-            sight_spin.setToolTip("Distance (in world units) at which this monster detects the player")
-            self._widgets['monster_sight_spin'] = sight_spin
-
-            sight_preview_btn = QToolButton()
-            sight_preview_btn.setText("👁")
-            sight_preview_btn.setCheckable(True)
-            sight_preview_btn.setChecked(getattr(self.editor, '_sight_preview_thing', None) is thing)
-            sight_preview_btn.setToolTip("Visualise sight radius in viewport")
-            sight_preview_btn.setStyleSheet("""
-                QToolButton {
-                    background-color: #425f5d;
-                    color: white;
-                    border-radius: 4px;
-                    padding: 3px 8px;
-                    font-size: 14px;
-                    border: 1px solid #555;
-                }
-                QToolButton:checked { background-color: #F08000; border-color: #F08000; }
-                QToolButton:hover   { background-color: #5a7a82; }
-            """)
-            self._widgets['monster_sight_preview_btn'] = sight_preview_btn
-
-            def _on_sight_changed(v, _thing=thing):
-                _thing.properties['sight'] = v
-                if hasattr(self.editor, 'mark_dirty'):
-                    self.editor.mark_dirty()
-                if getattr(self.editor, '_sight_preview_thing', None) is _thing:
-                    self._repaint_viewport()
-
-            def _on_sight_preview_toggled(checked, _thing=thing):
-                self.editor._sight_preview_thing = _thing if checked else None
-                self._repaint_viewport()
-
-            sight_spin.valueChanged.connect(_on_sight_changed)
-            sight_preview_btn.toggled.connect(_on_sight_preview_toggled)
-
-            sight_row_layout.addWidget(sight_spin)
-            sight_row_layout.addWidget(sight_preview_btn)
-            sight_row_layout.addStretch()
-            ai_form.addRow("Sight:", sight_row)
-
-            # --- Patrol: checkbox + conditional path-node dropdown ----------
-            thing.properties.setdefault('patrol', False)
-            thing.properties.setdefault('patrol_target', '')
-
-            patrol_cb = QCheckBox("Patrol")
-            patrol_cb.setChecked(bool(thing.properties.get('patrol', False)))
-            patrol_cb.setStyleSheet(self._checkbox_style())
-            patrol_cb.setToolTip(
-                "When enabled, the monster will walk toward the selected\n"
-                "PathNode whenever the player is not in sight range.\n"
-                "Sight / chase always overrides patrol behaviour."
-            )
-            self._widgets['monster_patrol_cb'] = patrol_cb
-
-            # Populate dropdown with all PathNodes in the current level.
-            patrol_combo = QComboBox()
-            patrol_combo.addItem("(none)")
-
-            # Only offer nodes whose affects_type accepts this monster's type.
-            # Nodes set to 'both' always appear; matching specific types appear
-            # when they agree with this monster. Mismatched nodes are shown
-            # greyed-out with an annotation so the designer understands why
-            # they can't pick them.
-            mtype = str(thing.properties.get('monster_type', 'human')).lower()
-            available_nodes = []
-            try:
-                for t in self.editor.state.things:
-                    if isinstance(t, PathNode):
-                        available_nodes.append(t)
-            except Exception:
-                pass
-
-            for node in available_nodes:
-                node_name = node.properties.get('name', '') or ''
-                if not node_name:
-                    continue
-                if node.accepts_monster_type(mtype):
-                    patrol_combo.addItem(node_name)
-                else:
-                    # Show but disable mismatched entries
-                    affects = node.get_affects_type()
-                    patrol_combo.addItem(f"{node_name}  (wants {affects})")
-                    # Disable the just-added item
-                    from PyQt5.QtCore import Qt as _Qt
-                    idx = patrol_combo.count() - 1
-                    item = patrol_combo.model().item(idx)
-                    if item is not None:
-                        item.setFlags(item.flags() & ~_Qt.ItemIsEnabled)
-
-            current_target = thing.properties.get('patrol_target', '') or ''
-            if current_target:
-                tidx = patrol_combo.findText(current_target)
-                if tidx >= 0:
-                    patrol_combo.setCurrentIndex(tidx)
-                else:
-                    # Target name in file but node was deleted or renamed
-                    patrol_combo.addItem(current_target + "  (missing)")
-                    patrol_combo.setCurrentIndex(patrol_combo.count() - 1)
-
-            patrol_combo.setToolTip(
-                "Target PathNode for patrol behaviour.\n"
-                "Only nodes whose 'Affects Type' matches this monster are selectable."
-            )
-            self._widgets['monster_patrol_combo'] = patrol_combo
-
-            # Helper label matches other conditional rows in this editor
-            patrol_label = QLabel("Target Node:")
-            is_patrolling = bool(thing.properties.get('patrol', False))
-            patrol_label.setVisible(is_patrolling)
-            patrol_combo.setVisible(is_patrolling)
-
-            def _on_patrol_toggled(checked, _thing=thing,
-                                   _lbl=patrol_label, _combo=patrol_combo):
-                _thing.properties['patrol'] = bool(checked)
-                _lbl.setVisible(checked)
-                _combo.setVisible(checked)
-                if not checked:
-                    # Clearing target when disabling avoids stale references
-                    _thing.properties['patrol_target'] = ''
-                    _combo.setCurrentIndex(0)
-                if hasattr(self.editor, 'mark_dirty'):
-                    self.editor.mark_dirty()
-
-            def _on_patrol_target_changed(text, _thing=thing):
-                clean = (text or '').replace("  (missing)", "")
-                # Strip the "(wants …)" annotation from disabled items —
-                # they can't actually be selected, but be defensive anyway.
-                if "  (wants " in clean:
-                    clean = clean.split("  (wants ")[0]
-                if clean == "(none)":
-                    _thing.properties['patrol_target'] = ''
-                else:
-                    _thing.properties['patrol_target'] = clean
-                if hasattr(self.editor, 'mark_dirty'):
-                    self.editor.mark_dirty()
-
-            patrol_cb.toggled.connect(_on_patrol_toggled)
-            patrol_combo.currentTextChanged.connect(_on_patrol_target_changed)
-
-            # --- Patrol Mode dropdown (loop / ping_pong / once) ----------
-            thing.properties.setdefault('patrol_mode', 'loop')
-            patrol_mode_combo = QComboBox()
-            for mode in ('loop', 'ping_pong', 'once'):
-                patrol_mode_combo.addItem(mode)
-            current_mode = str(thing.properties.get('patrol_mode', 'loop')).lower()
-            midx = patrol_mode_combo.findText(current_mode)
-            if midx >= 0:
-                patrol_mode_combo.setCurrentIndex(midx)
-            patrol_mode_combo.setToolTip(
-                "How the monster traverses the patrol chain:\n"
-                "  loop      — A → B → C → A → B → C …\n"
-                "  ping_pong — A → B → C → B → A → B …\n"
-                "  once      — A → B → C  then holds at last node"
-            )
-            self._widgets['monster_patrol_mode_combo'] = patrol_mode_combo
-
-            patrol_mode_label = QLabel("Patrol Mode:")
-            patrol_mode_label.setVisible(is_patrolling)
-            patrol_mode_combo.setVisible(is_patrolling)
-
-            def _on_patrol_mode_changed(text, _thing=thing):
-                _thing.properties['patrol_mode'] = text
-                if hasattr(self.editor, 'mark_dirty'):
-                    self.editor.mark_dirty()
-
-            patrol_mode_combo.currentTextChanged.connect(_on_patrol_mode_changed)
-
-            # Wire patrol_mode visibility to patrol checkbox
-            _orig_on_patrol_toggled = _on_patrol_toggled
-            def _on_patrol_toggled_ext(checked, _thing=thing,
-                                        _lbl=patrol_label, _combo=patrol_combo,
-                                        _mlbl=patrol_mode_label, _mcombo=patrol_mode_combo):
-                _orig_on_patrol_toggled(checked)
-                _mlbl.setVisible(checked)
-                _mcombo.setVisible(checked)
-
-            # Rebind with extended version
-            try:
-                patrol_cb.toggled.disconnect(_on_patrol_toggled)
-            except Exception:
-                pass
-            patrol_cb.toggled.connect(_on_patrol_toggled_ext)
-
-            ai_form.addRow("", patrol_cb)
-            ai_form.addRow(patrol_label, patrol_combo)
-            ai_form.addRow(patrol_mode_label, patrol_mode_combo)
-
-            tab_layout.addWidget(ai_group)
-
-            flags_group = QGroupBox("Behaviour Flags")
-            flags_group.setStyleSheet(_group_style)
-            flags_layout = QVBoxLayout(flags_group)
-            flags_layout.setSpacing(6)
-
-            _flag_defs = [
-                ('triggered',            'Trigger',
-                 'Monster starts dormant — must be woken via an I/O input'),
-                ('wake_on_sight',        'Wake when sees player',
-                 'Monster wakes automatically when the player enters its sight range'),
-                ('dead',                 'Dead',
-                 'Monster is placed in a dead/inactive state at level start'),
-                ('non_hostile',          'Non-hostile',
-                 'Monster will not attack the player (passive / civilian)'),
-            ]
-
-            for prop_key, label_text, tooltip in _flag_defs:
-                cb = QCheckBox(label_text)
-                cb.setStyleSheet(self._checkbox_style())
-                cb.setChecked(thing.properties.get(prop_key, False))
-                cb.setToolTip(tooltip)
-                cb.toggled.connect(lambda checked, k=prop_key: self.update_object_prop(k, checked))
-                flags_layout.addWidget(cb)
-                self._widgets[f'monster_flag_{prop_key}'] = cb
-
-            tab_layout.addWidget(flags_group)
-
-            customise_btn = QPushButton("🎨  Customise Sprites…")
-            customise_btn.setFixedWidth(350)
-            customise_btn.setToolTip(
-                "Assign custom idle / shoot / dead PNGs and billboard size "
-                "for this monster instance"
-            )
-            customise_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #3c3f41;
-                    border: 1px solid #F08000;
-                    color: #F08000;
-                    padding: 6px;
-                    font-weight: bold;
-                    margin-top: 4px;
-                }
-                QPushButton:hover  { background-color: #4b4d4d; }
-                QPushButton:pressed { background-color: #2b2b2b; }
-            """)
-
-            def _open_customise(_checked=False, _thing=thing):
-                from editor.monster_customise_dialog import MonsterCustomiseDialog
-                dlg = MonsterCustomiseDialog(_thing, self)
-                if dlg.exec_() == MonsterCustomiseDialog.Accepted:
-                    self.set_object(_thing)
-                    try:
-                        self.editor.view_3d.update()
-                    except Exception:
-                        pass
-                    # Repaint all 2D views so the new sprite_2d is visible immediately
-                    for attr in ('view_top', 'view_front', 'view_side', 'view_2d'):
-                        widget = getattr(self.editor, attr, None)
-                        if widget is not None:
-                            try:
-                                widget.update()
-                            except Exception:
-                                pass
-
-            customise_btn.clicked.connect(_open_customise)
-            customise_btn_row = QHBoxLayout()
-            customise_btn_row.addWidget(customise_btn)
-            customise_btn_row.addStretch()
-            tab_layout.addLayout(customise_btn_row)
-
-        tab_layout.addStretch()
-        return widget
-
-    def _repaint_viewport(self):
-        """Request a repaint of all viewports without rebuilding the property panel."""
-        # 3D viewport
-        for attr in ('gl_widget', 'viewport', 'canvas', 'render_widget', 'opengl_widget', 'view_3d'):
-            widget = getattr(self.editor, attr, None)
-            if widget is not None:
-                widget.update()
-                break
-        # 2D views
-        for attr in ('view_top', 'view_front', 'view_side', 'view_2d'):
-            widget = getattr(self.editor, attr, None)
-            if widget is not None:
-                widget.update()
-
     def on_respawn_toggled(self, state):
-        """Handle respawn checkbox toggle."""
         respawns = state == Qt.Checked
         self.update_object_prop('respawns', respawns)
         if hasattr(self, 'respawn_time_label'):
@@ -3200,101 +2170,68 @@ class PropertyEditor(QWidget):
             self.respawn_time_spin.setVisible(respawns)
 
     def on_pickup_key_name_changed(self, key_name):
-        """Updates key_name property and toggles sprite visibility if 'custom' is selected."""
         self.update_object_prop('key_name', key_name)
-        
-        # Show sprite widgets if it's a 'custom' key
-        is_custom = (key_name == 'custom')
+        is_custom = key_name == 'custom'
         if hasattr(self, '_pickup_sprite_widgets'):
-            for label, widget in self._pickup_sprite_widgets:
-                label.setVisible(is_custom)
+            for lbl, widget in self._pickup_sprite_widgets:
+                lbl.setVisible(is_custom)
                 widget.setVisible(is_custom)
 
     def on_pickup_sprite_select(self):
-        """Open file dialog to select custom sprite for pickup."""
         if self.current_object is None or not isinstance(self.current_object, Pickup):
             return
-        
-        # Ensure the file dialog starts in the assets/sprites directory
-        start_path = os.path.join(os.getcwd(), 'assets', 'sprites')
-        if not os.path.exists(start_path):
-            os.makedirs(start_path, exist_ok=True)
-        
-        filepath, _ = QFileDialog.getOpenFileName(
-            self, "Select Sprite Image", start_path,
-            "Image Files (*.png *.jpg *.jpeg *.bmp *.tga)"
-        )
-        
-        if filepath:
-            try:
-                # Force path relative to the project root for cross-platform compatibility
-                rel_path = os.path.relpath(filepath, os.getcwd()).replace('\\', '/')
-            except ValueError:
-                rel_path = filepath
-            
-            self.update_object_prop('custom_sprite', rel_path)
+        start = os.path.join(os.getcwd(), 'assets', 'sprites')
+        os.makedirs(start, exist_ok=True)
+        fp, _ = QFileDialog.getOpenFileName(self, "Select Sprite Image", start,
+                                            "Image Files (*.png *.jpg *.jpeg *.bmp *.tga)")
+        if fp:
+            rel = os.path.relpath(fp, os.getcwd()).replace('\\', '/')
+            self.update_object_prop('custom_sprite', rel)
             if hasattr(self, 'pickup_sprite_path'):
-                self.pickup_sprite_path.setText(rel_path)
-            
-            # Clear sprite cache to force reload in the editor view
+                self.pickup_sprite_path.setText(rel)
             if hasattr(Pickup, 'clear_sprite_cache'):
                 Pickup.clear_sprite_cache()
-            
             self.editor.update_all_ui()
 
     def on_pickup_sprite_clear(self):
-        """Clear custom sprite, revert to default."""
         if self.current_object is None or not isinstance(self.current_object, Pickup):
             return
-        
         self.update_object_prop('custom_sprite', '')
         if hasattr(self, 'pickup_sprite_path'):
             self.pickup_sprite_path.setText('')
-        
-        # Clear sprite cache to force reload
         if hasattr(Pickup, 'clear_sprite_cache'):
             Pickup.clear_sprite_cache()
-        
         self.editor.update_all_ui()
 
     def on_pickup_item_type_changed(self, item_type):
-        if self.current_object is None: return
+        if self.current_object is None:
+            return
         self.update_object_prop('item_type', item_type)
-        
-        is_key = (item_type == 'key')
-        is_health = (item_type == 'health')
-        is_gun = (item_type in ['gun1', 'gun2'])
-        
-        # Check current key name to determine if the sprite picker should be visible
-        # Defaulting to 'red_key' if not set
-        current_key_name = self.current_object.properties.get('key_name', 'red_key')
-        
-        # Show/hide key name widgets
+        is_key = item_type == 'key'
+        is_health = item_type == 'health'
+        is_gun = item_type in ('gun1', 'gun2')
+
+        current_key = self.current_object.properties.get('key_name', 'red_key')
+
         if hasattr(self, '_pickup_key_widgets'):
-            for label, widget in self._pickup_key_widgets:
-                label.setVisible(is_key)
+            for lbl, widget in self._pickup_key_widgets:
+                lbl.setVisible(is_key)
                 widget.setVisible(is_key)
-        
-        # Refresh door cross-reference when switching to key type
+
         if is_key:
             self._update_pickup_door_link(self.current_object)
-        
-        # Show/hide value widgets (hide for keys)
+
         if hasattr(self, '_pickup_value_widgets'):
-            for label, widget in self._pickup_value_widgets:
-                label.setVisible(not is_key)
+            for lbl, widget in self._pickup_value_widgets:
+                lbl.setVisible(not is_key)
                 widget.setVisible(not is_key)
-        
-        # Show/hide sprite widgets
-        # Sprites are visible for all generic items, OR specifically for 'custom' keys
-        show_sprite_picker = (not is_key) or (is_key and current_key_name == 'custom')
-        
+
+        show_sprite = (not is_key) or (is_key and current_key == 'custom')
         if hasattr(self, '_pickup_sprite_widgets'):
-            for label, widget in self._pickup_sprite_widgets:
-                label.setVisible(show_sprite_picker)
-                widget.setVisible(show_sprite_picker)
-        
-        # Handle specific item type logic
+            for lbl, widget in self._pickup_sprite_widgets:
+                lbl.setVisible(show_sprite)
+                widget.setVisible(show_sprite)
+
         if is_health:
             self.update_object_prop('custom_sprite', 'assets/sprites/health.png')
             if hasattr(self, 'pickup_sprite_path'):
@@ -3303,129 +2240,159 @@ class PropertyEditor(QWidget):
             if hasattr(self, '_pickup_activation_widget'):
                 self._pickup_activation_widget.setCurrentText('walk_over')
                 self._pickup_activation_widget.setEnabled(False)
-        
         elif is_gun:
-            sprite_path = f'assets/sprites/{item_type}.png'
-            self.update_object_prop('custom_sprite', sprite_path)
+            sprite = f'assets/sprites/{item_type}.png'
+            self.update_object_prop('custom_sprite', sprite)
             if hasattr(self, 'pickup_sprite_path'):
-                self.pickup_sprite_path.setText(sprite_path)
+                self.pickup_sprite_path.setText(sprite)
             self.update_object_prop('activation', 'walk_over')
             if hasattr(self, '_pickup_activation_widget'):
                 self._pickup_activation_widget.setCurrentText('walk_over')
                 self._pickup_activation_widget.setEnabled(False)
-                
         else:
-            # Re-enable activation dropdown for generic pickups and keys
             if hasattr(self, '_pickup_activation_widget'):
                 self._pickup_activation_widget.setEnabled(True)
-        
-        # Refresh views
+
         if hasattr(Pickup, 'clear_sprite_cache'):
             Pickup.clear_sprite_cache()
-        
         self.editor.update_all_ui()
 
     def add_model_path_widget(self, layout, thing):
         widget = QWidget()
-        h_box = QHBoxLayout(widget)
-        h_box.setContentsMargins(0, 0, 0, 0)
+        h = QHBoxLayout(widget)
+        h.setContentsMargins(0, 0, 0, 0)
         path_edit = QLineEdit(thing.properties.get('model_path', ''))
         path_edit.setReadOnly(True)
         btn = QPushButton("...")
         btn.setFixedWidth(30)
-        def pick_model():
-            filepath, _ = QFileDialog.getOpenFileName(self, "Select OBJ Model", "assets/models", "OBJ Files (*.obj)")
-            if filepath:
-                try: rel_path = os.path.relpath(filepath, "assets").replace("\\", "/")
-                except: rel_path = filepath
-                if not rel_path.startswith(".."): rel_path = os.path.join("assets", rel_path) if not rel_path.startswith("assets") else rel_path
-                self.update_object_prop('model_path', rel_path)
-                path_edit.setText(rel_path)
-        btn.clicked.connect(pick_model)
-        h_box.addWidget(path_edit)
-        h_box.addWidget(btn)
+
+        def pick():
+            fp, _ = QFileDialog.getOpenFileName(self, "Select OBJ Model", "assets/models", "OBJ Files (*.obj)")
+            if fp:
+                try:
+                    rel = os.path.relpath(fp, "assets").replace("\\", "/")
+                except Exception:
+                    rel = fp
+                if not rel.startswith(".."):
+                    rel = os.path.join("assets", rel) if not rel.startswith("assets") else rel
+                self.update_object_prop('model_path', rel)
+                path_edit.setText(rel)
+
+        btn.clicked.connect(pick)
+        h.addWidget(path_edit)
+        h.addWidget(btn)
         layout.addRow("Model Path:", widget)
 
     def add_vector3_widget(self, layout, thing, key):
         widget = QWidget()
-        h_box = QHBoxLayout(widget)
-        h_box.setContentsMargins(0, 0, 0, 0)
+        h = QHBoxLayout(widget)
+        h.setContentsMargins(0, 0, 0, 0)
         val = thing.properties.get(key, [0, 0, 0])
-        if not isinstance(val, list) or len(val) != 3: val = [0, 0, 0]
+        if not isinstance(val, list) or len(val) != 3:
+            val = [0, 0, 0]
+        inputs = []
         for i in range(3):
             le = QLineEdit(str(val[i]))
             le.setFixedWidth(50)
+
             def update_vec(text, idx=i):
                 try:
-                    current_vec = thing.properties.get(key, [0,0,0])
-                    current_vec[idx] = float(text)
-                    self.update_object_prop(key, current_vec)
-                except ValueError: pass
+                    vec = thing.properties.get(key, [0, 0, 0])
+                    vec[idx] = float(text)
+                    self.update_object_prop(key, vec)
+                except ValueError:
+                    pass
+
             le.editingFinished.connect(lambda l=le, idx=i: update_vec(l.text(), idx))
-            h_box.addWidget(le)
+            h.addWidget(le)
+            inputs.append(le)
         layout.addRow(key.title() + ":", widget)
 
     def add_sound_file_widget(self, form_layout, thing, key, value):
         widget = QWidget()
-        layout = QHBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
+        h = QHBoxLayout(widget)
+        h.setContentsMargins(0, 0, 0, 0)
         line_edit = QLineEdit(str(value))
         line_edit.setReadOnly(True)
         button = QPushButton("...")
         button.setFixedWidth(30)
+
         def open_dialog():
-            start_path = os.path.join('assets', 'sounds')
-            if not os.path.exists(start_path): os.makedirs(start_path)
-            filepath, _ = QFileDialog.getOpenFileName(self, "Select Sound File", start_path, "Sound Files (*.wav *.mp3)")
-            if filepath:
-                try: relative_path = os.path.relpath(filepath, ".").replace('\\', '/')
-                except ValueError: relative_path = os.path.basename(filepath)
-                self.update_object_prop(key, relative_path)
-                line_edit.setText(relative_path)
+            start = os.path.join('assets', 'sounds')
+            if not os.path.exists(start):
+                os.makedirs(start)
+            fp, _ = QFileDialog.getOpenFileName(self, "Select Sound File", start, "Sound Files (*.wav *.mp3)")
+            if fp:
+                try:
+                    rel = os.path.relpath(fp, ".").replace('\\', '/')
+                except ValueError:
+                    rel = os.path.basename(fp)
+                self.update_object_prop(key, rel)
+                line_edit.setText(rel)
+
         button.clicked.connect(open_dialog)
-        layout.addWidget(line_edit)
-        layout.addWidget(button)
+        h.addWidget(line_edit)
+        h.addWidget(button)
         form_layout.addRow(key.replace('_', ' ').title() + ":", widget)
 
     def add_color_picker_widget(self, form_layout, thing, key):
         widget = QWidget()
-        layout = QHBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        current_color_rgb = thing.properties.get(key, [255, 255, 255])
-        color_swatch = QPushButton()
-        color_swatch.setFixedSize(200, 32)
+        h = QHBoxLayout(widget)
+        h.setContentsMargins(0, 0, 0, 0)
+        rgb = thing.properties.get(key, [255, 255, 255])
+        swatch = QPushButton()
+        swatch.setFixedSize(200, 32)
+
         def update_swatch():
             rgb = thing.properties.get(key, [255, 255, 255])
-            color_swatch.setStyleSheet(f"background-color: rgb({rgb[0]}, {rgb[1]}, {rgb[2]});")
-        def open_color_dialog():
-            current_color_rgb = thing.properties.get(key, [255, 255, 255])
-            color = QColorDialog.getColor(QColor(*current_color_rgb), self, "Choose Light Colour")
+            swatch.setStyleSheet(f"background-color: rgb({rgb[0]}, {rgb[1]}, {rgb[2]});")
+
+        def open_dialog():
+            rgb = thing.properties.get(key, [255, 255, 255])
+            color = QColorDialog.getColor(QColor(*rgb), self, "Choose Light Colour")
             if color.isValid():
                 self.update_object_prop(key, [color.red(), color.green(), color.blue()])
                 update_swatch()
-        color_swatch.clicked.connect(open_color_dialog)
+
+        swatch.clicked.connect(open_dialog)
         update_swatch()
-        layout.addWidget(color_swatch)
+        h.addWidget(swatch)
         form_layout.addRow("Colour:", widget)
 
     def update_object_prop(self, key, value):
-        if self.current_object is None: return
+        if self.current_object is None:
+            return
         if isinstance(self.current_object, dict):
             self.current_object[key] = value
         elif isinstance(self.current_object, Thing):
             if key in self.current_object.properties:
                 prop_type = type(self.current_object.properties.get(key))
                 if prop_type == float:
-                    try: value = float(value)
-                    except (ValueError, TypeError): value = 0.0
+                    try:
+                        value = float(value)
+                    except (ValueError, TypeError):
+                        value = 0.0
             self.current_object.properties[key] = value
-        
-        # Keep Portal rotation in sync with angle
+
         if isinstance(self.current_object, Portal) and key == 'angle':
             rot = self.current_object.properties.get('rotation', [0.0, 0.0, 0.0])
             if isinstance(rot, list) and len(rot) > 0:
                 rot[0] = float(value)
-        
-        # Only update UI if we're not in the middle of populating
+
         if not self._populating:
-            self.editor.update_all_ui()
+            # Only repaint viewports — do NOT call update_all_ui() here.
+            # update_all_ui() rebuilds the entire property editor via set_object(),
+            # which destroys and recreates every widget (including whichever combo/spin
+            # just fired the signal).  The deferred deleteLater() window causes Qt to
+            # briefly re-show the combo dropdown before the widget is actually gone,
+            # producing the flickering popup.
+            self.editor.view_3d.update()
+            for v in ('view_top', 'view_front', 'view_side'):
+                if hasattr(self.editor, v):
+                    getattr(self.editor, v).update()
+            # Hierarchy only needs a refresh when the display name changes.
+            if key == 'name' and hasattr(self.editor, 'scene_hierarchy'):
+                self.editor.scene_hierarchy.refresh_list()
+            # Mark the scene dirty so Ctrl+S knows there are unsaved changes.
+            if hasattr(self.editor, 'mark_dirty'):
+                self.editor.mark_dirty()
