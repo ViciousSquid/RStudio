@@ -40,7 +40,6 @@ class PackageExporter:
     def export(self, output_path, metadata, current_map_path, parent_widget=None):
         """
         Export the current project as a .fiopak zip.
-        Now safe for Nuitka builds: all paths are absolute, errors are caught and shown.
         """
         import zipfile
         import json
