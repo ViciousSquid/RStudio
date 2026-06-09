@@ -10,12 +10,13 @@
 ### Unified editor and runtime inspired by Radiant and Hammer. Optimised for low-power CPUs
 
 **Key Features**
+- Edit and play in the same runtime
 - Hit "play" instantly: no import, compile or bake step
 - Generate fully playable procedural maps with one click
 - Entity I/O logic system inspired by Source engine
 - Classic brush-based CSG editing
-- Export creations as self-contained shareable packages
-- Local split-screen: share one keyboard, or give player 2 a gamepad
+- Export creations as self-contained packages
+- Local split-screen multiplayer
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
 ### [💾 Download Binaries for Windows/macOS/Linux](https://github.com/ViciousSquid/Fio/releases) | [Wiki](https://github.com/ViciousSquid/Fio/wiki/) | [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
@@ -54,7 +55,7 @@ Fio explores a unified approach to level editing and runtime simulation:
 - Frustum culling
 - Dynamic portals (moveable / scripted transforms)
 
-### Architecture
+### Under the Hood
 - Python 3.10+ runtime
 - NumPy used for batch numeric operations and scene updates
 - Multi-threaded subsystems (render / simulation separation where applicable)
