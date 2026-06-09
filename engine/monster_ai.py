@@ -6,6 +6,8 @@ PERF: All brush collision/raycast methods delegate to SpatialGrid,
 reducing per-monster cost from O(all_brushes) to O(nearby_brushes).
 """
 
+import threading
+import time
 import glm
 import math
 from typing import Dict, List, Any, Optional, Tuple
@@ -22,6 +24,10 @@ from .monster_constants import (
     MONSTER_STUCK_THRESHOLD,
     MONSTER_DETOUR_RANGE,
     WEAPON_DAMAGE,
+    MONSTER_SHOOT_SOUNDS,
+    MONSTER_SHOOT_SOUND_DEFAULT,
+    MONSTER_BITE_DISTANCE,
+    MONSTER_BITE_DAMAGE_MULT,
 )
 
 try:
@@ -111,17 +117,40 @@ class MonsterAI:
                     thing.properties['awake'] = True
                     awake = True
                 else:
+                    # Check if player is in sight range
                     dist_to_player = glm.distance(player_pos, glm.vec3(thing.pos))
                     if dist_to_player <= MONSTER_SIGHT_RANGE:
                         thing.properties['awake'] = True
                         awake = True
                     else:
-                        continue
+                        # Check if any enemy team monster is in sight range
+                        my_team = thing.properties.get('team', '')
+                        if my_team:
+                            enemy = self._find_closest_enemy_team_monster(
+                                thing, my_team, player_pos, MONSTER_SIGHT_RANGE)
+                            if enemy is not None:
+                                thing.properties['awake'] = True
+                                awake = True
+                                if self.monster_debug_active:
+                                    name = thing.properties.get('name', '?')
+                                    ename = enemy.properties.get('name', '?')
+                                    eteam = enemy.properties.get('team', '?')
+                                    debug_log("MonsterAI",
+                                              f"{name} woke to enemy {ename} (team={eteam})")
+                            else:
+                                continue
+                        else:
+                            continue
 
             # ---- Kill input handling ----
             if thing.properties.pop('_kill', False):
                 thing.properties['dead'] = True
                 thing.properties.pop('is_shooting', None)
+                if self.monster_debug_active:
+                    name = thing.properties.get('name', '?')
+                    debug_log("MonsterAI",
+                        f'<a href="filter:{name}" style="color: #EF5350; font-weight: bold; text-decoration: none;">{name}</a> '
+                        f'<span style="color: #B71C1C; font-weight: bold;">DIED</span> (killed by input)')
                 continue
 
             mtype = thing.properties.get('monster_type', 'human')
@@ -134,6 +163,7 @@ class MonsterAI:
                     'anim_timer': 0.0,
                     'in_sight': False,
                     'vel_y': 0.0,
+                    'investigating_sound': None,  # (pos, expiry_time) or None
                 }
 
             state = self.monster_states[mid]
@@ -169,7 +199,11 @@ class MonsterAI:
                 thing.properties['is_shooting'] = False
                 if mid in self.monster_states:
                     self.monster_states[mid]['anim_timer'] = 0.0
-                self._update_monster_patrol(thing, state, mtype, delta)
+                # Even in notarget mode, monsters with can_hear investigate sounds
+                if thing.properties.get('can_hear', False):
+                    self._investigate_sounds(thing, state, mtype, delta, player_pos)
+                else:
+                    self._update_monster_patrol(thing, state, mtype, delta)
                 continue
 
             # ---- Target name override (set via I/O settarget input) ----
@@ -206,7 +240,24 @@ class MonsterAI:
                 if aggro_monster is not None:
                     target_pos = glm.vec3(aggro_monster.pos)
                 else:
-                    target_pos = player_pos
+                    # ---- Team-based enemy targeting (priority over player) ----
+                    my_team = thing.properties.get('team', '')
+                    if my_team:
+                        enemy_monster = self._find_closest_enemy_team_monster(
+                            thing, my_team, player_pos, MONSTER_SIGHT_RANGE)
+                        if enemy_monster is not None:
+                            aggro_monster = enemy_monster
+                            target_pos = glm.vec3(enemy_monster.pos)
+                            if self.monster_debug_active:
+                                name = thing.properties.get('name', '?')
+                                ename = enemy_monster.properties.get('name', '?')
+                                eteam = enemy_monster.properties.get('team', '?')
+                                debug_log("MonsterAI",
+                                          f"{name} (team={my_team}) targeting enemy {ename} (team={eteam})")
+                        else:
+                            target_pos = player_pos
+                    else:
+                        target_pos = player_pos
 
             # ---- Line of sight check ----
             monster_eye = glm.vec3(thing_pos.x, thing_pos.y + 64.0, thing_pos.z)
@@ -233,8 +284,17 @@ class MonsterAI:
                         self.lt.io_manager.fire_output(thing, 'OnSeePlayer')
                     if self.monster_debug_active:
                         name = thing.properties.get('name', '?')
-                        tgt = aggro_monster.properties.get('name', '?') if aggro_monster else 'player'
-                        debug_log("MonsterAI", f"{name} sees {tgt} (dist={distance:.0f})")
+                        if aggro_monster is not None:
+                            tgt_name = aggro_monster.properties.get('name', '?')
+                            debug_log("MonsterAI",
+                                f'<a href="filter:{name}" style="color: #42A5F5; font-weight: bold; text-decoration: none;">{name}</a> '
+                                f'engaging enemy: '
+                                f'<a href="filter:{tgt_name}" style="color: #EF5350; font-weight: bold; text-decoration: none;">{tgt_name}</a>')
+                        else:
+                            debug_log("MonsterAI",
+                                f'<a href="filter:{name}" style="color: #42A5F5; font-weight: bold; text-decoration: none;">{name}</a> '
+                                f'engaging enemy: '
+                                f'<span style="color: #AB47BC; font-weight: bold;">player</span>')
 
                 # ---- Move toward target ----
                 if distance > MONSTER_STOP_DISTANCE:
@@ -267,26 +327,43 @@ class MonsterAI:
 
                     damage = int(thing.properties.get('damage', 10))
 
-                    if aggro_monster is not None:
-                        # ---- Infighting: damage the aggro target monster ----
-                        self._apply_monster_damage(aggro_monster, damage, attacker=thing)
-                    else:
-                        # ---- Check for crossfire (Doom-style infighting) ----
-                        crossfire_victim = self._find_monster_in_crossfire(
-                            thing, monster_eye, target_eye)
-                        if crossfire_victim is not None:
-                            self._apply_monster_damage(
-                                crossfire_victim, damage, attacker=thing)
-                            if self.monster_debug_active:
-                                v_name = crossfire_victim.properties.get('name', '?')
-                                a_name = thing.properties.get('name', '?')
-                                debug_log("MonsterAI",
-                                          f"CROSSFIRE: {a_name} hit {v_name} — infighting!")
+                    if mtype == 'flying':
+                        # ---- Flying monsters: bite if very close, else projectile ----
+                        if distance <= MONSTER_BITE_DISTANCE and aggro_monster is None:
+                            # Bite attack: instant hitscan, double damage
+                            bite_damage = int(damage * MONSTER_BITE_DAMAGE_MULT)
+                            self.lt._apply_player_damage(bite_damage)
+                            name = thing.properties.get('name', '?')
+                            debug_log("MonsterAI", f"{name} used bite attack for 2x damage!")
                         else:
-                            self.lt._apply_player_damage(damage)
+                            # Too far — spawn projectile sprite
+                            self._spawn_monster_projectile(thing, target_pos, damage, mid)
+                            name = thing.properties.get('name', '?')
+                            debug_log("MonsterAI", f"{name} fired projectile")
+                    else:
+                        # ---- Human monsters: instant hitscan damage ----
+                        if aggro_monster is not None:
+                            # ---- Infighting: damage the aggro target monster ----
+                            self._apply_monster_damage(aggro_monster, damage, attacker=thing)
+                        else:
+                            # ---- Check for crossfire (Doom-style infighting) ----
+                            crossfire_victim = self._find_monster_in_crossfire(
+                                thing, monster_eye, target_eye)
+                            if crossfire_victim is not None:
+                                self._apply_monster_damage(
+                                    crossfire_victim, damage, attacker=thing)
+                                if self.monster_debug_active:
+                                    v_name = crossfire_victim.properties.get('name', '?')
+                                    a_name = thing.properties.get('name', '?')
+                                    debug_log("MonsterAI",
+                                              f"CROSSFIRE: {a_name} hit {v_name} — infighting!")
+                            else:
+                                self.lt._apply_player_damage(damage)
 
+                    # ---- Use per-type shoot sound ----
+                    sound_file = MONSTER_SHOOT_SOUNDS.get(mtype, MONSTER_SHOOT_SOUND_DEFAULT)
                     self.lt.game_state.queue_sound({
-                        'file': 'shoot.wav',
+                        'file': sound_file,
                         'volume': 0.6,
                         'entity_id': mid,
                     })
@@ -325,8 +402,15 @@ class MonsterAI:
                 if aggro_monster is not None:
                     thing.properties.pop('_aggro_target', None)
 
-                # ---- Patrol behaviour (only when target not in sight) ----
-                self._update_monster_patrol(thing, state, mtype, delta)
+                # ---- Sound investigation (can_hear monsters) ----
+                if thing.properties.get('can_hear', False):
+                    investigating = self._investigate_sounds(thing, state, mtype, delta, player_pos)
+                    if not investigating:
+                        # ---- Patrol behaviour (only when target not in sight and not investigating) ----
+                        self._update_monster_patrol(thing, state, mtype, delta)
+                else:
+                    # ---- Patrol behaviour (only when target not in sight) ----
+                    self._update_monster_patrol(thing, state, mtype, delta)
 
         # ---- Player death check (after all monsters processed) ----
         if self.lt.player_health <= 0 and not self.lt.player_dead:
@@ -353,12 +437,48 @@ class MonsterAI:
                 return t
         return None
 
+    def _find_closest_enemy_team_monster(self, thing, my_team: str, player_pos: glm.vec3, max_range: float):
+        """Find the closest living monster on a DIFFERENT team within range.
+        Returns the monster or None.  Team-based enemies are targeted first
+        before the player."""
+        if not my_team or MonsterThing is None:
+            return None
+
+        my_pos = glm.vec3(thing.pos)
+        best_dist = float('inf')
+        best_monster = None
+
+        for t in self.lt.things:
+            if not isinstance(t, MonsterThing):
+                continue
+            if t is thing:
+                continue
+            if t.properties.get('dead', False) or t.properties.get('hidden', False):
+                continue
+            other_team = t.properties.get('team', '')
+            if not other_team:
+                continue
+            if other_team == my_team:
+                continue  # Same team = ally, not enemy
+
+            dist = glm.distance(my_pos, glm.vec3(t.pos))
+            if dist > max_range:
+                continue
+            if dist < best_dist:
+                best_dist = dist
+                best_monster = t
+
+        return best_monster
+
+
     def _find_monster_in_crossfire(self, shooter, ray_start: glm.vec3,
                                     ray_end: glm.vec3):
         """Check if a living monster (other than the shooter) intersects
         the ray from ray_start to ray_end.  Returns the closest hit monster
         or None.  Used for Doom-style infighting — when monster A fires at
-        the player and monster B is in the way, B takes the hit instead."""
+        the player and monster B is in the way, B takes the hit instead.
+
+        Team-aware: same-team monsters are never hit by crossfire."""
         ray_dir = ray_end - ray_start
         ray_len = glm.length(ray_dir)
         if ray_len < 1.0:
@@ -367,6 +487,7 @@ class MonsterAI:
 
         best_t = ray_len
         best_victim = None
+        shooter_team = shooter.properties.get('team', '')
 
         for t in self.lt.things:
             if not isinstance(t, MonsterThing):
@@ -376,8 +497,13 @@ class MonsterAI:
             if t.properties.get('dead', False) or t.properties.get('hidden', False):
                 continue
 
+            # Team-aware crossfire: never hit same-team allies
+            target_team = t.properties.get('team', '')
+            if shooter_team and target_team and shooter_team == target_team:
+                continue
+
             # Sphere intersection (same radius used by player shooting)
-            radius = 64.0
+            radius = 80.0
             center = glm.vec3(t.pos[0], t.pos[1] + 64.0, t.pos[2])
             oc = ray_start - center
             a = glm.dot(ray_dir, ray_dir)
@@ -418,15 +544,168 @@ class MonsterAI:
             victim.properties.pop('_aggro_target', None)
             if self.lt.io_manager:
                 self.lt.io_manager.fire_output(victim, 'OnDeath')
+            if self.monster_debug_active:
+                v_name = victim.properties.get('name', '?')
+                debug_log("MonsterAI",
+                    f'<a href="filter:{v_name}" style="color: #EF5350; font-weight: bold; text-decoration: none;">{v_name}</a> '
+                    f'<span style="color: #B71C1C; font-weight: bold;">DIED</span>')
         elif attacker is not None:
             # Retaliate — set aggro toward the attacker
             victim.properties['_aggro_target'] = id(attacker)
             # Wake the victim if it was asleep
             victim.properties['awake'] = True
+            if self.monster_debug_active:
+                v_name = victim.properties.get('name', '?')
+                a_name = attacker.properties.get('name', '?')
+                debug_log("MonsterAI",
+                    f'<a href="filter:{v_name}" style="color: #EF5350; font-weight: bold; text-decoration: none;">{v_name}</a> '
+                    f'was shot by '
+                    f'<a href="filter:{a_name}" style="color: #42A5F5; font-weight: bold; text-decoration: none;">{a_name}</a> '
+                    f'and has gone '
+                    f'<span style="color: #FFEE58; font-weight: bold;">AGGRO</span>')
 
     # -------------------------------------------------------------------------
-    # Patrol system (PathNode navigation) — UNCHANGED
+    # Projectile system (flying monsters)
     # -------------------------------------------------------------------------
+
+    def _spawn_monster_projectile(self, thing, target_pos: glm.vec3, damage: int, owner_id: int):
+        """Spawn a projectile sprite for a flying monster.
+        The projectile travels toward the target position and can be dodged."""
+        from .monster_constants import (
+            MONSTER_PROJECTILE_SPEED,
+            MONSTER_PROJECTILE_MAX_DIST,
+            MONSTER_PROJECTILE_SPRITE_SIZE,
+            MONSTER_PROJECTILE_SPRITE,
+        )
+
+        start_pos = glm.vec3(thing.pos[0], thing.pos[1] + 64.0, thing.pos[2])
+        direction = target_pos - start_pos
+        dir_len = glm.length(direction)
+        if dir_len < 0.001:
+            direction = glm.vec3(0, 0, 1)
+            dir_len = 1.0
+        direction = direction / dir_len
+
+        # Get custom projectile sprite or default
+        sprite = thing.properties.get('projectile_sprite', MONSTER_PROJECTILE_SPRITE)
+        size = thing.properties.get('projectile_size', MONSTER_PROJECTILE_SPRITE_SIZE)
+        if not isinstance(size, (list, tuple)) or len(size) != 2:
+            size = MONSTER_PROJECTILE_SPRITE_SIZE
+
+        projectile = {
+            'pos': [start_pos.x, start_pos.y, start_pos.z],
+            'vel': [direction.x * MONSTER_PROJECTILE_SPEED,
+                    direction.y * MONSTER_PROJECTILE_SPEED,
+                    direction.z * MONSTER_PROJECTILE_SPEED],
+            'owner_id': owner_id,
+            'sprite': sprite,
+            'lifetime': MONSTER_PROJECTILE_MAX_DIST / MONSTER_PROJECTILE_SPEED,
+            'damage': damage,
+            'size': tuple(size),
+            'distance_travelled': 0.0,
+        }
+
+        # Add to logic thread's projectile list for update
+        if not hasattr(self.lt, '_monster_projectiles'):
+            self.lt._monster_projectiles = []
+        self.lt._monster_projectiles.append(projectile)
+
+        if self.monster_debug_active:
+            name = thing.properties.get('name', '?')
+            debug_log("MonsterAI", f"{name} spawned projectile → ({target_pos.x:.0f}, {target_pos.y:.0f}, {target_pos.z:.0f})")
+
+    # -------------------------------------------------------------------------
+    # Patrol system (PathNode navigation)
+    # -------------------------------------------------------------------------
+
+    def _investigate_sounds(self, monster, state: Dict, mtype: str, delta: float, player_pos: glm.vec3) -> bool:
+        """Check for recent gunfire sounds and move toward them if within range. Returns True if investigating."""
+        if not monster.properties.get('can_hear', False):
+            return False
+
+        # Check for recent gunfire events
+        gunfire_events = self.lt.get_recent_gunfire_events(max_age=3.0)
+        if not gunfire_events:
+            # Clear any expired investigation
+            if state.get('investigating_sound') is not None:
+                state['investigating_sound'] = None
+            return False
+
+        thing_pos = glm.vec3(monster.pos)
+        hearing_range = float(monster.properties.get('sight', MONSTER_SIGHT_RANGE))
+
+        # Find the most recent gunfire event within hearing range
+        best_event = None
+        best_dist = float('inf')
+        current_time = time.perf_counter()
+
+        for event in gunfire_events:
+            sound_pos = glm.vec3(event['pos'][0], event['pos'][1], event['pos'][2])
+            dist = glm.distance(thing_pos, sound_pos)
+            if dist <= hearing_range and dist < best_dist:
+                best_dist = dist
+                best_event = event
+
+        if best_event is None:
+            # No sounds in range
+            if state.get('investigating_sound') is not None:
+                state['investigating_sound'] = None
+            return False
+
+        # Check if investigation has expired (sound is too old)
+        sound_pos = glm.vec3(best_event['pos'][0], best_event['pos'][1], best_event['pos'][2])
+        sound_age = current_time - best_event['time']
+
+        # If the sound is older than 2 seconds, stop investigating
+        if sound_age > 2.0:
+            state['investigating_sound'] = None
+            return False
+
+        # Check if we've arrived at the sound source (within 64 units)
+        if glm.distance(thing_pos, sound_pos) <= 64.0:
+            # Reached the sound location - look around briefly then resume patrol
+            if self.monster_debug_active:
+                name = monster.properties.get('name', '?')
+                debug_log("MonsterAI", f"{name} reached sound location, looking around...")
+            state['investigating_sound'] = None
+            return False
+
+        # Move toward the sound source
+        direction = sound_pos - thing_pos
+        dir_len = glm.length(direction)
+        if dir_len > 0.001:
+            direction = direction / dir_len
+            if mtype != 'flying':
+                direction = glm.normalize(glm.vec3(direction.x, 0.0, direction.z))
+            step = direction * MONSTER_MOVE_SPEED * delta
+            new_pos = thing_pos + step
+
+            if not self._monster_overlaps_wall(new_pos.x, new_pos.y, new_pos.z, MONSTER_WALL_MARGIN):
+                monster.pos = [new_pos.x, new_pos.y, new_pos.z]
+            else:
+                # Try sliding along walls
+                slide_x = glm.vec3(thing_pos.x + step.x, thing_pos.y, thing_pos.z)
+                slide_z = glm.vec3(thing_pos.x, thing_pos.y, thing_pos.z + step.z)
+                if not self._monster_overlaps_wall(slide_x.x, slide_x.y, slide_x.z, MONSTER_WALL_MARGIN):
+                    monster.pos = [slide_x.x, slide_x.y, slide_z.z]
+                elif not self._monster_overlaps_wall(slide_z.x, slide_z.y, slide_z.z, MONSTER_WALL_MARGIN):
+                    monster.pos = [slide_z.x, slide_z.y, slide_z.z]
+
+        state['investigating_sound'] = (sound_pos, current_time + 3.0)
+
+        if self.monster_debug_active:
+            name = monster.properties.get('name', '?')
+            debug_log("MonsterAI", 
+                f'<a href="filter:{name}" style="color: #FFA726; font-weight: bold; text-decoration: none;">{name}</a> '
+                f'<span style="color: #FFA726;">investigating gunfire within Range at ({sound_pos.x:.0f}, {sound_pos.y:.0f}, {sound_pos.z:.0f})</span>')
+            # Draw debug ray to sound source
+            self._debug_rays.append({
+                'start': [thing_pos.x, thing_pos.y + 64.0, thing_pos.z],
+                'end': [sound_pos.x, sound_pos.y, sound_pos.z],
+                'color': 'orange',
+            })
+
+        return True
 
     def _update_monster_patrol(self, monster, state: Dict, mtype: str, delta: float):
         """Move monster along a chain of PathNodes when player is out of sight."""
@@ -623,7 +902,7 @@ class MonsterAI:
             slide_x = glm.vec3(m_pos.x + step.x, m_pos.y, m_pos.z)
             slide_z = glm.vec3(m_pos.x, m_pos.y, m_pos.z + step.z)
             if not self._monster_overlaps_wall(slide_x.x, slide_x.y, slide_x.z, MONSTER_WALL_MARGIN):
-                monster.pos = [slide_x.x, slide_x.y, slide_x.z]
+                monster.pos = [slide_x.x, slide_x.y, slide_z.z]
                 state['patrol_blocked_count'] = 0
             elif not self._monster_overlaps_wall(slide_z.x, slide_z.y, slide_z.z, MONSTER_WALL_MARGIN):
                 monster.pos = [slide_z.x, slide_z.y, slide_z.z]
@@ -848,3 +1127,46 @@ class MonsterAI:
                 m_zmax > bz_min and m_zmin < bz_max):
                 return True
         return False
+
+
+class MonsterAIThread(threading.Thread):
+    """
+    Dedicated thread for running MonsterAI updates.
+    Runs at a lower tick rate (default 30 Hz) to reduce contention
+    with the main logic thread.
+    """
+    def __init__(self, logic_thread, monster_ai, lock, tick_rate: int = 30):
+        super().__init__(daemon=True, name="MonsterAIThread")
+        self.lt = logic_thread
+        self.monster_ai = monster_ai
+        self.lock = lock
+        self.tick_rate = tick_rate
+        self.tick_duration = 1.0 / tick_rate
+        self.running = False
+        
+    def run(self):
+        self.running = True
+        last_time = time.perf_counter()
+        accumulator = 0.0
+        
+        while self.running:
+            current_time = time.perf_counter()
+            frame_time = current_time - last_time
+            last_time = current_time
+            
+            if frame_time > 0.25:
+                frame_time = 0.25
+                
+            accumulator += frame_time
+            
+            while accumulator >= self.tick_duration:
+                with self.lock:
+                    self.monster_ai.update(self.tick_duration)
+                accumulator -= self.tick_duration
+                
+            sleep_time = self.tick_duration - (time.perf_counter() - current_time)
+            if sleep_time > 0:
+                time.sleep(sleep_time * 0.9)
+                
+    def stop(self):
+        self.running = False

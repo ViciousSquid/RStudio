@@ -6,6 +6,9 @@ All distances are in world units. All times are in seconds.
 # How far away (units) a monster can detect the player
 MONSTER_SIGHT_RANGE = 1024
 
+# Default team assignment for monsters (empty = no team / neutral)
+MONSTER_DEFAULT_TEAM = ""
+
 # Seconds between each attack (per-monster cooldown)
 MONSTER_SHOOT_INTERVAL = 1.5
 
@@ -17,7 +20,7 @@ MONSTER_SHOOT_ANIM_TIME = 0.35
 MONSTER_MOVE_SPEED = 90.0
 
 # Monster stops moving when it gets this close (to avoid clipping into player)
-MONSTER_STOP_DISTANCE = 60.0
+MONSTER_STOP_DISTANCE = 85.0
 
 # ---------------------------------------------------------------------------
 # Sprite frame filenames (relative to assets/sprites/monsters/<type>/)
@@ -26,6 +29,8 @@ MONSTER_STOP_DISTANCE = 60.0
 MONSTER_SPRITE_IDLE  = "idle.png"
 MONSTER_SPRITE_SHOOT = "shoot.png"
 MONSTER_SPRITE_DEAD  = "dead.png"
+
+MONSTER_PROJECTILE_SPRITE = "projectile.png"
 
 # ---------------------------------------------------------------------------
 # Billboard size (world units) — used by the 3D renderer for each subtype.
@@ -63,8 +68,8 @@ MONSTER_VARIANTS = {
 # ---------------------------------------------------------------------------
 # Projectile constants  (flying monster ranged attack)
 # ---------------------------------------------------------------------------
-MONSTER_PROJECTILE_SPEED    = 160.0   # world-units / second
-MONSTER_PROJECTILE_MAX_DIST = 1024.0  # despawn after travelling this far
+MONSTER_PROJECTILE_SPEED    = 512.0   # world-units / second
+MONSTER_PROJECTILE_MAX_DIST = 2048  # despawn after travelling this far
 MONSTER_PROJECTILE_SPRITE_SIZE = (40.0, 40.0)   # billboard size in world units
 
 # ---------------------------------------------------------------------------
@@ -100,3 +105,30 @@ WEAPON_SHOOT_SOUND = {
     'gun1': 'shoot.wav',
     'gun2': 'shoot2.wav',
 }
+
+
+# ---------------------------------------------------------------------------
+# Per-monster-type shoot sounds (used by MonsterAI)
+# ---------------------------------------------------------------------------
+MONSTER_SHOOT_SOUNDS = {
+    'human':  'shoot.wav',
+    'flying': 'shoot_flying.wav',
+}
+MONSTER_SHOOT_SOUND_DEFAULT = 'shoot.wav'
+
+
+# ---------------------------------------------------------------------------
+# Team-based combat
+# ---------------------------------------------------------------------------
+# Monsters on different teams are enemies and will always attack one another
+# first before targeting the player.  Same-team monsters never damage each
+# other via crossfire.  The 'team' property is a string (e.g. "1", "2",
+# "player") — leave empty for neutral / no-team behaviour.
+
+# ---------------------------------------------------------------------------
+# Flying monster bite attack (melee when very close)
+# ---------------------------------------------------------------------------
+# When a flying monster gets within this distance of its target, it switches
+# from projectile shooting to a bite attack that deals double damage.
+MONSTER_BITE_DISTANCE = 80.0    # world units — must be < MONSTER_STOP_DISTANCE
+MONSTER_BITE_DAMAGE_MULT = 2.0  # bite deals 2× normal damage

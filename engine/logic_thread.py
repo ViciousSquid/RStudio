@@ -80,8 +80,8 @@ from .monster_constants import (
     WEAPON_SHOOT_SOUND,
 )
 
-# Import the extracted MonsterAI class
-from .monster_ai import MonsterAI
+# Import the extracted MonsterAI class and new thread
+from .monster_ai import MonsterAI, MonsterAIThread
 
 # FIX#1: Map door_direction editor strings to movement vectors
 DOOR_DIRECTION_MAP = {
@@ -221,8 +221,11 @@ class LogicThread(threading.Thread):
         # Muzzle flash
         self.muzzle_flash_active = False
 
-        # Monster AI (delegated to separate class)
+        # Monster AI (delegated to separate class + thread)
+        self._monster_lock = threading.RLock()
+        self._player_damage_lock = threading.Lock()
         self.monster_ai = MonsterAI(self)
+        self.monster_ai_thread = None
 
         # Mover PathNode waypoint state (used by io_handlers FollowPath)
         self.mover_path_states = {}
@@ -243,6 +246,13 @@ class LogicThread(threading.Thread):
         self._portals_cache_dirty: bool = True
 
         self.level_complete_ui = None
+
+        # Monster projectiles (flying monster ranged attacks)
+        self._monster_projectiles: list = []
+
+        # Gunfire sound events for AI hearing (list of dicts with pos, time, source)
+        self._gunfire_events: list = []
+
         # Performance Monitoring
         self.actual_tps = 0.0
         self._tick_count = 0
@@ -405,13 +415,24 @@ class LogicThread(threading.Thread):
             self._portals_cache_dirty = True
 
             self.level_complete_ui = None
+
+            # Clear monster projectiles
+            self._monster_projectiles.clear()
+
+            # Clear gunfire events
+            self._gunfire_events.clear()
+
             # Fire OnPlayerSpawn
             self._fire_player_spawn_outputs()
             
             # Initialize timers that start on
             self._init_logic_timers()
+
+            # Start monster AI thread
+            self._start_monster_ai()
             
         else:
+            self._stop_monster_ai()
             self.player_in_triggers.clear()
             self.fired_once_triggers.clear()
             self.collected_pickups.clear()
@@ -447,9 +468,30 @@ class LogicThread(threading.Thread):
             self._portals_cache_dirty = True
 
             self.level_complete_ui = None
+
+            # Clear monster projectiles
+            self._monster_projectiles.clear()
+
+            # Clear gunfire events
+            self._gunfire_events.clear()
+
             # Reset monster AI state
             self._reset_all_monsters(clear_dead=False)
     
+    def _start_monster_ai(self):
+        """Start the monster AI processing thread."""
+        self._stop_monster_ai()
+        self.monster_ai_thread = MonsterAIThread(
+            self, self.monster_ai, self._monster_lock, tick_rate=30
+        )
+        self.monster_ai_thread.start()
+
+    def _stop_monster_ai(self):
+        """Signal the monster AI thread to stop."""
+        if self.monster_ai_thread is not None:
+            self.monster_ai_thread.stop()
+            self.monster_ai_thread = None
+
     def _reset_all_monsters(self, clear_dead=True):
         """Reset all monster AI state. Called when entering or exiting play mode."""
         self.monster_ai.monster_states = {}
@@ -622,6 +664,7 @@ class LogicThread(threading.Thread):
                 
     def stop(self):
         self.running = False
+        self._stop_monster_ai()
 
     def _update_tps_counter(self):
         self._tick_count += 1
@@ -691,7 +734,6 @@ class LogicThread(threading.Thread):
             self.game_state.consume_mouse_delta()
             self.game_state.consume_use_key()
             self.game_state.consume_shot()
-            self.monster_ai.update(delta)
             return
 
         # ---- Player dead: freeze all gameplay input ----
@@ -699,7 +741,6 @@ class LogicThread(threading.Thread):
             self.game_state.consume_mouse_delta()
             self.game_state.consume_use_key()
             self.game_state.consume_shot()
-            self.monster_ai.update(delta)
             return
 
         # ---- Level Complete UI: freeze player input ----
@@ -707,7 +748,6 @@ class LogicThread(threading.Thread):
             self.game_state.consume_mouse_delta()
             self.game_state.consume_use_key()
             self.game_state.consume_shot()
-            self.monster_ai.update(delta)
             return
         
         # Clear muzzle flash from previous frame
@@ -756,8 +796,16 @@ class LogicThread(threading.Thread):
             
         self._update_bullet_marks()
 
-        # Monster AI (delegated)
-        self.monster_ai.update(delta)
+        # Clean up expired gunfire sound events (keep for 3 seconds)
+        current_time = time.perf_counter()
+        self._gunfire_events = [
+            e for e in self._gunfire_events
+            if (current_time - e['time']) < 3.0
+        ]
+
+        # Update monster projectiles (flying monster ranged attacks)
+        # NOTE: Monster AI itself now runs in MonsterAIThread
+        self._update_monster_projectiles(delta)
 
         # ── Player 2 physics (split-screen) ──────────────────────────────────
         if self.player2 and not self.player2_dead:
@@ -957,11 +1005,12 @@ class LogicThread(threading.Thread):
         self.player_in_triggers = currently_in
 
     def _apply_player_damage(self, damage):
-        if self.god_mode:
-            return
-        self.player_health = max(0, self.player_health - damage)
-        if self.buddha_mode and self.player_health < 2:
-            self.player_health = 2
+        with self._player_damage_lock:
+            if self.god_mode:
+                return
+            self.player_health = max(0, self.player_health - damage)
+            if self.buddha_mode and self.player_health < 2:
+                self.player_health = 2
 
     def _on_trigger_enter(self, brush: dict, trigger_id: int):
         trigger_type = brush.get('trigger_type', 'multiple')
@@ -1571,54 +1620,74 @@ class LogicThread(threading.Thread):
             if hit and dist < closest_brush_dist:
                 closest_brush_dist = dist
                 closest_brush_hit = ray_origin + ray_dir * dist
+        
+        # Raycast against monsters — acquire lock for consistent positions
         closest_monster = None
         closest_monster_dist = float('inf')
-        for thing in self.things:
-            if not isinstance(thing, MonsterThing):
-                continue
-            if thing.properties.get('dead', False) or thing.properties.get('hidden', False):
-                continue
-            sprite_width = float(thing.properties.get('sprite_width', 64.0))
-            sprite_height = float(thing.properties.get('sprite_height', 128.0))
-            radius = max(sprite_width, sprite_height) / 2.0
-            center = glm.vec3(thing.pos[0], thing.pos[1] + sprite_height / 2.0, thing.pos[2])
-            oc = ray_origin - center
-            a = glm.dot(ray_dir, ray_dir)
-            b = 2.0 * glm.dot(oc, ray_dir)
-            c = glm.dot(oc, oc) - radius * radius
-            disc = b * b - 4 * a * c
-            if disc >= 0:
-                t = (-b - math.sqrt(disc)) / (2.0 * a)
-                if t >= 0 and t < closest_monster_dist:
-                    if t < closest_brush_dist:
-                        closest_monster_dist = t
-                        closest_monster = thing
-        if closest_monster is not None:
-            damage = WEAPON_DAMAGE.get(self.active_weapon, 25)
-            health_raw = closest_monster.properties.get('health', 100)
-            try:
-                health = int(health_raw)
-            except (ValueError, TypeError):
-                health = 100
-            new_health = health - damage
-            closest_monster.properties['health'] = new_health
-            debug_log("MonsterAI", f"Monster {closest_monster.properties.get('name')} health: {health} -> {new_health} (weapon={self.active_weapon}, dmg={damage})")
-            self.game_state.queue_sound({
-                'file': 'hit.wav',
-                'volume': 1.0,
-                'entity_id': id(closest_monster)
-            })
-            if new_health <= 0:
-                closest_monster.properties['dead'] = True
-                closest_monster.properties.pop('is_shooting', None)
-                if self.io_manager:
-                    self.io_manager.fire_output(closest_monster, 'OnDeath')
-            hit_point = ray_origin + ray_dir * closest_monster_dist
-            self.bullet_marks.append({
-                'pos': hit_point,
-                'time': time.perf_counter()
-            })
-            return
+        
+        with self._monster_lock:
+            for thing in self.things:
+                if not isinstance(thing, MonsterThing):
+                    continue
+                if thing.properties.get('dead', False) or thing.properties.get('hidden', False):
+                    continue
+                sprite_width = float(thing.properties.get('sprite_width', 64.0))
+                sprite_height = float(thing.properties.get('sprite_height', 128.0))
+                # Use a wider, more forgiving hit box for better gameplay feel
+                # Width matters more than height for shooting comfort
+                radius = max(sprite_width * 0.75, sprite_height * 0.4, 48.0)
+                center = glm.vec3(thing.pos[0], thing.pos[1] + sprite_height * 0.45, thing.pos[2])
+                oc = ray_origin - center
+                a = glm.dot(ray_dir, ray_dir)
+                b = 2.0 * glm.dot(oc, ray_dir)
+                c = glm.dot(oc, oc) - radius * radius
+                disc = b * b - 4 * a * c
+                if disc >= 0:
+                    t = (-b - math.sqrt(disc)) / (2.0 * a)
+                    if t >= 0 and t < closest_monster_dist:
+                        if t < closest_brush_dist:
+                            closest_monster_dist = t
+                            closest_monster = thing
+
+            if closest_monster is not None:
+                damage = WEAPON_DAMAGE.get(self.active_weapon, 25)
+                health_raw = closest_monster.properties.get('health', 100)
+                try:
+                    health = int(health_raw)
+                except (ValueError, TypeError):
+                    health = 100
+                new_health = health - damage
+                closest_monster.properties['health'] = new_health
+                debug_log("MonsterAI", f"Monster {closest_monster.properties.get('name')} health: {health} -> {new_health} (weapon={self.active_weapon}, dmg={damage})")
+                self.game_state.queue_sound({
+                    'file': 'hit.wav',
+                    'volume': 1.0,
+                    'entity_id': id(closest_monster)
+                })
+                if new_health <= 0:
+                    closest_monster.properties['dead'] = True
+                    closest_monster.properties.pop('is_shooting', None)
+                    if self.io_manager:
+                        self.io_manager.fire_output(closest_monster, 'OnDeath')
+                    if self.monster_ai.monster_debug_active:
+                        name = closest_monster.properties.get('name', '?')
+                        debug_log("MonsterAI",
+                            f'<a href="filter:{name}" style="color: #EF5350; font-weight: bold; text-decoration: none;">{name}</a> '
+                            f'<span style="color: #B71C1C; font-weight: bold;">DIED</span> (shot by player)')
+                hit_point = ray_origin + ray_dir * closest_monster_dist
+                self.bullet_marks.append({
+                    'pos': hit_point,
+                    'time': time.perf_counter()
+                })
+                return
+        
+        # Record gunfire sound event for AI hearing
+        self._gunfire_events.append({
+            'pos': [ray_origin.x, ray_origin.y, ray_origin.z],
+            'time': time.perf_counter(),
+            'source': 'player',
+        })
+
         if closest_brush_hit is not None:
             self.bullet_marks.append({
                 'pos': closest_brush_hit,
@@ -1649,6 +1718,148 @@ class LogicThread(threading.Thread):
         self.bullet_marks = [
             m for m in self.bullet_marks 
             if (current_time - m['time']) < self.BULLET_FADE_TIME
+        ]
+
+    # =========================================================================
+    # MONSTER PROJECTILES (flying monster ranged attacks)
+    # =========================================================================
+
+    def _update_monster_projectiles(self, delta: float):
+        """Update all active monster projectiles: move, check collisions, apply damage."""
+        if not hasattr(self, '_monster_projectiles'):
+            return
+
+        from .monster_constants import (
+            MONSTER_PROJECTILE_SPEED,
+            MONSTER_PROJECTILE_MAX_DIST,
+            MONSTER_PROJECTILE_SPRITE_SIZE,
+        )
+        import math
+
+        remaining = []
+        for proj in self._monster_projectiles:
+            # Update position
+            vel = proj['vel']
+            proj['pos'][0] += vel[0] * delta
+            proj['pos'][1] += vel[1] * delta
+            proj['pos'][2] += vel[2] * delta
+
+            # Track distance travelled
+            speed = math.sqrt(vel[0]**2 + vel[1]**2 + vel[2]**2)
+            proj['distance_travelled'] += speed * delta
+
+            # Decrease lifetime
+            proj['lifetime'] -= delta
+
+            # Check max distance
+            if proj['distance_travelled'] >= MONSTER_PROJECTILE_MAX_DIST:
+                continue  # Expired
+
+            if proj['lifetime'] <= 0.0:
+                continue  # Expired
+
+            p_pos = glm.vec3(proj['pos'][0], proj['pos'][1], proj['pos'][2])
+
+            # ---- Collision with player ----
+            if self.player and not self.god_mode and not self.player_dead:
+                player_pos = self.player.pos
+                # Simple sphere collision with player (radius ~32 units)
+                dist_to_player = glm.distance(p_pos, player_pos)
+                if dist_to_player < 32.0:
+                    damage = proj['damage']
+                    self._apply_player_damage(damage)
+                    if self.monster_ai.monster_debug_active:
+                        debug_log("MonsterAI", f"Projectile hit player for {damage} dmg")
+                    continue  # Projectile consumed
+
+            # ---- Collision with monsters (team-aware) ----
+            owner_id = proj['owner_id']
+            hit_monster = None
+            
+            with self._monster_lock:
+                for thing in self.things:
+                    if not isinstance(thing, MonsterThing):
+                        continue
+                    if id(thing) == owner_id:
+                        continue  # Don\'t hit self
+                    if thing.properties.get('dead', False) or thing.properties.get('hidden', False):
+                        continue
+
+                    # Team-aware: don\'t hit same-team allies
+                    owner_team = None
+                    for t in self.things:
+                        if isinstance(t, MonsterThing) and id(t) == owner_id:
+                            owner_team = t.properties.get('team', '')
+                            break
+                    target_team = thing.properties.get('team', '')
+                    if owner_team and target_team and owner_team == target_team:
+                        continue
+
+                    t_pos = glm.vec3(thing.pos[0], thing.pos[1] + 64.0, thing.pos[2])
+                    dist = glm.distance(p_pos, t_pos)
+                    if dist < 64.0:  # Monster hit radius (increased for better feel)
+                        hit_monster = thing
+                        break
+
+                if hit_monster is not None:
+                    damage = proj['damage']
+                    self.monster_ai._apply_monster_damage(hit_monster, damage, attacker=None)
+                    if self.monster_ai.monster_debug_active:
+                        name = hit_monster.properties.get('name', '?')
+                        debug_log("MonsterAI", f"Projectile hit {name} for {damage} dmg")
+                    continue  # Projectile consumed
+
+            # ---- Collision with solid brushes (walls) ----
+            hit_wall = False
+            for brush in self.brushes:
+                if brush.get('hidden') or brush.get('is_water') or brush.get('is_fog'):
+                    continue
+                if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
+                    continue
+                pos = brush['pos']
+                size = brush['size']
+                bx_min = pos[0] - size[0] * 0.5
+                bx_max = pos[0] + size[0] * 0.5
+                by_min = pos[1] - size[1] * 0.5
+                by_max = pos[1] + size[1] * 0.5
+                bz_min = pos[2] - size[2] * 0.5
+                bz_max = pos[2] + size[2] * 0.5
+
+                if (bx_min <= p_pos.x <= bx_max and
+                    by_min <= p_pos.y <= by_max and
+                    bz_min <= p_pos.z <= bz_max):
+                    hit_wall = True
+                    break
+
+            if hit_wall:
+                continue  # Projectile consumed
+
+            # Projectile survived this tick
+            remaining.append(proj)
+
+        self._monster_projectiles = remaining
+
+        # Sync projectiles to render state for visualisation
+        write_state = self.game_state.get_write_state()
+        write_state.projectiles = [
+            {
+                'pos': list(proj['pos']),
+                'sprite': proj.get('sprite', 'projectile.png'),
+                'size': proj.get('size', MONSTER_PROJECTILE_SPRITE_SIZE),
+            }
+            for proj in remaining
+        ]
+
+
+    # =========================================================================
+    # GUNFIRE SOUND EVENTS (for AI hearing)
+    # =========================================================================
+
+    def get_recent_gunfire_events(self, max_age: float = 3.0) -> list:
+        current_time = time.perf_counter()
+        return [
+            e for e in self._gunfire_events
+            if (current_time - e['time']) < max_age
         ]
 
     # =========================================================================

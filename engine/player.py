@@ -94,36 +94,10 @@ class Player:
         # --- 3. Collision Resolution ---
 
         # A. Horizontal X Movement
-        original_pos = glm.vec3(self.pos)
-        self.pos.x += self.velocity.x * delta
-
-        if self._check_overlap(colliders, ignore_brush=self.ground_object):
-            self.pos.x  = original_pos.x
-            self.pos.y += self.step_height
-            self.pos.x += self.velocity.x * delta
-
-            if not self._check_overlap(colliders, ignore_brush=self.ground_object):
-                pass  # step-up succeeded
-            else:
-                self.pos    = original_pos
-                self.pos.x += self.velocity.x * delta
-                self._resolve_collision(colliders, axis='x', ignore_brush=self.ground_object)
+        self._move_with_collision(delta, colliders, axis='x')
 
         # B. Horizontal Z Movement
-        original_pos = glm.vec3(self.pos)
-        self.pos.z += self.velocity.z * delta
-
-        if self._check_overlap(colliders, ignore_brush=self.ground_object):
-            self.pos.z  = original_pos.z
-            self.pos.y += self.step_height
-            self.pos.z += self.velocity.z * delta
-
-            if not self._check_overlap(colliders, ignore_brush=self.ground_object):
-                pass  # step-up succeeded
-            else:
-                self.pos    = original_pos
-                self.pos.z += self.velocity.z * delta
-                self._resolve_collision(colliders, axis='z', ignore_brush=self.ground_object)
+        self._move_with_collision(delta, colliders, axis='z')
 
         # C. Vertical Y Movement
         self.pos.y += self.velocity.y * delta
@@ -150,6 +124,92 @@ class Player:
         if self.pos.y < -2000:
             self.pos     = glm.vec3(0, 100, 0)
             self.velocity = glm.vec3(0, 0, 0)
+
+    def _move_with_collision(self, delta, colliders, axis):
+        """
+        Move player along one horizontal axis with collision detection and step-up.
+
+        FIXES:
+        1. Only applies movement ONCE (no double-move bug)
+        2. Properly zeros velocity on collision
+        3. Only steps up when on ground
+        4. Checks headroom before stepping up
+        """
+        original_pos = glm.vec3(self.pos)
+
+        # Get velocity component for this axis
+        if axis == 'x':
+            vel_component = self.velocity.x
+        else:
+            vel_component = self.velocity.z
+
+        # Apply movement
+        if axis == 'x':
+            self.pos.x += vel_component * delta
+        else:
+            self.pos.z += vel_component * delta
+
+        # Check for overlap
+        if not self._check_overlap(colliders, ignore_brush=self.ground_object):
+            return  # No collision, movement succeeded
+
+        # --- Try step-up (only when on ground) ---
+        if self.on_ground and vel_component != 0:
+            # Check headroom before stepping up
+            if self._has_headroom(colliders, self.step_height):
+                # Move up by step height
+                self.pos.y += self.step_height
+
+                # Re-apply horizontal movement at elevated position
+                if axis == 'x':
+                    self.pos.x = original_pos.x + vel_component * delta
+                else:
+                    self.pos.z = original_pos.z + vel_component * delta
+
+                # Check if step-up succeeded
+                if not self._check_overlap(colliders, ignore_brush=self.ground_object):
+                    return  # Step-up succeeded!
+
+                # Step-up failed - revert to original position
+                self.pos = original_pos
+
+        # --- Resolve collision (either no step attempted, or step failed) ---
+        self._resolve_collision(colliders, axis=axis, ignore_brush=self.ground_object)
+
+        # Zero velocity on this axis since we hit something
+        if axis == 'x':
+            self.velocity.x = 0
+        else:
+            self.velocity.z = 0
+
+    def _has_headroom(self, colliders, height):
+        """Check if there's enough vertical space above the player."""
+        test_pos = glm.vec3(self.pos)
+        test_pos.y += height
+
+        half = self._half
+        player_min = test_pos - half
+        player_max = test_pos + half
+
+        for brush in colliders:
+            if brush.get('hidden') or brush.get('is_water') or brush.get('is_fog'):
+                continue
+
+            is_dynamic_solid = brush.get('is_mover') or brush.get('is_door')
+            if brush.get('is_trigger') and not is_dynamic_solid:
+                continue
+
+            pos  = glm.vec3(brush['pos'])
+            size = glm.vec3(brush['size'])
+            b_min = pos - size * 0.5
+            b_max = pos + size * 0.5
+
+            if (player_max.x > b_min.x and player_min.x < b_max.x and
+                player_max.y > b_min.y and player_min.y < b_max.y and
+                player_max.z > b_min.z and player_min.z < b_max.z):
+                return False  # No headroom
+
+        return True
 
     def _resolve_collision(self, brushes, axis, ignore_brush=None):
         """

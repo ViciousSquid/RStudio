@@ -19,6 +19,69 @@ class Renderer_F(BaseRenderer):
         self._current_shader = None
         self._frame_lights_uploaded = False
 
+        # Texture batch cache for draw_textured_brushes_optimized.
+        # Key: tuple of (brush_id, sorted_tex_items) per brush.
+        # Storing None initially forces a build on the first frame.
+        self._tex_batch_cache     = None   # defaultdict(list) | None
+        self._tex_batch_cache_key = None   # last key tuple | None
+
+    # ------------------------------------------------------------------
+    # Matrix helpers – cached on the brush dict itself
+    # ------------------------------------------------------------------
+
+    def _brush_model_matrix(self, brush):
+        """Return the model matrix for *brush*, recomputing only when the
+        brush transform actually changes.  Result is stored directly on the
+        brush dict so it survives across frames with zero extra bookkeeping.
+        """
+        pos   = brush.get('pos',  [0, 0, 0])
+        size  = brush.get('size', [64, 64, 64])
+        angle = brush.get('_rot_angle')
+        axis  = tuple(brush.get('rot_axis', [0, 1, 0])) if angle else None
+        key   = (pos[0], pos[1], pos[2],
+                 size[0], size[1], size[2],
+                 angle, axis)
+
+        if brush.get('_mat_cache_key') == key:
+            return brush['_mat_cache']
+
+        mat = glm.translate(self._identity_mat4, glm.vec3(*pos))
+        if angle:
+            av = glm.vec3(*axis)
+            if glm.length(av) > 0.001:
+                mat = glm.rotate(mat, glm.radians(float(angle)), glm.normalize(av))
+        mat = glm.scale(mat, glm.vec3(*size))
+        brush['_mat_cache_key'] = key
+        brush['_mat_cache']     = mat
+        return mat
+
+    def _compute_normal_matrix(self, model_matrix, brush=None):
+        """Compute the normal matrix.
+
+        If *brush* is provided the result is cached under the same cache
+        key as the model matrix, so it is only recomputed when the brush
+        transform changes.  Falls back to uncached behaviour when brush is
+        None (e.g. calls from base-class code that don't have a brush ref).
+        """
+        if brush is not None:
+            mk = brush.get('_mat_cache_key')
+            if mk is not None and brush.get('_nmat_cache_key') == mk:
+                return brush['_nmat_cache']
+            try:
+                nmat = glm.transpose(glm.inverse(glm.mat3(model_matrix)))
+            except Exception:
+                nmat = self._identity_mat3
+            brush['_nmat_cache_key'] = mk
+            brush['_nmat_cache']     = nmat
+            return nmat
+        # No brush supplied – uncached path (should be rare)
+        try:
+            return glm.transpose(glm.inverse(glm.mat3(model_matrix)))
+        except Exception:
+            return self._identity_mat3
+
+    # ------------------------------------------------------------------
+
     def _upload_lights_once(self, shader_name, lights):
         super()._upload_lights_once(shader_name, lights)
 
@@ -27,32 +90,39 @@ class Renderer_F(BaseRenderer):
             return
         visible = brushes
         self.render_stats.visible_brushes += len(visible)
-        if not visible:
-            return
         shader, uniforms = self.shaders['lit'], self.uniforms['lit']
         gl.glUseProgram(shader)
         self._current_shader = shader
         self._upload_lights_once('lit', lights)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        # Cache value_ptr results – avoids redundant ctypes work per draw call
+        proj_ptr = glm.value_ptr(projection)
+        view_ptr = glm.value_ptr(view)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'],       1, gl.GL_FALSE, view_ptr)
         gl.glBindVertexArray(self.vaos['cube'])
-        display_mode = config.get('brush_display_mode', 'Textured')
+        display_mode        = config.get('brush_display_mode', 'Textured')
         show_triggers_solid = config.get('show_triggers_as_solid', False)
-        selected = config.get('selected_object')
-        model_loc, color_loc, alpha_loc = uniforms['model'], uniforms['object_color'], uniforms['alpha']
+        selected            = config.get('selected_object')
+        model_loc      = uniforms['model']
+        color_loc      = uniforms['object_color']
+        alpha_loc      = uniforms['alpha']
         normal_mat_loc = uniforms.get('normalMatrix', -1)
         if normal_mat_loc is None:
             normal_mat_loc = -1
-        fill_mode = (gl.GL_FILL if show_triggers_solid else gl.GL_LINE) if is_transparent_pass else \
-                    (gl.GL_FILL if display_mode != "Wireframe" else gl.GL_LINE)
+
+        if is_transparent_pass:
+            fill_mode = gl.GL_FILL if show_triggers_solid else gl.GL_LINE
+        else:
+            fill_mode = gl.GL_FILL if display_mode != "Wireframe" else gl.GL_LINE
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
+
         for brush in visible:
             self.render_stats.visible_tris += 12
             model_matrix = self._brush_model_matrix(brush)
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
             if normal_mat_loc > 0:
-                normal_mat = self._compute_normal_matrix(model_matrix)
-                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
+                nmat = self._compute_normal_matrix(model_matrix, brush)
+                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(nmat))
             if brush.get('is_trigger'):
                 color, alpha = [0.0, 1.0, 1.0], 0.3
             elif brush is selected:
@@ -60,7 +130,7 @@ class Renderer_F(BaseRenderer):
             elif brush.get('operation') == 'subtract':
                 color, alpha = [1.0, 0.0, 0.0], 1.0
             else:
-                brush_tint = brush.get('tint')
+                brush_tint   = brush.get('tint')
                 brush_colour = brush.get('colour')
                 color = normalize_color(brush_tint) if brush_tint else normalize_color(brush_colour)
                 alpha = 1.0
@@ -68,6 +138,7 @@ class Renderer_F(BaseRenderer):
             gl.glUniform1f(alpha_loc, alpha)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
             self.render_stats.draw_calls += 1
+
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         gl.glBindVertexArray(0)
 
@@ -76,37 +147,63 @@ class Renderer_F(BaseRenderer):
             return
         visible = brushes
         self.render_stats.visible_brushes += len(visible)
-        if not visible:
-            return
         shader, uniforms = self.shaders['textured'], self.uniforms['textured']
         gl.glUseProgram(shader)
         self._current_shader = shader
         self._upload_lights_once('textured', lights)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        proj_ptr = glm.value_ptr(projection)
+        view_ptr = glm.value_ptr(view)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'],       1, gl.GL_FALSE, view_ptr)
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(uniforms['texture_diffuse'], 0)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         gl.glBindVertexArray(self.vaos['cube'])
         model_loc = uniforms['model']
+
+        # Ensure tex_scale_loc is permanently stored in the UniformCache so
+        # we never call glGetUniformLocation on the hot path again.
         tex_scale_loc = uniforms.get('tex_scale', -1)
         if tex_scale_loc == -1:
-            tex_scale_loc = gl.glGetUniformLocation(shader, "tex_scale")
+            loc = gl.glGetUniformLocation(shader, "tex_scale")
+            uniforms._cache['tex_scale'] = loc   # write straight into the cache
+            tex_scale_loc = loc
+
         normal_mat_loc = uniforms.get('normalMatrix', -1)
         if normal_mat_loc is None:
             normal_mat_loc = -1
-        batches = defaultdict(list)
+
         is_play = config.get('play_mode', False)
-        for brush in visible:
-            for i, key in enumerate(['south', 'north', 'west', 'east', 'down', 'top']):
-                tex_name = brush.get('textures', {}).get(key, 'default.png')
-                if tex_name == 'caulk.jpg':
-                    continue
-                if is_play and tex_name == 'nodraw.jpg':
-                    continue
-                tex_id = self.texture_manager.get(os.path.join('textures', tex_name)) or \
-                         self.load_texture_callback(tex_name, 'textures')
-                batches[tex_id].append((brush, i))
+
+        # ---- Texture batch cache -----------------------------------------
+        # Build a cheap key: (brush_id, sorted texture items) per brush.
+        # When any brush's textures change the key changes and the cache
+        # rebuilds automatically.  In play mode we always rebuild because
+        # nodraw / caulk filtering differs from editor mode.
+        cache_key = None if is_play else tuple(
+            (id(b), tuple(sorted(b.get('textures', {}).items())))
+            for b in visible
+        )
+
+        if not is_play and cache_key == self._tex_batch_cache_key and self._tex_batch_cache is not None:
+            batches = self._tex_batch_cache
+        else:
+            batches = defaultdict(list)
+            for brush in visible:
+                for i, face_key in enumerate(['south', 'north', 'west', 'east', 'down', 'top']):
+                    tex_name = brush.get('textures', {}).get(face_key, 'default.png')
+                    if tex_name == 'caulk.jpg':
+                        continue
+                    if is_play and tex_name == 'nodraw.jpg':
+                        continue
+                    tex_id = self.texture_manager.get(os.path.join('textures', tex_name)) or \
+                             self.load_texture_callback(tex_name, 'textures')
+                    batches[tex_id].append((brush, i))
+            if not is_play:
+                self._tex_batch_cache     = batches
+                self._tex_batch_cache_key = cache_key
+        # ------------------------------------------------------------------
+
         current_tex = None
         for tex_id, items in batches.items():
             if tex_id != current_tex:
@@ -118,15 +215,16 @@ class Renderer_F(BaseRenderer):
                 model_matrix = self._brush_model_matrix(brush)
                 gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
                 if normal_mat_loc > 0:
-                    normal_mat = self._compute_normal_matrix(model_matrix)
-                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
+                    nmat = self._compute_normal_matrix(model_matrix, brush)
+                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(nmat))
                 if tex_scale_loc != -1:
                     size = brush.get('size', [64, 64, 64])
                     if brush.get('texture_tiling', False):
                         tex_unit_size = 128.0
-                        if face_idx == 0 or face_idx == 1:
+                        fi = face_idx
+                        if fi == 0 or fi == 1:
                             scale_x, scale_y = size[0] / tex_unit_size, size[1] / tex_unit_size
-                        elif face_idx == 2 or face_idx == 3:
+                        elif fi == 2 or fi == 3:
                             scale_x, scale_y = size[2] / tex_unit_size, size[1] / tex_unit_size
                         else:
                             scale_x, scale_y = size[0] / tex_unit_size, size[2] / tex_unit_size
@@ -144,13 +242,15 @@ class Renderer_F(BaseRenderer):
         gl.glUseProgram(shader)
         self._current_shader = shader
         self._upload_lights_once('lit', lights)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        proj_ptr = glm.value_ptr(projection)
+        view_ptr = glm.value_ptr(view)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'],       1, gl.GL_FALSE, view_ptr)
         gl.glBindVertexArray(self.vaos['cube'])
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        model_loc = uniforms['model']
-        color_loc = uniforms['object_color']
-        alpha_loc = uniforms['alpha']
+        model_loc      = uniforms['model']
+        color_loc      = uniforms['object_color']
+        alpha_loc      = uniforms['alpha']
         normal_mat_loc = uniforms.get('normalMatrix', -1)
         if normal_mat_loc is None:
             normal_mat_loc = -1
@@ -159,11 +259,11 @@ class Renderer_F(BaseRenderer):
             model_matrix = self._brush_model_matrix(brush)
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
             if normal_mat_loc > 0:
-                normal_mat = self._compute_normal_matrix(model_matrix)
-                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
+                nmat = self._compute_normal_matrix(model_matrix, brush)
+                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(nmat))
             tint = brush.get('tint') or brush.get('colour')
             base_color = normalize_color(tint, default=[1.0, 1.0, 1.0])
-            intensity = float(brush.get('glow_intensity', 10.0))
+            intensity  = float(brush.get('glow_intensity', 10.0))
             overbright = [min(c * intensity, 10.0) for c in base_color]
             gl.glUniform3fv(color_loc, 1, overbright)
             gl.glUniform1f(alpha_loc, 1.0)

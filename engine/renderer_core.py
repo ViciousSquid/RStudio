@@ -924,9 +924,7 @@ class BaseRenderer:
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 
         for brush in brushes:
-            pos = brush.get('pos', [0, 0, 0])
-            size = brush.get('size', [64, 64, 64])
-            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
+            model_matrix = self._brush_model_matrix(brush)
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
             gl.glUniform1f(opacity_loc, brush.get('water_opacity', 0.5))
             gl.glUniform1f(reflectivity_loc, brush.get('water_reflectivity', 0.5))
@@ -968,12 +966,10 @@ class BaseRenderer:
         gl.glCullFace(gl.GL_BACK)
 
         for brush in brushes:
-            pos = brush.get('pos', [0, 0, 0])
-            size = brush.get('size', [64, 64, 64])
-            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
+            model_matrix = self._brush_model_matrix(brush)
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
             if normal_mat_loc > 0:
-                normal_mat = self._compute_normal_matrix(model_matrix)
+                normal_mat = self._compute_normal_matrix(model_matrix, brush)
                 gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
             glass_color = brush.get('glass_color', [0.7, 0.85, 0.95])
             opacity = brush.get('glass_opacity', 0.3)
@@ -1022,9 +1018,7 @@ class BaseRenderer:
         alpha_loc = uniforms['alpha']
 
         for brush in brushes:
-            pos = brush.get('pos', [0, 0, 0])
-            size = brush.get('size', [64, 64, 64])
-            model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
+            model_matrix = self._brush_model_matrix(brush)
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
             inv_matrix = glm.inverse(model_matrix)
             gl.glUniformMatrix4fv(inv_model_loc, 1, gl.GL_FALSE, glm.value_ptr(inv_matrix))
@@ -1116,7 +1110,9 @@ class BaseRenderer:
         mat = glm.scale(mat, glm.vec3(*size))
         return mat
 
-    def _compute_normal_matrix(self, model_matrix):
+    def _compute_normal_matrix(self, model_matrix, brush=None):
+        # brush parameter is accepted for API compatibility with Renderer_F's
+        # caching override, but not used at the base-class level.
         mat3 = glm.mat3(model_matrix)
         try:
             return glm.transpose(glm.inverse(mat3))

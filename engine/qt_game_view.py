@@ -62,6 +62,10 @@ class QtGameView(QOpenGLWidget):
         self.culling_enabled = True
         self.selected_object = None
         self.show_sprites_in_play_mode = False
+        # Cache keys for per-frame expensive rebuilds
+        self._instance_tex_hash   = None   # hash of last things-state snapshot
+        self._io_conn_cache       = None   # last _gather_io_connections result
+        self._io_conn_scene_ver   = None   # (len(brushes), len(things)) when cache was built
         self.visibility_system = None
         self.show_visibility_debug = False
         self.grid_visible = True
@@ -844,7 +848,13 @@ class QtGameView(QOpenGLWidget):
             if self.play_mode and getattr(self, 'show_spatial_grid', False):
                 self._render_spatial_grid(self.projection_matrix, self.view_matrix)
         if not self.play_mode and getattr(self.editor, 'show_logic_links', False):
-            conn_lines = self._gather_io_connections()
+            # Cache IO connections - only rebuild when the scene composition changes.
+            # This avoids an O(brushes + things) traversal every frame in the editor.
+            _scene_ver = (len(self.editor.state.brushes), len(self.editor.state.things))
+            if self._io_conn_cache is None or self._io_conn_scene_ver != _scene_ver:
+                self._io_conn_cache     = self._gather_io_connections()
+                self._io_conn_scene_ver = _scene_ver
+            conn_lines = self._io_conn_cache
             if conn_lines:
                 self.renderer.draw_connection_lines(self.projection_matrix, self.view_matrix, conn_lines)
         if self.face_mode_active and self.hovered_face_info:
@@ -861,7 +871,9 @@ class QtGameView(QOpenGLWidget):
                 self.sysmon_stats['visible_brushes'] = visible
                 self.sysmon_stats['culled_brushes'] = render_state.culled_brushes
                 self.sysmon_stats['total_brushes'] = total
-        gl.glFinish()
+        # gl.glFinish() removed: QOpenGLWidget handles buffer swap internally.
+        # Calling glFinish() here drained the GPU pipeline every frame and
+        # destroyed CPU/GPU pipelining, costing several ms per frame for nothing.
         painter = QPainter(self)
         if self.editor.config.getboolean('Display', 'show_fps', fallback=False):
             self._draw_fps_counter(painter)
@@ -1391,6 +1403,28 @@ class QtGameView(QOpenGLWidget):
     def update_instance_textures(self, things):
         if not self.renderer:
             return
+
+        # Build a cheap state hash: captures thing identity, monster
+        # state flags (dead/shooting), and logic gate type.
+        # If it matches the last frame we can reuse the cached result.
+        def _state_hash():
+            parts = []
+            for t in things:
+                if isinstance(t, Monster):
+                    parts.append((id(t), t.properties.get('dead', False), t.properties.get('is_shooting', False)))
+                elif isinstance(t, LogicGate):
+                    parts.append((id(t), t.properties.get('logic_type', 'and')))
+                elif isinstance(t, Pickup):
+                    parts.append((id(t), t.properties.get('item_type', ''), t.properties.get('key_name', ''), t.properties.get('custom_sprite', '')))
+                else:
+                    parts.append(id(t))
+            return hash(tuple(parts))
+
+        h = _state_hash()
+        if h == self._instance_tex_hash:
+            return   # nothing changed – skip the rebuild entirely
+
+        self._instance_tex_hash = h
         instance_textures = {}
         for thing in things:
             if isinstance(thing, Monster):

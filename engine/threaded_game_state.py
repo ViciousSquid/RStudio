@@ -50,7 +50,15 @@ class RenderState:
         
         # Visual FX
         self.bullet_marks = [] # List of {'pos': [x,y,z], 'alpha': float}
-        self.projectiles = []  # list of {'pos': [x, y, z]}
+        self.projectiles = []  # list of {
+            #     'pos': [x, y, z],
+            #     'vel': [vx, vy, vz],
+            #     'owner_id': int,      # id() of the monster that fired it
+            #     'sprite': str,        # projectile sprite path
+            #     'lifetime': float,    # seconds remaining
+            #     'damage': int,
+            #     'size': (w, h),       # billboard size
+            # }
 
         # Muzzle flash — True for one frame after the player fires
         self.muzzle_flash_active = False
