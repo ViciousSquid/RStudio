@@ -2198,6 +2198,85 @@ class MainWindow(QMainWindow):
         self.state.brushes = new_brushes
         self.update_all_ui()
 
+
+    def autocaulk(self):
+        """Automatically apply nodraw to faces that are never visible."""
+        self.save_state()  # Enables undo/redo
+
+        # Collect all solid additive brushes (exclude subtract, trigger, fog)
+        brushes = [
+            b for b in self.state.brushes
+            if b.get('operation') != 'subtract'
+            and not b.get('is_trigger', False)
+            and not b.get('is_fog', False)
+        ]
+
+        caulked_faces = 0
+        for brush in brushes:
+            # Ensure textures dict exists
+            if 'textures' not in brush:
+                brush['textures'] = {}
+
+            for face in ['north', 'south', 'east', 'west', 'top', 'down']:
+                current_tex = brush['textures'].get(face, '')
+                if current_tex == 'nodraw.jpg':
+                    continue   # already set
+
+                if self._is_face_occluded(brush, face, brushes):
+                    brush['textures'][face] = 'nodraw.jpg'
+                    caulked_faces += 1
+
+        if caulked_faces > 0:
+            self.update_views()
+            self.show_toast(f"Autocaulk applied: caulked {caulked_faces} face(s)", duration=5000)
+        else:
+            self.show_toast("Autocaulk: no occluded faces found")
+
+    def _is_face_occluded(self, brush, face, all_brushes):
+        """
+        Returns True if the given face of 'brush' is fully covered by any other
+        brush in 'all_brushes'. Uses a point sample just outside the face center.
+        """
+        pos = brush['pos']
+        size = brush['size']
+        epsilon = 1.0   # small offset to push sample outside the brush
+
+        # Compute the sample point (center of the face, shifted outward)
+        if face == 'north':
+            center = [pos[0], pos[1], pos[2] + size[2]/2 + epsilon]
+        elif face == 'south':
+            center = [pos[0], pos[1], pos[2] - size[2]/2 - epsilon]
+        elif face == 'east':
+            center = [pos[0] + size[0]/2 + epsilon, pos[1], pos[2]]
+        elif face == 'west':
+            center = [pos[0] - size[0]/2 - epsilon, pos[1], pos[2]]
+        elif face == 'top':
+            center = [pos[0], pos[1] + size[1]/2 + epsilon, pos[2]]
+        elif face == 'down':
+            center = [pos[0], pos[1] - size[1]/2 - epsilon, pos[2]]
+        else:
+            return False
+
+        # Check if the sample point lies inside any other brush
+        for other in all_brushes:
+            if other is brush:
+                continue
+            op = other['pos']
+            osize = other['size']
+            minx = op[0] - osize[0]/2
+            maxx = op[0] + osize[0]/2
+            miny = op[1] - osize[1]/2
+            maxy = op[1] + osize[1]/2
+            minz = op[2] - osize[2]/2
+            maxz = op[2] + osize[2]/2
+
+            # Use epsilon tolerance for floating-point safety
+            if (minx - epsilon <= center[0] <= maxx + epsilon and
+                miny - epsilon <= center[1] <= maxy + epsilon and
+                minz - epsilon <= center[2] <= maxz + epsilon):
+                return True
+        return False
+
     def hollow_selected_brush(self):
         """Hollow out the selected brush by creating an inner subtraction brush."""
         if not isinstance(self.state.selected_object, dict):

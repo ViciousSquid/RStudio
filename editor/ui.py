@@ -258,6 +258,12 @@ class Ui_MainWindow(object):
         view_menu.addAction(MainWindow.reset_layout_action)
 
         # --- Tools Menu Actions ---
+
+        autocaulk_action = QAction("Autocaulk", MainWindow)
+        autocaulk_action.setToolTip("Apply nodraw to all invisible brush faces")
+        autocaulk_action.triggered.connect(MainWindow.autocaulk)
+        MainWindow.tools_menu.addAction(autocaulk_action)
+
         MainWindow.logic_graph_action = QAction('Logic Graph Editor…', MainWindow)
         MainWindow.logic_graph_action.setShortcut('Ctrl+L')
         MainWindow.logic_graph_action.setToolTip('Open the visual I/O node graph editor')
