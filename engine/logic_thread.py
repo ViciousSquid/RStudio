@@ -903,8 +903,8 @@ class LogicThread(threading.Thread):
         dz = pz - oz
         local_right = dx * rx + dz * rz
         local_up    = dy
-        hw = portal.get_width()  / 2.0 * 1.25
-        hh = portal.get_height() / 2.0 * 1.25
+        hw = portal.get_width()  / 2.0 * 1.50
+        hh = portal.get_height() / 2.0 * 1.50
         return abs(local_right) <= hw and abs(local_up) <= hh
 
     def _execute_portal_transit(self, portal_a, portal_b):
@@ -2014,6 +2014,7 @@ class LogicThread(threading.Thread):
                 visible_things.append(thing)
 
         write_state.visible_things = visible_things
+        write_state.all_things = list(self.things)
         write_state.timestamp = time.perf_counter()
 
         # ── Player 2 render state ─────────────────────────────────────────────

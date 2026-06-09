@@ -307,19 +307,34 @@ class Renderer_F(BaseRenderer):
         if terrain and terrain.enabled:
             self.render_terrain(projection, view, camera_pos, terrain, lights)
         if config.get('play_mode', False) and Portal is not None and self._portal_gl_ready:
-            portal_things = [t for t in things if isinstance(t, Portal) and t.is_active()]
+            # Use ALL things for portal discovery, not just frustum-visible ones.
+            # But only render portal cameras when player is within 2048 units.
+            all_things = config.get('all_things', things)
+            portal_things = []
+            for t in all_things:
+                if not isinstance(t, Portal) or not t.is_active():
+                    continue
+                # Distance check: only render virtual camera if player is close enough
+                portal_pos = glm.vec3(*t.pos)
+                dist_sq = glm.distance2(portal_pos, camera_pos)
+                if dist_sq <= (2048.0 * 2048.0):
+                    portal_things.append(t)
             if portal_things:
                 try:
                     def _portal_draw_scene(proj, vw, cam, br, th, sel, cfg):
+                        # FIX: Re-sort from the FULL unculled brush set
                         all_br = cfg.get('all_brushes', br)
-                        _t_opaque, _solid = self._split_opaque(all_br)
+                        _opaque, _transparent, _sprites, _fog, _water, _glass, _glow = \
+                            self._sort_objects(all_br, th, cfg)
+                        
+                        _t_opaque, _solid = self._split_opaque(_opaque)
                         _t_brush_mode = cfg.get('brush_display_mode', 'Textured')
                         _lights = [t for t in th if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
                         if _t_brush_mode in ('Textured', 'Solid Lit'):
                             self.draw_textured_brushes_optimized(proj, vw, cam, _t_opaque, _lights, cfg)
                             self.draw_lit_brushes_optimized(proj, vw, cam, _solid, _lights, cfg)
                         else:
-                            self.draw_lit_brushes_optimized(proj, vw, cam, all_br, _lights, cfg)
+                            self.draw_lit_brushes_optimized(proj, vw, cam, _opaque, _lights, cfg)
                         _sprites = []
                         for t in th:
                             if PathNode is not None and isinstance(t, PathNode):

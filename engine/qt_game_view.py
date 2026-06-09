@@ -759,6 +759,10 @@ class QtGameView(QOpenGLWidget):
             self._render_config["all_brushes"] = render_state.all_brushes
         else:
             self._render_config["all_brushes"] = self.editor.state.brushes
+        if render_state and hasattr(render_state, 'all_things'):
+            self._render_config["all_things"] = render_state.all_things
+        else:
+            self._render_config["all_things"] = self.editor.state.things
         self.update_instance_textures(things_to_render)
         _splitscreen = (
             self.play_mode
@@ -848,8 +852,6 @@ class QtGameView(QOpenGLWidget):
             if self.play_mode and getattr(self, 'show_spatial_grid', False):
                 self._render_spatial_grid(self.projection_matrix, self.view_matrix)
         if not self.play_mode and getattr(self.editor, 'show_logic_links', False):
-            # Cache IO connections - only rebuild when the scene composition changes.
-            # This avoids an O(brushes + things) traversal every frame in the editor.
             _scene_ver = (len(self.editor.state.brushes), len(self.editor.state.things))
             if self._io_conn_cache is None or self._io_conn_scene_ver != _scene_ver:
                 self._io_conn_cache     = self._gather_io_connections()
@@ -871,9 +873,6 @@ class QtGameView(QOpenGLWidget):
                 self.sysmon_stats['visible_brushes'] = visible
                 self.sysmon_stats['culled_brushes'] = render_state.culled_brushes
                 self.sysmon_stats['total_brushes'] = total
-        # gl.glFinish() removed: QOpenGLWidget handles buffer swap internally.
-        # Calling glFinish() here drained the GPU pipeline every frame and
-        # destroyed CPU/GPU pipelining, costing several ms per frame for nothing.
         painter = QPainter(self)
         if self.editor.config.getboolean('Display', 'show_fps', fallback=False):
             self._draw_fps_counter(painter)
