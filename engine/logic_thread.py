@@ -1674,11 +1674,6 @@ class LogicThread(threading.Thread):
                         debug_log("MonsterAI",
                             f'<a href="filter:{name}" style="color: #EF5350; font-weight: bold; text-decoration: none;">{name}</a> '
                             f'<span style="color: #B71C1C; font-weight: bold;">DIED</span> (shot by player)')
-                hit_point = ray_origin + ray_dir * closest_monster_dist
-                self.bullet_marks.append({
-                    'pos': hit_point,
-                    'time': time.perf_counter()
-                })
                 return
         
         # Record gunfire sound event for AI hearing

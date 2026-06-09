@@ -13,12 +13,35 @@ class AudioManager:
     def __init__(self):
         self._sounds: Dict[str, pygame.mixer.Sound] = {}
         self._rm = ResourceManager()
+        
+        # Ensure pygame mixer is initialized before any Sound operations
+        if not pygame.mixer.get_init():
+            try:
+                pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+                print("[AudioManager] pygame.mixer initialized")
+            except pygame.error as e:
+                print(f"[AudioManager] pygame.mixer init failed: {e}")
+    
+    def _ensure_mixer(self) -> bool:
+        """Lazy-init mixer if something else quit it."""
+        if pygame.mixer.get_init():
+            return True
+        try:
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+            return True
+        except pygame.error as e:
+            print(f"[AudioManager] pygame.mixer re-init failed: {e}")
+            return False
     
     def load_sound(self, relative_path: str) -> Optional[pygame.mixer.Sound]:
         """
         Load a sound effect from current ResourceManager mount.
         Uses BytesIO streaming when in ZIP package mode.
         """
+        if not self._ensure_mixer():
+            print(f"[AudioManager] Cannot load '{relative_path}': mixer not initialized")
+            return None
+        
         # Check cache
         if relative_path in self._sounds:
             return self._sounds[relative_path]

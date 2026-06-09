@@ -325,7 +325,7 @@ class MonsterAI:
                     state['shoot_timer'] = MONSTER_SHOOT_INTERVAL
                     state['anim_timer'] = MONSTER_SHOOT_ANIM_TIME
 
-                    damage = int(thing.properties.get('damage', 10))
+                    damage = int(thing.properties.get('damage', 20))
 
                     if mtype == 'flying':
                         # ---- Flying monsters: bite if very close, else projectile ----

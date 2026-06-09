@@ -7,7 +7,6 @@ from typing import Optional
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
 from PyQt5.QtCore import Qt, QTimer, QPoint, QUrl, QRect, QEvent
 from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QFontDatabase, QPen, QBrush, QPolygon, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage
-from PyQt5.QtMultimedia import QSoundEffect
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
@@ -132,9 +131,18 @@ class QtGameView(QOpenGLWidget):
         self.player2 = None
         self.splitscreen_mode = False
 
-        # Pygame gamepad initialisation
+        # PYGAME INIT (MUST happen before _init_sound_system)
         pygame.init()
         pygame.joystick.init()
+        
+        # Initialize pygame mixer BEFORE any sound loading
+        try:
+            if not pygame.mixer.get_init():
+                pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+            print(f"[Audio] pygame.mixer initialized: {pygame.mixer.get_init()}")
+        except pygame.error as e:
+            print(f"[Audio] pygame.mixer init failed: {e}")
+
         self.gamepad = None
         if pygame.joystick.get_count() > 0:
             self.gamepad = pygame.joystick.Joystick(0)
@@ -148,8 +156,12 @@ class QtGameView(QOpenGLWidget):
         self.gamepad_timer.timeout.connect(self._poll_gamepad)
         self.gamepad_timer.start(16)  # ~60 Hz
 
-        # NEW: Store arrow key states for Player 2 when no gamepad
+        # Store arrow key states for Player 2 when no gamepad
         self.p2_keys_pressed = set()
+
+        # === NOW safe to load sounds ===
+        self._init_sound_system()
+
 
         self._last_player_start_pos = [0, 0, 0]
         self._last_player_start_angle = 0
@@ -231,19 +243,70 @@ class QtGameView(QOpenGLWidget):
         self.setMouseTracking(True)
 
     def _init_sound_system(self):
-        sound_dir = os.path.join(os.getcwd(), 'assets', 'sounds')
-        if not os.path.exists(sound_dir):
-            print("Warning: assets/sounds directory not found.")
+        """Preload sounds into pygame mixer cache."""
+        if not self._ensure_pygame_mixer():
+            print("[Audio] Sound system unavailable — mixer could not be initialized")
             return
 
-        print("Preloading sounds...")
+        sound_dir = os.path.join(os.getcwd(), 'assets', 'sounds')
+        if not os.path.exists(sound_dir):
+            print("[Audio] Warning: assets/sounds directory not found.")
+            return
+
+        print("[Audio] Preloading sounds...")
         count = 0
         for f in os.listdir(sound_dir):
-            if f.lower().endswith(('.wav', '.mp3')):
+            if f.lower().endswith(('.wav', '.mp3', '.ogg')):
                 full_path = os.path.join(sound_dir, f)
-                self._preload_sound_file(f, full_path)
+                self._load_sound_to_cache(f, full_path)
                 count += 1
-        print(f"Preloaded {count} sound files.")
+        print(f"[Audio] Preloaded {count} sound files.")
+
+    def _ensure_pygame_mixer(self) -> bool:
+        """Initialize pygame mixer if it isn't already active."""
+        if pygame.mixer.get_init():
+            return True
+        try:
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+            print("[Audio] pygame.mixer late-initialized")
+            return True
+        except pygame.error as e:
+            print(f"[Audio] pygame.mixer init failed: {e}")
+            return False
+
+    def _load_sound_to_cache(self, name, path):
+        """Load a sound file into pygame mixer cache."""
+        if not self._ensure_pygame_mixer():
+            print(f"[Audio] Failed to load {name}: mixer not initialized")
+            return False
+        if name in self.sound_pool:
+            return True
+        try:
+            sound = pygame.mixer.Sound(path)
+            self.sound_pool[name] = sound
+            return True
+        except pygame.error as e:
+            print(f"[Audio] Failed to load {name}: {e}")
+            return False
+
+    def _get_sound_instance(self, name):
+        """Get a pygame Sound object by name. Loads on-demand if not cached."""
+        clean_name = os.path.basename(name)
+        
+        # Already cached?
+        if clean_name in self.sound_pool:
+            return self.sound_pool[clean_name]
+        
+        # Try to load on-demand
+        path = os.path.join(os.getcwd(), 'assets', 'sounds', clean_name)
+        if os.path.exists(path):
+            if self._load_sound_to_cache(clean_name, path):
+                return self.sound_pool[clean_name]
+        
+        print(f"[Audio] Sound not found: {clean_name}")
+        return None
+       
+
 
     def _init_hud_caches(self):
         self._hud_font = QFont("Arial", 11)
@@ -320,44 +383,12 @@ class QtGameView(QOpenGLWidget):
 
         self.game_state.set_p2_input(move_x, move_z, look_dx, look_dy, jump, crouch)
 
-    def _preload_sound_file(self, name, path, pool_size=4):
-        if name in self.sound_pool:
-            return
-        self.sound_pool[name] = []
-        url = QUrl.fromLocalFile(path)
-        for _ in range(pool_size):
-            effect = QSoundEffect(self)
-            effect.setSource(url)
-            effect.setVolume(0.0)
-            effect.play()
-            effect.stop()
-            effect.setVolume(1.0)
-            self.sound_pool[name].append(effect)
 
     def _clear_play_mode_hint(self):
         self._play_mode_hint = ""
         self._cached_hint_text = None
         self.update()
 
-    def _get_sound_instance(self, name):
-        clean_name = os.path.basename(name)
-        if clean_name not in self.sound_pool:
-            path = os.path.join(os.getcwd(), 'assets', 'sounds', clean_name)
-            if os.path.exists(path):
-                self._preload_sound_file(clean_name, path)
-            else:
-                return None
-        pool = self.sound_pool[clean_name]
-        for effect in pool:
-            if not effect.isPlaying():
-                return effect
-        if pool:
-            source_url = pool[0].source()
-            new_effect = QSoundEffect(self)
-            new_effect.setSource(source_url)
-            pool.append(new_effect)
-            return new_effect
-        return None
 
     def initializeGL(self):
         gl.glClearColor(0.1, 0.1, 0.15, 1.0)
@@ -482,15 +513,19 @@ class QtGameView(QOpenGLWidget):
             self.repaint()
 
     def _process_sound_queue(self):
+        """Drain the logic thread's sound queue and play via pygame mixer."""
         for request in self.game_state.consume_sounds():
             sound_file = request.get('file')
             volume = request.get('volume', 1.0)
             if not sound_file:
                 continue
-            effect = self._get_sound_instance(sound_file)
-            if effect:
-                effect.setVolume(volume)
-                effect.play()
+            
+            sound = self._get_sound_instance(sound_file)
+            if sound:
+                # pygame mixer channels auto-manage, but we can set volume per-play
+                channel = sound.play()
+                if channel:
+                    channel.set_volume(volume)
 
     def _gather_io_connections(self):
         COLOR_LOGIC   = (1.0, 1.0, 0.0)
@@ -1893,9 +1928,9 @@ class QtGameView(QOpenGLWidget):
                 self.game_state.queue_shot()
                 from engine.monster_constants import WEAPON_SHOOT_SOUND
                 sound_file = WEAPON_SHOOT_SOUND.get(active_weapon, 'shoot.wav')
-                effect = self._get_sound_instance(sound_file)
-                if effect:
-                    effect.play()
+                sound = self._get_sound_instance(sound_file)
+                if sound:
+                    sound.play()
                 return
         if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ShiftModifier and not self.play_mode:
             obj = self.get_object_at_3d(event.x(), event.y())
