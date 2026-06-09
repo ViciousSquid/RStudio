@@ -105,7 +105,7 @@ dark_stylesheet = """
 if __name__ == "__main__":
 
     from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout, QProgressBar
-    from PyQt5.QtGui import QPixmap, QSurfaceFormat
+    from PyQt5.QtGui import QPixmap, QSurfaceFormat, QIcon
     from PyQt5.QtCore import Qt
     from editor.main_window import MainWindow
 
@@ -118,17 +118,27 @@ if __name__ == "__main__":
         root_directory = os.path.dirname(os.path.abspath(__file__))
 
     os.chdir(root_directory)
+    
+    # Set the application ID for Windows taskbar (required for Windows 7+)
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            myappid = 'fio.editor.v1'  # arbitrary string
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except:
+            pass
     # ---------------------------------------------------------
 
     # Version print
     try:
         with open(os.path.join(root_directory, 'editor/version.txt'), 'r') as f:
+            print(f"")
             print(f"       +++ Fio {f.read().strip()}")
     except FileNotFoundError:
         print("Version file not found")
 
     # ---------------------------------------------------------
-    # ✅ FIX: Configure OpenGL BEFORE QApplication is created
+    # Configure OpenGL BEFORE QApplication is created
     # ---------------------------------------------------------
     fmt = QSurfaceFormat()
     fmt.setVersion(3, 3)
@@ -188,6 +198,22 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyleSheet(dark_stylesheet)
 
+    # Set application icon
+    icon_path = os.path.join(root_directory, 'assets', 'icon.ico')
+    if os.path.exists(icon_path):
+        app_icon = QIcon(icon_path)
+        app.setWindowIcon(app_icon)
+    else:
+        mac_icon_path = os.path.join(root_directory, 'assets', 'icon.icns')
+        if os.path.exists(mac_icon_path):
+            app_icon = QIcon(mac_icon_path)
+            app.setWindowIcon(app_icon)
+        else:
+            png_icon_path = os.path.join(root_directory, 'assets', 'icon.png')
+            if os.path.exists(png_icon_path):
+                app_icon = QIcon(png_icon_path)
+                app.setWindowIcon(app_icon)
+
     splash = ProgressSplashScreen('assets/splash.png')
     splash.show()
     splash.set_progress(5, "Configuring OpenGL...")
@@ -195,6 +221,21 @@ if __name__ == "__main__":
     splash.set_progress(25, "Building editor UI...")
 
     window = MainWindow(root_directory)
+    
+    # Set icon on main window
+    if 'app_icon' in locals():
+        window.setWindowIcon(app_icon)
+    
+    # For macOS, set the dock icon explicitly
+    if sys.platform == 'darwin':
+        try:
+            from Foundation import NSBundle
+            bundle = NSBundle.mainBundle()
+            icon_file = os.path.join(root_directory, 'assets', 'icon.icns')
+            if os.path.exists(icon_file):
+                bundle.setInfoDictionary_({'CFBundleIconFile': 'icon'})
+        except:
+            pass
 
     splash.set_progress(100, "Ready.")
 
