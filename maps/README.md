@@ -16,7 +16,7 @@ Playable level with two rooms, pickups, a moving platform and a light that can b
 
 ### `Maze.json`
 
-Liminal corridors with a simple floating platform puzzle
+Opens with a cutscene demonstrating the Camera entity
 
 ### `MonsterTest.json`
 
