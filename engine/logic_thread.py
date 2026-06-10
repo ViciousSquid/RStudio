@@ -903,8 +903,8 @@ class LogicThread(threading.Thread):
         dz = pz - oz
         local_right = dx * rx + dz * rz
         local_up    = dy
-        hw = portal.get_width()  / 2.0 * 1.50
-        hh = portal.get_height() / 2.0 * 1.50
+        hw = portal.get_width()  / 2.0 * 1.0
+        hh = portal.get_height() / 2.0 * 1.0
         return abs(local_right) <= hw and abs(local_up) <= hh
 
     def _execute_portal_transit(self, portal_a, portal_b):
