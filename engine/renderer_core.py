@@ -1630,8 +1630,13 @@ class BaseRenderer:
         gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
         # virtual scene
         virtual_view, virtual_cam = self._portal_build_virtual_view(portal_a, portal_b, main_view, camera_pos)
+        
+        # Apply oblique clipping to slice away the wall behind portal B
+        clip_proj = self._calculate_oblique_projection(projection, virtual_view, portal_b.pos, portal_b.get_normal())
+        
         self._portal_virtual_view = virtual_view
-        self._portal_virtual_proj = projection
+        self._portal_virtual_proj = clip_proj
+        
         gl.glStencilFunc(gl.GL_EQUAL, stencil_id, 0xFF)
         gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
         gl.glStencilMask(0x00)
@@ -1640,7 +1645,10 @@ class BaseRenderer:
         self._proj_ptr = glm.value_ptr(self._portal_virtual_proj)
         self._view_ptr = glm.value_ptr(self._portal_virtual_view)
         self._current_shader = None
-        draw_scene_fn(projection, virtual_view, virtual_cam, brushes, things, lights, config)
+        
+        # Pass clip_proj into the draw function, NOT projection
+        draw_scene_fn(clip_proj, virtual_view, virtual_cam, brushes, things, lights, config) 
+        
         self._proj_ptr = old_proj_ptr
         self._view_ptr = old_view_ptr
         self._current_shader = None
@@ -1671,6 +1679,42 @@ class BaseRenderer:
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, vdata.nbytes, vdata)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
 
+    def _calculate_oblique_projection(self, projection, view, plane_pos, plane_normal):
+        # 1. Define the clipping plane in world space
+        # The normal faces OUT of the destination portal, keeping everything in front of it.
+        normal = glm.vec3(*plane_normal)
+        pos = glm.vec3(*plane_pos)
+        
+        # Nudge the plane slightly backward into the wall to prevent z-fighting with the portal itself
+        pos -= normal * 0.05 
+        
+        dist = -glm.dot(normal, pos)
+        plane_world = glm.vec4(normal.x, normal.y, normal.z, dist)
+        
+        # 2. Transform the plane to view space
+        inv_trans_view = glm.transpose(glm.inverse(view))
+        plane_view = inv_trans_view * plane_world
+        
+        # 3. Modify the projection matrix using Lengyel's oblique near-plane algorithm
+        q = glm.vec4(
+            1.0 if plane_view.x >= 0.0 else -1.0,
+            1.0 if plane_view.y >= 0.0 else -1.0,
+            1.0,
+            1.0
+        )
+        
+        q_view = glm.inverse(projection) * q
+        c = plane_view * (2.0 / glm.dot(plane_view, q_view))
+        
+        oblique_proj = glm.mat4(projection)
+        # Replace the third column (Z-mapping) of the projection matrix
+        oblique_proj[0][2] = c.x - oblique_proj[0][3]
+        oblique_proj[1][2] = c.y - oblique_proj[1][3]
+        oblique_proj[2][2] = c.z - oblique_proj[2][3]
+        oblique_proj[3][2] = c.w - oblique_proj[3][3]
+        
+        return oblique_proj
+
     def _portal_build_virtual_view(self, portal_a, portal_b, current_view, camera_pos):
         import math
         yaw_a = portal_a.get_yaw_radians()
@@ -1681,7 +1725,17 @@ class BaseRenderer:
         normal_a = glm.vec3(*portal_a.get_normal())
         to_player = cam - pos_a
         player_side = glm.dot(to_player, normal_a)
-        delta_yaw = (yaw_b - yaw_a) + math.pi
+
+        # Force the same "looking OUT of portal B" view onto both faces.
+        # When player is in front of portal A (player_side > 0), do NOT add
+        # the extra 180° flip — the raw yaw difference already places the
+        # virtual camera in front of portal B looking outward.
+        # When player is behind portal A, keep the existing +pi flip.
+        if player_side > 0:
+            delta_yaw = yaw_b - yaw_a
+        else:
+            delta_yaw = (yaw_b - yaw_a) + math.pi
+
         cos_d = math.cos(delta_yaw)
         sin_d = math.sin(delta_yaw)
         relative = cam - pos_a
@@ -1699,6 +1753,7 @@ class BaseRenderer:
         )
         new_fwd = glm.normalize(new_fwd)
         return glm.lookAt(virtual_cam, virtual_cam + new_fwd, glm.vec3(0,1,0)), virtual_cam
+    
 
     # --------------------------------------------------------------------------
     # VAO creation
