@@ -1681,9 +1681,7 @@ class BaseRenderer:
         normal_a = glm.vec3(*portal_a.get_normal())
         to_player = cam - pos_a
         player_side = glm.dot(to_player, normal_a)
-        delta_yaw = yaw_a - yaw_b
-        if player_side >= 0:
-            delta_yaw += math.pi
+        delta_yaw = (yaw_b - yaw_a) + math.pi
         cos_d = math.cos(delta_yaw)
         sin_d = math.sin(delta_yaw)
         relative = cam - pos_a
