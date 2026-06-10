@@ -50,8 +50,7 @@ Fio explores a unified approach to level editing and runtime simulation:
 
 ### Rendering
 - OpenGL 3.3 forward renderer
-- Dynamic lighting with shadows
-- Fog, glass, water, overbright effects
+- Dynamic lighting, shadows, fog, glass and water
 - Frustum culling
 - Dynamic portals (moveable / scripted transforms)
 
