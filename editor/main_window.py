@@ -1866,10 +1866,33 @@ class MainWindow(QMainWindow):
         splash_label.setPixmap(pixmap.scaled(512, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         layout.addWidget(splash_label)
 
-        version_label = QLabel(f"{version}<br>https://github.com/ViciousSquid/Fio")
+        subtitle_label = QLabel("Liminal World Editor & Procedural Engine")
+        subtitle_label.setAlignment(Qt.AlignCenter)
+        subtitle_label.setStyleSheet("""
+            QLabel {
+                color: #cccccc;
+                font-weight: bold;
+                padding: 4px 0px;
+            }
+        """)
+        layout.addWidget(subtitle_label)
+
+        version_label = QLabel(
+            f"{version}<br>"
+            f"<a href='https://github.com/ViciousSquid/Fio' style='color: #F08000; text-decoration: none;'>"
+            f"https://github.com/ViciousSquid/Fio"
+            f"</a><br>"
+            f"<a href='https://github.com/ViciousSquid/Fio/wiki' style='color: #A7B454; text-decoration: none;'>"
+            f"view the wiki"
+            f"</a>"
+        )
         version_label.setTextFormat(Qt.RichText)
         version_label.setAlignment(Qt.AlignCenter)
         version_label.setOpenExternalLinks(True)
+        version_label.setStyleSheet("""
+            QLabel { color: #f0f0f0; }
+            a { color: #F08000; }
+        """)
         layout.addWidget(version_label)
         
         msg_box.layout().addWidget(container_widget, 0, 0, 1, msg_box.layout().columnCount())
@@ -3479,5 +3502,3 @@ class MainWindow(QMainWindow):
             import traceback
             traceback.print_exc()
             event.accept()
-
-

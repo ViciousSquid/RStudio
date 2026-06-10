@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import (
     QLabel, QCheckBox, QComboBox, QFrame, QLineEdit, QSplitter
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QUrl
-from PyQt5.QtGui import QFont, QTextCursor, QColor, QDesktopServices
+from PyQt5.QtGui import QFont, QTextCursor, QColor, QDesktopServices, QPainter, QPixmap
 from collections import deque
 import re
 
@@ -100,6 +100,55 @@ class CommandInput(QLineEdit):
         self.history_idx = len(self.history)
 
 
+class LogoTextBrowser(QTextBrowser):
+    """Custom QTextBrowser that paints a centered logo with 80% transparency behind the text."""
+
+    def __init__(self, logo_path=None, parent=None):
+        super().__init__(parent)
+        self._logo_path = logo_path
+        self._logo_pixmap = None
+        self._logo_opacity = 0.20  # 80% transparent = 20% opaque
+        self._load_logo()
+
+    def set_logo_path(self, logo_path):
+        """Update the logo path and reload."""
+        self._logo_path = logo_path
+        self._load_logo()
+        self.viewport().update()
+
+    def _load_logo(self):
+        """Load the logo pixmap if path is valid."""
+        if self._logo_path:
+            self._logo_pixmap = QPixmap(self._logo_path)
+        else:
+            self._logo_pixmap = None
+
+    def paintEvent(self, event):
+        """Paint the logo centered with 80% transparency, then paint text on top."""
+        painter = QPainter(self.viewport())
+
+        # Paint the logo first (behind text)
+        if self._logo_pixmap and not self._logo_pixmap.isNull():
+            # Calculate centered position
+            vp_rect = self.viewport().rect()
+            img_w = self._logo_pixmap.width()
+            img_h = self._logo_pixmap.height()
+
+            x = (vp_rect.width() - img_w) // 2
+            y = (vp_rect.height() - img_h) // 2
+
+            # Save painter state
+            painter.save()
+            painter.setOpacity(self._logo_opacity)
+            painter.drawPixmap(x, y, self._logo_pixmap)
+            painter.restore()
+
+        painter.end()
+
+        # Let QTextBrowser paint the text content on top
+        super().paintEvent(event)
+
+
 class DebugConsole(QWidget):
     """
     Floating debug console window for viewing I/O and entity logic messages.
@@ -137,14 +186,15 @@ class DebugConsole(QWidget):
     _instance = None
 
     @classmethod
-    def get_instance(cls, parent=None):
+    def get_instance(cls, parent=None, logo_path="assets/logo.png"):
         """Return the singleton DebugConsole, creating it on first call."""
         if cls._instance is None:
-            cls._instance = cls(parent)
+            cls._instance = cls(parent, logo_path)
         return cls._instance
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, logo_path="assets/logo.png"):
         super().__init__(parent)
+        self._logo_path = logo_path
         # Track enabled categories
         self.enabled_categories = set(self.CATEGORY_COLORS.keys())
 
@@ -324,7 +374,7 @@ class DebugConsole(QWidget):
         """)
 
         # Console text area
-        self.console = QTextBrowser()
+        self.console = LogoTextBrowser(self._logo_path, self)
         self.console.setReadOnly(True)
         self.console.setFont(QFont("Consolas", self.font_size))
         self.console.setOpenLinks(False)
