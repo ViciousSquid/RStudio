@@ -276,7 +276,11 @@ class Renderer_F(BaseRenderer):
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDepthFunc(gl.GL_LESS)
         if clear:
-            gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
+            # FIX: Don't clear color when rendering a portal virtual view
+            if getattr(self, '_portal_virtual_view', None) is not None:
+                gl.glClear(gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
+            else:
+                gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
         self._proj_ptr = glm.value_ptr(projection)
         self._view_ptr = glm.value_ptr(view)
         self.render_stats.reset()
@@ -312,7 +316,10 @@ class Renderer_F(BaseRenderer):
             all_things = config.get('all_things', things)
             portal_things = []
             for t in all_things:
-                if not isinstance(t, Portal) or not t.is_active():
+                if not isinstance(t, Portal):
+                    continue
+                # Include if active OR still mid-fade (fading out but not yet hidden)
+                if not t.is_active() and getattr(t, '_fade_alpha', 0.0) <= 0.01:
                     continue
                 # Distance check: only render virtual camera if player is close enough
                 portal_pos = glm.vec3(*t.pos)
@@ -322,31 +329,21 @@ class Renderer_F(BaseRenderer):
             if portal_things:
                 try:
                     def _portal_draw_scene(proj, vw, cam, br, th, sel, cfg):
-                        # FIX: Re-sort from the FULL unculled brush set
+                        # Re-sort from the FULL unculled brush set
                         all_br = cfg.get('all_brushes', br)
+                        all_th = cfg.get('all_things', th) 
                         _opaque, _transparent, _sprites, _fog, _water, _glass, _glow = \
-                            self._sort_objects(all_br, th, cfg)
-                        
+                            self._sort_objects(all_br, all_th, cfg) 
+
                         _t_opaque, _solid = self._split_opaque(_opaque)
                         _t_brush_mode = cfg.get('brush_display_mode', 'Textured')
-                        _lights = [t for t in th if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
+                        _lights = [t for t in all_th if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
                         if _t_brush_mode in ('Textured', 'Solid Lit'):
                             self.draw_textured_brushes_optimized(proj, vw, cam, _t_opaque, _lights, cfg)
                             self.draw_lit_brushes_optimized(proj, vw, cam, _solid, _lights, cfg)
                         else:
                             self.draw_lit_brushes_optimized(proj, vw, cam, _opaque, _lights, cfg)
-                        _sprites = []
-                        for t in th:
-                            if PathNode is not None and isinstance(t, PathNode):
-                                continue
-                            if Portal is not None and isinstance(t, Portal):
-                                continue
-                            if isinstance(t, dict) and 'monster_type' in t:
-                                _sprites.append(t)
-                            elif Pickup is not None and isinstance(t, Pickup):
-                                _sprites.append(t)
-                            elif Monster is not None and isinstance(t, Monster):
-                                _sprites.append(t)
+
                         self.draw_sprites(proj, vw, _sprites, self.sprite_textures, self.instance_textures)
                     self.draw_portals(
                         portal_things,

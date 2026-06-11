@@ -414,6 +414,14 @@ class LogicThread(threading.Thread):
             self._portal_cooldowns.clear()
             self._portals_cache_dirty = True
 
+            # Reset portal fade state so portals start at the correct opacity
+            if Portal is not None:
+                for t in self.things:
+                    if isinstance(t, Portal):
+                        _a = t.is_active()
+                        t._fade_alpha = 1.0 if _a else 0.0
+                        t._fade_target = t._fade_alpha
+
             self.level_complete_ui = None
 
             # Clear monster projectiles
@@ -466,6 +474,14 @@ class LogicThread(threading.Thread):
             self._portal_last_side.clear()
             self._portal_cooldowns.clear()
             self._portals_cache_dirty = True
+
+            # Reset portal fade state to match 'active' property (editor view stays correct)
+            if Portal is not None:
+                for t in self.things:
+                    if isinstance(t, Portal):
+                        _a = t.is_active()
+                        t._fade_alpha = 1.0 if _a else 0.0
+                        t._fade_target = t._fade_alpha
 
             self.level_complete_ui = None
 
@@ -835,6 +851,11 @@ class LogicThread(threading.Thread):
         """
         if Portal is None or not self.player:
             return
+
+        # Tick fade transitions for every portal each frame
+        for t in self.things:
+            if isinstance(t, Portal):
+                t.tick_fade(delta)
 
         # Decay all active cooldowns
         for pid in list(self._portal_cooldowns):

@@ -868,6 +868,7 @@ class BaseRenderer:
             if instance_textures:
                 tex_id = instance_textures.get(id(thing))
 
+
             if tex_id is None:
                 class_name = thing.__class__.__name__
                 tex_id = sprite_textures.get(class_name)
@@ -878,6 +879,24 @@ class BaseRenderer:
                     elif isinstance(thing, LogicCamera):
                         tex_id = self.load_texture('logic_camera.png', 'sprites')
                         if tex_id: self.sprite_textures['LogicCamera'] = tex_id
+
+                    elif isinstance(thing, Pickup):
+                        sprite_path = thing.get_sprite_path()
+                        if sprite_path:
+                            subfolder = os.path.dirname(sprite_path.replace('assets/', '', 1))
+                            filename = os.path.basename(sprite_path)
+                            tex_id = self.load_texture(filename, subfolder)
+                            if tex_id:
+                                sprite_textures[class_name] = tex_id
+                    elif isinstance(thing, Monster):
+                        sprite_path = thing.get_sprite_path()
+                        if sprite_path:
+                            subfolder = os.path.dirname(sprite_path.replace('assets/', '', 1))
+                            filename = os.path.basename(sprite_path)
+                            tex_id = self.load_texture(filename, subfolder)
+                            if tex_id:
+                                sprite_textures[class_name] = tex_id
+
                     else:
                         tex_id = sprite_textures.get(class_name)
 
@@ -1566,27 +1585,42 @@ class BaseRenderer:
             name = p.properties.get('name', '')
             if name:
                 by_name[name] = p
-        rendered_pairs = set()
         proj_ptr = glm.value_ptr(projection)
         stencil_id = 1
         for portal_a in portal_things:
-            if not portal_a.is_active():
+            # Render while any opacity remains (covers both fading-in and fading-out)
+            fade_a = getattr(portal_a, '_fade_alpha', 1.0)
+            if fade_a <= 0.01:
                 continue
             target_name = portal_a.properties.get('portal_target', '')
             if not target_name:
                 continue
             portal_b = by_name.get(target_name)
-            if portal_b is None or not portal_b.is_active():
+            if portal_b is None:
                 continue
-            pair_key = frozenset({id(portal_a), id(portal_b)})
-            if pair_key in rendered_pairs:
-                continue
-            rendered_pairs.add(pair_key)
+
+            a_direction = portal_a.properties.get('portal_direction', 'both')
+
+            # Forward: portal_a sees out of portal_b (render B's view into A's aperture)
+            render_forward = a_direction in ('forward', 'both')
+            # Reverse: portal_b sees out of portal_a (render A's view into B's aperture)
+            render_reverse = a_direction in ('reverse', 'both')
+
             if stencil_id > self.MAX_PORTALS:
                 break
-            self._draw_one_portal(portal_a, portal_b, projection, proj_ptr, main_view, camera_pos,
-                                  brushes, things, lights, config, draw_scene_fn, stencil_id)
-            stencil_id += 1
+
+            if render_forward:
+                self._draw_one_portal(portal_a, portal_b, projection, proj_ptr, main_view, camera_pos,
+                                      brushes, things, lights, config, draw_scene_fn, stencil_id)
+                stencil_id += 1
+                if stencil_id > self.MAX_PORTALS:
+                    break
+
+            if render_reverse:
+                self._draw_one_portal(portal_b, portal_a, projection, proj_ptr, main_view, camera_pos,
+                                      brushes, things, lights, config, draw_scene_fn, stencil_id)
+                stencil_id += 1
+
         gl.glDisable(gl.GL_STENCIL_TEST)
         gl.glStencilMask(0xFF)
         gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
@@ -1597,6 +1631,8 @@ class BaseRenderer:
                          brushes, things, lights, config, draw_scene_fn, stencil_id):
         corners_a = portal_a.get_corners_world()
         view_ptr = glm.value_ptr(main_view)
+        # Current rendered opacity — drives the fade-in/out overlay and rim brightness
+        fade_a = getattr(portal_a, '_fade_alpha', 1.0)
         gl.glDisable(gl.GL_CULL_FACE)
         # mask pass
         gl.glEnable(gl.GL_STENCIL_TEST)
@@ -1655,7 +1691,11 @@ class BaseRenderer:
         gl.glStencilMask(0xFF)
         # rim glow (border only)
         if portal_a.properties.get('show_rim', True):
-            gl.glDisable(gl.GL_STENCIL_TEST)
+            # FIX: Keep stencil test ON — only draw where portal mask is
+            gl.glEnable(gl.GL_STENCIL_TEST)
+            gl.glStencilFunc(gl.GL_EQUAL, stencil_id, 0xFF)
+            gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
+            gl.glStencilMask(0x00)  # Don't write to stencil during rim
             gl.glEnable(gl.GL_BLEND)
             gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE)
             raw_col = portal_a.properties.get('color', [255,255,255])
@@ -1665,16 +1705,36 @@ class BaseRenderer:
             gl.glUseProgram(self._portal_rim_shader)
             gl.glUniformMatrix4fv(self._portal_rim_proj_loc, 1, gl.GL_FALSE, proj_ptr)
             gl.glUniformMatrix4fv(self._portal_rim_view_loc, 1, gl.GL_FALSE, view_ptr)
-            gl.glUniform4f(self._portal_rim_color_loc, r, g, b, 0.55)
+            gl.glUniform4f(self._portal_rim_color_loc, r, g, b, 0.55 * fade_a)
             gl.glBindVertexArray(self._portal_quad_vao)
             gl.glDrawArrays(gl.GL_LINE_LOOP, 0, 4)
             gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+            gl.glDisable(gl.GL_BLEND)
+        # Fade overlay: filled black quad over the aperture, alpha = 1 − fade_a.
+        # During fade-in the aperture reveals from black; during fade-out it returns to black.
+        if fade_a < 0.999:
+            gl.glEnable(gl.GL_STENCIL_TEST)
+            gl.glStencilFunc(gl.GL_EQUAL, stencil_id, 0xFF)
+            gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
+            gl.glStencilMask(0x00)
+            gl.glEnable(gl.GL_BLEND)
+            gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+            self._portal_upload_quad(corners_a)
+            gl.glUseProgram(self._portal_rim_shader)
+            gl.glUniformMatrix4fv(self._portal_rim_proj_loc, 1, gl.GL_FALSE, proj_ptr)
+            gl.glUniformMatrix4fv(self._portal_rim_view_loc, 1, gl.GL_FALSE, view_ptr)
+            gl.glUniform4f(self._portal_rim_color_loc, 0.0, 0.0, 0.0, 1.0 - fade_a)
+            gl.glBindVertexArray(self._portal_quad_vao)
+            gl.glDrawArrays(gl.GL_TRIANGLE_FAN, 0, 4)
             gl.glDisable(gl.GL_BLEND)
         gl.glDisable(gl.GL_STENCIL_TEST)
         gl.glBindVertexArray(0)
 
     def _portal_upload_quad(self, corners):
+        # corners should be a list of 4 [x,y,z] points
         vdata = np.array(corners, dtype=np.float32).flatten()
+        # Debug: print the order to verify it's not crossing
+        # print("Portal corners:", corners)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_quad_vbo)
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, vdata.nbytes, vdata)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
