@@ -341,7 +341,7 @@ class QtGameView(QOpenGLWidget):
         self._face_mode_bot_width = QFontMetrics(self._face_mode_font_bot).horizontalAdvance(
             "Press ESC to cancel")
         self._cached_death_title_width = QFontMetrics(self._death_title_font).horizontalAdvance(
-            "YOU DIED")
+            "DIED")
         self._cached_death_sub_width = QFontMetrics(self._death_sub_font).horizontalAdvance(
             "Press Escape to return to the editor")
 
@@ -1159,9 +1159,9 @@ class QtGameView(QOpenGLWidget):
         title_x = (w - self._cached_death_title_width) // 2
         title_y = h // 2 - 20
         painter.setPen(QColor(60, 0, 0, 220))
-        painter.drawText(title_x + 3, title_y + 3, "YOU DIED")
+        painter.drawText(title_x + 3, title_y + 3, "DIED")
         painter.setPen(QColor(255, 60, 60))
-        painter.drawText(title_x, title_y, "YOU DIED")
+        painter.drawText(title_x, title_y, "DIED")
         painter.setFont(self._death_sub_font)
         sub_x = (w - self._cached_death_sub_width) // 2
         sub_y = title_y + 60
