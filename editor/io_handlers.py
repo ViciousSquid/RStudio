@@ -808,23 +808,29 @@ def register_all_input_handlers(io_manager: IOManager):
     # ==========================================================================
 
     def portal_enable(entity, param, logic):
-        """Activate the portal — it will render and teleport entities."""
+        """Activate the portal — fades it in."""
         entity.properties['active'] = True
+        if hasattr(entity, '_fade_target'):
+            entity._fade_target = 1.0        # fade in
         name = entity.properties.get('name', 'unnamed')
         debug_log('IO', f"Portal '{name}' enabled")
         logic.io_manager.fire_output(entity, 'OnEnabled')
 
     def portal_disable(entity, param, logic):
-        """Deactivate the portal."""
+        """Deactivate the portal — fades it out."""
         entity.properties['active'] = False
+        if hasattr(entity, '_fade_target'):
+            entity._fade_target = 0.0        # fade out
         name = entity.properties.get('name', 'unnamed')
         debug_log('IO', f"Portal '{name}' disabled")
         logic.io_manager.fire_output(entity, 'OnDisabled')
 
     def portal_toggle(entity, param, logic):
-        """Toggle portal active state."""
+        """Toggle portal active state with fade."""
         was_active = entity.properties.get('active', False)
         entity.properties['active'] = not was_active
+        if hasattr(entity, '_fade_target'):
+            entity._fade_target = 1.0 if entity.properties['active'] else 0.0
         name = entity.properties.get('name', 'unnamed')
         state = "enabled" if entity.properties['active'] else "disabled"
         debug_log('IO', f"Portal '{name}' toggled → {state}")

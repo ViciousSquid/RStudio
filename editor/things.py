@@ -1128,6 +1128,9 @@ class Portal(Thing):
     # Transit cooldown prevents rapid back-and-forth oscillation (seconds).
     TRANSIT_COOLDOWN = 0.5
 
+    # Duration of a full fade-in or fade-out transition (seconds).
+    FADE_DURATION = 0.35
+
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties['type'] = 'portal'
@@ -1145,6 +1148,12 @@ class Portal(Thing):
 
         # Runtime state
         self.properties.setdefault('active', True)
+
+        # Portal directionality: controls which way the portal renders
+        # "forward"  = This portal sees out of its target (one-way)
+        # "reverse"  = Target portal sees out of this one (one-way)
+        # "both"     = Both directions render (default)
+        self.properties.setdefault('portal_direction', 'both')
 
         # Visual rim
         self.properties.setdefault('color',    [255, 255, 255])
@@ -1164,6 +1173,13 @@ class Portal(Thing):
         self._transit_cooldown = 0.0
         # Last signed distance of player from this portal's plane (for edge detection)
         self._last_player_side = None
+
+        # Fade state (runtime only, never serialised to map JSON).
+        # _fade_alpha: current rendered opacity 0.0 (invisible) → 1.0 (fully visible)
+        # _fade_target: opacity we are animating toward
+        _start_active = self.is_active()
+        self._fade_alpha: float = 1.0 if _start_active else 0.0
+        self._fade_target: float = self._fade_alpha
 
     # ── Geometry helpers ──────────────────────────────────────────────────────
 
@@ -1240,6 +1256,16 @@ class Portal(Thing):
             [px - rx * w2, py + h2, pz - rz * w2],
         ]
 
+    def tick_fade(self, delta: float) -> None:
+        """Advance _fade_alpha toward _fade_target.  Called every logic tick."""
+        if self._fade_alpha == self._fade_target:
+            return
+        step = delta / max(self.FADE_DURATION, 0.001)
+        if self._fade_target > self._fade_alpha:
+            self._fade_alpha = min(self._fade_target, self._fade_alpha + step)
+        else:
+            self._fade_alpha = max(self._fade_target, self._fade_alpha - step)
+
     def is_active(self) -> bool:
         v = self.properties.get('active', True)
         if isinstance(v, bool):
@@ -1265,15 +1291,19 @@ class Portal(Thing):
         name = (input_name or '').lower().strip()
         if name == 'enable':
             self.properties['active'] = True
+            self._fade_target = 1.0          # fade in
             if logic and logic.io_manager:
                 logic.io_manager.fire_output(self, 'OnActivate')
         elif name == 'disable':
             self.properties['active'] = False
+            self._fade_target = 0.0          # fade out
             if logic and logic.io_manager:
                 logic.io_manager.fire_output(self, 'OnDeactivate')
         elif name == 'toggle':
-            self.properties['active'] = not self.is_active()
-            ev = 'OnActivate' if self.is_active() else 'OnDeactivate'
+            new_active = not self.is_active()
+            self.properties['active'] = new_active
+            self._fade_target = 1.0 if new_active else 0.0
+            ev = 'OnActivate' if new_active else 'OnDeactivate'
             if logic and logic.io_manager:
                 logic.io_manager.fire_output(self, ev)
 
