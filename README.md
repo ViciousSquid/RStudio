@@ -43,8 +43,7 @@ Fio explores a unified approach to level editing and runtime simulation:
 
 ### Logic & Gameplay
 - 16 included *example maps*
-- Monsters with pathfinding
-- Node-based pathfinding
+- Monsters with node-based pathfinding
 - Triggers, timers, and logic gates
 - Procedural terrain and liminal level generators
 
