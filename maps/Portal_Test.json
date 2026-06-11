@@ -220,6 +220,7 @@
             "is_trigger": true,
             "trigger_type": "Once",
             "id": "adbc3681-8f2b-4fcd-8d52-e7c5d8a36437",
+            "hidden": false,
             "io_connections": [
                 {
                     "output": "OnStartTouch",
@@ -424,14 +425,14 @@
         {
             "type": "levelchanger",
             "pos": [
-                -32.0,
-                288.0,
-                448.0
+                48,
+                160,
+                464
             ],
             "properties": {
                 "type": "levelchanger",
                 "name": "LevelChanger_1",
-                "target_map": "Simple_Map_Test.json",
+                "target_map": "Simple_Map_Test_Extended.json",
                 "delay": 0.0,
                 "fade_time": 0.5,
                 "show_radius": false,
