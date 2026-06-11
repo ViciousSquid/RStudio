@@ -1,7 +1,11 @@
+# Fio — Liminal World Editor & Procedural Engine
+#    https://github.com/ViciousSquid/Fio
+
 import sys
 import os
 import shutil
 import argparse
+
 
 os.environ["QT_PLUGIN_PATH"] = ""
 os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = ""
