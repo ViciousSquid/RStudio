@@ -42,7 +42,7 @@ Fio explores a unified approach to level editing and runtime simulation:
   -----------------
 
 ### Logic & Gameplay
-- 16 included [example maps](https://github.com/ViciousSquid/Fio/tree/1.2.6.50_Latest/maps)
+- 16 included *example maps*
 - Monsters with pathfinding
 - Node-based pathfinding
 - Triggers, timers, and logic gates
