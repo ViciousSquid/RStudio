@@ -322,6 +322,17 @@ class Light(Thing):
     def get_radius(self):
         return float(self.properties.get('radius', 512.0))
 
+    def get_show_radius(self):
+        val = self.properties.get('show_radius', False)
+        if isinstance(val, str):
+            return val.lower() == 'true'
+        return bool(val)
+
+    def set_show_radius(self, value):
+        self.properties['show_radius'] = bool(value)
+
+    show_radius = property(get_show_radius, set_show_radius)
+
 
 class Speaker(Thing):
     """Sound emitter entity."""

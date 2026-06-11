@@ -151,7 +151,7 @@ class LogoTextBrowser(QTextBrowser):
 
 class DebugConsole(QWidget):
     """
-    Floating debug console window for viewing I/O and entity logic messages.
+    Console window for viewing I/O and entity logic messages.
     """
     command_issued = pyqtSignal(str) 
 

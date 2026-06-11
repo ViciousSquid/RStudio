@@ -14,7 +14,8 @@ from datetime import datetime
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QMessageBox, QFileDialog, QDialog, QWidget, QLabel, QVBoxLayout,
-    QGraphicsOpacityEffect, QInputDialog, QColorDialog, QProgressDialog, QAction, QToolBar, QDockWidget
+    QGraphicsOpacityEffect, QInputDialog, QColorDialog, QProgressDialog, QAction, QToolBar, QDockWidget,
+    QPushButton, QDialogButtonBox, QHBoxLayout
 )
 from PyQt5.QtWidgets import QShortcut
 from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, QRect, QPoint, pyqtSignal
@@ -3502,3 +3503,122 @@ class MainWindow(QMainWindow):
             import traceback
             traceback.print_exc()
             event.accept()
+
+    def open_grid_colours_dialog(self):
+        dialog = GridColoursDialog(self.config, self)
+        if dialog.exec_() == QDialog.Accepted:
+            # Refresh all views that draw a grid
+            self.view_3d.update()
+            self.view_top.update()
+            self.view_side.update()
+            self.view_front.update()
+            self.show_toast("Grid colours updated")
+
+class GridColoursDialog(QDialog):
+    def __init__(self, config, parent=None):
+        super().__init__(parent)
+        self.config = config
+        self.parent_window = parent
+        self.setWindowTitle("Grid Colours")
+        self.setModal(True)
+        self.setMinimumWidth(350)
+
+        # Default colours
+        self.default_colours = {
+            "major": "#5a5a5a",
+            "minor": "#404040",
+            "background": "#2b2b2b"
+        }
+
+        layout = QVBoxLayout(self)
+
+        # Helper to load colour from config with fallback
+        def get_color(key, default_hex):
+            hex_val = config.get("GridColours", key, fallback=default_hex)
+            return QColor(hex_val)
+
+        self.major_colour = get_color("major", self.default_colours["major"])
+        major_row = QHBoxLayout()
+        major_label = QLabel("Major colour:")
+        major_label.setFixedWidth(200)
+        major_row.addWidget(major_label)
+        major_row.addStretch()
+        self.major_btn = QPushButton()
+        self.major_btn.setFixedSize(32, 32)
+        self.major_btn.setStyleSheet(f"background-color: {self.major_colour.name()}; border: 1px solid #888;")
+        self.major_btn.clicked.connect(lambda: self.pick_colour(self.major_btn, "major"))
+        major_row.addWidget(self.major_btn)
+        layout.addLayout(major_row)
+
+        self.minor_colour = get_color("minor", self.default_colours["minor"])
+        minor_row = QHBoxLayout()
+        minor_label = QLabel("Minor colour:")
+        minor_label.setFixedWidth(200)
+        minor_row.addWidget(minor_label)
+        minor_row.addStretch()
+        self.minor_btn = QPushButton()
+        self.minor_btn.setFixedSize(32, 32)
+        self.minor_btn.setStyleSheet(f"background-color: {self.minor_colour.name()}; border: 1px solid #888;")
+        self.minor_btn.clicked.connect(lambda: self.pick_colour(self.minor_btn, "minor"))
+        minor_row.addWidget(self.minor_btn)
+        layout.addLayout(minor_row)
+
+        self.bg_colour = get_color("background", self.default_colours["background"])
+        bg_row = QHBoxLayout()
+        bg_label = QLabel("Background:")
+        bg_label.setFixedWidth(200)
+        bg_row.addWidget(bg_label)
+        bg_row.addStretch()
+        self.bg_btn = QPushButton()
+        self.bg_btn.setFixedSize(32, 32)
+        self.bg_btn.setStyleSheet(f"background-color: {self.bg_colour.name()}; border: 1px solid #888;")
+        self.bg_btn.clicked.connect(lambda: self.pick_colour(self.bg_btn, "background"))
+        bg_row.addWidget(self.bg_btn)
+        layout.addLayout(bg_row)
+
+        layout.addSpacing(12)
+
+        button_row = QHBoxLayout()
+        defaults_btn = QPushButton("Defaults")
+        defaults_btn.clicked.connect(self.reset_to_defaults)
+        button_row.addWidget(defaults_btn)
+        button_row.addStretch()
+        self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        button_row.addWidget(self.button_box)
+        layout.addLayout(button_row)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+    def pick_colour(self, button, key):
+        col = QColorDialog.getColor(button.palette().button().color(), self)
+        if col.isValid():
+            hex_val = col.name()
+            if key == "major":
+                self.major_colour = col
+            elif key == "minor":
+                self.minor_colour = col
+            elif key == "background":
+                self.bg_colour = col
+            button.setStyleSheet(f"background-color: {hex_val}; border: 1px solid #888;")
+
+    def reset_to_defaults(self):
+        """Reset all colours to the default dark theme values."""
+        self.major_colour = QColor(self.default_colours["major"])
+        self.minor_colour = QColor(self.default_colours["minor"])
+        self.bg_colour = QColor(self.default_colours["background"])
+
+        self.major_btn.setStyleSheet(f"background-color: {self.default_colours['major']}; border: 1px solid #888;")
+        self.minor_btn.setStyleSheet(f"background-color: {self.default_colours['minor']}; border: 1px solid #888;")
+        self.bg_btn.setStyleSheet(f"background-color: {self.default_colours['background']}; border: 1px solid #888;")
+
+    def accept(self):
+        # Save to config
+        if not self.config.has_section("GridColours"):
+            self.config.add_section("GridColours")
+        self.config.set("GridColours", "major", self.major_colour.name())
+        self.config.set("GridColours", "minor", self.minor_colour.name())
+        self.config.set("GridColours", "background", self.bg_colour.name())
+        self.parent_window.save_config()
+        super().accept()

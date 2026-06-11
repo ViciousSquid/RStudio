@@ -386,15 +386,18 @@ class View2D(QWidget):
         return visible_bounds.intersects(brush_bounds)
 
     def is_thing_visible(self, thing, visible_bounds, axis1_idx, axis2_idx):
-        """Check if a thing's position is within the visible area (with margin)."""
-        # Get thing position in the 2D view's coordinate system
+        """Check if a thing's position (plus its radius) is within the visible area."""
         pos = thing.pos
         x = pos[axis1_idx]
         y = pos[axis2_idx]
-        
-        # Add margin for sprite size (approximate 32px sprite)
-        margin = 32.0 / self.zoom_factor if self.zoom_factor > 0 else 32.0
-        
+
+        # Include the radius if the thing has one (Light, Speaker, etc.)
+        radius = 0
+        if hasattr(thing, 'get_radius'):
+            radius = thing.get_radius()
+        # Also add a small fixed margin for sprites
+        margin = max(32.0, radius) / self.zoom_factor if self.zoom_factor > 0 else 32.0
+
         point_rect = QRectF(x - margin, y - margin, margin * 2, margin * 2)
         return visible_bounds.intersects(point_rect)
 
@@ -434,7 +437,9 @@ class View2D(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(50, 50, 50))
+        # Use the custom grid background colour (or fallback to dark grey)
+        bg_hex = self.main_window.config.get('GridColours', 'background', fallback='#2b2b2b')
+        painter.fillRect(self.rect(), QColor(bg_hex))
         
         visible_bounds = self.get_visible_world_bounds()
         if visible_bounds.width() <= 0 or visible_bounds.height() <= 0:
@@ -729,9 +734,14 @@ class View2D(QWidget):
         if hasattr(self.editor, 'view_3d') and self.editor.view_3d.play_mode:
             return
             
-        grid_color = QColor(70, 70, 70)
-        thick_grid_color = QColor(90, 90, 90)
-        world_origin_color = QColor(0, 255, 0)
+        config = self.main_window.config
+        minor_hex = config.get("GridColours", "minor", fallback="#404040")
+        major_hex = config.get("GridColours", "major", fallback="#5a5a5a")
+        bg_hex = config.get("GridColours", "background", fallback="#2b2b2b")
+
+        grid_color = QColor(minor_hex)          # thin lines
+        thick_grid_color = QColor(major_hex)    # every 8th line
+        world_origin_color = QColor(0, 255, 0)  # keep origin green
         painter.setPen(QPen(grid_color, 1))
 
         screen_rect = self.rect()
@@ -1187,7 +1197,20 @@ class View2D(QWidget):
                 # 1. Draw Radius
                 if (isinstance(thing, Light) or isinstance(thing, Speaker)) and thing.properties.get('show_radius', False):
                     default_col = [255, 255, 0] if isinstance(thing, Speaker) else [255, 255, 255]
-                    r, g, b = thing.properties.get('colour', default_col)
+                    col = thing.properties.get('colour', default_col)
+
+                    # Normalise to 0-255 integers
+                    if isinstance(col, (list, tuple)) and len(col) >= 3:
+                        r, g, b = col[0], col[1], col[2]
+                        if max(r, g, b) > 1.0:
+                            # Already 0-255 range
+                            r, g, b = int(r), int(g), int(b)
+                        else:
+                            # Convert 0.0-1.0 to 0-255
+                            r, g, b = int(r * 255), int(g * 255), int(b * 255)
+                    else:
+                        r, g, b = 255, 255, 255
+
                     viz_color = QColor(r, g, b, 60)
                     painter.setBrush(QBrush(viz_color))
                     painter.setPen(QPen(viz_color.darker(120), 1))

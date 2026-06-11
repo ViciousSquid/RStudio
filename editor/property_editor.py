@@ -1065,6 +1065,17 @@ class PropertyEditor(QWidget):
                 continue
             if is_pickup and key in ('key_name', 'custom_sprite', 'respawns', 'respawn_time'):
                 continue
+            if isinstance(thing, Light) and key == 'show_radius':
+                # Force boolean checkbox, convert string "True"/"False" to bool
+                bool_val = value
+                if isinstance(value, str):
+                    bool_val = value.lower() == 'true'
+                cb = _make_checkbox("Show Radius", bool_val,
+                                    lambda c, k=key: self.update_object_prop(k, c),
+                                    _Style.CHECKBOX)
+                form.addRow(label_text, cb)
+                self._widgets['light_show_radius_cb'] = cb
+                continue
 
             label_text = "Visible:" if key == 'show_rim' else key.replace('_', ' ').title() + ":"
 
@@ -2378,6 +2389,13 @@ class PropertyEditor(QWidget):
             rot = self.current_object.properties.get('rotation', [0.0, 0.0, 0.0])
             if isinstance(rot, list) and len(rot) > 0:
                 rot[0] = float(value)
+
+        # Force redraw of 2D views when show_radius changes ==========
+        if key == 'show_radius' and isinstance(self.current_object, Light):
+            # The 2D views need a hard refresh to redraw the radius circle
+            for v in ('view_top', 'view_front', 'view_side'):
+                if hasattr(self.editor, v):
+                    getattr(self.editor, v).update()
 
         if not self._populating:
             # Only repaint viewports — do NOT call update_all_ui() here.

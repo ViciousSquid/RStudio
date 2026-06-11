@@ -228,6 +228,13 @@ class Ui_MainWindow(object):
         edit_menu.addAction(QAction('Hide Brush', MainWindow, shortcut='H', triggered=MainWindow.hide_selected_brush))
         edit_menu.addAction(QAction('Unhide All Brushes', MainWindow, shortcut='Shift+H', triggered=MainWindow.unhide_all_brushes))
 
+        edit_menu.addSeparator()
+        grid_colours_action = QAction('Grid colours…', MainWindow)
+        grid_colours_action.setToolTip("Customise grid line colours")
+        grid_colours_action.triggered.connect(MainWindow.open_grid_colours_dialog)
+        edit_menu.addAction(grid_colours_action)
+        MainWindow.grid_colours_action = grid_colours_action
+
         view_menu.addActions([
             MainWindow.scene_hierarchy_dock.toggleViewAction(),
             MainWindow.view_3d_dock.toggleViewAction(), 
@@ -298,13 +305,6 @@ class Ui_MainWindow(object):
         toggle_triggers_action.setChecked(MainWindow.view_3d.show_triggers_as_solid)
         toggle_triggers_action.triggered.connect(MainWindow.toggle_trigger_display)
         view_menu.addAction(toggle_triggers_action)
-
-        debug_console_action = QAction('Debug Console', MainWindow, checkable=True)
-        debug_console_action.setShortcut('`')  # Tilde/backtick
-        debug_console_action.setToolTip("Toggle I/O debug console (~)")
-        debug_console_action.triggered.connect(MainWindow.toggle_debug_console)
-        view_menu.addAction(debug_console_action)
-        MainWindow.debug_console_action = debug_console_action  # Store reference
 
         modern_action = QAction('Modern (Shaders)', MainWindow, checkable=True, checked=True)
         immediate_action = QAction('Immediate (Legacy)', MainWindow, checkable=True)
