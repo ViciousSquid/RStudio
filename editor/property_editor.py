@@ -100,8 +100,18 @@ def _make_checkbox(label: str, checked: bool, callback, style=None) -> QCheckBox
     return cb
 
 
-def _make_combo(items, current, callback=None, editable=False, tooltip="") -> QComboBox:
-    c = QComboBox()
+class ClickableComboBox(QComboBox):
+    """QComboBox that opens its dropdown on any click, not just the arrow."""
+
+    def mousePressEvent(self, event):
+        # Always show popup on left-click anywhere in the combo
+        if event.button() == Qt.LeftButton:
+            self.showPopup()
+        super().mousePressEvent(event)
+
+
+def _make_combo(items, current, callback=None, editable=False, tooltip="") -> "ClickableComboBox":
+    c = ClickableComboBox()
     c.setEditable(editable)
     c.addItems(items)
     if current in items:
@@ -139,7 +149,6 @@ class ClickableLineEdit(QLineEdit):
         if event.button() == Qt.LeftButton and not self.text().strip():
             self.clicked_while_empty.emit()
         super().mousePressEvent(event)
-
 
 class PropertyEditor(QWidget):
     def __init__(self, editor):
@@ -942,7 +951,7 @@ class PropertyEditor(QWidget):
         cb = _make_checkbox("Attach to Mover", is_attached, None)
         form.addRow("", cb)
 
-        combo = QComboBox()
+        combo = ClickableComboBox()
         combo.addItem("(none)")
         for brush in self.editor.state.brushes:
             if brush.get('is_mover'):
@@ -994,7 +1003,7 @@ class PropertyEditor(QWidget):
     def _build_portal_target(self, form, thing):
         current = thing.properties.get('portal_target', '')
         others = [t for t in self.editor.state.things if isinstance(t, Portal) and t is not thing]
-        combo = QComboBox()
+        combo = ClickableComboBox()
         combo.addItem("(none)")
         for p in others:
             combo.addItem(p.properties.get('name', ''))
@@ -1134,7 +1143,7 @@ class PropertyEditor(QWidget):
         combo = _make_combo(['human', 'flying'], thing.properties.get('monster_type', 'human'))
         form.addRow("Monster Type:", combo)
 
-        variant_combo = QComboBox()
+        variant_combo = ClickableComboBox()
         variant_combo.setToolTip("Sprite variant — selects an alternate sprite subfolder.")
         self._widgets['monster_variant_combo'] = variant_combo
 
@@ -1334,7 +1343,7 @@ class PropertyEditor(QWidget):
 
         # Next node
         my_name = thing.properties.get('name', '') or ''
-        next_combo = QComboBox()
+        next_combo = ClickableComboBox()
         next_combo.addItem("(none)")
         for t in self.editor.state.things:
             if isinstance(t, PathNode):
@@ -1382,7 +1391,7 @@ class PropertyEditor(QWidget):
         form.setContentsMargins(8, 8, 8, 8)
 
         # Path target
-        combo = QComboBox()
+        combo = ClickableComboBox()
         combo.setEditable(True)
         combo.addItem("(none)")
         for t in self.editor.state.things:
@@ -1441,7 +1450,7 @@ class PropertyEditor(QWidget):
         form.addRow("Spawn Type:", spawn_combo)
 
         # Target node
-        node_combo = QComboBox()
+        node_combo = ClickableComboBox()
         node_combo.setEditable(True)
         node_combo.addItem("(none)")
         for t in self.editor.state.things:
@@ -1485,7 +1494,7 @@ class PropertyEditor(QWidget):
                                   lambda t: spawn_props.update({'monster_type': t}))
         mform.addRow("Monster Type:", mtype_combo)
 
-        variant_combo = QComboBox()
+        variant_combo = ClickableComboBox()
         variant_combo.setToolTip("Sprite variant")
         mform.addRow("Variant:", variant_combo)
 
@@ -1589,7 +1598,7 @@ class PropertyEditor(QWidget):
 
         # Team
         thing.properties.setdefault('team', '')
-        team_combo = QComboBox()
+        team_combo = ClickableComboBox()
         team_combo.setEditable(True)
         team_combo.addItems(['(none)', '1', '2', '3', 'player'])
         cur = str(thing.properties.get('team', ''))
@@ -1662,7 +1671,7 @@ class PropertyEditor(QWidget):
         patrol_cb.setToolTip("Monster walks toward selected PathNode when player is not in sight")
         aform.addRow("", patrol_cb)
 
-        patrol_combo = QComboBox()
+        patrol_combo = ClickableComboBox()
         patrol_combo.addItem("(none)")
         mtype = str(thing.properties.get('monster_type', 'human')).lower()
         for t in self.editor.state.things:
@@ -1787,7 +1796,7 @@ class PropertyEditor(QWidget):
     # Shared small helpers
     # ────────────────────────────
     def _pathnode_combo(self, current_value):
-        combo = QComboBox()
+        combo = ClickableComboBox()
         combo.setEditable(True)
         combo.addItem("(none)")
         for t in self.editor.state.things:
