@@ -18,12 +18,12 @@ from PyQt5.QtWidgets import (
     QPushButton, QDialogButtonBox, QHBoxLayout
 )
 from PyQt5.QtWidgets import QShortcut
-from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, QRect, QPoint, pyqtSignal
+from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, QPoint, pyqtSignal
 from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor, QIcon
 
-from editor.things import Light, PlayerStart, Thing, Pickup, Monster, Model, update_all_counters_from_entities
+from editor.things import Light, PlayerStart, Model, update_all_counters_from_entities
 from editor.SettingsWindow import SettingsWindow
-from editor.ui import Ui_MainWindow, GenerateTilemapDialog
+from editor.ui import Ui_MainWindow
 from engine.constants import TILE_SIZE, WALL_TILE, FLOOR_TILE
 from editor.view_2d import View2D
 from editor.editor_state import EditorState
@@ -164,7 +164,7 @@ class MainWindow(QMainWindow):
         self.keys_pressed = set()
         self._brush_clipboard = None  # For Ctrl+C / Ctrl+V brush copy-paste
         self.grid_visible = True
-        self.preview_timer = QTimer()
+        self.preview_timer = QTimer(self)  # OPTIMIZATION: Added parent=self for proper cleanup
         self.preview_timer.timeout.connect(self.update_mover_preview)
         self.preview_data = {} 
         self.ui = Ui_MainWindow()
@@ -252,11 +252,11 @@ class MainWindow(QMainWindow):
         self.autosave_timer.timeout.connect(self.autosave)
         self.setup_autosave()
 
-        # Play button state sync timer — ensures button always matches play_mode
-        self._play_button_sync_timer = QTimer(self)
-        self._play_button_sync_timer.timeout.connect(self._sync_play_button_state)
-        self._play_button_sync_timer.start(200)  # Check every 200ms
-        self._last_play_mode_state = False
+        # REMOVED: Redundant 200ms play button sync timer.
+        # All code paths that change play_mode already call update_play_button_color() directly:
+        #   - enter_play_mode() → update_play_button_color()
+        #   - _exit_play_mode() → update_play_button_color()
+        #   - load_level_file() → enter_play_mode() → update_play_button_color()
 
         # Overlay management for Properties dock
         self._original_properties_widget = None   # the widget that was replaced
@@ -1082,14 +1082,9 @@ class MainWindow(QMainWindow):
         elif hasattr(self.scene_hierarchy, 'scroll_to_item'):
             self.scene_hierarchy.scroll_to_item(obj)
 
-    def _sync_play_button_state(self):
-        """Timer-based safety check: ensure play button matches actual play_mode state."""
-        if not hasattr(self, 'play_button') or not hasattr(self, 'view_3d'):
-            return
-        current_play_mode = getattr(self.view_3d, 'play_mode', False)
-        if current_play_mode != self._last_play_mode_state:
-            self._last_play_mode_state = current_play_mode
-            self.update_play_button_color()
+    # REMOVED: _sync_play_button_state() method and _last_play_mode_state attribute.
+    # The 200ms timer was redundant because ALL code paths that change play_mode
+    # already call update_play_button_color() directly.
 
     def update_play_button_color(self):
         """Update the Play button color based on current mode."""

@@ -72,7 +72,18 @@ class View2D(QWidget):
         self.animation_timer = QTimer(self)
         self.animation_timer.timeout.connect(self._update_connection_animations)
         self.animation_timer.start(16)
-        
+
+        # ---- Camera tracking for smooth viewcone updates ----
+        # Watches camera position/yaw/pitch and repaints 2D views only when changed
+        self._camera_tracking_timer = QTimer(self)
+        self._camera_tracking_timer.setInterval(16)  # ~60 FPS check
+        self._camera_tracking_timer.timeout.connect(self._check_camera_changed)
+        self._camera_tracking_timer.start()
+        # Cached camera state for change detection
+        self._last_camera_pos = None
+        self._last_camera_yaw = None
+        self._last_camera_pitch = None
+
         # CTRL+drag connection state
         self.is_connecting = False
         self.connection_source = None  # The trigger brush being connected
@@ -1684,6 +1695,45 @@ class View2D(QWidget):
                     for i in range(len(points) - 1):
                         painter.drawLine(points[i], points[i + 1])
     
+    def _check_camera_changed(self):
+        """
+        Check if the 3D camera has moved/rotated since last frame.
+        If so, schedule a repaint of this 2D view (only the camera indicator).
+        This runs at ~60 FPS but only repaints when the camera actually changes,
+        keeping CPU usage minimal while providing smooth viewcone updates.
+        """
+        if not self.isVisible():
+            return
+
+        camera = self.editor.view_3d.camera
+
+        # Get current camera state
+        current_pos = (float(camera.pos.x), float(camera.pos.y), float(camera.pos.z))
+        current_yaw = float(camera.yaw)
+        current_pitch = float(camera.pitch)
+
+        # Check if anything changed (with small epsilon for float comparison)
+        EPSILON = 0.01
+        changed = False
+
+        if self._last_camera_pos is None:
+            changed = True
+        else:
+            if any(abs(current_pos[i] - self._last_camera_pos[i]) > EPSILON for i in range(3)):
+                changed = True
+            if abs(current_yaw - self._last_camera_yaw) > EPSILON:
+                changed = True
+            if abs(current_pitch - self._last_camera_pitch) > EPSILON:
+                changed = True
+
+        if changed:
+            # Update cache
+            self._last_camera_pos = current_pos
+            self._last_camera_yaw = current_yaw
+            self._last_camera_pitch = current_pitch
+            # Schedule repaint - Qt will coalesce multiple update() calls
+            self.update()
+
     def draw_camera(self, painter):
         """Optimized camera drawing with early exit for off-screen cameras."""
         camera = self.editor.view_3d.camera
