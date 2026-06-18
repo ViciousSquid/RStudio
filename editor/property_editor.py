@@ -101,13 +101,17 @@ def _make_checkbox(label: str, checked: bool, callback, style=None) -> QCheckBox
 
 
 class ClickableComboBox(QComboBox):
-    """QComboBox that opens its dropdown on any click, not just the arrow."""
+    """QComboBox that toggles its dropdown on any click, not just the arrow."""
 
     def mousePressEvent(self, event):
-        # Always show popup on left-click anywhere in the combo
         if event.button() == Qt.LeftButton:
-            self.showPopup()
-        super().mousePressEvent(event)
+            # Toggle popup: if already open, hide it; otherwise show it
+            if self.view().isVisible():
+                self.hidePopup()
+            else:
+                self.showPopup()
+        else:
+            super().mousePressEvent(event)
 
 
 def _make_combo(items, current, callback=None, editable=False, tooltip="") -> "ClickableComboBox":

@@ -26,6 +26,72 @@ except ImportError:
     IO_AVAILABLE = False
 
 
+# ── Random name generator for unnamed entities ──
+_ADJECTIVES = [
+    "red", "blue", "green", "dark", "bright", "old", "new", "big", "small",
+    "fast", "slow", "hot", "cold", "wild", "calm", "sharp", "soft", "hard",
+    "deep", "high", "low", "near", "far", "left", "right", "front", "back",
+    "inner", "outer", "upper", "lower", "main", "side", "alpha", "beta",
+    "gamma", "delta", "prime", "mega", "super", "ultra", "hyper", "nano"
+]
+
+_NOUNS = [
+    "door", "gate", "lift", "mover", "block", "panel", "plate", "switch",
+    "button", "lever", "valve", "hatch", "cover", "shield", "barrier",
+    "wall", "floor", "ceiling", "ramp", "stairs", "bridge", "tunnel",
+    "box", "crate", "chest", "locker", "cabinet", "shelf", "rack",
+    "light", "lamp", "beacon", "torch", "flare", "spark", "glow",
+    "unit", "node", "hub", "core", "center", "point", "spot", "zone",
+    "sector", "region", "area", "cell", "chunk", "piece", "part"
+]
+
+
+def _generate_random_name() -> str:
+    """Generate a random entity name like 'red_door_42'."""
+    import random
+    return f"{random.choice(_ADJECTIVES)}_{random.choice(_NOUNS)}_{random.randint(1, 999)}"
+
+
+def _ensure_entity_named(entity) -> str:
+    """
+    Ensure an entity has a non-empty name. If unnamed, assign a random name
+    and return it. Works for both brushes (dicts) and things (objects).
+    """
+    if isinstance(entity, dict):
+        name = entity.get('name', '')
+        if not name:
+            name = _generate_random_name()
+            entity['name'] = name
+        return name
+    elif hasattr(entity, 'properties'):
+        name = entity.properties.get('name', '')
+        if not name:
+            name = _generate_random_name()
+            entity.properties['name'] = name
+        return name
+    elif hasattr(entity, 'name'):
+        if not entity.name:
+            entity.name = _generate_random_name()
+        return entity.name
+    return _generate_random_name()
+
+
+
+class ClickableComboBox(QComboBox):
+    """QComboBox that toggles its dropdown on any click, not just the arrow."""
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            # Toggle: if popup is visible, hide it; otherwise show it
+            if self.view().isVisible():
+                self.hidePopup()
+            else:
+                self.showPopup()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
 class IOConnectionDialog(QDialog):
     """Dialog for adding/editing a single I/O connection."""
     
@@ -63,25 +129,48 @@ class IOConnectionDialog(QDialog):
         # Target entity name
         self.target_edit = QLineEdit()
         self.target_edit.setPlaceholderText("Target entity name...")
-        
+
         all_names = self._get_all_entity_names()
         completer = QCompleter(all_names)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
         self.target_edit.setCompleter(completer)
-        
+
         target_row = QHBoxLayout()
         target_row.addWidget(self.target_edit)
-        pick_btn = QPushButton("Pick")
-        pick_btn.setFixedWidth(50)
-        pick_btn.setToolTip("Click an entity in the viewport")
-        pick_btn.clicked.connect(self._start_pick_mode)
-        #target_row.addWidget(pick_btn)
-        
+
+        # Dropdown button to show all valid entities
+        dropdown_btn = QPushButton("▼")
+        dropdown_btn.setFixedWidth(28)
+        dropdown_btn.setToolTip("Click to show all entities in the level")
+        dropdown_btn.clicked.connect(self._show_target_dropdown)
+        target_row.addWidget(dropdown_btn)
+
         form_layout.addRow("Target Entity:", target_row)
         
         # Input selector
-        self.input_combo = QComboBox()
+        self.input_combo = ClickableComboBox()
         self.input_combo.setEditable(True)
+        self.input_combo.setStyleSheet("""
+            QComboBox {
+                padding-right: 30px;
+            }
+            QComboBox::drop-down {
+                width: 30px;
+                border: none;
+                background-color: #F08000;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                width: 0px;
+                height: 0px;
+                border-left: 8px solid transparent;
+                border-right: 8px solid transparent;
+                border-top: 12px solid white;
+            }
+            QComboBox::down-arrow:hover {
+                border-top: 12px solid #eeeeee;
+            }
+        """)
         self.target_edit.textChanged.connect(self._update_input_options)
         form_layout.addRow("Target Input:", self.input_combo)
         
@@ -155,6 +244,89 @@ class IOConnectionDialog(QDialog):
             inputs = get_input_names(target_type)
             self.input_combo.addItems(inputs)
     
+    def _show_target_dropdown(self):
+        """Show a menu with all door/mover brushes and all entities (things) in the level.
+
+        Unnamed entities will be auto-named when selected so they can be targeted.
+        """
+        self._target_menu = QMenu(self)
+        menu = self._target_menu
+
+        door_movers = []
+        entities = []
+
+        if self.editor_state:
+            # Collect door and mover brushes (with or without names)
+            for brush in self.editor_state.brushes:
+                if brush.get('is_door') or brush.get('is_mover'):
+                    name = brush.get('name', '')
+                    btype = 'door' if brush.get('is_door') else 'mover'
+                    display = name if name else f"<unnamed {btype}>"
+                    door_movers.append((display, brush, name, btype))
+
+            # Collect all thing entities (with or without names)
+            for thing in self.editor_state.things:
+                name = thing.properties.get('name', '')
+                ttype = thing.properties.get('type', 'thing')
+                display = name if name else f"<unnamed {ttype}>"
+                entities.append((display, thing, name, ttype))
+
+        # Sort each group by display name
+        door_movers.sort(key=lambda x: x[0].lower())
+        entities.sort(key=lambda x: x[0].lower())
+
+        has_items = False
+
+        # Door/Mover brushes section
+        if door_movers:
+            has_items = True
+            menu.addSection("DOOR / MOVER BRUSHES")
+            for display, entity, current_name, btype in door_movers:
+                action = QAction(f"{display}  [{btype}]", self)
+                # Pass the entity reference so we can auto-name it if unnamed
+                from functools import partial
+                action.triggered.connect(partial(self._set_target_from_entity, entity))
+                menu.addAction(action)
+
+        # Separator between sections
+        if door_movers and entities:
+            menu.addSeparator()
+
+        # Entities (things) section
+        if entities:
+            has_items = True
+            menu.addSection("ENTITIES (THINGS)")
+            for display, entity, current_name, ttype in entities:
+                action = QAction(f"{display}  [{ttype}]", self)
+                from functools import partial
+                action.triggered.connect(partial(self._set_target_from_entity, entity))
+                menu.addAction(action)
+
+        if not has_items:
+            no_action = QAction("No door/mover brushes or entities in level", self)
+            no_action.setEnabled(False)
+            menu.addAction(no_action)
+
+        # Position menu below the button
+        sender = self.sender()
+        if sender:
+            menu.exec_(sender.mapToGlobal(sender.rect().bottomLeft()))
+
+    def _set_target_from_dropdown(self, name):
+        """Set the target entity name from the dropdown selection (legacy)."""
+        self.target_edit.setText(name)
+        self.target_edit.editingFinished.emit()
+        # Trigger input options update
+        self._update_input_options(name)
+
+    def _set_target_from_entity(self, entity):
+        """Set the target from an entity reference, auto-naming if unnamed."""
+        name = _ensure_entity_named(entity)
+        self.target_edit.setText(name)
+        self.target_edit.editingFinished.emit()
+        # Trigger input options update
+        self._update_input_options(name)
+
     def _start_pick_mode(self):
         QMessageBox.information(
             self, "Pick Mode",
