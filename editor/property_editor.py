@@ -470,6 +470,36 @@ class PropertyEditor(QWidget):
         form.addRow("Trigger Type:", type_combo)
         self._widgets['trigger_type_combo'] = type_combo
 
+        # Activation mode: touch fires on entry; use requires E press while inside
+        activation_combo = _make_combo(
+            ['touch', 'use'],
+            brush.get('trigger_activation', 'touch'),
+            tooltip="touch — fires when player walks inside\nuse — fires when player presses E while inside"
+        )
+        form.addRow("Activation:", activation_combo)
+        self._widgets['trigger_activation_combo'] = activation_combo
+
+        # Use Label: custom HUD prompt shown when activation == 'use'
+        use_label_lbl = QLabel("Use Label:")
+        use_label_input = QLineEdit(brush.get('use_label', ''))
+        use_label_input.setPlaceholderText("Activate")
+        use_label_input.editingFinished.connect(
+            lambda: self.update_object_prop('use_label', use_label_input.text().strip()))
+        is_use_mode = brush.get('trigger_activation', 'touch') == 'use'
+        use_label_lbl.setVisible(is_use_mode)
+        use_label_input.setVisible(is_use_mode)
+        form.addRow(use_label_lbl, use_label_input)
+        self._widgets['trigger_use_label_lbl'] = use_label_lbl
+        self._widgets['trigger_use_label_input'] = use_label_input
+
+        def _on_activation_changed(val):
+            self.update_object_prop('trigger_activation', val)
+            show = (val == 'use')
+            use_label_lbl.setVisible(show)
+            use_label_input.setVisible(show)
+
+        activation_combo.currentTextChanged.connect(_on_activation_changed)
+
         action_combo = _make_combo(['target', 'hurt', 'teleport'],
                                    brush.get('trigger_action', 'target'),
                                    tooltip="target — fire I/O outputs\nhurt — damage player\nteleport — move player to PathNode")
