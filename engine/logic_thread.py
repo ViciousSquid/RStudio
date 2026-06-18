@@ -1004,7 +1004,30 @@ class LogicThread(threading.Thread):
                      min_b.z <= player_pos.z <= max_b.z)
             
             bid = brush.get('id') or i
-            if inside:
+            activation = brush.get('trigger_activation', 'touch').lower()
+
+            if activation == 'use':
+                # Use-activated: behaves like a button — player faces the trigger
+                # from outside and presses E. No need to be inside the volume.
+                t_pos = glm.vec3(brush['pos'])
+                use_radius = float(brush.get('use_radius', 96.0))
+                dist = glm.distance(player_pos, t_pos)
+                if dist < use_radius:
+                    p_forward = glm.vec3(
+                        math.sin(self.player.angle), 0,
+                        math.cos(self.player.angle))
+                    to_trigger = glm.normalize(t_pos - player_pos)
+                    if glm.dot(p_forward, to_trigger) > 0.5:
+                        trigger_type = brush.get('trigger_type', 'multiple').lower()
+                        already_fired = (trigger_type == 'once'
+                                         and bid in self.fired_once_triggers)
+                        if not already_fired:
+                            use_label = brush.get('use_label', '') or 'Activate'
+                            self.current_hud_message = f"[E] {use_label}"
+                            if use_key_pressed:
+                                self._on_trigger_enter(brush, bid)
+            elif inside:
+                # Touch activation (default behaviour)
                 currently_in.add(bid)
                 if bid not in self.player_in_triggers:
                     self._on_trigger_enter(brush, bid)
