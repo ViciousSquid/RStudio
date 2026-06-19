@@ -460,6 +460,7 @@ class GLB:
         self.groups = []
         self.materials = {}
         self.cpu_vertices = None  # np.array of shape (N, 3) for 2D view projection
+        self.cpu_triangles = None  # List of (i0, i1, i2) tuples for wireframe drawing
         self.has_indices = False
 
         loader = GLBLoader()
@@ -545,6 +546,9 @@ class GLB:
 
         # Store cpu_vertices as (N, 3) numpy array for 2D view projection
         self.cpu_vertices = np.array(cpu_verts, dtype=np.float32)
+        
+        # Store flattened triangles for wireframe rendering
+        self.cpu_triangles = loader.get_flattened_triangles()
 
         if not vertices:
             print(f"[GLB] No vertices generated for {self.filepath}")

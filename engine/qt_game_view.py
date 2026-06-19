@@ -28,9 +28,22 @@ from engine.threaded_game_state import ThreadedGameState, RenderState
 from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from editor.debug_console import DebugConsole, get_debug_logger
+from .sysmon import SysMon
 
 # Pygame for gamepad support
 import pygame
+
+# System monitoring (pure Python, no external deps)
+import ctypes
+import os
+import platform
+
+# OpenGL GPU memory query constants
+GL_GPU_MEM_INFO_TOTAL_AVAILABLE_MEM_NVX = 0x9048
+GL_GPU_MEM_INFO_CURRENT_AVAILABLE_MEM_NVX = 0x9049
+GL_GPU_MEM_INFO_DEDICATED_VIDMEM_NVX = 0x9047
+GL_TEXTURE_FREE_MEMORY_ATI = 0x87FC
+GL_RENDERBUFFER_FREE_MEMORY_ATI = 0x87FD
 
 def perspective_projection(fov, aspect, near, far):
     if aspect == 0:
@@ -68,8 +81,8 @@ class QtGameView(QOpenGLWidget):
         self.visibility_system = None
         self.show_visibility_debug = False
         self.grid_visible = True
-        self.dragging_sysmon = False
-        self.sysmon_drag_offset = QPoint(0, 0)
+        self.sysmon = SysMon(self)
+
 
         self.sound_pool = {}
         self._init_sound_system()
@@ -81,15 +94,21 @@ class QtGameView(QOpenGLWidget):
             RENDER_MODE_VERTEX: "Vertex"
         }
 
-        self.sysmon_expanded = False
-        self.sysmon_stats = {
-            'visible_brushes': 0,
-            'visible_tris': 0,
-            'visible_surfaces': 0,
-            'culled_brushes': 0,
-            'culled_tris': 0,
-            'culled_surfaces': 0
-        }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
         self.game_state = ThreadedGameState()
         self.logic_thread: Optional[LogicThread] = None
@@ -102,11 +121,11 @@ class QtGameView(QOpenGLWidget):
         self.mouselook_active = False
         self.last_mouse_pos = QPoint()
 
-        self.debug_mode_active = False
-        self.debug_window_rect = QRect(20, 20, 400, 200)
-        self.frame_times = deque(maxlen=100)
-        self.console_font = QFont("Arial", 9)
-        self.console_font.setStyleHint(QFont.Monospace)
+
+
+
+
+
 
         self._init_hud_caches()
 
@@ -350,7 +369,6 @@ class QtGameView(QOpenGLWidget):
         self._cached_gun_hud = {}
         self._cached_key_pixmaps = {}
         self._cached_key_size = 100
-        self._console_fm = QFontMetrics(self.console_font)
 
         self._key_fallback_cache = {
             'blue_key':   (QColor(50, 100, 200), QPen(QColor(40, 80, 160), 2), QBrush(QColor(50, 100, 200))),
@@ -498,7 +516,7 @@ class QtGameView(QOpenGLWidget):
             self.fps = self.frame_count / fps_elapsed
             self.frame_count = 0
             self.last_fps_time = current_time
-        self.frame_times.append(delta * 1000.0)
+        self.sysmon.record_frame_time(delta * 1000.0)
         self._process_sound_queue()
         if self.use_threading and self.logic_thread:
             keys = set() if self.console_overlay_active else self.editor.keys_pressed
@@ -905,9 +923,11 @@ class QtGameView(QOpenGLWidget):
             if total == 0 and actual_total > 0:
                 pass
             else:
-                self.sysmon_stats['visible_brushes'] = visible
-                self.sysmon_stats['culled_brushes'] = render_state.culled_brushes
-                self.sysmon_stats['total_brushes'] = total
+                self.sysmon.update_stats(
+                    visible_brushes=visible,
+                    culled_brushes=render_state.culled_brushes,
+                    total_brushes=total
+                )
         painter = QPainter(self)
         if self.editor.config.getboolean('Display', 'show_fps', fallback=False):
             self._draw_fps_counter(painter)
@@ -929,8 +949,11 @@ class QtGameView(QOpenGLWidget):
             self._draw_death_screen(painter)
         if self.play_mode and getattr(self, '_cached_level_complete_ui', None):
             self._draw_level_complete_overlay(painter)
-        if self.debug_mode_active:
-            self._draw_window_manager(painter)
+        if self.sysmon.is_active():
+            self.sysmon.draw(
+                painter, self.fps, self.logic_thread, self.renderer,
+                self.editor.state, getattr(self.editor, 'terrain', None)
+            )
         if self.face_mode_active:
             painter.setFont(self._face_mode_font_top)
             ht = self._face_mode_font_top.pointSize() + 6
@@ -1182,101 +1205,10 @@ class QtGameView(QOpenGLWidget):
         painter.drawLine(x + size - 10, mid, x + size - 10, mid + 6)
         painter.drawLine(x + size - 14, mid, x + size - 14, mid + 4)
 
-    def _draw_window_manager(self, painter):
-        bg_color = QColor(20, 20, 25, 235)
-        border_color = QColor(80, 80, 90)
-        header_color = QColor(66, 95, 93)
-        text_color = QColor(220, 220, 220)
-        graph_bg_color = QColor(10, 10, 15, 200)
-        target_height = 240 if self.sysmon_expanded else 30
-        rect = QRect(self.debug_window_rect.x(), self.debug_window_rect.y(),
-                    self.debug_window_rect.width(), target_height)
-        painter.setPen(QPen(border_color, 1))
-        painter.setBrush(QBrush(bg_color))
-        painter.drawRect(rect)
-        header_rect = QRect(rect.x(), rect.y(), rect.width(), 25)
-        painter.fillRect(header_rect, header_color)
-        painter.setPen(QPen(border_color, 1))
-        painter.drawLine(rect.x(), rect.y() + 25, rect.right(), rect.y() + 25)
-        painter.setFont(self.console_font)
-        painter.setPen(QColor(255, 255, 255))
-        painter.drawText(header_rect.adjusted(10, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, "SysMon [F3]")
-        painter.drawText(QRect(rect.right() - 50, rect.y(), 25, 25), Qt.AlignCenter,
-                        "▼" if self.sysmon_expanded else "▶")
-        painter.drawText(QRect(rect.right() - 25, rect.y(), 25, 25), Qt.AlignCenter, "[X]")
-        if not self.sysmon_expanded:
-            return
-        graph_x, graph_y = rect.x() + 5, rect.y() + 30
-        graph_width, graph_height = rect.width() - 10, 50
-        painter.setPen(QPen(border_color, 1))
-        painter.setBrush(QBrush(graph_bg_color))
-        painter.drawRect(graph_x, graph_y, graph_width, graph_height)
-        if len(self.frame_times) > 1:
-            max_ft = max(max(self.frame_times), 16.67)
-            step = graph_width / max(len(self.frame_times) - 1, 1)
-            points = [QPoint(int(graph_x + i * step),
-                            int(graph_y + graph_height - (ft / max_ft) * graph_height))
-                    for i, ft in enumerate(self.frame_times)]
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QBrush(QColor(100, 200, 100, 40)))
-            poly = QPolygon([QPoint(graph_x, graph_y + graph_height)] + points +
-                            [QPoint(points[-1].x(), graph_y + graph_height)])
-            painter.drawPolygon(poly)
-            painter.setPen(QPen(QColor(100, 255, 100), 1))
-            painter.drawPolyline(QPolygon(points))
-        brush_tris = len(self.editor.state.brushes) * 12
-        terrain_total_tris = 0
-        terrain_visible_tris = 0
-        if hasattr(self.editor, 'terrain') and self.editor.terrain is not None:
-            terrain_total_tris = self.editor.terrain.get_tri_count()
-            terrain_visible_tris = self.editor.terrain.total_triangles
-        total_tris = brush_tris + terrain_total_tris
-        visible_tris = (self.renderer.render_stats.visible_tris if self.renderer else 0) + terrain_visible_tris
-        left_margin = rect.x() + 10
-        stats_start_y = graph_y + graph_height + 25
-        line_height = 18
-        current_ft = self.frame_times[-1] if self.frame_times else 0
-        painter.setPen(QColor(255, 255, 255))
-        painter.drawText(left_margin, stats_start_y,
-                        f"Frame: {current_ft:.1f}ms  FPS: {self.fps:.0f}")
-        painter.setPen(text_color)
-        painter.drawText(left_margin, stats_start_y + line_height * 2,
-                        f"Things:   {len(self.editor.state.things)}")
-        painter.drawText(left_margin, stats_start_y + line_height * 3,
-                        f"Draws:    {self.renderer.render_stats.draw_calls if self.renderer else 0}")
-        brush_text = f"Brushes:  {self.sysmon_stats.get('total_brushes', 0)} "
-        painter.drawText(left_margin, stats_start_y + line_height * 4, brush_text)
-        tri_text = f"Tris:     {total_tris} "
-        painter.drawText(left_margin, stats_start_y + line_height * 5, tri_text)
-        fm = self._console_fm
-        painter.setPen(QColor(50, 200, 50))
-        painter.drawText(left_margin + fm.horizontalAdvance(brush_text),
-                        stats_start_y + line_height * 4,
-                        f"(Visible: {self.sysmon_stats.get('visible_brushes', 0)})")
-        painter.drawText(left_margin + fm.horizontalAdvance(tri_text),
-                        stats_start_y + line_height * 5,
-                        f"(Visible: {visible_tris})")
-        painter.setPen(QColor(180, 180, 180))
-        culled_brushes = self.sysmon_stats.get('culled_brushes', 0)
-        total_brushes = self.sysmon_stats.get('total_brushes', 0)
-        cull_pct = (culled_brushes / total_brushes * 100) if total_brushes > 0 else 0
-        painter.drawText(left_margin, rect.bottom() - 10, f"Culled: {cull_pct:.1f}%")
-        tps_text = f"TPS: {getattr(self.logic_thread, 'actual_tps', 0.0):.1f}"
-        painter.drawText(rect.right() - fm.horizontalAdvance(tps_text) - 10,
-                        rect.bottom() - 10, tps_text)
-        #renderer_label = f""
-        #renderer_name = getattr(self, '_renderer_mode', 'Forward')
-        bold_font = QFont(self.console_font)
-        bold_font.setBold(True)
-        renderer_name_color = QColor(120, 210, 255)
-        painter.setFont(self.console_font)
-        painter.setPen(text_color)
-        #painter.drawText(left_margin, stats_start_y + line_height, renderer_label)
-        #label_w = fm.horizontalAdvance(renderer_label)
-        painter.setFont(bold_font)
-        painter.setPen(renderer_name_color)
-        #painter.drawText(left_margin + label_w, stats_start_y + line_height, renderer_name)
-        painter.setFont(self.console_font)
+
+
+
+
 
     def _draw_render_menu(self, painter):
         width, height = 200, 120
@@ -1892,20 +1824,10 @@ class QtGameView(QOpenGLWidget):
             self.terrain_sculpt_painting = True
             self._apply_sculpt_at_mouse(event.x(), event.y())
             return
-        if not self.play_mode and self.debug_mode_active and event.button() == Qt.LeftButton:
-            if self.debug_window_rect.contains(event.pos()):
-                if event.x() > self.debug_window_rect.right() - 25 and event.y() < self.debug_window_rect.y() + 25:
-                    self.debug_mode_active = False
-                    if self.play_mode:
-                        QApplication.setOverrideCursor(Qt.BlankCursor)
-                    return
-                title_bar_rect = QRect(self.debug_window_rect.x(), self.debug_window_rect.y(),
-                                    self.debug_window_rect.width(), 25)
-                if title_bar_rect.contains(event.pos()):
-                    self.dragging_sysmon = True
-                    self.sysmon_drag_offset = event.pos() - QPoint(self.debug_window_rect.x(), self.debug_window_rect.y())
-                    self.setCursor(Qt.ClosedHandCursor)
-                    return
+        if self.sysmon.handle_mouse_press(event, self.play_mode):
+            if self.sysmon.dragging:
+                self.setCursor(Qt.ClosedHandCursor)
+            return
         if self.face_mode_active and event.button() == Qt.LeftButton:
             if self.hovered_face_info:
                 brush, face = self.hovered_face_info
@@ -1968,11 +1890,7 @@ class QtGameView(QOpenGLWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if not self.play_mode and self.dragging_sysmon:
-            new_pos = event.pos() - self.sysmon_drag_offset
-            new_x = max(5, min(new_pos.x(), self.width() - self.debug_window_rect.width() - 5))
-            new_y = max(5, min(new_pos.y(), self.height() - 120))
-            self.debug_window_rect.moveTo(new_x, new_y)
+        if self.sysmon.handle_mouse_move(event, self.play_mode, self.width(), self.height()):
             self.update()
             return
         if self.mouselook_active:
@@ -2019,8 +1937,7 @@ class QtGameView(QOpenGLWidget):
         if self.terrain_sculpt_painting and event.button() == Qt.LeftButton:
             self.terrain_sculpt_painting = False
             return
-        if not self.play_mode and self.dragging_sysmon and event.button() == Qt.LeftButton:
-            self.dragging_sysmon = False
+        if self.sysmon.handle_mouse_release(event, self.play_mode):
             self.setCursor(Qt.ArrowCursor)
             return
         if self.is_dragging_gizmo:
@@ -2207,7 +2124,7 @@ class QtGameView(QOpenGLWidget):
             self.update()
             return
         if check_key('key_sysmon', 'F3'):
-            self.debug_mode_active = not self.debug_mode_active
+            self.sysmon.toggle()
             self.update()
             return
         if self.play_mode and event.key() == Qt.Key_F7:
