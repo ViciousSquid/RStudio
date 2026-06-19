@@ -1131,7 +1131,6 @@ class View2D(QWidget):
 
     def _draw_model_wireframe(self, painter, model_thing, ax_map, ax1, ax2):
         """Draws the projected wireframe of a 3D model in the 2D view."""
-        # Ensure model is loaded before trying to compute coords
         model_path = model_thing.properties.get('model_path')
         if model_path and hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.renderer:
             renderer = self.main_window.view_3d.renderer
@@ -1139,36 +1138,62 @@ class View2D(QWidget):
                 renderer.load_model(model_path)
 
         coords = self._compute_model_screen_coords(model_thing, ax_map, ax1, ax2)
-        
+
         if coords is None:
-             # Fallback: Draw small placeholder box
-             painter.setPen(QPen(QColor(200, 200, 200), 1))
-             s_pos = self.world_to_screen(QPointF(model_thing.pos[ax_map[ax1]], model_thing.pos[ax_map[ax2]]))
-             painter.drawRect(QRectF(s_pos.x()-10, s_pos.y()-10, 20, 20))
-             return
+            painter.setPen(QPen(QColor(200, 200, 200), 1))
+            s_pos = self.world_to_screen(QPointF(model_thing.pos[ax_map[ax1]], model_thing.pos[ax_map[ax2]]))
+            painter.drawRect(QRectF(s_pos.x()-10, s_pos.y()-10, 20, 20))
+            return
 
         pts_x, pts_y = coords
-        
-        painter.setPen(QPen(QColor(0, 255, 255, 100), 1))
-        
-        width, height = self.width(), self.height()
-        
-        # Iterate over triangles
-        for i in range(0, len(pts_x), 3):
-            # Culling optimization
-            if (pts_x[i] < 0 and pts_x[i+1] < 0 and pts_x[i+2] < 0) or \
-               (pts_x[i] > width and pts_x[i+1] > width and pts_x[i+2] > width) or \
-               (pts_y[i] < 0 and pts_y[i+1] < 0 and pts_y[i+2] < 0) or \
-               (pts_y[i] > height and pts_y[i+1] > height and pts_y[i+2] > height):
-                continue
+        n_pts = len(pts_x)
 
-            p0 = QPointF(pts_x[i], pts_y[i])
-            p1 = QPointF(pts_x[i+1], pts_y[i+1])
-            p2 = QPointF(pts_x[i+2], pts_y[i+2])
-            
-            painter.drawLine(p0, p1)
-            painter.drawLine(p1, p2)
-            painter.drawLine(p2, p0)
+        painter.setPen(QPen(QColor(0, 255, 255, 100), 1))
+        width, height = self.width(), self.height()
+
+        # Prefer the model's index buffer (cpu_triangles) for correct wireframe on
+        # indexed geometry (all GLBs; most OBJs).  Without this, the loop treats
+        # unique shared vertices as sequential flat triangles, which gives wrong
+        # edges AND crashes when vertex_count % 3 != 0.
+        obj = None
+        if model_path and hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.renderer:
+            obj = self.main_window.view_3d.renderer.loaded_models.get(model_path)
+        cpu_triangles = getattr(obj, 'cpu_triangles', None)
+
+        if cpu_triangles:
+            for tri in cpu_triangles:
+                i0, i1, i2 = tri
+                # Guard against malformed index data
+                if i0 >= n_pts or i1 >= n_pts or i2 >= n_pts:
+                    continue
+                # Frustum cull
+                if (pts_x[i0] < 0 and pts_x[i1] < 0 and pts_x[i2] < 0) or \
+                (pts_x[i0] > width and pts_x[i1] > width and pts_x[i2] > width) or \
+                (pts_y[i0] < 0 and pts_y[i1] < 0 and pts_y[i2] < 0) or \
+                (pts_y[i0] > height and pts_y[i1] > height and pts_y[i2] > height):
+                    continue
+                p0 = QPointF(pts_x[i0], pts_y[i0])
+                p1 = QPointF(pts_x[i1], pts_y[i1])
+                p2 = QPointF(pts_x[i2], pts_y[i2])
+                painter.drawLine(p0, p1)
+                painter.drawLine(p1, p2)
+                painter.drawLine(p2, p0)
+        else:
+            # Fallback for non-indexed meshes where vertices are laid out as
+            # sequential flat triangles.  Use n_pts - 2 as the bound so a
+            # vertex count not divisible by 3 never reads past the end of the array.
+            for i in range(0, n_pts - 2, 3):
+                if (pts_x[i] < 0 and pts_x[i+1] < 0 and pts_x[i+2] < 0) or \
+                (pts_x[i] > width and pts_x[i+1] > width and pts_x[i+2] > width) or \
+                (pts_y[i] < 0 and pts_y[i+1] < 0 and pts_y[i+2] < 0) or \
+                (pts_y[i] > height and pts_y[i+1] > height and pts_y[i+2] > height):
+                    continue
+                p0 = QPointF(pts_x[i],   pts_y[i])
+                p1 = QPointF(pts_x[i+1], pts_y[i+1])
+                p2 = QPointF(pts_x[i+2], pts_y[i+2])
+                painter.drawLine(p0, p1)
+                painter.drawLine(p1, p2)
+                painter.drawLine(p2, p0)
 
     def draw_things(self, painter, visible_bounds):
         ax1, ax2 = self.get_axes()

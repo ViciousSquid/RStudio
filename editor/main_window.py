@@ -202,8 +202,8 @@ class MainWindow(QMainWindow):
 
         # Enable sysmon at launch if configured
         if self.config.getboolean('Display', 'always_show_sysmon', fallback=False):
-            self.view_3d.debug_mode_active = True
-            self.view_3d.sysmon_expanded = True
+            self.view_3d.sysmon.set_active(True)
+            self.view_3d.sysmon.set_expanded(True)
 
         self.show_logic_links = True
         
@@ -1771,11 +1771,11 @@ class MainWindow(QMainWindow):
     
     def toggle_system_monitor(self):
         """Toggles the debug system monitor overlay in the 3D view."""
-        self.view_3d.debug_mode_active = not self.view_3d.debug_mode_active
+        self.view_3d.sysmon.toggle()
         
         # If in play mode, we need to handle cursor visibility when toggling the menu
         if self.view_3d.play_mode:
-            if self.view_3d.debug_mode_active:
+            if self.view_3d.sysmon.is_active():
                 # Show cursor for menu interaction
                 QApplication.restoreOverrideCursor()
                 self.view_3d.setCursor(Qt.ArrowCursor)
@@ -3275,7 +3275,7 @@ class MainWindow(QMainWindow):
             self.play_button.setVisible(False)
 
         # Hide sysmon overlay by default in kiosk mode (F3 to toggle back on)
-        self.view_3d.debug_mode_active = False
+        self.view_3d.sysmon.set_active(False)
 
         # Go fullscreen
         self.showFullScreen()
