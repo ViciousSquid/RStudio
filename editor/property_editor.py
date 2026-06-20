@@ -942,6 +942,27 @@ class PropertyEditor(QWidget):
             self.add_model_path_widget(form, thing)
             self.add_vector3_widget(form, thing, 'scale')
             self.add_vector3_widget(form, thing, 'rotation')
+
+            # Collision toggle for this model entity
+            no_collision = thing.properties.get('no_collision', False)
+            collision_cb = _make_checkbox("Disable collision for this model", no_collision,
+                                           lambda c: self.update_object_prop('no_collision', c),
+                                           _Style.CHECKBOX)
+            collision_cb.setToolTip("If checked, player and monsters will pass through this model")
+            form.addRow("", collision_cb)
+            self._widgets['model_no_collision_cb'] = collision_cb
+
+            # Collision size override
+            collision_size = thing.properties.get('collision_size')
+            cs_widget, cs_inputs = self._vec3_row(
+                collision_size if collision_size else [0, 0, 0],
+                lambda v: self._on_collision_size_changed(v, thing)
+            )
+            cs_label = QLabel("Collision Size:")
+            cs_label.setToolTip("Custom collision box size (0,0,0 = auto from scale)")
+            form.addRow(cs_label, cs_widget)
+            self._widgets['model_collision_size_inputs'] = cs_inputs
+
             if IO_AVAILABLE:
                 note = QLabel("💡 Use the I/O tab for advanced targeting")
                 note.setStyleSheet("QLabel { color: #88AAFF; font-style: italic; padding: 4px; }")
@@ -2310,6 +2331,16 @@ class PropertyEditor(QWidget):
         if hasattr(Pickup, 'clear_sprite_cache'):
             Pickup.clear_sprite_cache()
         self.editor.update_all_ui()
+
+    def _on_collision_size_changed(self, value, thing):
+        """Handle collision size vector update."""
+        # If all zeros, remove the property (use auto)
+        if all(v == 0 for v in value):
+            thing.properties.pop('collision_size', None)
+        else:
+            thing.properties['collision_size'] = list(value)
+        if hasattr(self.editor, 'mark_dirty'):
+            self.editor.mark_dirty()
 
     def add_model_path_widget(self, layout, thing):
         widget = QWidget()

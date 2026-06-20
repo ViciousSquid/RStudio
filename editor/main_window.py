@@ -133,7 +133,8 @@ class MainWindow(QMainWindow):
     def __init__(self, root_dir):
         super().__init__()
         self.root_dir = root_dir
-        self.root_dir = os.path.abspath(root_dir)   # force absolute
+        self.root_dir = os.path.abspath(root_dir) 
+        self.assets_root = os.path.join(self.root_dir, 'assets')
         self.debug_console = None
         self.key_bindings = {}
 
@@ -1519,32 +1520,75 @@ class MainWindow(QMainWindow):
         self.update_views()
         self.show_toast(f"Applied to {face_name}")
 
-    def apply_texture_to_brush(self, texture_name=None, tiled=False):
-        if not isinstance(self.state.selected_object, dict):
-            QMessageBox.warning(self, "No Brush Selected", "Select a brush to apply the texture to.")
+    def apply_texture_to_brush(self, texture_path, tiled=False):
+        """
+        Apply texture to the selected brush.
+        If tiled=True: 1 texture pixel = 1 world unit.
+        A 512x512 texture on a 512-unit face tiles once.
+        A 256x256 texture on a 512-unit face tiles twice.
+        If tiled=False: texture is stretched to fit (old behaviour).
+        """
+        import os
+        from PyQt5.QtGui import QPixmap
+
+        selected = self.state.selected_object
+        if not isinstance(selected, dict):
+            self.show_toast("Select a brush first", is_error=True)
             return
 
-        # Fallback if called without argument (e.g. from shortcut)
-        if texture_name is None:
-            texture_path = self.asset_browser.get_selected_filepath()
-            if not texture_path:
-                QMessageBox.warning(self, "No Texture Selected", "Select a texture from the Asset Browser.")
-                return
-            texture_name = os.path.basename(texture_path)
+        # --- Load texture to read its pixel dimensions ---
+        full_path = os.path.join(self.root_dir, 'assets', 'textures', texture_path)
+        pixmap = QPixmap(full_path)
+        if pixmap.isNull():
+            self.show_toast("Failed to load texture", is_error=True)
+            return
+
+        tex_w = pixmap.width()
+        tex_h = pixmap.height()
+
+        # --- Ensure brush has texture storage ---
+        if 'textures' not in selected:
+            selected['textures'] = {}
+
+        faces = ['north', 'south', 'east', 'west', 'top', 'down']
+        sx, sy, sz = selected['size']
+
+        # --- Calculate face dimensions in world units ---
+        def get_face_size(face):
+                """Return (width, height) in world units for the given face."""
+                if face in ('north', 'south'):
+                    return (sx, sy)        # width = x, height = y
+                elif face in ('east', 'west'):
+                    return (sz, sy)        # width = z, height = y
+                else:  # top, down
+                    return (sx, sz)        # width = x, height = z
+
+        # --- Apply to all faces ---
+        for face in faces:
+            selected['textures'][face] = texture_path
+
+            if tiled:
+                face_w, face_h = get_face_size(face)
+
+                # 1 pixel = 1 world unit
+                # A 512px texture on a 512-unit face repeats 1.0 times
+                # A 256px texture on a 512-unit face repeats 2.0 times
+                repeat_u = face_w / tex_w
+                repeat_v = face_h / tex_h
+
+                if 'uv_scale' not in selected:
+                    selected['uv_scale'] = {}
+                selected['uv_scale'][face] = [repeat_u, repeat_v]
+            else:
+                # FIT mode: remove any custom UV scaling (stretch 0→1)
+                if 'uv_scale' in selected:
+                    selected['uv_scale'].pop(face, None)
 
         self.save_state()
-        if 'textures' not in self.state.selected_object:
-            self.state.selected_object['textures'] = {}
-        for face in ['south', 'north', 'west', 'east', 'down', 'top']:
-            self.state.selected_object['textures'][face] = texture_name
-            
-        # Update tiling property
-        self.state.selected_object['texture_tiling'] = tiled
-        
         self.update_views()
-        
-        mode_str = "Tiled" if tiled else "Stretched"
-        self.show_toast(f"Applied {texture_name} ({mode_str})")
+
+        mode_str = "tiled (1px = 1 unit)" if tiled else "fitted"
+        self.show_toast(f"Applied {mode_str}: {tex_w}x{tex_h}")
 
     def apply_texture_to_selected_face(self, face_name):
         if not isinstance(self.state.selected_object, dict):

@@ -70,9 +70,8 @@ class ConsoleCommandHandler:
             'physics': self.cmd_physics,
             'setpos': self.cmd_setpos,
             'teleport': self.cmd_setpos,
-            'ss': self.cmd_split_screen,          # NEW
+            'ss': self.cmd_split_screen,
 
-            # Original commands
             'noclip': self.cmd_noclip,
             'god': self.cmd_god,
             'buddha': self.cmd_buddha,
@@ -80,7 +79,6 @@ class ConsoleCommandHandler:
             'fps': self.cmd_fps,
             'map': self.cmd_map,
 
-            # ==================== NEW RENDER COMMANDS ====================
             'r_list': self.cmd_render_list,
             'r_wireframe': self.cmd_render_wireframe,
             'r_shadows': self.cmd_render_shadows,
@@ -110,9 +108,12 @@ class ConsoleCommandHandler:
             'show': self.cmd_show,
             'tint': self.cmd_tint,
 
-            # Play Mode cheats / debug
+            # Debug
             'notarget': self.cmd_notarget,
             'sg': self.cmd_spatial_grid,
+            'showcollision': self.cmd_show_collision,
+            'collisionvis': self.cmd_show_collision,
+            'collision': self.cmd_show_collision,
 
             # Portal commands
             'portal_list': self.cmd_portal_list,
@@ -566,6 +567,57 @@ class ConsoleCommandHandler:
                 self.main_window.update_all_ui()
                 return
         debug_log("Error", f"Portal '{name}' not found")
+
+    def cmd_show_collision(self, args):
+        """
+        Toggle collision visualization overlay.
+        Usage: showcollision [on|off|mesh|aabb|all]
+        
+        Shows wireframe outlines of:
+        - AABB collision boxes (yellow wireframes)
+        - Mesh collision triangles (cyan wireframes)
+        
+        Works in both Editor mode and Play mode.
+        """
+        view_3d = getattr(self.main_window, 'view_3d', None)
+        if not view_3d:
+            debug_log("Error", "3D view not available")
+            return
+        
+        # Initialize state if not present
+        if not hasattr(view_3d, '_collision_vis_mode'):
+            view_3d._collision_vis_mode = 'off'
+        
+        arg = args.strip().lower() if args else 'toggle'
+        
+        if arg == 'on':
+            view_3d._collision_vis_mode = 'all'
+        elif arg == 'off':
+            view_3d._collision_vis_mode = 'off'
+        elif arg == 'mesh':
+            view_3d._collision_vis_mode = 'mesh'
+        elif arg == 'aabb':
+            view_3d._collision_vis_mode = 'aabb'
+        elif arg == 'toggle':
+            modes = ['off', 'all', 'mesh', 'aabb']
+            current_idx = modes.index(view_3d._collision_vis_mode) if view_3d._collision_vis_mode in modes else 0
+            view_3d._collision_vis_mode = modes[(current_idx + 1) % len(modes)]
+        else:
+            debug_log("Error", "Usage: showcollision [on|off|mesh|aabb|all|toggle]")
+            return
+        
+        # Build collision brushes if enabling visualization and not already built
+        # (needed for editor mode where they aren't auto-built on play start)
+        if view_3d._collision_vis_mode != 'off' and view_3d.logic_thread:
+            lt = view_3d.logic_thread
+            if not getattr(lt, '_model_collision_brushes', []):
+                lt.model_collision_enabled = True
+                lt._model_collision_brushes = lt._build_model_collision_brushes()
+                debug_log("Info", f"Built {len(lt._model_collision_brushes)} collision brushes for visualization")
+        
+        debug_log("Info", f"Collision visualization: {view_3d._collision_vis_mode}")
+        self.main_window.show_toast(f"Collision Vis: {view_3d._collision_vis_mode}")
+        view_3d.update()
 
     def cmd_portal_delete(self, args):
         """Delete a portal and optionally its pair: portal_delete <name> [and_pair]"""
