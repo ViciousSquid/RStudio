@@ -2415,7 +2415,7 @@ class View2D(QWidget):
         menu.addSeparator()
         
         # Advanced / Import
-        add_model_action = menu.addAction("Model...")
+        # add_model_action = menu.addAction("Model...")
         
         # Logic Menu Sub-section
         menu.addSeparator()
