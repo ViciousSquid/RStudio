@@ -58,12 +58,12 @@
             ],
             "operation": "add",
             "textures": {
-                "north": "tiles.jpg",
-                "south": "tiles.jpg",
-                "east": "tiles.jpg",
-                "west": "tiles.jpg",
-                "top": "tiles.jpg",
-                "down": "tiles.jpg"
+                "north": "Dev/512.jpg",
+                "south": "Dev/512.jpg",
+                "east": "Dev/512.jpg",
+                "west": "Dev/512.jpg",
+                "top": "Dev/512.jpg",
+                "down": "Dev/512.jpg"
             },
             "id": "323afe8f-90a0-40b7-8e11-4bdac278e40e"
         },
@@ -177,7 +177,13 @@
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
-                "id": "86e01c9a-66c9-442c-b5be-cd22e4c07d2c"
+                "id": "86e01c9a-66c9-442c-b5be-cd22e4c07d2c",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
             },
             "io_connections": []
         },
