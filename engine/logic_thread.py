@@ -17,6 +17,7 @@ import numpy as np
 from typing import List, Dict, Any, Optional
 import glm
 import math
+import os
 
 from .threaded_game_state import ThreadedGameState, RenderState
 from .player import Player
@@ -207,6 +208,12 @@ class LogicThread(threading.Thread):
 
         # Parented portals (same system as lights — attach to movers)
         self._parented_portals: list = []
+
+        # Model collision pseudo-brushes for things with model_path
+        self._model_collision_brushes: list = []
+
+        # Global toggle for model collision (F6 in play mode)
+        self.model_collision_enabled = True
         
         # Interaction State
         self.current_hud_message = ""
@@ -316,6 +323,226 @@ class LogicThread(threading.Thread):
                 return t
         return None
 
+    def _build_model_collision_brushes(self):
+        """Create collision data for model entities. Supports AABB or mesh-accurate."""
+        if not getattr(self, 'model_collision_enabled', True):
+            return []
+        brushes = []
+        for thing in self.things:
+            props = getattr(thing, 'properties', {})
+            if not props.get('model_path'):
+                continue
+            if props.get('no_collision', False):
+                continue
+
+            pos = getattr(thing, 'pos', [0, 0, 0])
+            if hasattr(pos, 'x'):
+                pos = [pos.x, pos.y, pos.z]
+            else:
+                pos = list(pos)
+
+            scale = props.get('scale', 1.0)
+            if isinstance(scale, (int, float)):
+                scale = [scale, scale, scale]
+            else:
+                scale = list(scale)
+
+            rot = props.get('rotation', [0, 0, 0])
+
+            # Check for explicit collision_size (forces AABB mode)
+            collision_size = props.get('collision_size')
+            if collision_size:
+                size = list(collision_size)
+                brushes.append({
+                    'pos': pos,
+                    'size': size,
+                    'hidden': False,
+                    'is_trigger': False,
+                    'is_mover': False,
+                    'is_door': False,
+                    'is_water': False,
+                    'is_fog': False,
+                    '_model_collision': True,
+                    '_collision_mode': 'aabb',
+                })
+                continue
+
+            # Try mesh-accurate collision
+            model_path = props.get('model_path', '')
+            mesh_tris = self._compute_model_collision_mesh(model_path, pos, scale, rot)
+            if mesh_tris:
+                brushes.append({
+                    'pos': pos,
+                    'size': [1, 1, 1],  # Dummy, not used for mesh collision
+                    'hidden': False,
+                    'is_trigger': False,
+                    'is_mover': False,
+                    'is_door': False,
+                    'is_water': False,
+                    'is_fog': False,
+                    '_model_collision': True,
+                    '_collision_mode': 'mesh',
+                    '_mesh_triangles': mesh_tris,
+                    '_mesh_bounds': self._compute_mesh_bounds(mesh_tris),
+                })
+            else:
+                # Fallback to AABB from model bounds
+                bounds = self._compute_model_bounds(model_path)
+                if bounds:
+                    min_v, max_v = bounds
+                    size = [max_v[0] - min_v[0], max_v[1] - min_v[1], max_v[2] - min_v[2]]
+                    size = [size[i] * scale[i] for i in range(3)]
+                else:
+                    base = 64.0
+                    size = [base * scale[i] for i in range(3)]
+                brushes.append({
+                    'pos': pos,
+                    'size': size,
+                    'hidden': False,
+                    'is_trigger': False,
+                    'is_mover': False,
+                    'is_door': False,
+                    'is_water': False,
+                    'is_fog': False,
+                    '_model_collision': True,
+                    '_collision_mode': 'aabb',
+                })
+        return brushes
+
+    def _compute_model_collision_mesh(self, model_path, world_pos, scale, rotation):
+        """Load model and return world-space triangles for collision."""
+        if not model_path:
+            return None
+
+        full_path = os.path.join('assets', 'models', model_path)
+        if not os.path.exists(full_path):
+            full_path = model_path
+        if not os.path.exists(full_path):
+            return None
+
+        ext = os.path.splitext(model_path)[1].lower()
+        if ext != '.glb':
+            return None  # Only GLB supports mesh collision for now
+
+        try:
+            from .glb_loader import GLB
+            model = GLB(full_path)
+            
+            if not model.is_loaded:
+                return None
+
+            local_tris = model.get_collision_triangles()
+            if not local_tris:
+                return None
+
+            # Build rotation matrix from euler angles (YXZ order, matching renderer)
+            import math
+            yaw, pitch, roll = math.radians(rotation[1]), math.radians(rotation[0]), math.radians(rotation[2])
+            
+            cy, sy = math.cos(yaw), math.sin(yaw)
+            cp, sp = math.cos(pitch), math.sin(pitch)
+            cr, sr = math.cos(roll), math.sin(roll)
+
+            # Combined rotation: scale first, then rotate Y, X, Z, then translate
+            def transform_point(x, y, z):
+                # Apply scale
+                x, y, z = x * scale[0], y * scale[1], z * scale[2]
+                # Rotate Y
+                x, z = x * cy - z * sy, x * sy + z * cy
+                # Rotate X
+                y, z = y * cp - z * sp, y * sp + z * cp
+                # Rotate Z
+                x, y = x * cr - y * sr, x * sr + y * cr
+                # Translate
+                return (x + world_pos[0], y + world_pos[1], z + world_pos[2])
+
+            world_tris = []
+            for (v0, v1, v2), normal in local_tris:
+                w0 = transform_point(*v0)
+                w1 = transform_point(*v1)
+                w2 = transform_point(*v2)
+                
+                # Rotate normal (no scale, no translate)
+                nx, ny, nz = normal
+                nx, nz = nx * cy - nz * sy, nx * sy + nz * cy
+                ny, nz = ny * cp - nz * sp, ny * sp + nz * cp
+                nxf, nyf = nx * cr - ny * sr, nx * sr + ny * cr
+                nzf = nz
+                
+                # Normalize
+                length = math.sqrt(nxf*nxf + nyf*nyf + nzf*nzf)
+                if length > 0.001:
+                    w_normal = (nxf/length, nyf/length, nzf/length)
+                else:
+                    w_normal = (0, 1, 0)
+                    
+                world_tris.append(((w0, w1, w2), w_normal))
+
+            return world_tris
+
+        except Exception as e:
+            debug_log("Collision", f"Failed to build mesh collision for {model_path}: {e}")
+            return None
+
+    def _compute_mesh_bounds(self, mesh_tris):
+        """Compute AABB from mesh triangles for broad-phase culling."""
+        if not mesh_tris:
+            return None
+        all_verts = []
+        for (v0, v1, v2), _ in mesh_tris:
+            all_verts.extend([v0, v1, v2])
+        min_v = [min(v[i] for v in all_verts) for i in range(3)]
+        max_v = [max(v[i] for v in all_verts) for i in range(3)]
+        return (min_v, max_v)
+
+    def _compute_model_bounds(self, model_path):
+        """Compute axis-aligned bounds from a model file. Returns (min, max) or None."""
+        if not model_path:
+            return None
+
+        full_path = os.path.join('assets', 'models', model_path)
+        if not os.path.exists(full_path):
+            full_path = model_path
+        if not os.path.exists(full_path):
+            return None
+
+        ext = os.path.splitext(model_path)[1].lower()
+        if ext == '.glb':
+            try:
+                from .glb_loader import GLBLoader
+                loader = GLBLoader()
+                loader._filepath_hint = full_path
+                if loader.load(full_path):
+                    verts = loader.get_flattened_vertices()
+                    if verts:
+                        min_v = [min(v[i] for v in verts) for i in range(3)]
+                        max_v = [max(v[i] for v in verts) for i in range(3)]
+                        return min_v, max_v
+            except Exception as e:
+                debug_log("Collision", f"Failed to compute GLB bounds for {model_path}: {e}")
+        return None
+
+    def toggle_model_collision(self, enabled: bool = None) -> bool:
+        """Toggle model collision on/off. If enabled is None, flip current state.
+        Returns the new state. Works in both play mode and editor mode."""
+        if enabled is None:
+            self.model_collision_enabled = not self.model_collision_enabled
+        else:
+            self.model_collision_enabled = bool(enabled)
+
+        # Rebuild collision brushes in both play mode and editor mode
+        # (editor mode uses them for visualization via showcollision command)
+        if self.model_collision_enabled:
+            self._model_collision_brushes = self._build_model_collision_brushes()
+            if self.play_mode and hasattr(self, '_spatial_grid') and self._spatial_grid:
+                self._spatial_grid.populate(self.brushes + self._model_collision_brushes)
+        else:
+            self._model_collision_brushes = []
+            if self.play_mode and hasattr(self, '_spatial_grid') and self._spatial_grid:
+                self._spatial_grid.populate(self.brushes)
+
+        return self.model_collision_enabled
+
     # =========================================================================
     # PLAYER & MODE MANAGEMENT
     # =========================================================================
@@ -344,7 +571,10 @@ class LogicThread(threading.Thread):
             self._init_doors()
             self._init_parented_lights()
             self._init_parented_portals()
-            
+
+            # Build collision brushes for model entities
+            self._model_collision_brushes = self._build_model_collision_brushes()
+
             # Reset player stats
             self.player_health = 100
             self.player_max_health = 100
@@ -403,7 +633,7 @@ class LogicThread(threading.Thread):
             # Build spatial grid for fast collision queries (monsters + player)
             from .physics import SpatialGrid
             self._spatial_grid = SpatialGrid(cell_size=512.0)
-            self._spatial_grid.populate(self.brushes)
+            self._spatial_grid.populate(self.brushes + self._model_collision_brushes)
             self.monster_ai.set_spatial_grid(self._spatial_grid)
 
             # Reset cinematic state (mover_path_states already reset by _init_movers)
@@ -452,6 +682,7 @@ class LogicThread(threading.Thread):
             self._reset_doors()
             self._reset_parented_lights()
             self._reset_parented_portals()
+            self._model_collision_brushes = []
             self.current_hud_message = ""
             self.gate_inputs = {}
             self.timer_states = {}
@@ -793,7 +1024,8 @@ class LogicThread(threading.Thread):
         # Physics update
         mover_brushes = [b for _, b in self.movers]
         door_brushes = [b for _, b in self.doors]
-        self.player.update(delta, move_dir, jump, crouch, self.brushes, 
+        collision_brushes = self.brushes + self._model_collision_brushes
+        self.player.update(delta, move_dir, jump, crouch, collision_brushes, 
                           mover_brushes, door_brushes, self.terrain,
                           spatial_grid=getattr(self, '_spatial_grid', None))
         
@@ -837,7 +1069,7 @@ class LogicThread(threading.Thread):
             self.player2.update(
                 delta, p2_dir,
                 bool(p2['jump']), False,   # crouch removed
-                self.brushes, mover_brushes, door_brushes, self.terrain,
+                collision_brushes, mover_brushes, door_brushes, self.terrain,
                 spatial_grid=getattr(self, '_spatial_grid', None),
             )
 
@@ -1652,7 +1884,8 @@ class LogicThread(threading.Thread):
         ray_dir = glm.normalize(glm.vec3(dir_x, dir_y, dir_z))
         closest_brush_hit = None
         closest_brush_dist = float('inf')
-        for brush in self.brushes:
+        collision_brushes = self.brushes + self._model_collision_brushes
+        for brush in collision_brushes:
             if (brush.get('is_trigger') or brush.get('hidden') or
                 brush.get('is_water') or brush.get('is_fog')):
                 continue
@@ -1850,7 +2083,8 @@ class LogicThread(threading.Thread):
 
             # ---- Collision with solid brushes (walls) ----
             hit_wall = False
-            for brush in self.brushes:
+            collision_brushes = self.brushes + self._model_collision_brushes
+            for brush in collision_brushes:
                 if brush.get('hidden') or brush.get('is_water') or brush.get('is_fog'):
                     continue
                 if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):

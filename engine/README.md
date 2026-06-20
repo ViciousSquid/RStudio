@@ -36,9 +36,6 @@ Caches textures, models, shaders.
 ### `shaders.py`
 Shader compilation & uniform binding.
 
-### `sysmon.py`
-Floating real-time system monitor
-
 ### `terrain.py`
 Chunked terrain mesh generation (perlin noise), texturing, collision
 

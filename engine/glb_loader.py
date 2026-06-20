@@ -18,6 +18,7 @@ The GLB class provides the same interface as OBJ for renderer compatibility:
 import struct
 import json
 import os
+import math
 import numpy as np
 import OpenGL.GL as gl
 from typing import List, Tuple, Optional, Dict, Any
@@ -473,6 +474,39 @@ class GLB:
         self._build_gl_buffers(loader)
         self.is_loaded = True
         print(f"[GLB] Loaded {self.vertex_count} vertices ({self.index_count} indices) from {filepath}")
+
+    def get_bounds(self):
+        """Return axis-aligned bounding box as (min_v, max_v) or None."""
+        if self.cpu_vertices is None or len(self.cpu_vertices) == 0:
+            return None
+        min_v = [float(self.cpu_vertices[:, i].min()) for i in range(3)]
+        max_v = [float(self.cpu_vertices[:, i].max()) for i in range(3)]
+        return min_v, max_v
+
+    def get_collision_triangles(self):
+        """Return list of local-space triangles for mesh-accurate collision.
+        Each triangle is ((v0, v1, v2), normal) where v* are (x,y,z)."""
+        if self.cpu_vertices is None or len(self.cpu_vertices) == 0:
+            return []
+        
+        tris = []
+        for i0, i1, i2 in self.cpu_triangles:
+            v0 = tuple(self.cpu_vertices[i0])
+            v1 = tuple(self.cpu_vertices[i1])
+            v2 = tuple(self.cpu_vertices[i2])
+            # Compute face normal
+            e1 = (v1[0]-v0[0], v1[1]-v0[1], v1[2]-v0[2])
+            e2 = (v2[0]-v0[0], v2[1]-v0[1], v2[2]-v0[2])
+            nx = e1[1]*e2[2] - e1[2]*e2[1]
+            ny = e1[2]*e2[0] - e1[0]*e2[2]
+            nz = e1[0]*e2[1] - e1[1]*e2[0]
+            length = math.sqrt(nx*nx + ny*ny + nz*nz)
+            if length > 0.001:
+                normal = (nx/length, ny/length, nz/length)
+            else:
+                normal = (0, 1, 0)
+            tris.append(((v0, v1, v2), normal))
+        return tris
 
     def _build_gl_buffers(self, loader: GLBLoader):
         """Build OpenGL VAO/VBO/EBO from parsed GLB data."""

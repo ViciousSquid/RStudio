@@ -895,6 +895,29 @@ class QtGameView(QOpenGLWidget):
                 brushes_to_render, things_to_render,
                 self.selected_object, self._render_config,
             )
+            # Collision visualization
+            if getattr(self, '_collision_vis_mode', 'off') != 'off':
+                # Get collision brushes from logic thread
+                collision_brushes = []
+                if hasattr(self, 'logic_thread') and self.logic_thread:
+                    collision_brushes = getattr(self.logic_thread, '_model_collision_brushes', [])
+                    # Build collision brushes on demand if not already built
+                    # (needed for editor mode where they aren't auto-built on play start)
+                    if not collision_brushes:
+                        self.logic_thread.model_collision_enabled = True
+                        self.logic_thread._model_collision_brushes = self.logic_thread._build_model_collision_brushes()
+                        collision_brushes = self.logic_thread._model_collision_brushes
+                if collision_brushes:
+                    mode = self._collision_vis_mode
+                    filtered = []
+                    for b in collision_brushes:
+                        b_mode = b.get('_collision_mode', 'aabb')
+                        if mode == 'all' or mode == b_mode:
+                            filtered.append(b)
+                    if filtered:
+                        self.renderer.draw_collision_visualization(
+                            self.projection_matrix, self.view_matrix, filtered
+                        )
             if render_state and hasattr(render_state, 'bullet_marks'):
                 self._render_bullet_marks(render_state.bullet_marks, self.projection_matrix, self.view_matrix)
             if render_state and hasattr(render_state, 'projectiles') and render_state.projectiles:
@@ -2134,6 +2157,14 @@ class QtGameView(QOpenGLWidget):
             if hasattr(self.editor, 'show_toast'):
                 status = "ON" if self.monster_debug_active else "OFF"
                 self.editor.show_toast(f"Monster Debug: {status}")
+            self.update()
+            return
+        if self.play_mode and event.key() == Qt.Key_F6:
+            if self.logic_thread:
+                new_state = self.logic_thread.toggle_model_collision()
+                status = "ON" if new_state else "OFF"
+                if hasattr(self.editor, 'show_toast'):
+                    self.editor.show_toast(f"Model Collision: {status}")
             self.update()
             return
         if self.play_mode and event.key() == Qt.Key_F9:

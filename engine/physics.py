@@ -40,6 +40,14 @@ class SpatialGrid:
             pos = brush['pos']
             size = brush['size']
 
+            # FIX: For mesh collision brushes, use the actual mesh bounds
+            if brush.get('_collision_mode') == 'mesh':
+                mesh_bounds = brush.get('_mesh_bounds')
+                if mesh_bounds:
+                    min_b, max_b = mesh_bounds
+                    pos = [(min_b[i] + max_b[i]) / 2.0 for i in range(3)]
+                    size = [max_b[i] - min_b[i] for i in range(3)]
+
             min_x = int(math.floor((pos[0] - size[0] * 0.5) / self.cell_size))
             max_x = int(math.floor((pos[0] + size[0] * 0.5) / self.cell_size))
             min_z = int(math.floor((pos[2] - size[2] * 0.5) / self.cell_size))

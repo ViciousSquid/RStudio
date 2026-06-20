@@ -55,6 +55,12 @@ class Renderer_F(BaseRenderer):
         brush['_mat_cache']     = mat
         return mat
 
+    def set_sprite_textures(self, textures):
+        self.sprite_textures = textures
+
+    def set_instance_textures(self, textures):
+        self.instance_textures = textures
+
     def _compute_normal_matrix(self, model_matrix, brush=None):
         """Compute the normal matrix.
 
@@ -176,10 +182,6 @@ class Renderer_F(BaseRenderer):
         is_play = config.get('play_mode', False)
 
         # ---- Texture batch cache -----------------------------------------
-        # Build a cheap key: (brush_id, sorted texture items) per brush.
-        # When any brush's textures change the key changes and the cache
-        # rebuilds automatically.  In play mode we always rebuild because
-        # nodraw / caulk filtering differs from editor mode.
         cache_key = None if is_play else tuple(
             (id(b), tuple(sorted(b.get('textures', {}).items())))
             for b in visible
@@ -198,7 +200,7 @@ class Renderer_F(BaseRenderer):
                         continue
                     tex_id = self.texture_manager.get(os.path.join('textures', tex_name)) or \
                              self.load_texture_callback(tex_name, 'textures')
-                    batches[tex_id].append((brush, i))
+                    batches[tex_id].append((brush, i, face_key))
             if not is_play:
                 self._tex_batch_cache     = batches
                 self._tex_batch_cache_key = cache_key
@@ -210,7 +212,7 @@ class Renderer_F(BaseRenderer):
                 gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                 current_tex = tex_id
                 self.render_stats.batched_draws += 1
-            for brush, face_idx in items:
+            for brush, face_idx, face_key in items:
                 self.render_stats.visible_tris += 2
                 model_matrix = self._brush_model_matrix(brush)
                 gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
@@ -219,16 +221,27 @@ class Renderer_F(BaseRenderer):
                     gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(nmat))
                 if tex_scale_loc != -1:
                     size = brush.get('size', [64, 64, 64])
-                    if brush.get('texture_tiling', False):
-                        tex_unit_size = 128.0
+                    # --- PRIORITY 1: Use pre-computed uv_scale from editor ---
+                    uv_scale = brush.get('uv_scale', {}).get(face_key)
+                    if uv_scale is not None:
+                        gl.glUniform2f(tex_scale_loc, uv_scale[0], uv_scale[1])
+                    # --- PRIORITY 2: Fallback to texture_tiling with actual dimensions ---
+                    elif brush.get('texture_tiling', False):
+                        tex_name = brush.get('textures', {}).get(face_key, 'default.png')
+                        tex_cache_name = os.path.join('textures', tex_name)
+                        tex_w, tex_h = getattr(self, '_texture_dimensions', {}).get(tex_cache_name, (128, 128))
+                        tex_w = max(tex_w, 1)
+                        tex_h = max(tex_h, 1)
+                        
                         fi = face_idx
-                        if fi == 0 or fi == 1:
-                            scale_x, scale_y = size[0] / tex_unit_size, size[1] / tex_unit_size
-                        elif fi == 2 or fi == 3:
-                            scale_x, scale_y = size[2] / tex_unit_size, size[1] / tex_unit_size
-                        else:
-                            scale_x, scale_y = size[0] / tex_unit_size, size[2] / tex_unit_size
+                        if fi == 0 or fi == 1:   # south, north
+                            scale_x, scale_y = size[0] / tex_w, size[1] / tex_h
+                        elif fi == 2 or fi == 3:  # west, east
+                            scale_x, scale_y = size[2] / tex_w, size[1] / tex_h
+                        else:                      # down, top
+                            scale_x, scale_y = size[0] / tex_w, size[2] / tex_h
                         gl.glUniform2f(tex_scale_loc, scale_x, scale_y)
+                    # --- PRIORITY 3: FIT mode (stretch 0→1) ---
                     else:
                         gl.glUniform2f(tex_scale_loc, 1.0, 1.0)
                 gl.glDrawArrays(gl.GL_TRIANGLES, face_idx * 6, 6)
