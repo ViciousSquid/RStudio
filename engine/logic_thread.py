@@ -386,17 +386,25 @@ class LogicThread(threading.Thread):
                     '_mesh_bounds': self._compute_mesh_bounds(mesh_tris),
                 })
             else:
-                # Fallback to AABB from model bounds
+                # Fallback to AABB from model bounds.
+                # FIX: The brush 'pos' must be the WORLD-SPACE centre of the
+                # bounding box, not just the entity origin.  Many models have
+                # their geometry offset from origin (e.g. base sitting at y=0
+                # in local space), so we add the scaled local-centre offset.
                 bounds = self._compute_model_bounds(model_path)
                 if bounds:
                     min_v, max_v = bounds
                     size = [max_v[0] - min_v[0], max_v[1] - min_v[1], max_v[2] - min_v[2]]
                     size = [size[i] * scale[i] for i in range(3)]
+                    # Centre of the local bounding box (may not be at model origin)
+                    local_centre = [(min_v[i] + max_v[i]) * 0.5 for i in range(3)]
+                    aabb_pos = [pos[i] + local_centre[i] * scale[i] for i in range(3)]
                 else:
                     base = 64.0
                     size = [base * scale[i] for i in range(3)]
+                    aabb_pos = pos
                 brushes.append({
-                    'pos': pos,
+                    'pos': aabb_pos,
                     'size': size,
                     'hidden': False,
                     'is_trigger': False,
@@ -410,7 +418,13 @@ class LogicThread(threading.Thread):
         return brushes
 
     def _compute_model_collision_mesh(self, model_path, world_pos, scale, rotation):
-        """Load model and return world-space triangles for collision."""
+        """Load model and return world-space triangles for collision.
+
+        Uses GLBLoader (CPU-only, no OpenGL calls) so this is safe to call from
+        any thread regardless of whether a GL context is current.  The old path
+        used GLB which called glGenVertexArrays/glGenBuffers and would silently
+        fail when the GL context was not active on this thread.
+        """
         if not model_path:
             return None
 
@@ -425,60 +439,64 @@ class LogicThread(threading.Thread):
             return None  # Only GLB supports mesh collision for now
 
         try:
-            from .glb_loader import GLB
-            model = GLB(full_path)
-            
-            if not model.is_loaded:
+            # GLBLoader is pure file I/O + JSON parsing — zero OpenGL calls.
+            from .glb_loader import GLBLoader
+            import math
+
+            loader = GLBLoader()
+            loader._filepath_hint = full_path
+            if not loader.load(full_path):
+                debug_log("Collision", f"GLBLoader failed to load {model_path}")
                 return None
 
-            local_tris = model.get_collision_triangles()
-            if not local_tris:
+            all_verts = loader.get_flattened_vertices()   # list of (x, y, z)
+            all_tris  = loader.get_flattened_triangles()  # list of (i0, i1, i2)
+
+            if not all_verts or not all_tris:
+                debug_log("Collision", f"No geometry in {model_path}")
                 return None
 
             # Build rotation matrix from euler angles (YXZ order, matching renderer)
-            import math
-            yaw, pitch, roll = math.radians(rotation[1]), math.radians(rotation[0]), math.radians(rotation[2])
-            
-            cy, sy = math.cos(yaw), math.sin(yaw)
+            yaw, pitch, roll = (math.radians(rotation[1]),
+                                math.radians(rotation[0]),
+                                math.radians(rotation[2]))
+            cy, sy = math.cos(yaw),   math.sin(yaw)
             cp, sp = math.cos(pitch), math.sin(pitch)
-            cr, sr = math.cos(roll), math.sin(roll)
+            cr, sr = math.cos(roll),  math.sin(roll)
 
-            # Combined rotation: scale first, then rotate Y, X, Z, then translate
             def transform_point(x, y, z):
-                # Apply scale
+                # Scale
                 x, y, z = x * scale[0], y * scale[1], z * scale[2]
-                # Rotate Y
+                # Rotate Y (yaw)
                 x, z = x * cy - z * sy, x * sy + z * cy
-                # Rotate X
+                # Rotate X (pitch)
                 y, z = y * cp - z * sp, y * sp + z * cp
-                # Rotate Z
+                # Rotate Z (roll)
                 x, y = x * cr - y * sr, x * sr + y * cr
-                # Translate
+                # Translate to world
                 return (x + world_pos[0], y + world_pos[1], z + world_pos[2])
 
             world_tris = []
-            for (v0, v1, v2), normal in local_tris:
-                w0 = transform_point(*v0)
-                w1 = transform_point(*v1)
-                w2 = transform_point(*v2)
-                
-                # Rotate normal (no scale, no translate)
-                nx, ny, nz = normal
-                nx, nz = nx * cy - nz * sy, nx * sy + nz * cy
-                ny, nz = ny * cp - nz * sp, ny * sp + nz * cp
-                nxf, nyf = nx * cr - ny * sr, nx * sr + ny * cr
-                nzf = nz
-                
-                # Normalize
-                length = math.sqrt(nxf*nxf + nyf*nyf + nzf*nzf)
-                if length > 0.001:
-                    w_normal = (nxf/length, nyf/length, nzf/length)
-                else:
-                    w_normal = (0, 1, 0)
-                    
+            for i0, i1, i2 in all_tris:
+                if i0 >= len(all_verts) or i1 >= len(all_verts) or i2 >= len(all_verts):
+                    continue
+                w0 = transform_point(*all_verts[i0])
+                w1 = transform_point(*all_verts[i1])
+                w2 = transform_point(*all_verts[i2])
+
+                # Compute face normal from world-space edge vectors
+                e1 = (w1[0]-w0[0], w1[1]-w0[1], w1[2]-w0[2])
+                e2 = (w2[0]-w0[0], w2[1]-w0[1], w2[2]-w0[2])
+                nx = e1[1]*e2[2] - e1[2]*e2[1]
+                ny = e1[2]*e2[0] - e1[0]*e2[2]
+                nz = e1[0]*e2[1] - e1[1]*e2[0]
+                length = math.sqrt(nx*nx + ny*ny + nz*nz)
+                w_normal = (nx/length, ny/length, nz/length) if length > 0.001 else (0.0, 1.0, 0.0)
+
                 world_tris.append(((w0, w1, w2), w_normal))
 
-            return world_tris
+            debug_log("Collision", f"Built {len(world_tris)} mesh-collision tris for {model_path}")
+            return world_tris if world_tris else None
 
         except Exception as e:
             debug_log("Collision", f"Failed to build mesh collision for {model_path}: {e}")

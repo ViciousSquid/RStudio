@@ -54,23 +54,32 @@ def _intersect_swept_sphere_triangle(sphere_pos, sphere_vel, radius, triangle, n
     # Relative velocity along normal
     vel_dot_n = sv[0]*normal[0] + sv[1]*normal[1] + sv[2]*normal[2]
     
-    # If moving away from triangle and already in front, no collision
+    # If moving away from triangle and clearly not touching, no collision
     if vel_dot_n > 0 and dist > radius:
         return False, 1.0, None, None
-    
-    # Time when sphere surface touches plane
-    if abs(vel_dot_n) < 0.0001:
-        # Moving parallel to plane
-        if abs(dist) > radius:
+
+    # Sphere fully behind the plane (inside-out geometry) — skip
+    if dist < -radius:
+        return False, 1.0, None, None
+
+    # Time when sphere surface touches plane.
+    # We solve: dist + vel_dot_n * t = radius  →  t = (radius - dist) / vel_dot_n
+    # BUG FIX: the original code had (dist - radius) which is the wrong sign, producing
+    # a negative t for any approaching sphere and causing all mesh collision to be skipped.
+    if dist > radius:
+        # Sphere not yet touching the plane — find exact contact time
+        if abs(vel_dot_n) < 0.0001:
+            # Moving parallel to a plane we haven't touched yet — no contact
+            return False, 1.0, None, None
+        t0 = (radius - dist) / vel_dot_n   # positive when vel_dot_n < 0 (approaching)
+    else:
+        # Sphere is already overlapping the plane (dist <= radius).
+        # If moving further in, treat as immediate (t=0) collision so the player is
+        # deflected this frame.  If moving out, let it escape without interference.
+        if vel_dot_n >= 0:
             return False, 1.0, None, None
         t0 = 0.0
-    else:
-        # Solve: dist + vel_dot_n * t = radius (for front side) or -radius (for back side)
-        if dist > 0:
-            t0 = (dist - radius) / vel_dot_n
-        else:
-            t0 = (dist + radius) / vel_dot_n
-    
+
     if t0 < 0 or t0 > 1.0:
         return False, 1.0, None, None
     
