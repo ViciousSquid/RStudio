@@ -436,6 +436,40 @@ class IOManager:
         return 'unknown'
 
 
+    def query_keyvalue(self, store_name: str, key: str, default: str = "<missing>") -> str:
+        """
+        Query a value from a LogicKeyValueStore by store_name.
+        This is a convenience method for other systems (not I/O handlers)
+        to read persistent state without going through the entity system.
+        """
+        # First try to find the actual entity
+        if self._find_entity:
+            entity = self._find_entity(store_name)
+            if entity and hasattr(entity, 'get_value'):
+                return entity.get_value(key, default)
+
+        # Fallback to the class-level persistent registry
+        try:
+            from editor.things import LogicKeyValueStore
+            if store_name in LogicKeyValueStore._persistent_registry:
+                return LogicKeyValueStore._persistent_registry[store_name].get(key, default)
+        except ImportError:
+            pass
+
+        return default
+
+    def set_keyvalue(self, store_name: str, key: str, value: str) -> bool:
+        """
+        Set a value in a LogicKeyValueStore by store_name.
+        Returns True on success, False if store is full or not found.
+        """
+        if self._find_entity:
+            entity = self._find_entity(store_name)
+            if entity and hasattr(entity, 'set_value'):
+                return entity.set_value(key, value)
+        return False
+
+
 # =============================================================================
 # DEFAULT I/O DEFINITIONS
 # =============================================================================
@@ -748,6 +782,27 @@ def register_default_io():
         outputs=[
             IODef('OnSpawn',       'Fired each time an entity is spawned'),
             IODef('OnMaxReached',  'Fired when max_spawn limit is hit'),
+        ]
+    )
+
+    # === LOGIC KEYVALUE STORE ===
+    # Persistent key/value store that survives level transitions.
+    register_io('logic_keyvalue',
+        inputs=[
+            IODef('SetValue',      'Set a key/value pair (param: "key=value")', 'string'),
+            IODef('GetValue',      'Read a key and fire OnValueRead (param: key name)', 'string'),
+            IODef('ClearKey',      'Remove a single key (param: key name)', 'string'),
+            IODef('ClearAll',      'Remove all keys'),
+            IODef('CopyFrom',      'Copy all keys from another store by name', 'string'),
+            IODef('Increment',     'Increment integer value (param: "key,amount")', 'string'),
+            IODef('Decrement',     'Decrement integer value (param: "key,amount")', 'string'),
+        ],
+        outputs=[
+            IODef('OnValueSet',    'Fired when any key is set (param: "key=value")'),
+            IODef('OnValueRead',   'Fired by GetValue (param: value or "<missing>")'),
+            IODef('OnKeyCleared',  'Fired when a key is removed (param: key name)'),
+            IODef('OnStoreFull',   'Fired when trying to add beyond 25 keys'),
+            IODef('OnKeyNotFound', 'Fired when GetValue targets a missing key'),
         ]
     )
 

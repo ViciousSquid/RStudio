@@ -7,7 +7,8 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
 from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QFont
 from editor.things import (Thing, Light, Pickup, Monster, Model, Speaker,
-                           LogicGate, PathNode, LogicCamera, LogicSpawner, Portal)
+                           LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
+                           LogicKeyValueStore)
 from engine.monster_constants import MONSTER_VARIANTS
 
 # I/O System imports
@@ -992,6 +993,8 @@ class PropertyEditor(QWidget):
             self._build_logic_camera_group(tab_layout, thing)
         if isinstance(thing, LogicSpawner):
             self._build_spawner_group(tab_layout, thing)
+        if isinstance(thing, LogicKeyValueStore):
+            self._build_keyvalue_group(tab_layout, thing)
         if isinstance(thing, Monster):
             self._build_monster_groups(tab_layout, thing)
 
@@ -1126,6 +1129,8 @@ class PropertyEditor(QWidget):
             if isinstance(thing, LogicCamera) and key in ('path_target', 'speed', 'fov_override', 'look_ahead'):
                 continue
             if isinstance(thing, LogicSpawner) and key in ('spawn_type', 'target_node', 'max_spawn', 'spawn_properties'):
+                continue
+            if isinstance(thing, LogicKeyValueStore) and key in ('store_name', 'initial_data', '_runtime_data'):
                 continue
             if is_pickup and key in ('key_name', 'custom_sprite', 'respawns', 'respawn_time'):
                 continue
@@ -1609,6 +1614,112 @@ class PropertyEditor(QWidget):
         spawn_combo.currentTextChanged.connect(lambda _: update_visibility())
         update_visibility()
         tab_layout.addWidget(monster_group)
+
+
+    def _build_keyvalue_group(self, tab_layout, thing):
+        """Display LogicKeyValueStore runtime data and persistent registry info."""
+        group = QGroupBox("Key/Value Store")
+        group.setStyleSheet(_Style.group_box("#26A69A", "#1a2f2d"))
+        layout = QVBoxLayout(group)
+        layout.setSpacing(6)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        # Store name (read-only display)
+        store_name = thing.properties.get('store_name', thing.properties.get('name', ''))
+        name_lbl = QLabel(f"<b>Store Name:</b> {store_name}")
+        name_lbl.setStyleSheet("QLabel { color: #88FF88; }")
+        layout.addWidget(name_lbl)
+
+        # Refresh button
+        refresh_btn = QPushButton("🔄 Refresh Values")
+        refresh_btn.setStyleSheet("""
+            QPushButton { background-color: #2a5a5a; color: white; border: 1px solid #26A69A;
+                          border-radius: 3px; padding: 4px 8px; }
+            QPushButton:hover { background-color: #3a7a7a; }
+        """)
+        refresh_btn.setToolTip("Reload values from runtime storage")
+        refresh_btn.clicked.connect(lambda: self._refresh_keyvalue_group(thing))
+        layout.addWidget(refresh_btn)
+
+
+        # Initial data (designer defaults)
+        initial_data = thing.properties.get('initial_data', {})
+        if initial_data:
+            layout.addWidget(QLabel("<b>Initial Data (Designer Defaults):</b>"))
+            for k, v in sorted(initial_data.items()):
+                row = QHBoxLayout()
+                row.setSpacing(4)
+                key_lbl = QLabel(f"  {k}:")
+                key_lbl.setStyleSheet("QLabel { color: #AAAAAA; min-width: 100px; }")
+                val_lbl = QLabel(str(v))
+                val_lbl.setStyleSheet("QLabel { color: #FFFFFF; }")
+                row.addWidget(key_lbl)
+                row.addWidget(val_lbl)
+                row.addStretch()
+                layout.addLayout(row)
+
+        # Separator
+        if initial_data:
+            line = QFrame()
+            line.setFrameShape(QFrame.HLine)
+            line.setStyleSheet("QFrame { color: #555; }")
+            layout.addWidget(line)
+
+        # Runtime data (live values)
+        runtime_data = getattr(thing, '_runtime_data', {})
+        persistent = getattr(thing.__class__, '_persistent_registry', {})
+
+        # Check persistent registry for this store
+        persistent_data = persistent.get(store_name, {})
+
+        if runtime_data or persistent_data:
+            layout.addWidget(QLabel("<b>Runtime Values (Live):</b>"))
+
+            # Show runtime data (authoritative for this instance)
+            all_keys = set(runtime_data.keys()) | set(persistent_data.keys())
+            for k in sorted(all_keys):
+                row = QHBoxLayout()
+                row.setSpacing(4)
+
+                # Key label
+                key_lbl = QLabel(f"  {k}:")
+                key_lbl.setStyleSheet("QLabel { color: #F08000; min-width: 100px; }")
+
+                # Value with source indicator
+                if k in runtime_data:
+                    val_str = str(runtime_data[k])
+                    source = "runtime"
+                else:
+                    val_str = str(persistent_data[k])
+                    source = "persistent"
+
+                val_lbl = QLabel(val_str)
+                if source == "runtime":
+                    val_lbl.setStyleSheet("QLabel { color: #00FF00; font-weight: bold; }")
+                else:
+                    val_lbl.setStyleSheet("QLabel { color: #88AAFF; }")
+
+                row.addWidget(key_lbl)
+                row.addWidget(val_lbl)
+                row.addStretch()
+                layout.addLayout(row)
+
+            # Count
+            count_lbl = QLabel(f"<i>{len(all_keys)} / {thing.MAX_PAIRS} pairs stored</i>")
+            count_lbl.setStyleSheet("QLabel { color: #888; font-size: 10px; }")
+            layout.addWidget(count_lbl)
+        else:
+            empty_lbl = QLabel("<i>No values stored yet.</i>")
+            empty_lbl.setStyleSheet("QLabel { color: #888; font-style: italic; }")
+            layout.addWidget(empty_lbl)
+
+
+        tab_layout.addWidget(group)
+        self._widgets['keyvalue_group'] = group
+
+    def _refresh_keyvalue_group(self, thing):
+        """Refresh the keyvalue display by rebuilding the property editor."""
+        self.set_object(thing)
 
     def _build_monster_groups(self, tab_layout, thing):
         for k, v in (('sight', 512), ('triggered', False), ('wake_on_sight', True),

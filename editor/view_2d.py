@@ -7,7 +7,7 @@ from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixma
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
 from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Monster,
                           LogicGate, LogicRelay, LogicTimer, LevelChanger, PathNode,
-                          LogicCamera, LogicSpawner, Portal)
+                          LogicCamera, LogicSpawner, Portal, LogicKeyValueStore)
 from editor.scene_hierarchy import SceneHierarchy
 # I/O System imports for drawing connections
 try:
@@ -2423,6 +2423,7 @@ class View2D(QWidget):
         add_logic_relay_action = logic_menu.addAction("LogicRelay")
         add_logic_timer_action = logic_menu.addAction("LogicTimer")
         add_logic_gate_action = logic_menu.addAction("LogicGate")
+        add_logic_keyvalue_action = logic_menu.addAction("KeyValue Store")
 
         # Node / Special submenu
         ai_menu = menu.addMenu("Nodes")
@@ -2481,6 +2482,9 @@ class View2D(QWidget):
         elif action == add_logic_gate_action:
             new_thing = LogicGate(pos=pos_3d)
             new_thing.properties['logic_type'] = 'AND' 
+        elif action == add_logic_keyvalue_action:
+            new_thing = LogicKeyValueStore(pos=pos_3d)
+            new_thing.properties['initial_data'] = {}
         elif action == add_logic_camera_action:
             new_thing = LogicCamera(pos=pos_3d)
         elif action == add_logic_spawner_action:

@@ -802,6 +802,101 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('logic_spawner', 'disable',       spawner_disable)
     io_manager.register_input_handler('logic_spawner', 'settargetnode', spawner_set_target)
 
+    # ==========================================================================
+    # LOGIC KEYVALUE STORE INPUTS
+    # ==========================================================================
+
+    def keyvalue_setvalue(entity, param, logic):
+        """Set a key/value pair. Parameter format: 'key=value' or just 'key' (value='1')."""
+        if not param:
+            return
+        if '=' in param:
+            key, value = param.split('=', 1)
+        else:
+            key, value = param.strip(), "1"
+        success = entity.set_value(key.strip(), value.strip())
+        store_name = entity.properties.get('store_name', entity.properties.get('name', 'unknown'))
+        if success:
+            debug_log("IO", f"LogicKeyValueStore '{store_name}': set '{key}' = '{value}'")
+            logic.io_manager.fire_output(entity, 'OnValueSet')
+        else:
+            debug_log("IO", f"LogicKeyValueStore '{store_name}': FAILED to set '{key}' (store full?)")
+            logic.io_manager.fire_output(entity, 'OnStoreFull')
+
+    def keyvalue_getvalue(entity, param, logic):
+        """Read a key and fire OnValueRead with the value as parameter."""
+        if not param:
+            logic.io_manager.fire_output(entity, 'OnKeyNotFound')
+            return
+        key = param.strip()
+        value = entity.get_value(key, "<missing>")
+        if value == "<missing>":
+            logic.io_manager.fire_output(entity, 'OnKeyNotFound')
+        else:
+            logic.io_manager.fire_output(entity, 'OnValueRead')
+
+    def keyvalue_clearkey(entity, param, logic):
+        """Remove a single key."""
+        if not param:
+            return
+        key = param.strip()
+        existed = entity.clear_key(key)
+        if existed:
+            logic.io_manager.fire_output(entity, 'OnKeyCleared')
+
+    def keyvalue_clearall(entity, param, logic):
+        """Remove all keys."""
+        entity.clear_all()
+
+    def keyvalue_copyfrom(entity, param, logic):
+        """Copy all keys from another LogicKeyValueStore by store_name."""
+        if not param:
+            return
+        other_name = param.strip()
+        success = entity.copy_from(other_name)
+        if success and logic.io_manager:
+            logic.io_manager.fire_output(entity, 'OnValueSet')
+
+    def keyvalue_increment(entity, param, logic):
+        """Increment an integer value. Parameter: 'key,amount' or just 'key'."""
+        if not param:
+            return
+        if ',' in param:
+            key, amount_str = param.split(',', 1)
+            try:
+                amount = int(amount_str.strip())
+            except ValueError:
+                amount = 1
+        else:
+            key, amount = param.strip(), 1
+        new_val = entity.increment(key.strip(), amount)
+        if logic.io_manager:
+            logic.io_manager.fire_output(entity, 'OnValueSet')
+
+    def keyvalue_decrement(entity, param, logic):
+        """Decrement an integer value. Parameter: 'key,amount' or just 'key'."""
+        if not param:
+            return
+        if ',' in param:
+            key, amount_str = param.split(',', 1)
+            try:
+                amount = int(amount_str.strip())
+            except ValueError:
+                amount = 1
+        else:
+            key, amount = param.strip(), 1
+        new_val = entity.decrement(key.strip(), amount)
+        if logic.io_manager:
+            logic.io_manager.fire_output(entity, 'OnValueSet')
+
+    io_manager.register_input_handler('logic_keyvalue', 'setvalue',   keyvalue_setvalue)
+    io_manager.register_input_handler('logic_keyvalue', 'getvalue',   keyvalue_getvalue)
+    io_manager.register_input_handler('logic_keyvalue', 'clearkey',   keyvalue_clearkey)
+    io_manager.register_input_handler('logic_keyvalue', 'clearall',   keyvalue_clearall)
+    io_manager.register_input_handler('logic_keyvalue', 'copyfrom',   keyvalue_copyfrom)
+    io_manager.register_input_handler('logic_keyvalue', 'increment',  keyvalue_increment)
+    io_manager.register_input_handler('logic_keyvalue', 'decrement',  keyvalue_decrement)
+
 
     # ==========================================================================
     # PORTAL INPUTS

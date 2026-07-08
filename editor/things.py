@@ -1319,6 +1319,183 @@ class Portal(Thing):
                 logic.io_manager.fire_output(self, ev)
 
 
+
+# =============================================================================
+# KEY/VALUE STORE ENTITY
+# =============================================================================
+
+class LogicKeyValueStore(Thing):
+    """
+    A persistent key/value store that survives level transitions.
+
+    Stores up to 25 key/value pairs (strings). Other entities can query
+    values via I/O inputs, and values can be set/read during gameplay.
+
+    The store is identified by its store_name — if a store with the same name
+    exists in the destination level, its values are preserved across
+    the transition. This allows cross-level state like quest progress,
+    puzzle solutions, or flags to persist.
+
+    Properties:
+      - store_name (str): Unique identifier for this store (defaults to entity name).
+                          Levels that share the same store_name will sync values.
+      - initial_data (dict): Up to 25 key/value pairs set at design time.
+
+    I/O Inputs:
+      - SetValue:    Set a key/value pair. Parameter format: "key=value"
+      - GetValue:    Fire OnValueRead with the value of the given key as parameter.
+      - ClearKey:    Remove a single key.
+      - ClearAll:    Remove all keys.
+      - CopyFrom:    Copy all keys from another LogicKeyValueStore by name.
+      - Increment:   Treat value as int and increment. Parameter: "key,amount"
+      - Decrement:   Treat value as int and decrement. Parameter: "key,amount"
+
+    I/O Outputs:
+      - OnValueSet:      Fired when any key is set (parameter = "key=value")
+      - OnValueRead:     Fired by GetValue (parameter = value, or "<missing>")
+      - OnKeyCleared:    Fired when a key is removed (parameter = key name)
+      - OnStoreFull:     Fired when trying to add a 26th key
+      - OnKeyNotFound:   Fired when GetValue targets a missing key
+    """
+    pixmap_path = "assets/sprites/logic_keyvalue.png"
+
+    # Class-level registry of persistent stores across level transitions.
+    # Keyed by store_name, stores the dict of values. Survives as long as
+    # the Python process lives (i.e., across level loads within one session).
+    _persistent_registry = {}
+
+    MAX_PAIRS = 25
+
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties['type'] = 'logic_keyvalue'
+        self.properties.setdefault('store_name', self.properties.get('name', ''))
+
+        # initial_data holds the designer-specified defaults.
+        # Stored as a dict; serialised to/from JSON as needed.
+        self.properties.setdefault('initial_data', {})
+
+        # Runtime data — merged from persistent registry + initial_data
+        self._runtime_data = {}
+        self._sync_from_persistent()
+
+    def _sync_from_persistent(self):
+        """Load values from the persistent registry, falling back to initial_data."""
+        store_name = self.properties.get('store_name', '')
+        if store_name and store_name in LogicKeyValueStore._persistent_registry:
+            self._runtime_data = dict(LogicKeyValueStore._persistent_registry[store_name])
+        else:
+            # Deep copy initial_data so we don't mutate the property directly
+            initial = self.properties.get('initial_data', {})
+            if isinstance(initial, dict):
+                self._runtime_data = {k: str(v) for k, v in initial.items()}
+            else:
+                self._runtime_data = {}
+
+    def _sync_to_persistent(self):
+        """Write current runtime values back to the persistent registry."""
+        store_name = self.properties.get('store_name', '')
+        if store_name:
+            LogicKeyValueStore._persistent_registry[store_name] = dict(self._runtime_data)
+
+    def set_value(self, key, value):
+        """Set a key/value pair. Returns False if store is full (25 keys)."""
+        key = str(key).strip()
+        value = str(value)
+        if not key:
+            return False
+
+        if key in self._runtime_data:
+            self._runtime_data[key] = value
+            self._sync_to_persistent()
+            return True
+
+        if len(self._runtime_data) >= self.MAX_PAIRS:
+            return False
+
+        self._runtime_data[key] = value
+        self._sync_to_persistent()
+        return True
+
+    def get_value(self, key, default="<missing>"):
+        """Get the value for a key, or default if not present."""
+        return self._runtime_data.get(str(key).strip(), default)
+
+    def clear_key(self, key):
+        """Remove a single key. Returns True if the key existed."""
+        key = str(key).strip()
+        if key in self._runtime_data:
+            del self._runtime_data[key]
+            self._sync_to_persistent()
+            return True
+        return False
+
+    def clear_all(self):
+        """Remove all keys."""
+        self._runtime_data.clear()
+        self._sync_to_persistent()
+
+    def get_all_pairs(self):
+        """Return a copy of all key/value pairs."""
+        return dict(self._runtime_data)
+
+    def get_pair_count(self):
+        """Return the number of stored pairs."""
+        return len(self._runtime_data)
+
+    def copy_from(self, other_store_name):
+        """Copy all key/value pairs from another store by name."""
+        if other_store_name in LogicKeyValueStore._persistent_registry:
+            source = LogicKeyValueStore._persistent_registry[other_store_name]
+            # Only copy up to MAX_PAIRS total
+            for k, v in source.items():
+                if len(self._runtime_data) >= self.MAX_PAIRS and k not in self._runtime_data:
+                    break
+                self._runtime_data[k] = v
+            self._sync_to_persistent()
+            return True
+        return False
+
+    def increment(self, key, amount=1):
+        """Treat value as integer and increment. Returns new value or 0 if not numeric."""
+        key = str(key).strip()
+        try:
+            current = int(self._runtime_data.get(key, "0"))
+        except ValueError:
+            current = 0
+        new_val = current + amount
+        self._runtime_data[key] = str(new_val)
+        self._sync_to_persistent()
+        return new_val
+
+    def decrement(self, key, amount=1):
+        """Treat value as integer and decrement."""
+        return self.increment(key, -amount)
+
+    def to_dict(self):
+        """Override to_dict to include runtime data in the persistent registry."""
+        # Ensure persistent registry is up to date before serialising
+        self._sync_to_persistent()
+        result = super().to_dict()
+        # Also embed current runtime data so save files are self-contained
+        result['runtime_data'] = dict(self._runtime_data)
+        return result
+
+    @staticmethod
+    def from_dict(data):
+        """Override from_dict to restore runtime data from save file."""
+        thing = Thing.from_dict(data)
+        if thing and isinstance(thing, LogicKeyValueStore):
+            # Restore runtime data from save file if present
+            runtime = data.get('runtime_data', {})
+            if isinstance(runtime, dict):
+                thing._runtime_data = {k: str(v) for k, v in runtime.items()}
+                thing._sync_to_persistent()
+            else:
+                thing._sync_from_persistent()
+        return thing
+
+
 # =============================================================================
 # ENTITY REGISTRY
 # =============================================================================
@@ -1339,12 +1516,13 @@ ENTITY_TYPES = {
     'LogicCamera': LogicCamera,
     'LogicSpawner': LogicSpawner,
     'Portal': Portal,
+    'LogicKeyValueStore': LogicKeyValueStore,
 }
 
 # Categories for editor UI
 ENTITY_CATEGORIES = {
     'Gameplay': ['PlayerStart', 'Monster', 'Pickup', 'LevelChanger'],
     'Environment': ['Light', 'Speaker', 'Model', 'Portal'],
-    'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCamera', 'LogicSpawner'],
+    'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCamera', 'LogicSpawner', 'LogicKeyValueStore'],
     'AI': ['PathNode'],
 }
