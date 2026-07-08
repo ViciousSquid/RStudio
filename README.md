@@ -48,6 +48,7 @@ Fio explores a unified approach to level editing and runtime simulation:
 - Monsters with node-based pathfinding
 - Triggers, timers, and logic gates
 - Procedural terrain and liminal level generators
+- Keys/values can be stored globally (persists across level changes)
 
 ### Rendering
 - OpenGL 3.3 forward renderer
