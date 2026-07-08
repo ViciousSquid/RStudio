@@ -15,6 +15,7 @@
 - Generate fully playable procedural maps with one click
 - Entity I/O logic system inspired by Source engine
 - Classic brush-based CSG editing
+- Non-Euclidean portal connections between any two points in a level
 - Export creations as self-contained packages
 - Local split-screen multiplayer
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
@@ -38,6 +39,7 @@ Fio explores a unified approach to level editing and runtime simulation:
 - Reintroducing brush/CSG-based workflows in a modern runtime
 - Treating gameplay logic as a visible, editable system
 - Supporting rapid experimental iteration in rendering and world design
+- Enabling non-Euclidean level design without engine modifications
 
   -----------------
 
@@ -51,7 +53,9 @@ Fio explores a unified approach to level editing and runtime simulation:
 - OpenGL 3.3 forward renderer
 - Dynamic lighting, shadows, fog, glass and water
 - Frustum culling
-- World portals
+- **World portals** — non-Euclidean view-through portals with stencil-buffer masking, 
+  oblique near-plane clipping, and I/O-driven fade transitions. Place two portals, 
+  link them by name, walk through seamlessly.
 
 ### Under the Hood
 - Python 3.10+ runtime
