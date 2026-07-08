@@ -99,8 +99,7 @@ Contributions, feedback, and experiments are welcome. Check issues or open a dis
 
 
 
-
-<img src="https://github.com/user-attachments/assets/824184c7-643a-4619-b6ce-cfaebca71901" width="800">
+<img src="https://github.com/ViciousSquid/Fio/blob/1.3.0.0_Latest/assets/__portal.gif" width="800">
 
 
 
