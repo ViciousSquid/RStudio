@@ -234,9 +234,13 @@ class IOManager:
         self.pending_events.clear()
         self.current_time = 0.0
     
-    def fire_output(self, source_entity, output_name: str):
+    def fire_output(self, source_entity, output_name: str, value: str = None):
         """
         Fire an output from an entity (thing), triggering all connected inputs.
+
+        If 'value' is given, it is passed to any connection whose editor-authored
+        parameter is blank (Source-engine style parameter pass-through). A
+        connection with an explicit parameter always keeps its own parameter.
         """
         connections = self._get_connections(source_entity)
         source_name = self._get_entity_name(source_entity)
@@ -254,6 +258,12 @@ class IOManager:
             
             conn._fired = True
             
+            # Parameter pass-through: blank editor parameter inherits the
+            # dynamic value fired with this output (if any).
+            effective_param = conn.parameter
+            if not effective_param and value is not None:
+                effective_param = value
+            
             delay_str = f" (delay {conn.delay}s)" if conn.delay > 0 else ""
             io_log(f"{source_name}.{output_name} -> {conn.target_name}.{conn.input_name}{delay_str}")
             
@@ -262,7 +272,7 @@ class IOManager:
                     fire_time=self.current_time + conn.delay,
                     target_name=conn.target_name,
                     input_name=conn.input_name,
-                    parameter=conn.parameter,
+                    parameter=effective_param,
                     source_name=source_name,
                     connection=conn,
                     target_id=conn.target_id
@@ -270,7 +280,7 @@ class IOManager:
                 self.pending_events.append(event)
             else:
                 self._execute_input(conn.target_name, conn.input_name, 
-                                conn.parameter, source_name,
+                                effective_param, source_name,
                                 target_id=conn.target_id)
         
         if matching_count == 0:
@@ -796,13 +806,16 @@ def register_default_io():
             IODef('CopyFrom',      'Copy all keys from another store by name', 'string'),
             IODef('Increment',     'Increment integer value (param: "key,amount")', 'string'),
             IODef('Decrement',     'Decrement integer value (param: "key,amount")', 'string'),
+            IODef('TestValue',     'Compare a key against a value (param: "key==val", also != > < >= <=)', 'string'),
         ],
         outputs=[
             IODef('OnValueSet',    'Fired when any key is set (param: "key=value")'),
-            IODef('OnValueRead',   'Fired by GetValue (param: value or "<missing>")'),
+            IODef('OnValueRead',   'Fired by GetValue (param: value)'),
             IODef('OnKeyCleared',  'Fired when a key is removed (param: key name)'),
             IODef('OnStoreFull',   'Fired when trying to add beyond 25 keys'),
-            IODef('OnKeyNotFound', 'Fired when GetValue targets a missing key'),
+            IODef('OnKeyNotFound', 'Fired when GetValue/TestValue targets a missing key'),
+            IODef('OnCompareTrue', 'Fired when TestValue comparison passes (param: actual value)'),
+            IODef('OnCompareFalse','Fired when TestValue comparison fails (param: actual value)'),
         ]
     )
 

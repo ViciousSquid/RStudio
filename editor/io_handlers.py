@@ -818,7 +818,7 @@ def register_all_input_handlers(io_manager: IOManager):
         store_name = entity.properties.get('store_name', entity.properties.get('name', 'unknown'))
         if success:
             debug_log("IO", f"LogicKeyValueStore '{store_name}': set '{key}' = '{value}'")
-            logic.io_manager.fire_output(entity, 'OnValueSet')
+            logic.io_manager.fire_output(entity, 'OnValueSet', value=f"{key.strip()}={value.strip()}")
         else:
             debug_log("IO", f"LogicKeyValueStore '{store_name}': FAILED to set '{key}' (store full?)")
             logic.io_manager.fire_output(entity, 'OnStoreFull')
@@ -831,9 +831,53 @@ def register_all_input_handlers(io_manager: IOManager):
         key = param.strip()
         value = entity.get_value(key, "<missing>")
         if value == "<missing>":
-            logic.io_manager.fire_output(entity, 'OnKeyNotFound')
+            logic.io_manager.fire_output(entity, 'OnKeyNotFound', value=key)
         else:
-            logic.io_manager.fire_output(entity, 'OnValueRead')
+            # Pass the value through: connections with a blank parameter
+            # receive it (e.g. GameText.SetText, LogicCase.Test, etc.)
+            logic.io_manager.fire_output(entity, 'OnValueRead', value=value)
+
+    def keyvalue_testvalue(entity, param, logic):
+        """
+        Compare a stored key against an expected value and branch.
+        Parameter: "key==value" (also supports !=, >=, <=, >, <).
+        Fires OnCompareTrue / OnCompareFalse with the actual value as payload,
+        or OnKeyNotFound if the key doesn't exist.
+        """
+        if not param:
+            return
+        # Order matters: check two-char operators before their one-char prefixes
+        for op in ('==', '!=', '>=', '<=', '>', '<'):
+            if op in param:
+                key, expected = param.split(op, 1)
+                key, expected = key.strip(), expected.strip()
+                break
+        else:
+            return  # no operator found
+
+        actual = entity.get_value(key, "<missing>")
+        if actual == "<missing>":
+            logic.io_manager.fire_output(entity, 'OnKeyNotFound', value=key)
+            return
+
+        # Numeric comparison when both sides parse as numbers, else string
+        try:
+            a, b = float(actual), float(expected)
+        except ValueError:
+            a, b = actual, expected
+            if op in ('>', '<', '>=', '<='):
+                # Ordered comparison on strings is rarely intended; fall back
+                # to lexicographic, which Python supports natively.
+                pass
+
+        result = {
+            '==': a == b, '!=': a != b,
+            '>':  a > b,  '<':  a < b,
+            '>=': a >= b, '<=': a <= b,
+        }[op]
+
+        ev = 'OnCompareTrue' if result else 'OnCompareFalse'
+        logic.io_manager.fire_output(entity, ev, value=actual)
 
     def keyvalue_clearkey(entity, param, logic):
         """Remove a single key."""
@@ -891,6 +935,7 @@ def register_all_input_handlers(io_manager: IOManager):
 
     io_manager.register_input_handler('logic_keyvalue', 'setvalue',   keyvalue_setvalue)
     io_manager.register_input_handler('logic_keyvalue', 'getvalue',   keyvalue_getvalue)
+    io_manager.register_input_handler('logic_keyvalue', 'testvalue',  keyvalue_testvalue)
     io_manager.register_input_handler('logic_keyvalue', 'clearkey',   keyvalue_clearkey)
     io_manager.register_input_handler('logic_keyvalue', 'clearall',   keyvalue_clearall)
     io_manager.register_input_handler('logic_keyvalue', 'copyfrom',   keyvalue_copyfrom)
