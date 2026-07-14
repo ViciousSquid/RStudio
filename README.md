@@ -40,6 +40,7 @@ Fio explores a unified approach to level editing and runtime simulation:
 - Treating gameplay logic as a visible, editable system
 - Supporting rapid experimental iteration in rendering and world design
 - Enabling non-Euclidean level design without engine modifications
+- Decision tracking/branching narratives: maps can affect other maps
 
   -----------------
 
