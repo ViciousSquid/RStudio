@@ -220,6 +220,12 @@ class BaseRenderer:
         self._frame_lights_uploaded = False
         self._current_shader = None
 
+        # PERF: memoized monster-sprite texture-key strings, keyed by the
+        # (type, variant, sprite_type, custom) tuple that determines them —
+        # avoids rebuilding the same f-string every frame for every visible
+        # monster (draw_sprites runs once per visible monster per frame).
+        self._sprite_tex_key_cache = {}
+
         self._proj_ptr = None
         self._view_ptr = None
 
@@ -862,7 +868,11 @@ class BaseRenderer:
 
                 mtype = thing.get('monster_type', 'human')
                 variant = thing.get('variant', '<None>')
-                tex_key = f"msprite_{mtype}_{variant}_{sprite_type}_{custom}"
+                key_tuple = (mtype, variant, sprite_type, custom)
+                tex_key = self._sprite_tex_key_cache.get(key_tuple)
+                if tex_key is None:
+                    tex_key = f"msprite_{mtype}_{variant}_{sprite_type}_{custom}"
+                    self._sprite_tex_key_cache[key_tuple] = tex_key
                 tex_id = sprite_textures.get(tex_key)
                 if tex_id is None:
                     if custom:

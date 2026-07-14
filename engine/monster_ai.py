@@ -66,10 +66,13 @@ class MonsterAI:
         player_pos = self.lt.player.pos
         self._debug_rays.clear()
 
-        for thing in self.lt.things:
-            if not isinstance(thing, MonsterThing):
-                continue
+        # PERF: iterate the precomputed monster list instead of isinstance-
+        # scanning every brush/thing in the level every tick.
+        monster_things = getattr(self.lt, '_monster_things', None)
+        if monster_things is None:
+            monster_things = [t for t in self.lt.things if isinstance(t, MonsterThing)]
 
+        for thing in monster_things:
             if thing.properties.get('hidden', False):
                 thing.properties.pop('is_shooting', None)
                 continue
@@ -117,9 +120,10 @@ class MonsterAI:
                     thing.properties['awake'] = True
                     awake = True
                 else:
-                    # Check if player is in sight range
-                    dist_to_player = glm.distance(player_pos, glm.vec3(thing.pos))
-                    if dist_to_player <= MONSTER_SIGHT_RANGE:
+                    # Check if player is in sight range (squared distance — threshold-only compare)
+                    diff_to_player = player_pos - glm.vec3(thing.pos)
+                    dist_to_player_sq = glm.dot(diff_to_player, diff_to_player)
+                    if dist_to_player_sq <= MONSTER_SIGHT_RANGE * MONSTER_SIGHT_RANGE:
                         thing.properties['awake'] = True
                         awake = True
                     else:
@@ -274,9 +278,11 @@ class MonsterAI:
                     'color': 'green' if has_los else 'red',
                 })
 
-            distance = glm.distance(thing_pos, target_pos)
+            # PERF: squared distance — every use below is a threshold compare.
+            _dist_diff = thing_pos - target_pos
+            distance_sq = glm.dot(_dist_diff, _dist_diff)
 
-            if distance <= MONSTER_SIGHT_RANGE:
+            if distance_sq <= MONSTER_SIGHT_RANGE * MONSTER_SIGHT_RANGE:
                 # ---- Entered sight range ----
                 if not state['in_sight']:
                     state['in_sight'] = True
@@ -297,7 +303,7 @@ class MonsterAI:
                                 f'<span style="color: #AB47BC; font-weight: bold;">player</span>')
 
                 # ---- Move toward target ----
-                if distance > MONSTER_STOP_DISTANCE:
+                if distance_sq > MONSTER_STOP_DISTANCE * MONSTER_STOP_DISTANCE:
                     direction = target_pos - thing_pos
                     dir_len = glm.length(direction)
                     if dir_len > 0.001:
@@ -329,7 +335,7 @@ class MonsterAI:
 
                     if mtype == 'flying':
                         # ---- Flying monsters: bite if very close, else projectile ----
-                        if distance <= MONSTER_BITE_DISTANCE and aggro_monster is None:
+                        if distance_sq <= MONSTER_BITE_DISTANCE * MONSTER_BITE_DISTANCE and aggro_monster is None:
                             # Bite attack: instant hitscan, double damage
                             bite_damage = int(damage * MONSTER_BITE_DAMAGE_MULT)
                             self.lt._apply_player_damage(bite_damage)
@@ -393,7 +399,7 @@ class MonsterAI:
                         self.lt.io_manager.fire_output(thing, 'OnLostPlayer')
                     if self.monster_debug_active:
                         name = thing.properties.get('name', '?')
-                        debug_log("MonsterAI", f"{name} lost target (dist={distance:.0f})")
+                        debug_log("MonsterAI", f"{name} lost target (dist={math.sqrt(distance_sq):.0f})")
 
                 thing.properties['is_shooting'] = False
                 state['anim_timer'] = 0.0
@@ -432,6 +438,9 @@ class MonsterAI:
 
     def _find_monster_by_id(self, monster_id: int):
         """Return a living Monster thing by Python id, or None."""
+        monster_by_id = getattr(self.lt, '_monster_by_id', None)
+        if monster_by_id is not None:
+            return monster_by_id.get(monster_id)
         for t in self.lt.things:
             if isinstance(t, MonsterThing) and id(t) == monster_id:
                 return t
@@ -445,11 +454,13 @@ class MonsterAI:
             return None
 
         my_pos = glm.vec3(thing.pos)
-        best_dist = float('inf')
+        best_dist_sq = float('inf')
         best_monster = None
+        max_range_sq = max_range * max_range
+        monster_things = getattr(self.lt, '_monster_things', None) or self.lt.things
 
-        for t in self.lt.things:
-            if not isinstance(t, MonsterThing):
+        for t in monster_things:
+            if monster_things is self.lt.things and not isinstance(t, MonsterThing):
                 continue
             if t is thing:
                 continue
@@ -461,11 +472,14 @@ class MonsterAI:
             if other_team == my_team:
                 continue  # Same team = ally, not enemy
 
-            dist = glm.distance(my_pos, glm.vec3(t.pos))
-            if dist > max_range:
+            # PERF: compare squared distances — only used for a threshold
+            # and closest-of check, so the sqrt in glm.distance is wasted.
+            diff = my_pos - glm.vec3(t.pos)
+            dist_sq = glm.dot(diff, diff)
+            if dist_sq > max_range_sq:
                 continue
-            if dist < best_dist:
-                best_dist = dist
+            if dist_sq < best_dist_sq:
+                best_dist_sq = dist_sq
                 best_monster = t
 
         return best_monster
@@ -488,9 +502,10 @@ class MonsterAI:
         best_t = ray_len
         best_victim = None
         shooter_team = shooter.properties.get('team', '')
+        monster_things = getattr(self.lt, '_monster_things', None) or self.lt.things
 
-        for t in self.lt.things:
-            if not isinstance(t, MonsterThing):
+        for t in monster_things:
+            if monster_things is self.lt.things and not isinstance(t, MonsterThing):
                 continue
             if t is shooter:
                 continue
@@ -635,15 +650,18 @@ class MonsterAI:
         hearing_range = float(monster.properties.get('sight', MONSTER_SIGHT_RANGE))
 
         # Find the most recent gunfire event within hearing range
+        # PERF: squared distance — only used for threshold + closest compares.
         best_event = None
-        best_dist = float('inf')
+        best_dist_sq = float('inf')
+        hearing_range_sq = hearing_range * hearing_range
         current_time = time.perf_counter()
 
         for event in gunfire_events:
             sound_pos = glm.vec3(event['pos'][0], event['pos'][1], event['pos'][2])
-            dist = glm.distance(thing_pos, sound_pos)
-            if dist <= hearing_range and dist < best_dist:
-                best_dist = dist
+            diff = thing_pos - sound_pos
+            dist_sq = glm.dot(diff, diff)
+            if dist_sq <= hearing_range_sq and dist_sq < best_dist_sq:
+                best_dist_sq = dist_sq
                 best_event = event
 
         if best_event is None:
@@ -662,7 +680,8 @@ class MonsterAI:
             return False
 
         # Check if we've arrived at the sound source (within 64 units)
-        if glm.distance(thing_pos, sound_pos) <= 64.0:
+        _arrive_diff = thing_pos - sound_pos
+        if glm.dot(_arrive_diff, _arrive_diff) <= 64.0 * 64.0:
             # Reached the sound location - look around briefly then resume patrol
             if self.monster_debug_active:
                 name = monster.properties.get('name', '?')

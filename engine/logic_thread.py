@@ -196,6 +196,9 @@ class LogicThread(threading.Thread):
         # Mover/Door Lists
         self.movers = []
         self.doors = []
+        # PERF: cached brush-only views of self.movers/self.doors (see _init_movers/_init_doors)
+        self._mover_brush_list = []
+        self._door_brush_list = []
         
         # Mover Animation State
         self.mover_states = {}
@@ -211,6 +214,9 @@ class LogicThread(threading.Thread):
 
         # Model collision pseudo-brushes for things with model_path
         self._model_collision_brushes: list = []
+        # PERF: cached self.brushes + self._model_collision_brushes (see
+        # _refresh_collision_brushes_cache)
+        self._collision_brushes_cache: list = []
 
         # Global toggle for model collision (F6 in play mode)
         self.model_collision_enabled = True
@@ -243,6 +249,12 @@ class LogicThread(threading.Thread):
         # Entity lookup caches — built on play-mode enter
         self._name_cache = {}
         self._id_cache = {}
+        self._trigger_brushes = []
+        self._trigger_brush_by_bid = {}
+        self._pickup_things = []
+        self._levelchanger_things = []
+        self._monster_things = []
+        self._monster_by_id = {}
 
         # ── Portal transit state ───────────────────────────────────────────
         self._portal_last_side: Dict[int, float] = {}
@@ -283,7 +295,14 @@ class LogicThread(threading.Thread):
     # =========================================================================
     
     def _build_entity_caches(self):
-        """Build O(1) lookup dicts for I/O entity resolution."""
+        """Build O(1) lookup dicts for I/O entity resolution.
+
+        Also precomputes per-tick filtered entity lists (trigger brushes,
+        pickups, level changers) so hot-path tick handlers don't have to
+        linearly rescan the full brush/thing lists every frame — these are
+        rebuilt here (play-mode enter, and whenever a thing is spawned) since
+        that's the only time the underlying brush/thing collections change.
+        """
         self._name_cache = {}
         self._id_cache   = {}
         for b in self.brushes:
@@ -300,6 +319,22 @@ class LogicThread(threading.Thread):
             i = t.properties.get('id')
             if i:
                 self._id_cache[i] = t
+
+        # PERF: precomputed trigger-brush list + bid lookup for _handle_triggers
+        self._trigger_brushes = [
+            (b.get('id') or i, b) for i, b in enumerate(self.brushes) if b.get('is_trigger')
+        ]
+        self._trigger_brush_by_bid = dict(self._trigger_brushes)
+
+        # PERF: precomputed thing lists for _handle_interactions / _handle_pickups
+        self._pickup_things = [t for t in self.things if Pickup and isinstance(t, Pickup)]
+        self._levelchanger_things = [t for t in self.things if LevelChanger and isinstance(t, LevelChanger)]
+
+        # PERF: precomputed monster list + id lookup, used by MonsterAI so it
+        # doesn't have to isinstance-scan the full (brushes+things) list of
+        # every entity in the level on every AI tick.
+        self._monster_things = [t for t in self.things if MonsterThing and isinstance(t, MonsterThing)]
+        self._monster_by_id = {id(t): t for t in self._monster_things}
 
     def _find_entity_by_name(self, name: str):
         if not name:
@@ -558,8 +593,20 @@ class LogicThread(threading.Thread):
             self._model_collision_brushes = []
             if self.play_mode and hasattr(self, '_spatial_grid') and self._spatial_grid:
                 self._spatial_grid.populate(self.brushes)
+        self._refresh_collision_brushes_cache()
 
         return self.model_collision_enabled
+
+    def _refresh_collision_brushes_cache(self):
+        """Recompute the combined static+model collision brush list.
+
+        PERF: `self.brushes + self._model_collision_brushes` was previously
+        rebuilt (a full list concatenation) every single tick — and, worse,
+        once per active projectile per tick. Both collections only change
+        here (model-collision toggle, play-mode enter/exit), so cache the
+        concatenation and reuse it from the hot paths instead.
+        """
+        self._collision_brushes_cache = self.brushes + self._model_collision_brushes
 
     # =========================================================================
     # PLAYER & MODE MANAGEMENT
@@ -592,6 +639,7 @@ class LogicThread(threading.Thread):
 
             # Build collision brushes for model entities
             self._model_collision_brushes = self._build_model_collision_brushes()
+            self._refresh_collision_brushes_cache()
 
             # Reset player stats
             self.player_health = 100
@@ -701,6 +749,7 @@ class LogicThread(threading.Thread):
             self._reset_parented_lights()
             self._reset_parented_portals()
             self._model_collision_brushes = []
+            self._refresh_collision_brushes_cache()
             self.current_hud_message = ""
             self.gate_inputs = {}
             self.timer_states = {}
@@ -844,6 +893,9 @@ class LogicThread(threading.Thread):
                     }
                 elif not brush.get('move_once', False):
                     self.mover_states[i] = {'progress': 0.0, 'forward': True}
+        # PERF: cache the brush-only view of self.movers — was rebuilt via a
+        # list comprehension every tick in _tick_play_mode.
+        self._mover_brush_list = [b for _, b in self.movers]
 
     def _reset_movers(self):
         self.movers = []
@@ -851,6 +903,7 @@ class LogicThread(threading.Thread):
             if brush.get('is_mover') and 'original_pos' in brush:
                 brush['pos'] = list(brush['original_pos'])
         self.mover_states = {}
+        self._mover_brush_list = []
 
     def _init_doors(self):
         self.door_states = {}
@@ -870,6 +923,9 @@ class LogicThread(threading.Thread):
                 self.doors.append((i, brush))
                 if 'original_pos' not in brush:
                     brush['original_pos'] = list(brush['pos'])
+                # PERF: DOOR_DIRECTION_MAP entries are already unit vectors,
+                # and door direction never changes at runtime, so normalize
+                # once here instead of every tick in _update_doors.
                 self.door_states[i] = {
                     'progress': 0.0,
                     'state': 'closed',
@@ -877,7 +933,11 @@ class LogicThread(threading.Thread):
                     'speed': speed,
                     'distance': distance,
                     'direction': direction,
+                    '_direction_np': np.array(direction, dtype=float),
                 }
+        # PERF: cache the brush-only view of self.doors — was rebuilt via a
+        # list comprehension every tick in _tick_play_mode.
+        self._door_brush_list = [b for _, b in self.doors]
 
     def _reset_doors(self):
         self.doors = []
@@ -885,6 +945,7 @@ class LogicThread(threading.Thread):
             if brush.get('is_door') and 'original_pos' in brush:
                 brush['pos'] = list(brush['original_pos'])
         self.door_states = {}
+        self._door_brush_list = []
 
     def _trigger_door_open(self, door_idx: int, brush: dict):
         """Start opening a door if it is currently closed or closing."""
@@ -1040,11 +1101,9 @@ class LogicThread(threading.Thread):
         crouch = Key_C in keys
         
         # Physics update
-        mover_brushes = [b for _, b in self.movers]
-        door_brushes = [b for _, b in self.doors]
-        collision_brushes = self.brushes + self._model_collision_brushes
-        self.player.update(delta, move_dir, jump, crouch, collision_brushes, 
-                          mover_brushes, door_brushes, self.terrain,
+        collision_brushes = self._collision_brushes_cache
+        self.player.update(delta, move_dir, jump, crouch, collision_brushes,
+                          self._mover_brush_list, self._door_brush_list, self.terrain,
                           spatial_grid=getattr(self, '_spatial_grid', None))
         
         # Gameplay
@@ -1082,12 +1141,10 @@ class LogicThread(threading.Thread):
             self.player2.angle -= turn_input * self.p2_turn_sensitivity * delta
             self.player2.pitch -= float(p2['look_dy']) * 0.002
             self.player2.pitch = max(-1.5, min(1.5, self.player2.pitch))
-            mover_brushes = [b for _, b in self.movers]
-            door_brushes  = [b for _, b in self.doors]
             self.player2.update(
                 delta, p2_dir,
                 bool(p2['jump']), False,   # crouch removed
-                collision_brushes, mover_brushes, door_brushes, self.terrain,
+                collision_brushes, self._mover_brush_list, self._door_brush_list, self.terrain,
                 spatial_grid=getattr(self, '_spatial_grid', None),
             )
 
@@ -1238,9 +1295,7 @@ class LogicThread(threading.Thread):
         player_pos = self.player.pos
         currently_in = set()
         
-        for i, brush in enumerate(self.brushes):
-            if not brush.get('is_trigger'):
-                continue
+        for bid, brush in self._trigger_brushes:
             if brush.get('disabled', False):
                 continue
             pos = glm.vec3(brush['pos'])
@@ -1248,12 +1303,11 @@ class LogicThread(threading.Thread):
             half_size = size / 2.0
             min_b = pos - half_size
             max_b = pos + half_size
-            
+
             inside = (min_b.x <= player_pos.x <= max_b.x and
                      min_b.y <= player_pos.y <= max_b.y and
                      min_b.z <= player_pos.z <= max_b.z)
-            
-            bid = brush.get('id') or i
+
             activation = brush.get('trigger_activation', 'touch').lower()
 
             if activation == 'use':
@@ -1287,12 +1341,7 @@ class LogicThread(threading.Thread):
         
         for bid in self.player_in_triggers:
             if bid not in currently_in:
-                brush = None
-                for j, b in enumerate(self.brushes):
-                    b_bid = b.get('id') or j
-                    if b_bid == bid:
-                        brush = b
-                        break
+                brush = self._trigger_brush_by_bid.get(bid)
                 if brush:
                     self._on_trigger_exit(brush, bid)
         
@@ -1363,9 +1412,7 @@ class LogicThread(threading.Thread):
         
         found_door_idx = -1
         found_door_brush = None
-        for i, brush in enumerate(self.brushes):
-            if not brush.get('is_door'):
-                continue
+        for i, brush in self.doors:
             pos = brush['pos']
             size = brush['size']
             dx = abs(pos[0] - px)
@@ -1418,9 +1465,7 @@ class LogicThread(threading.Thread):
         if Pickup and not door_consumed_use:
             p_pos = glm.vec3(px, py, pz)
             p_forward = glm.vec3(math.sin(self.player.angle), 0, math.cos(self.player.angle))
-            for thing in self.things:
-                if not isinstance(thing, Pickup):
-                    continue
+            for thing in self._pickup_things:
                 if thing.properties.get('collected', False):
                     continue
                 if thing.properties.get('activation') != 'use':
@@ -1444,9 +1489,7 @@ class LogicThread(threading.Thread):
         if not door_consumed_use:
             p_pos = glm.vec3(px, py, pz)
             p_forward = glm.vec3(math.sin(self.player.angle), 0, math.cos(self.player.angle))
-            for thing in self.things:
-                if not isinstance(thing, LevelChanger):
-                    continue
+            for thing in self._levelchanger_things:
                 if thing.properties.get('disabled', False):
                     continue
                 # skip if not usable
@@ -1483,10 +1526,8 @@ class LogicThread(threading.Thread):
             return
         player_pos = self.player.pos
         pickup_radius = 32.0
-        
-        for thing in self.things:
-            if not isinstance(thing, Pickup):
-                continue
+
+        for thing in self._pickup_things:
             if thing.properties.get('collected', False):
                 continue
             if id(thing) in self.collected_pickups:
@@ -1568,10 +1609,15 @@ class LogicThread(threading.Thread):
             state = self.mover_states[i]
             speed = brush.get('speed', 64.0)
             distance = brush.get('distance', 128.0)
-            direction = np.array(brush.get('direction', [0, 1, 0]), dtype=float)
-            dir_length = np.linalg.norm(direction)
-            if dir_length > 0:
-                direction = direction / dir_length
+            # PERF: mover direction is static during play — normalize once
+            # and cache on the state dict instead of every tick.
+            direction = state.get('_direction_np')
+            if direction is None:
+                direction = np.array(brush.get('direction', [0, 1, 0]), dtype=float)
+                dir_length = np.linalg.norm(direction)
+                if dir_length > 0:
+                    direction = direction / dir_length
+                state['_direction_np'] = direction
             progress_delta = (speed * delta) / distance if distance > 0 else 0
             was_at_end = state['progress'] >= 1.0
             was_at_start = state['progress'] <= 0.0
@@ -1737,13 +1783,21 @@ class LogicThread(threading.Thread):
             if i not in self.door_states:
                 continue
             state = self.door_states[i]
+            # PERF: fully-closed, idle doors cost nothing until triggered.
+            if state['state'] == 'closed' and state['progress'] == 0.0:
+                continue
             speed = state.get('speed', 128.0)
             distance = state.get('distance', 128.0)
             open_time = brush.get('open_time', 3.0)
-            direction = np.array(state.get('direction', [0, 1, 0]), dtype=float)
-            dir_length = np.linalg.norm(direction)
-            if dir_length > 0:
-                direction = direction / dir_length
+            # PERF: direction is precomputed (already unit-length) in
+            # _init_doors — no need to renormalize every tick.
+            direction = state.get('_direction_np')
+            if direction is None:
+                direction = np.array(state.get('direction', [0, 1, 0]), dtype=float)
+                dir_length = np.linalg.norm(direction)
+                if dir_length > 0:
+                    direction = direction / dir_length
+                state['_direction_np'] = direction
             progress_delta = (speed * delta) / distance if distance > 0 else 0
             if state['state'] == 'opening':
                 state['progress'] += progress_delta
@@ -1902,7 +1956,7 @@ class LogicThread(threading.Thread):
         ray_dir = glm.normalize(glm.vec3(dir_x, dir_y, dir_z))
         closest_brush_hit = None
         closest_brush_dist = float('inf')
-        collision_brushes = self.brushes + self._model_collision_brushes
+        collision_brushes = self._collision_brushes_cache
         for brush in collision_brushes:
             if (brush.get('is_trigger') or brush.get('hidden') or
                 brush.get('is_water') or brush.get('is_fog')):
@@ -2027,6 +2081,15 @@ class LogicThread(threading.Thread):
         import math
 
         remaining = []
+        if self._monster_projectiles:
+            # PERF: reuse the cached combined collision-brush list instead of
+            # rebuilding it (was previously rebuilt once per projectile).
+            all_collision_brushes = self._collision_brushes_cache
+            owner_team_by_id = {}
+            with self._monster_lock:
+                for t in self.things:
+                    if isinstance(t, MonsterThing):
+                        owner_team_by_id[id(t)] = t.properties.get('team', '')
         for proj in self._monster_projectiles:
             # Update position
             vel = proj['vel']
@@ -2066,6 +2129,7 @@ class LogicThread(threading.Thread):
             owner_id = proj['owner_id']
             hit_monster = None
             
+            owner_team = owner_team_by_id.get(owner_id)
             with self._monster_lock:
                 for thing in self.things:
                     if not isinstance(thing, MonsterThing):
@@ -2076,11 +2140,6 @@ class LogicThread(threading.Thread):
                         continue
 
                     # Team-aware: don\'t hit same-team allies
-                    owner_team = None
-                    for t in self.things:
-                        if isinstance(t, MonsterThing) and id(t) == owner_id:
-                            owner_team = t.properties.get('team', '')
-                            break
                     target_team = thing.properties.get('team', '')
                     if owner_team and target_team and owner_team == target_team:
                         continue
@@ -2101,8 +2160,14 @@ class LogicThread(threading.Thread):
 
             # ---- Collision with solid brushes (walls) ----
             hit_wall = False
-            collision_brushes = self.brushes + self._model_collision_brushes
-            for brush in collision_brushes:
+            # PERF: narrow candidates via the spatial grid (same brush set
+            # and filtering as populate()) instead of scanning every brush.
+            grid = getattr(self, '_spatial_grid', None)
+            if grid is not None:
+                wall_candidates = grid.get_nearby_brushes(p_pos.x, p_pos.z)
+            else:
+                wall_candidates = all_collision_brushes
+            for brush in wall_candidates:
                 if brush.get('hidden') or brush.get('is_water') or brush.get('is_fog'):
                     continue
                 if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
@@ -2184,6 +2249,27 @@ class LogicThread(threading.Thread):
                 return False
         return True
 
+    def _aabb_in_frustum_batch(self, planes, centers, halves):
+        """Vectorized equivalent of calling _aabb_in_frustum for every
+        (center, half_size) pair. Returns a NumPy boolean array, True where
+        the AABB is (at least partially) inside the frustum.
+
+        PERF: replaces a per-brush, per-plane Python loop (thousands of
+        scalar float ops per tick for a level with hundreds of brushes) with
+        a handful of NumPy broadcast operations over the whole brush batch.
+        """
+        c = np.asarray(centers, dtype=np.float64)
+        h = np.asarray(halves, dtype=np.float64)
+        visible = np.ones(len(centers), dtype=bool)
+        for a, b, cc, d in planes:
+            sign = np.array([1.0 if a >= 0 else -1.0,
+                              1.0 if b >= 0 else -1.0,
+                              1.0 if cc >= 0 else -1.0])
+            p = c + h * sign
+            dist = a * p[:, 0] + b * p[:, 1] + cc * p[:, 2] + d
+            visible &= (dist >= 0)
+        return visible
+
     # =========================================================================
     # RENDER STATE PREPARATION
     # =========================================================================
@@ -2256,11 +2342,17 @@ class LogicThread(threading.Thread):
         proj_view = projection * view_matrix
         frustum_planes = self._extract_frustum_planes(proj_view)
 
-        visible_brushes = []
         all_brushes = []
         total_count = 0
         culled_count = 0
 
+        # PERF: gather (b_ref, center, half) for every non-hidden brush in a
+        # single pass, then test all of them against the frustum planes at
+        # once with NumPy instead of a 6-plane-per-brush Python loop. Brush
+        # dict copying/appending semantics are unchanged.
+        centers = []
+        halves = []
+        refs = []
         for b in self.brushes:
             total_count += 1
             if b.get('hidden', False):
@@ -2278,15 +2370,19 @@ class LogicThread(threading.Thread):
             else:
                 b_ref = b
             all_brushes.append(b_ref)
-            if self.culling_enabled:
-                pos = b.get('pos', [0, 0, 0])
-                size = b.get('size', [64, 64, 64])
-                center = (pos[0], pos[1], pos[2])
-                half = (size[0] / 2.0, size[1] / 2.0, size[2] / 2.0)
-                if not self._aabb_in_frustum(frustum_planes, center, half):
-                    culled_count += 1
-                    continue
-            visible_brushes.append(b_ref)
+
+            pos = b.get('pos', [0, 0, 0])
+            size = b.get('size', [64, 64, 64])
+            centers.append((pos[0], pos[1], pos[2]))
+            halves.append((size[0] * 0.5, size[1] * 0.5, size[2] * 0.5))
+            refs.append(b_ref)
+
+        if self.culling_enabled and refs:
+            visible_mask = self._aabb_in_frustum_batch(frustum_planes, centers, halves)
+            visible_brushes = [ref for ref, vis in zip(refs, visible_mask) if vis]
+            culled_count += len(refs) - len(visible_brushes)
+        else:
+            visible_brushes = refs
 
         write_state.visible_brushes = visible_brushes
         write_state.all_brushes = all_brushes

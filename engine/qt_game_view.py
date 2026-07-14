@@ -443,6 +443,11 @@ class QtGameView(QOpenGLWidget):
                 compileShader(fs_src, gl.GL_FRAGMENT_SHADER),
                 validate=False
             )
+            # PERF: cache uniform locations once instead of querying them
+            # via glGetUniformLocation every frame in the debug draw paths.
+            self._debug_proj_loc = gl.glGetUniformLocation(self.debug_shader, 'projection')
+            self._debug_view_loc = gl.glGetUniformLocation(self.debug_shader, 'view')
+            self._debug_color_loc = gl.glGetUniformLocation(self.debug_shader, 'color')
             self.debug_vao = gl.glGenVertexArrays(1)
             self.debug_vbo = gl.glGenBuffers(1)
             gl.glBindVertexArray(self.debug_vao)
@@ -690,24 +695,30 @@ class QtGameView(QOpenGLWidget):
         if not rays or not self.debug_shader:
             return
         gl.glUseProgram(self.debug_shader)
-        proj_loc = gl.glGetUniformLocation(self.debug_shader, 'projection')
-        view_loc = gl.glGetUniformLocation(self.debug_shader, 'view')
-        color_loc = gl.glGetUniformLocation(self.debug_shader, 'color')
         proj_ptr = glm.value_ptr(proj_matrix)
         view_ptr = glm.value_ptr(view_matrix)
-        gl.glUniformMatrix4fv(proj_loc, 1, gl.GL_FALSE, proj_ptr)
-        gl.glUniformMatrix4fv(view_loc, 1, gl.GL_FALSE, view_ptr)
+        gl.glUniformMatrix4fv(self._debug_proj_loc, 1, gl.GL_FALSE, proj_ptr)
+        gl.glUniformMatrix4fv(self._debug_view_loc, 1, gl.GL_FALSE, view_ptr)
         gl.glBindVertexArray(self.debug_vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.debug_vbo)
+
+        # PERF: group rays by color and upload+draw each group in one call
+        # instead of one glBufferSubData + glDrawArrays per ray.
+        green_pts = []
+        red_pts = []
         for ray in rays:
             s, e = ray['start'], ray['end']
-            if ray.get('color') == 'green':
-                gl.glUniform3f(color_loc, 0.0, 1.0, 0.0)
-            else:
-                gl.glUniform3f(color_loc, 1.0, 0.0, 0.0)
-            data = np.array([s[0], s[1], s[2], e[0], e[1], e[2]], dtype=np.float32)
-            gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data.nbytes, data)
-            gl.glDrawArrays(gl.GL_LINES, 0, 2)
+            dst = green_pts if ray.get('color') == 'green' else red_pts
+            dst.extend((s[0], s[1], s[2], e[0], e[1], e[2]))
+
+        for pts, color in ((green_pts, (0.0, 1.0, 0.0)), (red_pts, (1.0, 0.0, 0.0))):
+            if not pts:
+                continue
+            gl.glUniform3f(self._debug_color_loc, *color)
+            data = np.array(pts, dtype=np.float32)
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, data.nbytes, data, gl.GL_DYNAMIC_DRAW)
+            gl.glDrawArrays(gl.GL_LINES, 0, len(pts) // 3)
+
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
         gl.glBindVertexArray(0)
 
@@ -718,33 +729,36 @@ class QtGameView(QOpenGLWidget):
         if grid is None:
             return
         gl.glUseProgram(self.debug_shader)
-        proj_loc = gl.glGetUniformLocation(self.debug_shader, 'projection')
-        view_loc = gl.glGetUniformLocation(self.debug_shader, 'view')
-        color_loc = gl.glGetUniformLocation(self.debug_shader, 'color')
         proj_ptr = glm.value_ptr(proj_matrix)
         view_ptr = glm.value_ptr(view_matrix)
-        gl.glUniformMatrix4fv(proj_loc, 1, gl.GL_FALSE, proj_ptr)
-        gl.glUniformMatrix4fv(view_loc, 1, gl.GL_FALSE, view_ptr)
-        gl.glUniform3f(color_loc, 0.0, 0.8, 1.0)
+        gl.glUniformMatrix4fv(self._debug_proj_loc, 1, gl.GL_FALSE, proj_ptr)
+        gl.glUniformMatrix4fv(self._debug_view_loc, 1, gl.GL_FALSE, view_ptr)
+        gl.glUniform3f(self._debug_color_loc, 0.0, 0.8, 1.0)
         gl.glBindVertexArray(self.debug_vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.debug_vbo)
         cs = grid.cell_size
         draw_y = 1.0
+
+        # PERF: accumulate every cell edge into one buffer and issue a single
+        # draw call instead of one glBufferSubData + glDrawArrays per edge.
+        pts = []
         for (cx, cz) in grid.cells:
             x0 = cx * cs
             z0 = cz * cs
             x1 = x0 + cs
             z1 = z0 + cs
-            edges = [
-                (x0, draw_y, z0, x1, draw_y, z0),
-                (x1, draw_y, z0, x1, draw_y, z1),
-                (x1, draw_y, z1, x0, draw_y, z1),
-                (x0, draw_y, z1, x0, draw_y, z0),
-            ]
-            for e in edges:
-                data = np.array(e, dtype=np.float32)
-                gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data.nbytes, data)
-                gl.glDrawArrays(gl.GL_LINES, 0, 2)
+            pts.extend((
+                x0, draw_y, z0, x1, draw_y, z0,
+                x1, draw_y, z0, x1, draw_y, z1,
+                x1, draw_y, z1, x0, draw_y, z1,
+                x0, draw_y, z1, x0, draw_y, z0,
+            ))
+
+        if pts:
+            data = np.array(pts, dtype=np.float32)
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, data.nbytes, data, gl.GL_DYNAMIC_DRAW)
+            gl.glDrawArrays(gl.GL_LINES, 0, len(pts) // 3)
+
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
         gl.glBindVertexArray(0)
 
@@ -906,6 +920,8 @@ class QtGameView(QOpenGLWidget):
                     if not collision_brushes:
                         self.logic_thread.model_collision_enabled = True
                         self.logic_thread._model_collision_brushes = self.logic_thread._build_model_collision_brushes()
+                        if hasattr(self.logic_thread, '_refresh_collision_brushes_cache'):
+                            self.logic_thread._refresh_collision_brushes_cache()
                         collision_brushes = self.logic_thread._model_collision_brushes
                 if collision_brushes:
                     mode = self._collision_vis_mode

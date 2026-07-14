@@ -323,9 +323,14 @@ class Player:
 
         # --- 3. Collision Resolution ---
 
-        # Separate mesh brushes from AABB brushes
-        mesh_brushes = [b for b in colliders if b.get('_collision_mode') == 'mesh']
-        aabb_brushes = [b for b in colliders if b.get('_collision_mode') != 'mesh']
+        # Separate mesh brushes from AABB brushes (single pass over colliders)
+        mesh_brushes = []
+        aabb_brushes = []
+        for b in colliders:
+            if b.get('_collision_mode') == 'mesh':
+                mesh_brushes.append(b)
+            else:
+                aabb_brushes.append(b)
 
         # A. Horizontal movement with mesh collision (X then Z using collide-and-slide)
         self._move_with_mesh_collision(delta, mesh_brushes, axis='x')
