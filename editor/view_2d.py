@@ -554,14 +554,20 @@ class View2D(QWidget):
         axis1_idx = ax_map[ax1]
         axis2_idx = ax_map[ax2]
         
-        # Helper to find position by name
+        # Precompute a name -> position lookup once (was an O(N) linear scan
+        # over every brush and thing per connection, i.e. O(N*M) per repaint).
+        pos_by_name = {}
+        for b in self.editor.state.brushes:
+            b_name = b.get('name')
+            if b_name and b_name not in pos_by_name:
+                pos_by_name[b_name] = b['pos']
+        for t in self.editor.state.things:
+            t_name = getattr(t, 'name', t.properties.get('name'))
+            if t_name and t_name not in pos_by_name:
+                pos_by_name[t_name] = t.pos
+
         def get_pos_by_name(name):
-            for b in self.editor.state.brushes:
-                if b.get('name') == name: return b['pos']
-            for t in self.editor.state.things:
-                t_name = getattr(t, 'name', t.properties.get('name'))
-                if t_name == name: return t.pos
-            return None
+            return pos_by_name.get(name)
 
         # Check Animation Setting
         should_animate = self.main_window.config.getboolean('Display', 'animate_connections', fallback=False)
