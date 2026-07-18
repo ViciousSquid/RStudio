@@ -28,7 +28,7 @@ import numpy as np
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 
-from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
+from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX, is_water_brush
 from engine.shaders import DEFAULT_SHADERS
 from engine.terrain import TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER
 from editor.things import Thing
@@ -249,6 +249,9 @@ class BaseRenderer:
         self._cube_vbo = None
         self._sprite_vbo = None
         self._grid_vbo = None
+        self._water_surface_vbo = None
+        self._water_surface_ebo = None
+        self._water_surface_index_count = 0
 
         self._shader_init_failed = False
 
@@ -279,6 +282,7 @@ class BaseRenderer:
         # Create VAOs after shaders are ready
         if not self._shader_init_failed:
             self.vaos['cube'] = self._create_cube_vao()
+            self.vaos['water_surface'] = self._create_water_surface_vao()
             self.vaos['sprite'] = self._create_sprite_vao()
             self.vaos['grid'] = None
             self.update_grid_buffers(initial_world_size, initial_grid_size)
@@ -430,7 +434,7 @@ class BaseRenderer:
     def _preload_water_uniforms(self):
         uniforms = self.uniforms['water']
         uniforms.preload(['projection', 'view', 'model', 'time', 'viewPos', 'normalMap', 'waterOpacity',
-                          'waterReflectivity', 'waterTint', 'useWaveDisplacement', 'waveStrength'])
+                          'waterReflectivity', 'waterTint', 'normalMatrix', 'waveAmp', 'brushSize'])
 
     def _preload_fog_uniforms(self):
         uniforms = self.uniforms['fog']
@@ -957,8 +961,30 @@ class BaseRenderer:
     # --------------------------------------------------------------------------
     # Water / Glass / Fog
     # --------------------------------------------------------------------------
+    @staticmethod
+    def _water_wave_amplitude(brush):
+        """World-space wave amplitude for a brush, from its editor settings.
+
+        water_wave_height is stored as a 0..1 fraction (legacy maps stored raw
+        slider ints up to 200 — treat anything > 2 as a percentage). Even with
+        waves disabled a whisper of swell remains so the surface never reads
+        as a frozen slab. Amplitude is capped so the surface stays inside the
+        brush volume.
+        """
+        size = brush.get('size', [64, 64, 64])
+        h = float(brush.get('water_wave_height', 0.5))
+        if h > 2.0:
+            h = h / 100.0
+        if brush.get('water_wave_enabled', True):
+            amp = h * 30.0
+        else:
+            amp = 1.2
+        return min(amp, size[1] * 0.45, 30.0)
+
     def draw_water_brushes(self, projection, view, camera_pos, brushes, lights, config):
         if not brushes or 'water' not in self.shaders:
+            return
+        if not getattr(self, 'water_enabled', True):
             return
         shader, uniforms = self.shaders['water'], self.uniforms['water']
         gl.glUseProgram(shader)
@@ -974,26 +1000,42 @@ class BaseRenderer:
         opacity_loc = uniforms['waterOpacity']
         reflectivity_loc = uniforms['waterReflectivity']
         tint_loc, model_loc = uniforms['waterTint'], uniforms['model']
-        wave_enable_loc = uniforms['useWaveDisplacement']
-        wave_str_loc = uniforms['waveStrength']
+        normal_mat_loc = uniforms['normalMatrix']
+        wave_amp_loc = uniforms['waveAmp']
+        brush_size_loc = uniforms['brushSize']
 
-        gl.glBindVertexArray(self.vaos['cube'])
+        surface_vao = self.vaos.get('water_surface')
+        cube_vao = self.vaos['cube']
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 
         for brush in brushes:
             model_matrix = self._brush_model_matrix(brush)
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+            if normal_mat_loc >= 0:
+                normal_mat = self._compute_normal_matrix(model_matrix, brush)
+                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
             gl.glUniform1f(opacity_loc, brush.get('water_opacity', 0.5))
             gl.glUniform1f(reflectivity_loc, brush.get('water_reflectivity', 0.5))
             gl.glUniform3fv(tint_loc, 1, brush.get('water_tint', [0.0, 0.4, 0.6]))
-            gl.glUniform1i(wave_enable_loc, int(brush.get('water_wave_enabled', False)))
-            gl.glUniform1f(wave_str_loc, brush.get('water_wave_height', 0.5))
+            size = brush.get('size', [64, 64, 64])
+            gl.glUniform3f(brush_size_loc, float(size[0]), float(size[1]), float(size[2]))
+            gl.glUniform1f(wave_amp_loc, self._water_wave_amplitude(brush))
 
-            if brush.get('water_plane', False):
-                gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
-            else:
+            # Side walls first for full water volumes (edge-pinned waves keep
+            # the displaced surface meeting these exactly), then the surface
+            # composites over them for the common above-water view.
+            if not brush.get('water_plane', False):
+                gl.glBindVertexArray(cube_vao)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
+
+            # Tessellated top surface (the part the waves displace)
+            if surface_vao:
+                gl.glBindVertexArray(surface_vao)
+                gl.glDrawElements(gl.GL_TRIANGLES, self._water_surface_index_count,
+                                  gl.GL_UNSIGNED_INT, None)
+            else:
+                gl.glBindVertexArray(cube_vao)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
             self.render_stats.draw_calls += 1
         gl.glBindVertexArray(0)
@@ -1108,8 +1150,7 @@ class BaseRenderer:
         for brush in brushes:
             if brush.get('hidden'):
                 continue
-            if brush.get('is_water', False) or brush.get('shader') == 'Water' or \
-               any('water' in (t or '').lower() for t in brush.get('textures', {}).values()):
+            if is_water_brush(brush):
                 water.append(brush)
             elif brush.get('is_fog') or brush.get('shader') == 'Fog':
                 fog.append(brush)
@@ -1670,7 +1711,7 @@ class BaseRenderer:
                 continue
             for brush in all_brushes:
                 if brush.get('hidden') or brush.get('is_trigger') or brush.get('is_fog') or \
-                   brush.get('is_water') or brush.get('shader') in ('Water','Fog','Glass','Glow'):
+                   is_water_brush(brush) or brush.get('shader') in ('Fog','Glass','Glow'):
                     continue
                 bpos = brush.get('pos', [0,0,0])
                 bx, by, bz = float(bpos[0]), float(bpos[1]), float(bpos[2])
@@ -2006,6 +2047,54 @@ class BaseRenderer:
         self._cube_vbo = vbo
         return vao
 
+    def _create_water_surface_vao(self, subdivisions=64):
+        """Tessellated unit-square grid on the cube's top face (y = +0.5).
+
+        The water vertex shader needs real geometry to displace with Gerstner
+        waves — the 2-triangle cube top gave it nothing to work with, which is
+        why water used to look like a solid slab. Same attribute layout as the
+        cube VAO (pos, normal, uv) so both bind to the water shader.
+        """
+        n = subdivisions
+        verts = np.zeros(((n + 1) * (n + 1), 8), dtype=np.float32)
+        idx = 0
+        for j in range(n + 1):
+            z = j / n - 0.5
+            for i in range(n + 1):
+                x = i / n - 0.5
+                verts[idx] = (x, 0.5, z, 0.0, 1.0, 0.0, i / n, j / n)
+                idx += 1
+
+        indices = np.zeros(n * n * 6, dtype=np.uint32)
+        k = 0
+        for j in range(n):
+            row = j * (n + 1)
+            for i in range(n):
+                a = row + i
+                c = a + (n + 1)
+                indices[k:k + 6] = (a, c, a + 1, a + 1, c, c + 1)
+                k += 6
+
+        vao = gl.glGenVertexArrays(1)
+        gl.glBindVertexArray(vao)
+        vbo = gl.glGenBuffers(1)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, verts.nbytes, verts, gl.GL_STATIC_DRAW)
+        ebo = gl.glGenBuffers(1)
+        gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, ebo)
+        gl.glBufferData(gl.GL_ELEMENT_ARRAY_BUFFER, indices.nbytes, indices, gl.GL_STATIC_DRAW)
+        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(0))
+        gl.glEnableVertexAttribArray(0)
+        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(12))
+        gl.glEnableVertexAttribArray(1)
+        gl.glVertexAttribPointer(2, 2, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(24))
+        gl.glEnableVertexAttribArray(2)
+        gl.glBindVertexArray(0)
+        self._water_surface_vbo = vbo
+        self._water_surface_ebo = ebo
+        self._water_surface_index_count = len(indices)
+        return vao
+
     def _create_sprite_vao(self):
         vertices = np.array([-0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, 0.5], dtype=np.float32)
         vao = gl.glGenVertexArrays(1)
@@ -2085,6 +2174,10 @@ class BaseRenderer:
             gl.glDeleteBuffers(1, [self._sprite_vbo])
         if self._grid_vbo:
             gl.glDeleteBuffers(1, [self._grid_vbo])
+        if self._water_surface_vbo:
+            gl.glDeleteBuffers(1, [self._water_surface_vbo])
+        if self._water_surface_ebo:
+            gl.glDeleteBuffers(1, [self._water_surface_ebo])
         # Portal resources
         if self._portal_quad_vao:
             gl.glDeleteVertexArrays(1, [self._portal_quad_vao])

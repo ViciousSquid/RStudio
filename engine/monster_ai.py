@@ -12,6 +12,7 @@ import glm
 import math
 from typing import Dict, List, Any, Optional, Tuple
 from editor.debug_console import debug_log
+from .constants import is_water_brush
 from .monster_constants import (
     MONSTER_SIGHT_RANGE,
     MONSTER_SHOOT_INTERVAL,
@@ -1075,7 +1076,7 @@ class MonsterAI:
         ray_dir = ray_dir / ray_len
 
         for brush in self.lt.brushes:
-            if brush.get('hidden') or brush.get('is_water') or brush.get('is_fog'):
+            if brush.get('hidden') or is_water_brush(brush) or brush.get('is_fog'):
                 continue
             if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
                 continue
@@ -1096,7 +1097,7 @@ class MonsterAI:
         # Fallback
         best_y = None
         for brush in self.lt.brushes:
-            if brush.get('hidden') or brush.get('is_water') or brush.get('is_fog'):
+            if brush.get('hidden') or is_water_brush(brush) or brush.get('is_fog'):
                 continue
             if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
                 continue
@@ -1121,7 +1122,7 @@ class MonsterAI:
 
         # Fallback
         for brush in self.lt.brushes:
-            if brush.get('hidden') or brush.get('is_water') or brush.get('is_fog'):
+            if brush.get('hidden') or is_water_brush(brush) or brush.get('is_fog'):
                 continue
             if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
                 continue

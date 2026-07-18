@@ -1,6 +1,8 @@
 import math
 import glm
 
+from .constants import is_water_brush
+
 class SpatialGrid:
     """
     A 2D spatial partitioning grid to optimize collision detection.
@@ -14,10 +16,12 @@ class SpatialGrid:
         self.cell_size = cell_size
         self.cells = {}
         self._all_solid = []          # flat list kept for ray queries that span many cells
+        self.water_brushes = []       # non-solid water volumes, for swim physics queries
 
     def clear(self):
         self.cells.clear()
         self._all_solid.clear()
+        self.water_brushes.clear()
 
     # ------------------------------------------------------------------
     # Build
@@ -28,7 +32,10 @@ class SpatialGrid:
         and again whenever the static brush list changes (rare)."""
         self.clear()
         for brush in brushes:
-            if brush.get('hidden') or brush.get('is_water') or brush.get('is_fog'):
+            if brush.get('hidden') or brush.get('is_fog'):
+                continue
+            if is_water_brush(brush):
+                self.water_brushes.append(brush)
                 continue
 
             is_dynamic = brush.get('is_mover') or brush.get('is_door')

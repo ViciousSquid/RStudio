@@ -1,7 +1,13 @@
 import math
 import glm
 from PyQt5.QtCore import Qt
-from .constants import TILE_SIZE, GRAVITY, JUMP_STRENGTH, TERMINAL_VELOCITY
+from .constants import (
+    TILE_SIZE, GRAVITY, JUMP_STRENGTH, TERMINAL_VELOCITY,
+    WATER_SWIM_SPEED_MULT, WATER_VERTICAL_SPEED_MULT, WATER_DRAG,
+    WATER_WADE_SPEED_MULT, WATER_MAX_SINK_SPEED,
+    WATERJUMP_MAX_CLIMB, WATERJUMP_EDGE_ABOVE_SURFACE, WATERJUMP_MAX_BOOST,
+    is_water_brush,
+)
 
 
 # =============================================================================
@@ -253,6 +259,16 @@ class Player:
         self.physics_enabled = physics_enabled
         self.step_height = 18.0  # Max height the player can step up automatically
 
+        # Water / swimming state (refreshed every update)
+        self.in_water = False          # any meaningful immersion (wading or deeper)
+        self.swimming = False          # deep enough that swim physics take over
+        self.eye_underwater = False    # camera below a water surface (drives the underwater overlay)
+        self.water_surface_y = None    # world Y of the surface we're swimming under
+        self.water_depth_frac = 0.0    # 0..1 fraction of feet->eye span that is submerged
+        self.water_tint = [0.0, 0.4, 0.6]
+        self._waterjump_timer = 0.0    # while > 0, swim drag leaves the launch arc alone
+        self._waterjump_cooldown = 0.0 # prevents re-triggering every frame
+
         # Pre-computed half-extents (constant for the lifetime of this player instance)
         self._half = glm.vec3(self.width / 2.0, self.height / 2.0, self.depth / 2.0)
 
@@ -290,6 +306,19 @@ class Player:
         if doors:
             colliders.extend(doors)
 
+        # --- Water immersion (before movement so swim physics can use it) ---
+        if spatial_grid is not None:
+            water_brushes = getattr(spatial_grid, 'water_brushes', None)
+            if water_brushes is None:
+                water_brushes = [b for b in brushes if is_water_brush(b)]
+        else:
+            water_brushes = [b for b in brushes if is_water_brush(b)]
+        self._update_water_state(water_brushes)
+        if self._waterjump_timer > 0.0:
+            self._waterjump_timer = max(0.0, self._waterjump_timer - delta)
+        if self._waterjump_cooldown > 0.0:
+            self._waterjump_cooldown = max(0.0, self._waterjump_cooldown - delta)
+
         # --- 1. Movement Physics ---
 
         forward_vec = glm.vec3(math.sin(self.angle), 0, math.cos(self.angle))
@@ -300,26 +329,46 @@ class Player:
         if glm.length(wish_dir) > 0.1:
             wish_dir = glm.normalize(wish_dir)
 
-        target_speed = self.speed * (0.5 if crouch else 1.0)
+        swimming = self.swimming and self.physics_enabled
 
-        self.velocity.x = wish_dir.x * target_speed
-        self.velocity.z = wish_dir.z * target_speed
+        if swimming:
+            self._apply_swim_physics(delta, move_input, right_vec, jump, crouch)
+        else:
+            target_speed = self.speed * (0.5 if crouch else 1.0)
+            if self.in_water:
+                target_speed *= WATER_WADE_SPEED_MULT
+
+            self.velocity.x = wish_dir.x * target_speed
+            self.velocity.z = wish_dir.z * target_speed
 
         if not self.physics_enabled:
             self.pos += self.velocity * delta
             return
 
-        # --- 2. Gravity & Jumping ---
+        # --- 2. Gravity & Jumping (suspended while swimming) ---
 
-        self.velocity.y += GRAVITY * delta
+        if not swimming:
+            self.velocity.y += GRAVITY * delta
 
-        if self.velocity.y < TERMINAL_VELOCITY:
-            self.velocity.y = TERMINAL_VELOCITY
+            if self.velocity.y < TERMINAL_VELOCITY:
+                self.velocity.y = TERMINAL_VELOCITY
 
-        if jump and self.on_ground:
-            self.velocity.y = JUMP_STRENGTH
-            self.on_ground  = False
-            self.ground_object = None
+            # Wading: water resistance breaks a fall almost immediately
+            if self.in_water and self.velocity.y < WATER_MAX_SINK_SPEED:
+                self.velocity.y = WATER_MAX_SINK_SPEED
+
+            if jump and self.on_ground:
+                self.velocity.y = JUMP_STRENGTH
+                self.on_ground  = False
+                self.ground_object = None
+
+        # --- 2b. Waterjump: climbing out of pools ---
+        # Holding jump while pushing against a wall whose top edge is near the
+        # waterline launches the player hard enough to actually clear it.
+        # Works while wading AND swimming; without it, any pool whose rim is
+        # taller than a normal jump becomes an inescapable trap.
+        if self.in_water and jump:
+            self._try_water_jump(colliders, wish_dir)
 
         # --- 3. Collision Resolution ---
 
@@ -368,6 +417,182 @@ class Player:
         if self.pos.y < -2000:
             self.pos     = glm.vec3(0, 100, 0)
             self.velocity = glm.vec3(0, 0, 0)
+
+    # ------------------------------------------------------------------
+    # Water / swimming
+    # ------------------------------------------------------------------
+
+    def _update_water_state(self, water_brushes):
+        """Measure how deep the player is in any water volume this frame."""
+        feet_y = self.pos.y - self._half.y
+        eye_y = self.pos.y + self.camera_height
+        px, pz = self.pos.x, self.pos.z
+
+        depth = 0.0
+        surface_y = None
+        tint = None
+        eye_under = False
+
+        for brush in water_brushes:
+            if brush.get('hidden'):
+                continue
+            bpos = brush['pos']
+            bsize = brush['size']
+            hx, hz = bsize[0] * 0.5, bsize[2] * 0.5
+            if not (bpos[0] - hx <= px <= bpos[0] + hx and
+                    bpos[2] - hz <= pz <= bpos[2] + hz):
+                continue
+            b_top = bpos[1] + bsize[1] * 0.5
+            b_bot = bpos[1] - bsize[1] * 0.5
+
+            overlap_top = min(eye_y, b_top)
+            overlap_bot = max(feet_y, b_bot)
+            if overlap_top <= overlap_bot:
+                continue
+
+            depth = max(depth, overlap_top - overlap_bot)
+            if surface_y is None or b_top > surface_y:
+                surface_y = b_top
+                tint = brush.get('water_tint')
+            if b_bot <= eye_y <= b_top:
+                eye_under = True
+
+        span = max(eye_y - feet_y, 0.001)
+        frac = depth / span
+        self.water_depth_frac = frac
+        self.in_water = frac > 0.12
+        self.swimming = frac > 0.55
+        self.eye_underwater = eye_under
+        self.water_surface_y = surface_y
+        if tint is not None:
+            self.water_tint = list(tint)
+
+    def _apply_swim_physics(self, delta, move_input, right_vec, jump, crouch):
+        """Buoyant, drag-damped movement while submerged.
+
+        Forward motion follows the view pitch (look down + forward = dive),
+        jump swims up, crouch sinks, and idling drifts gently toward a
+        floating position at the surface. Velocity converges on the swim
+        target through drag instead of snapping, which gives water its
+        characteristic weight.
+        """
+        cos_p = math.cos(self.pitch)
+        swim_fwd = glm.vec3(math.sin(self.angle) * cos_p,
+                            math.sin(self.pitch),
+                            math.cos(self.angle) * cos_p)
+
+        wish = swim_fwd * move_input.z + right_vec * move_input.x
+        if glm.length(wish) > 0.1:
+            wish = glm.normalize(wish)
+
+        swim_speed = self.speed * WATER_SWIM_SPEED_MULT
+        target = wish * swim_speed
+
+        vertical_speed = swim_speed * WATER_VERTICAL_SPEED_MULT
+        if jump:
+            target.y += vertical_speed
+        if crouch:
+            target.y -= vertical_speed
+
+        # Idle buoyancy: bob up until the eyes sit just above the surface
+        if not jump and not crouch and abs(move_input.z) < 0.1 and self.water_surface_y is not None:
+            float_target_y = self.water_surface_y - self.camera_height * 0.35
+            err = float_target_y - self.pos.y
+            target.y += max(min(err * 1.8, 40.0), -25.0)
+
+        k = min(1.0, WATER_DRAG * delta)
+        self.velocity.x += (target.x - self.velocity.x) * k
+        self.velocity.z += (target.z - self.velocity.z) * k
+        # A waterjump launch is ballistic: leave its vertical arc alone or
+        # drag would smother the boost before the player clears the edge
+        if self._waterjump_timer <= 0.0:
+            self.velocity.y += (target.y - self.velocity.y) * k
+
+        self.on_ground = False
+        self.ground_object = None
+
+    @staticmethod
+    def _waterjump_solid(brush):
+        """Solid AABB obstacles a waterjump can vault onto (or be blocked by)."""
+        if brush.get('hidden') or brush.get('is_fog') or is_water_brush(brush):
+            return False
+        if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
+            return False
+        if brush.get('_collision_mode') == 'mesh':
+            return False
+        return True
+
+    def _try_water_jump(self, colliders, wish_dir):
+        """Vault out of water onto a nearby ledge.
+
+        Probes one step ahead in the movement direction for a solid wall whose
+        top edge is (a) above the feet, (b) within climbing reach, and (c) not
+        far above the waterline, then launches with exactly the vertical speed
+        needed for the feet to clear that edge. This is what lets the player
+        get OUT of a pool: the rim is usually taller than a normal jump from
+        the pool floor, and swimming alone can never lift the body over it.
+        """
+        if self._waterjump_cooldown > 0.0:
+            return
+        if glm.length(wish_dir) < 0.1:
+            return  # must be pushing toward the edge, not just treading water
+
+        feet_y = self.pos.y - self._half.y
+        surface_y = self.water_surface_y if self.water_surface_y is not None else feet_y
+        body_r = max(self._half.x, self._half.z)
+
+        # Two probe depths so thin rims aren't stepped over by a single point
+        for probe_dist in (body_r + 10.0, body_r + 26.0):
+            px = self.pos.x + wish_dir.x * probe_dist
+            pz = self.pos.z + wish_dir.z * probe_dist
+
+            # Highest climbable ledge at this probe point
+            ledge_top = None
+            for brush in colliders:
+                if not self._waterjump_solid(brush):
+                    continue
+                bpos, bsize = brush['pos'], brush['size']
+                if not (abs(px - bpos[0]) <= bsize[0] * 0.5 and
+                        abs(pz - bpos[2]) <= bsize[2] * 0.5):
+                    continue
+                top = bpos[1] + bsize[1] * 0.5
+                bottom = bpos[1] - bsize[1] * 0.5
+                if bottom > feet_y + 8.0:
+                    continue  # floating overhang, not a wall rising from below
+                if top <= feet_y + 4.0:
+                    continue  # already below our feet
+                if top > feet_y + WATERJUMP_MAX_CLIMB:
+                    continue  # too tall to vault — needs stairs
+                if top > surface_y + WATERJUMP_EDGE_ABOVE_SURFACE:
+                    continue  # rim too far above the waterline
+                if ledge_top is None or top > ledge_top:
+                    ledge_top = top
+
+            if ledge_top is None:
+                continue
+
+            # Headroom: the player must fit standing on the ledge
+            blocked = False
+            for brush in colliders:
+                if not self._waterjump_solid(brush):
+                    continue
+                bpos, bsize = brush['pos'], brush['size']
+                if not (abs(px - bpos[0]) <= bsize[0] * 0.5 and
+                        abs(pz - bpos[2]) <= bsize[2] * 0.5):
+                    continue
+                top = bpos[1] + bsize[1] * 0.5
+                bottom = bpos[1] - bsize[1] * 0.5
+                if top > ledge_top + 4.0 and bottom < ledge_top + self.height:
+                    blocked = True
+                    break
+            if blocked:
+                continue
+
+            rise = (ledge_top - feet_y) + 12.0
+            self.velocity.y = min(math.sqrt(2.0 * abs(GRAVITY) * rise), WATERJUMP_MAX_BOOST)
+            self._waterjump_timer = 0.6
+            self._waterjump_cooldown = 0.7
+            return
 
     def _move_with_collision(self, delta, aabb_brushes, axis):
         """
@@ -562,7 +787,7 @@ class Player:
             if ignore_brush and brush is ignore_brush:
                 continue
 
-            if brush.get('hidden') or brush.get('is_water') or brush.get('is_fog'):
+            if brush.get('hidden') or is_water_brush(brush) or brush.get('is_fog'):
                 continue
 
             is_dynamic_solid = brush.get('is_mover') or brush.get('is_door')
@@ -693,7 +918,7 @@ class Player:
         player_max = self.pos + half
 
         for brush in brushes:
-            if brush.get('hidden') or brush.get('is_water') or brush.get('is_fog'):
+            if brush.get('hidden') or is_water_brush(brush) or brush.get('is_fog'):
                 continue
 
             is_dynamic_solid = brush.get('is_mover') or brush.get('is_door')

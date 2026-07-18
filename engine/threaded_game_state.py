@@ -28,6 +28,8 @@ class RenderState:
         self.player_max_health = 100
         self.player_dead = False
         self.active_weapon = None
+        self.player_underwater = False
+        self.underwater_tint = [0.0, 0.4, 0.6]
 
         # Player 2 (split-screen)
         self.player2_pos = glm.vec3(0, 0, 0)
@@ -37,6 +39,7 @@ class RenderState:
         self.player2_health = 100
         self.player2_max_health = 100
         self.player2_dead = False
+        self.player2_underwater = False
         self.splitscreen_active = False
         
         # Scene Data
@@ -90,6 +93,8 @@ class RenderState:
         self.player_max_health = 100
         self.player_dead = False
         self.active_weapon = None
+        self.player_underwater = False
+        self.underwater_tint = [0.0, 0.4, 0.6]
         self.player2_pos = glm.vec3(0, 0, 0)
         self.player2_angle = 0.0
         self.player2_pitch = 0.0
@@ -97,6 +102,7 @@ class RenderState:
         self.player2_health = 100
         self.player2_max_health = 100
         self.player2_dead = False
+        self.player2_underwater = False
         self.splitscreen_active = False
         self.visible_brushes = []
         self.all_brushes = []

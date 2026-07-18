@@ -22,6 +22,7 @@ import os
 from .threaded_game_state import ThreadedGameState, RenderState
 from .player import Player
 from .camera import Camera
+from .constants import is_water_brush
 
 # Import Thing subclasses for type checking
 try:
@@ -1959,7 +1960,7 @@ class LogicThread(threading.Thread):
         collision_brushes = self._collision_brushes_cache
         for brush in collision_brushes:
             if (brush.get('is_trigger') or brush.get('hidden') or
-                brush.get('is_water') or brush.get('is_fog')):
+                is_water_brush(brush) or brush.get('is_fog')):
                 continue
             pos = glm.vec3(brush['pos'])
             size = glm.vec3(brush['size'])
@@ -2168,7 +2169,7 @@ class LogicThread(threading.Thread):
             else:
                 wall_candidates = all_collision_brushes
             for brush in wall_candidates:
-                if brush.get('hidden') or brush.get('is_water') or brush.get('is_fog'):
+                if brush.get('hidden') or is_water_brush(brush) or brush.get('is_fog'):
                     continue
                 if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
                     continue
@@ -2322,6 +2323,11 @@ class LogicThread(threading.Thread):
         write_state.player_health = self.player_health
         write_state.player_max_health = self.player_max_health
         write_state.player_dead = self.player_dead
+        if self.play_mode and self.player and not self.cinematic_state:
+            write_state.player_underwater = bool(getattr(self.player, 'eye_underwater', False))
+            write_state.underwater_tint = list(getattr(self.player, 'water_tint', [0.0, 0.4, 0.6]))
+        else:
+            write_state.player_underwater = False
         write_state.collected_keys = set(self.collected_keys)
         write_state.hud_message = self.current_hud_message
         write_state.active_weapon = self.active_weapon
@@ -2423,6 +2429,7 @@ class LogicThread(threading.Thread):
             write_state.player2_health      = self.player2_health
             write_state.player2_max_health  = self.player2_max_health
             write_state.player2_dead        = self.player2_dead
+            write_state.player2_underwater  = bool(getattr(self.player2, 'eye_underwater', False))
             write_state.splitscreen_active  = True
         else:
             write_state.splitscreen_active  = False

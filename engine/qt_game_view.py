@@ -1,12 +1,13 @@
 import time
 import os
+import math
 import numpy as np
 import ctypes
 from collections import deque
 from typing import Optional
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
 from PyQt5.QtCore import Qt, QTimer, QPoint, QUrl, QRect, QEvent
-from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QFontDatabase, QPen, QBrush, QPolygon, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage
+from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QFontDatabase, QPen, QBrush, QPolygon, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
@@ -783,6 +784,9 @@ class QtGameView(QOpenGLWidget):
                 self._cached_projectiles = list(getattr(render_state, 'projectiles', []))
                 self._cached_monster_rays = list(getattr(render_state, 'monster_debug_rays', []))
                 self._cached_level_complete_ui = getattr(render_state, 'level_complete_ui', None)
+                self._cached_underwater = getattr(render_state, 'player_underwater', False)
+                self._cached_underwater_tint = getattr(render_state, 'underwater_tint', [0.0, 0.4, 0.6])
+                self._cached_p2_underwater = getattr(render_state, 'player2_underwater', False)
         if self.grid_dirty:
             self.renderer.update_grid_buffers(self.world_size, self.grid_size)
             self.grid_dirty = False
@@ -968,6 +972,8 @@ class QtGameView(QOpenGLWidget):
                     total_brushes=total
                 )
         painter = QPainter(self)
+        if self.play_mode:
+            self._draw_underwater_overlay(painter, render_state)
         if self.editor.config.getboolean('Display', 'show_fps', fallback=False):
             self._draw_fps_counter(painter)
         if self.play_mode and self.show_sprites_in_play_mode:
@@ -1009,6 +1015,40 @@ class QtGameView(QOpenGLWidget):
         painter.end()
         if self._muzzle_flash_counter > 0:
             self._muzzle_flash_counter -= 1
+
+    def _draw_underwater_overlay(self, painter, render_state):
+        """Tint the view while the camera is below a water surface."""
+        p1_under = getattr(self, '_cached_underwater', False)
+        p2_under = getattr(self, '_cached_p2_underwater', False)
+        if not p1_under and not p2_under:
+            return
+        splitscreen = (
+            getattr(self, 'splitscreen_mode', False)
+            and render_state is not None
+            and getattr(render_state, 'splitscreen_active', False)
+        )
+        w, h = self.width(), self.height()
+        if splitscreen:
+            half = w // 2
+            if p1_under:
+                self._fill_underwater_rect(painter, 0, 0, half, h)
+            if p2_under:
+                self._fill_underwater_rect(painter, half, 0, half, h)
+        elif p1_under:
+            self._fill_underwater_rect(painter, 0, 0, w, h)
+
+    def _fill_underwater_rect(self, painter, x, y, w, h):
+        tint = getattr(self, '_cached_underwater_tint', None) or [0.0, 0.4, 0.6]
+        r = int(max(0.0, min(1.0, tint[0])) * 255)
+        g = int(max(0.0, min(1.0, tint[1])) * 255)
+        b = int(max(0.0, min(1.0, tint[2])) * 255)
+        # Slow "breathing" so the immersion feels alive rather than a static filter
+        wobble = math.sin((time.perf_counter() - self.start_time) * 1.7) * 10.0
+        grad = QLinearGradient(0, y, 0, y + h)
+        grad.setColorAt(0.0, QColor(r, g, b, max(0, min(255, int(95 + wobble)))))
+        grad.setColorAt(0.55, QColor(int(r * 0.6), int(g * 0.7), int(b * 0.75), 130))
+        grad.setColorAt(1.0, QColor(int(r * 0.3), int(g * 0.4), int(b * 0.5), 165))
+        painter.fillRect(x, y, w, h, QBrush(grad))
 
     def _draw_fps_counter(self, painter):
         painter.setFont(self._fps_font)
