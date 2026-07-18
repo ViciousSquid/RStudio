@@ -823,12 +823,14 @@ class PropertyEditor(QWidget):
             layout.addRow(label_txt, _hbox(slider, label, stretch=False))
             self._widgets[f'{key}_slider'] = slider
 
-        wave_cb = _make_checkbox("Enable Vertex Waves", brush.get('water_wave_enabled', False),
+        wave_cb = _make_checkbox("Enable Rolling Waves", brush.get('water_wave_enabled', True),
                                  lambda c: self.update_object_prop('water_wave_enabled', c), _Style.CHECKBOX)
         layout.addRow("", wave_cb)
         self._widgets['water_wave_cb'] = wave_cb
 
-        slider, label = _make_slider(self, brush.get('water_wave_height', 0.5), 0, 200,
+        # 0..1 fraction; the renderer maps this to world-space wave amplitude
+        wave_h = min(float(brush.get('water_wave_height', 0.5)), 1.0)
+        slider, label = _make_slider(self, wave_h, 0, 100,
                                      callback=lambda v: self.update_object_prop('water_wave_height', v),
                                      tooltip="Amplitude of the waves")
         layout.addRow("Wave Height:", _hbox(slider, label, stretch=False))
@@ -2112,7 +2114,7 @@ class PropertyEditor(QWidget):
             if 'water_tint' not in self.current_object:
                 self.current_object['water_tint'] = [0.0, 0.4, 0.6]
             if 'water_wave_enabled' not in self.current_object:
-                self.current_object['water_wave_enabled'] = False
+                self.current_object['water_wave_enabled'] = True
             if 'water_wave_height' not in self.current_object:
                 self.current_object['water_wave_height'] = 0.5
         elif shader_type == 'Fog':
