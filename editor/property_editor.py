@@ -1179,7 +1179,11 @@ class PropertyEditor(QWidget):
             elif is_pickup and key == 'value':
                 self._build_pickup_value_row(form, thing, value)
             elif isinstance(value, bool):
-                cb = _make_checkbox("", value, lambda c, k=key: self.update_object_prop(k, c == Qt.Checked), _Style.CHECKBOX)
+                # _make_checkbox wires the `toggled(bool)` signal, so the callback
+                # already receives the new checked state as a bool.  (Comparing it
+                # to Qt.Checked — an int enum == 2 — is always False, which is why
+                # generic bool props like 'casts_shadows' never stayed enabled.)
+                cb = _make_checkbox("", value, lambda c, k=key: self.update_object_prop(k, c), _Style.CHECKBOX)
                 form.addRow(label_text, cb)
             elif isinstance(value, int):
                 spin = _make_spin(value, -99999, 99999)
@@ -2350,7 +2354,9 @@ class PropertyEditor(QWidget):
                     self.editor.stop_mover_preview()
 
     def on_respawn_toggled(self, state):
-        respawns = state == Qt.Checked
+        # Connected via _make_checkbox -> toggled(bool), so `state` is already
+        # the boolean checked state (not a Qt.CheckState int).
+        respawns = bool(state)
         self.update_object_prop('respawns', respawns)
         if hasattr(self, 'respawn_time_label'):
             self.respawn_time_label.setVisible(respawns)

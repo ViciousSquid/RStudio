@@ -211,7 +211,7 @@ class SettingsWindow(QDialog):
         
         self.shadows_enabled_checkbox = QCheckBox("Enable Dynamic Shadows")
         self.shadows_enabled_checkbox.setToolTip(
-            "Enable projected shadows from lights with 'casts_shadows' enabled.\n"
+            "Enable depth cube-map shadows from lights with 'casts_shadows' enabled.\n"
             "Disable for better performance on slower devices."
         )
         renderer_layout.addWidget(self.shadows_enabled_checkbox)
