@@ -116,36 +116,50 @@ class MonsterAI:
 
             if not awake:
                 if triggered:
+                    # Scripted ambush: waits for its I/O trigger, ignores sight & sound
                     continue
                 elif not wake_sight:
                     thing.properties['awake'] = True
                     awake = True
                 else:
-                    # Check if player is in sight range (squared distance — threshold-only compare)
+                    # Try, in order: see the player, see an enemy-team monster,
+                    # or HEAR a recent player noise (gunshot / water splash).
+                    woke_reason = None
+
+                    # Sight of the player (squared distance — threshold-only compare)
                     diff_to_player = player_pos - glm.vec3(thing.pos)
                     dist_to_player_sq = glm.dot(diff_to_player, diff_to_player)
                     if dist_to_player_sq <= MONSTER_SIGHT_RANGE * MONSTER_SIGHT_RANGE:
-                        thing.properties['awake'] = True
-                        awake = True
+                        woke_reason = 'sight'
                     else:
-                        # Check if any enemy team monster is in sight range
+                        # Sight of an enemy-team monster
                         my_team = thing.properties.get('team', '')
                         if my_team:
                             enemy = self._find_closest_enemy_team_monster(
                                 thing, my_team, player_pos, MONSTER_SIGHT_RANGE)
                             if enemy is not None:
-                                thing.properties['awake'] = True
-                                awake = True
+                                woke_reason = 'enemy'
                                 if self.monster_debug_active:
                                     name = thing.properties.get('name', '?')
                                     ename = enemy.properties.get('name', '?')
                                     eteam = enemy.properties.get('team', '?')
                                     debug_log("MonsterAI",
                                               f"{name} woke to enemy {ename} (team={eteam})")
-                            else:
-                                continue
-                        else:
-                            continue
+
+                    # Hearing: a recent nearby noise wakes a can_hear monster.
+                    # Investigation (moving to the source) is handled once awake
+                    # by _investigate_sounds on the out-of-sight path.
+                    if woke_reason is None and self._hears_noise(thing) is not None:
+                        woke_reason = 'sound'
+                        if self.monster_debug_active:
+                            name = thing.properties.get('name', '?')
+                            debug_log("MonsterAI", f"{name} woke to a noise")
+
+                    if woke_reason is None:
+                        continue
+
+                    thing.properties['awake'] = True
+                    awake = True
 
             # ---- Kill input handling ----
             if thing.properties.pop('_kill', False):
@@ -634,14 +648,50 @@ class MonsterAI:
     # Patrol system (PathNode navigation)
     # -------------------------------------------------------------------------
 
+    @staticmethod
+    def _nearest_audible_noise(thing_pos: glm.vec3, hearing_range: float, events: list):
+        """Return the closest noise event audible from thing_pos, or None.
+
+        Each event's reach is the monster's hearing range scaled by the
+        event's 'loudness' (gunfire carries further than a water splash), so
+        a quiet event has to be closer to register.
+        PERF: squared distances — only used for threshold + closest compares.
+        """
+        best_event = None
+        best_dist_sq = float('inf')
+        for event in events:
+            ex, ey, ez = event['pos']
+            dx = thing_pos.x - ex
+            dy = thing_pos.y - ey
+            dz = thing_pos.z - ez
+            dist_sq = dx * dx + dy * dy + dz * dz
+            reach = hearing_range * event.get('loudness', 1.0)
+            if dist_sq <= reach * reach and dist_sq < best_dist_sq:
+                best_dist_sq = dist_sq
+                best_event = event
+        return best_event
+
+    def _hears_noise(self, monster):
+        """Return the closest recent player-noise event this monster can hear,
+        or None. Deaf monsters (can_hear False) never hear anything. Used to
+        wake sleeping monsters — investigation of the source is handled by
+        _investigate_sounds once the monster is awake."""
+        if not monster.properties.get('can_hear', False):
+            return None
+        events = self.lt.get_recent_noise_events(max_age=2.0)
+        if not events:
+            return None
+        hearing_range = float(monster.properties.get('sight', MONSTER_SIGHT_RANGE))
+        return self._nearest_audible_noise(glm.vec3(monster.pos), hearing_range, events)
+
     def _investigate_sounds(self, monster, state: Dict, mtype: str, delta: float, player_pos: glm.vec3) -> bool:
-        """Check for recent gunfire sounds and move toward them if within range. Returns True if investigating."""
+        """Check for recent player noises and move toward them if within range. Returns True if investigating."""
         if not monster.properties.get('can_hear', False):
             return False
 
-        # Check for recent gunfire events
-        gunfire_events = self.lt.get_recent_gunfire_events(max_age=3.0)
-        if not gunfire_events:
+        # Check for recent player-noise events (gunfire, water splashes, …)
+        noise_events = self.lt.get_recent_noise_events(max_age=3.0)
+        if not noise_events:
             # Clear any expired investigation
             if state.get('investigating_sound') is not None:
                 state['investigating_sound'] = None
@@ -649,21 +699,10 @@ class MonsterAI:
 
         thing_pos = glm.vec3(monster.pos)
         hearing_range = float(monster.properties.get('sight', MONSTER_SIGHT_RANGE))
-
-        # Find the most recent gunfire event within hearing range
-        # PERF: squared distance — only used for threshold + closest compares.
-        best_event = None
-        best_dist_sq = float('inf')
-        hearing_range_sq = hearing_range * hearing_range
         current_time = time.perf_counter()
 
-        for event in gunfire_events:
-            sound_pos = glm.vec3(event['pos'][0], event['pos'][1], event['pos'][2])
-            diff = thing_pos - sound_pos
-            dist_sq = glm.dot(diff, diff)
-            if dist_sq <= hearing_range_sq and dist_sq < best_dist_sq:
-                best_dist_sq = dist_sq
-                best_event = event
+        # Find the closest noise event within (loudness-scaled) hearing range
+        best_event = self._nearest_audible_noise(thing_pos, hearing_range, noise_events)
 
         if best_event is None:
             # No sounds in range
@@ -715,9 +754,14 @@ class MonsterAI:
 
         if self.monster_debug_active:
             name = monster.properties.get('name', '?')
-            debug_log("MonsterAI", 
+            src = best_event.get('source', 'noise')
+            noise_label = {
+                'gunfire': 'gunfire', 'player': 'gunfire',
+                'water_enter': 'a splash', 'water_exit': 'a splash',
+            }.get(src, 'a noise')
+            debug_log("MonsterAI",
                 f'<a href="filter:{name}" style="color: #FFA726; font-weight: bold; text-decoration: none;">{name}</a> '
-                f'<span style="color: #FFA726;">investigating gunfire within Range at ({sound_pos.x:.0f}, {sound_pos.y:.0f}, {sound_pos.z:.0f})</span>')
+                f'<span style="color: #FFA726;">investigating {noise_label} within Range at ({sound_pos.x:.0f}, {sound_pos.y:.0f}, {sound_pos.z:.0f})</span>')
             # Draw debug ray to sound source
             self._debug_rays.append({
                 'start': [thing_pos.x, thing_pos.y + 64.0, thing_pos.z],

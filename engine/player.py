@@ -629,6 +629,10 @@ class Player:
         for brush in aabb_brushes:
             # Check headroom using the fixed signature (brush, p_min, p_max)
             if not self._has_headroom(brush, p_min, p_max):
+                # Blocked — before treating this as a wall, try the automatic
+                # stair "lip": a low obstacle is climbed instead of walked into.
+                if axis in ('x', 'z') and self._try_step_up(aabb_brushes, orig_pos):
+                    return
                 # Collision detected: revert position and stop movement
                 self.pos = orig_pos
                 if axis == 'z':
@@ -638,6 +642,54 @@ class Player:
                 else:
                     self.velocity.y = 0
                 return
+
+    def _try_step_up(self, aabb_brushes, orig_pos):
+        """
+        Automatic stair "lip": when horizontal movement is blocked, check
+        whether every blocking brush is a low step (top edge no more than
+        step_height above the feet). If so — and there is headroom to stand
+        on it — lift the player onto the step and let the move stand.
+
+        Called with self.pos already at the blocked destination. Returns
+        True if the player was stepped up (caller keeps the move), False
+        if this is a real wall (caller reverts as before).
+        """
+        # Only step while walking on the ground; never mid-jump or swimming
+        if self.swimming or not self.on_ground:
+            return False
+        if self.velocity.y > 0.01:
+            return False
+
+        half = self._half
+        feet_y = orig_pos.y - half.y
+        p_min = self.pos - half
+        p_max = self.pos + half
+
+        # Every brush blocking the destination must qualify as a step;
+        # a single taller wall means this is not a staircase lip.
+        step_top = None
+        for brush in aabb_brushes:
+            if self._has_headroom(brush, p_min, p_max):
+                continue
+            top = brush['pos'][1] + brush['size'][1] * 0.5
+            rise = top - feet_y
+            if rise <= 0.0 or rise > self.step_height:
+                return False
+            if step_top is None or top > step_top:
+                step_top = top
+        if step_top is None:
+            return False
+
+        # Headroom: the player must fit standing with feet on the step
+        lifted_y = step_top + half.y + 0.001
+        l_min = glm.vec3(p_min.x, lifted_y - half.y, p_min.z)
+        l_max = glm.vec3(p_max.x, lifted_y + half.y, p_max.z)
+        for brush in aabb_brushes:
+            if not self._has_headroom(brush, l_min, l_max):
+                return False
+
+        self.pos.y = lifted_y
+        return True
 
     def _move_with_mesh_collision(self, delta, mesh_brushes, axis):
         """

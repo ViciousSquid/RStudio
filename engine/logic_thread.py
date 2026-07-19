@@ -109,6 +109,12 @@ Key_Control = 0x01000021
 # forth between two portals if they are very close together (seconds).
 _PORTAL_TRANSIT_COOLDOWN = 0.5
 
+# Noise "loudness" multipliers scale a monster's hearing range per event.
+# 1.0 = heard out to the full sensory radius (gunshots); water splashes are
+# quieter, so a monster has to be closer to notice the player entering/leaving.
+_GUNFIRE_LOUDNESS = 1.0
+_WATER_LOUDNESS = 0.7
+
 
 class LogicThread(threading.Thread):
     """
@@ -118,7 +124,10 @@ class LogicThread(threading.Thread):
     
     TICK_RATE = 60
     TICK_DURATION = 1.0 / TICK_RATE
-    
+
+    # Seconds between repeating wade footstep sounds while walking in water
+    WATERWALK_INTERVAL = 0.45
+
     # Editor camera settings
     EDITOR_CAMERA_SPEED = 300.0
     EDITOR_CAMERA_FAST_MULT = 2.5
@@ -224,7 +233,11 @@ class LogicThread(threading.Thread):
         
         # Interaction State
         self.current_hud_message = ""
-        
+
+        # Water sound state (enter/exit transition + wade footstep cadence)
+        self._player_was_in_water = False
+        self._waterwalk_timer = 0.0
+
         # Visual FX
         self.bullet_marks = []
         self.BULLET_FADE_TIME = 20.0
@@ -662,7 +675,11 @@ class LogicThread(threading.Thread):
             self.active_speakers.clear()
             self.hurt_trigger_timers.clear()
             self.current_hud_message = ""
-            
+
+            # Reset water sound state (no spurious enter/exit on spawn)
+            self._player_was_in_water = False
+            self._waterwalk_timer = 0.0
+
             # Reset gate inputs
             self.gate_inputs = {}
             
@@ -1106,7 +1123,10 @@ class LogicThread(threading.Thread):
         self.player.update(delta, move_dir, jump, crouch, collision_brushes,
                           self._mover_brush_list, self._door_brush_list, self.terrain,
                           spatial_grid=getattr(self, '_spatial_grid', None))
-        
+
+        # Water enter/exit/wade sounds (uses the post-physics immersion state)
+        self._update_water_sounds(delta)
+
         # Gameplay
         self._handle_interactions(use_key)
         self._check_pickups()
@@ -1148,6 +1168,52 @@ class LogicThread(threading.Thread):
                 collision_brushes, self._mover_brush_list, self._door_brush_list, self.terrain,
                 spatial_grid=getattr(self, '_spatial_grid', None),
             )
+
+    # =========================================================================
+    # WATER SOUNDS
+    # =========================================================================
+
+    def _update_water_sounds(self, delta: float):
+        """Queue splash sounds off the player's immersion state.
+
+        - enterwater.wav on the transition dry → in water
+        - exitwater.wav  on the transition in water → dry
+        - waterwalk.wav  on a repeating footstep cadence while wading
+          (in water, not deep enough to swim, on the ground, and moving)
+
+        Missing sound files are handled gracefully by the render thread's
+        _process_sound_queue, so this is safe even before the assets exist.
+        """
+        if not self.player:
+            return
+
+        in_water = bool(self.player.in_water)
+
+        # Enter / exit transitions. Each splash is also an audible event so
+        # nearby hearing monsters can wake and investigate (same system as
+        # gunfire) — quieter than a gunshot, hence _WATER_LOUDNESS.
+        if in_water and not self._player_was_in_water:
+            self.game_state.queue_sound({'file': 'enterwater.wav', 'volume': 1.0})
+            self._emit_noise_event(self.player.pos, source='water_enter',
+                                   loudness=_WATER_LOUDNESS)
+            self._waterwalk_timer = 0.0  # allow a wade step promptly after entry
+        elif not in_water and self._player_was_in_water:
+            self.game_state.queue_sound({'file': 'exitwater.wav', 'volume': 1.0})
+            self._emit_noise_event(self.player.pos, source='water_exit',
+                                   loudness=_WATER_LOUDNESS)
+        self._player_was_in_water = in_water
+
+        # Wading footsteps: only while shallow (not swimming), grounded, moving
+        wading = (in_water and not self.player.swimming and self.player.on_ground)
+        horiz_speed = math.hypot(self.player.velocity.x, self.player.velocity.z)
+        if wading and horiz_speed > 20.0:
+            self._waterwalk_timer -= delta
+            if self._waterwalk_timer <= 0.0:
+                self.game_state.queue_sound({'file': 'waterwalk.wav', 'volume': 0.8})
+                self._waterwalk_timer = self.WATERWALK_INTERVAL
+        else:
+            # Reset so the next stride into water plays a step immediately
+            self._waterwalk_timer = 0.0
 
     # =========================================================================
     # PORTAL TRANSIT
@@ -2027,11 +2093,9 @@ class LogicThread(threading.Thread):
                 return
         
         # Record gunfire sound event for AI hearing
-        self._gunfire_events.append({
-            'pos': [ray_origin.x, ray_origin.y, ray_origin.z],
-            'time': time.perf_counter(),
-            'source': 'player',
-        })
+        self._emit_noise_event(
+            [ray_origin.x, ray_origin.y, ray_origin.z],
+            source='gunfire', loudness=_GUNFIRE_LOUDNESS)
 
         if closest_brush_hit is not None:
             self.bullet_marks.append({
@@ -2212,12 +2276,32 @@ class LogicThread(threading.Thread):
     # GUNFIRE SOUND EVENTS (for AI hearing)
     # =========================================================================
 
-    def get_recent_gunfire_events(self, max_age: float = 3.0) -> list:
+    def _emit_noise_event(self, pos, source: str, loudness: float = 1.0):
+        """Record an audible player action so hearing monsters can react.
+
+        Stored in the shared player-noise list (self._gunfire_events); every
+        event carries a position, timestamp, a source tag and a loudness
+        multiplier that scales how far it can be heard. Used by the monster
+        AI both to wake sleeping monsters and to steer awake ones toward the
+        source (see MonsterAI._hears_noise / _investigate_sounds).
+        """
+        self._gunfire_events.append({
+            'pos': [float(pos[0]), float(pos[1]), float(pos[2])],
+            'time': time.perf_counter(),
+            'source': source,
+            'loudness': float(loudness),
+        })
+
+    def get_recent_noise_events(self, max_age: float = 3.0) -> list:
         current_time = time.perf_counter()
         return [
             e for e in self._gunfire_events
             if (current_time - e['time']) < max_age
         ]
+
+    # Backwards-compatible alias: the noise list started as gunfire-only.
+    def get_recent_gunfire_events(self, max_age: float = 3.0) -> list:
+        return self.get_recent_noise_events(max_age)
 
     # =========================================================================
     # FRUSTUM CULLING
