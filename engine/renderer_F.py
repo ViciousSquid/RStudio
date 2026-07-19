@@ -13,6 +13,17 @@ from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIR
 from editor.things import Thing, Light, PathNode, Portal, Pickup, Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger
 
 
+def _light_casts_shadows(light):
+    """True if a light should cast depth cube-map shadows.
+
+    Robust to the flag being stored as a real bool or as a string
+    (``"true"``/``"false"``) in saved maps."""
+    val = light.properties.get('casts_shadows', False)
+    if isinstance(val, str):
+        return val.strip().lower() in ('1', 'true', 'yes', 'on')
+    return bool(val)
+
+
 class Renderer_F(BaseRenderer):
     def __init__(self, texture_loader, initial_grid_size, initial_world_size, config=None):
         super().__init__(texture_loader, initial_grid_size, initial_world_size, config)
@@ -320,6 +331,18 @@ class Renderer_F(BaseRenderer):
                 final_sprites.append(thing)
         lights = [t for t in things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
         self._frame_lights = lights
+
+        # --- Depth cube-map shadow pass -------------------------------------
+        # Render shadow-casting point lights into their cube-maps *before* any
+        # scene geometry so every lit/textured/terrain draw can sample them.
+        self._light_shadow_index = {}
+        if current_mode == RENDER_MODE_LIT and self.shadows_enabled:
+            shadow_lights = [l for l in lights if _light_casts_shadows(l)]
+            if shadow_lights:
+                shadow_brushes = config.get('all_brushes', brushes)
+                shadow_things = config.get('all_things', things)
+                self.render_shadow_maps(shadow_lights, shadow_brushes, shadow_things, config)
+
         terrain = config.get('terrain', None)
         if terrain and terrain.enabled:
             self.render_terrain(projection, view, camera_pos, terrain, lights)
@@ -386,11 +409,6 @@ class Renderer_F(BaseRenderer):
             self.draw_glow_brushes(projection, view, camera_pos, glow_brushes, lights, config)
         if models_to_render:
             self.draw_models(projection, view, camera_pos, models_to_render, lights, config)
-        if current_mode == RENDER_MODE_LIT and self.shadows_enabled:
-            shadow_lights = [l for l in lights if l.properties.get('casts_shadows')]
-            if shadow_lights:
-                all_brushes = config.get('all_brushes', brushes)
-                self.render_projected_shadows_optimized(projection, view, camera_pos, all_brushes, shadow_lights)
         if transparent_brushes:
             transparent_brushes.sort(key=lambda b: -self._distance_sq(b.get('pos', [0,0,0]), camera_pos))
         if water_brushes:

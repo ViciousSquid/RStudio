@@ -456,6 +456,10 @@ class Terrain:
             self.uniforms[f'{base}.color']     = gl.glGetUniformLocation(self.shader_program, f'{base}.color')
             self.uniforms[f'{base}.intensity'] = gl.glGetUniformLocation(self.shader_program, f'{base}.intensity')
             self.uniforms[f'{base}.radius']    = gl.glGetUniformLocation(self.shader_program, f'{base}.radius')
+            self.uniforms[f'{base}.shadowIndex'] = gl.glGetUniformLocation(self.shader_program, f'{base}.shadowIndex')
+        # Depth cube-map samplers for point-light shadows.
+        for i in range(shaders.MAX_SHADOW_LIGHTS):
+            self.uniforms[f'shadowMaps[{i}]'] = gl.glGetUniformLocation(self.shader_program, f'shadowMaps[{i}]')
     
     def load_terrain_textures(self, tex_manager):
         self.grass_tex = tex_manager.get('assets/textures/terrain/grass.jpg')
@@ -791,7 +795,8 @@ class Terrain:
             if a * px + b * py + c * pz + d < 0: return False
         return True
     
-    def update_and_render(self, projection: glm.mat4, view: glm.mat4, camera_pos: glm.vec3, frustum_planes=None, lights=None, active_lights_count=0):
+    def update_and_render(self, projection: glm.mat4, view: glm.mat4, camera_pos: glm.vec3, frustum_planes=None, lights=None, active_lights_count=0,
+                          shadow_cubemaps=None, shadow_index_map=None, shadow_unit_base=4):
         if not self.enabled: return
         if not self.shader_program:
             self._init_shader()
@@ -828,6 +833,7 @@ class Terrain:
         gl.glUniform1i(self.uniforms['use_textures'], use_tex)
         
         gl.glUniform1i(self.uniforms['active_lights'], active_lights_count)
+        shadow_index_map = shadow_index_map or {}
         for i in range(active_lights_count):
             light = lights[i]
             base = f'lights[{i}]'
@@ -835,6 +841,19 @@ class Terrain:
             gl.glUniform3fv(self.uniforms[f'{base}.color'],    1, light.get_color())
             gl.glUniform1f(self.uniforms[f'{base}.intensity'],    light.get_intensity())
             gl.glUniform1f(self.uniforms[f'{base}.radius'],       light.get_radius())
+            sidx_loc = self.uniforms.get(f'{base}.shadowIndex', -1)
+            if sidx_loc is not None and sidx_loc != -1:
+                gl.glUniform1i(sidx_loc, shadow_index_map.get(id(light), -1))
+
+        # Bind depth cube-maps so terrain receives point-light shadows.
+        if shadow_cubemaps:
+            for i, cm in enumerate(shadow_cubemaps):
+                loc = self.uniforms.get(f'shadowMaps[{i}]', -1)
+                if loc is not None and loc != -1:
+                    gl.glActiveTexture(gl.GL_TEXTURE0 + shadow_unit_base + i)
+                    gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
+                    gl.glUniform1i(loc, shadow_unit_base + i)
+            gl.glActiveTexture(gl.GL_TEXTURE0)
         
         lod_level_loc = self.uniforms.get('lod_level', -1)
 

@@ -3,6 +3,66 @@ import os
 SHADER_DIR = os.path.join(os.path.dirname(__file__), 'shaders')
 
 # ==============================================================================
+# SHADOW MAPPING (depth cube-map, omnidirectional point-light shadows)
+# ------------------------------------------------------------------------------
+# Shared GLSL injected into every lighting fragment shader that *receives*
+# shadows.  A shadow-casting point light renders scene depth into a cube-map
+# (linear distance / far_plane stored per texel); receivers reconstruct the
+# distance and compare it against the fragment's distance to the light.
+#
+# NOTE: In GLSL 3.30 a sampler array may only be indexed with a *constant*
+# expression, so the cube lookup uses an explicit if-ladder instead of
+# dynamic indexing (which is only legal from GLSL 4.00 onwards).  Keeping the
+# indices constant makes the shaders portable across desktop GL 3.3 drivers.
+# ==============================================================================
+MAX_SHADOW_LIGHTS = 4
+
+SHADOW_GLSL = """
+#define MAX_SHADOW_LIGHTS 4
+uniform samplerCube shadowMaps[MAX_SHADOW_LIGHTS];
+
+highp float _sampleShadowCube(int idx, highp vec3 dir) {
+    if (idx == 0) return texture(shadowMaps[0], dir).r;
+    else if (idx == 1) return texture(shadowMaps[1], dir).r;
+    else if (idx == 2) return texture(shadowMaps[2], dir).r;
+    return texture(shadowMaps[3], dir).r;
+}
+
+// idx          : which cube-map (0..3), or <0 for a non-shadow-casting light
+// fragToLight  : lightPos - fragmentWorldPos (world space)
+// farPlane     : the light radius used when the cube-map was rendered
+// ndotl        : diffuse term, used to scale the slope bias
+// Returns 0 (fully lit) .. 1 (fully shadowed).  highp throughout because the
+// world coordinates can be in the thousands and mediump would band badly.
+float calcPointShadow(int idx, highp vec3 fragToLight, highp float farPlane, float ndotl) {
+    if (idx < 0) return 0.0;
+    highp float currentDepth = length(fragToLight);
+    if (currentDepth >= farPlane) return 0.0;   // beyond the light's reach
+    // The cube-map was rendered from the light looking outward, so the lookup
+    // direction runs light -> fragment, i.e. the negation of fragToLight.
+    highp vec3 lookDir = -fragToLight;
+    highp float diskRadius = farPlane * 0.004 * (1.0 + currentDepth / farPlane);
+    // Bias covers surface slope plus the depth spread from the PCF disk, so
+    // flat lit surfaces don't self-shadow ("shadow acne").
+    highp float bias = diskRadius + clamp(farPlane * 0.03 * (1.0 - ndotl),
+                                          farPlane * 0.004, farPlane * 0.04);
+    vec3 sampleDirs[20] = vec3[](
+        vec3( 1, 1, 1), vec3( 1,-1, 1), vec3(-1,-1, 1), vec3(-1, 1, 1),
+        vec3( 1, 1,-1), vec3( 1,-1,-1), vec3(-1,-1,-1), vec3(-1, 1,-1),
+        vec3( 1, 1, 0), vec3( 1,-1, 0), vec3(-1,-1, 0), vec3(-1, 1, 0),
+        vec3( 1, 0, 1), vec3(-1, 0, 1), vec3( 1, 0,-1), vec3(-1, 0,-1),
+        vec3( 0, 1, 1), vec3( 0,-1, 1), vec3( 0,-1,-1), vec3( 0, 1,-1)
+    );
+    float shadow = 0.0;
+    for (int s = 0; s < 20; ++s) {
+        highp float closest = _sampleShadowCube(idx, lookDir + sampleDirs[s] * diskRadius) * farPlane;
+        if (currentDepth - bias > closest) shadow += 1.0;
+    }
+    return shadow / 20.0;
+}
+"""
+
+# ==============================================================================
 # DEFAULT SHADER SOURCES
 # These are the fallback strings used if the .vert/.frag files are missing from
 # disk (e.g. in a packaged build that doesn't include loose shader files).
@@ -49,9 +109,9 @@ in highp vec3 FragPos;
 in vec3 Normal;
 uniform vec3 object_color;
 uniform float alpha;
-struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; };
+struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; int shadowIndex; };
 uniform Light lights[8];
-uniform int active_lights;
+uniform int active_lights;""" + SHADOW_GLSL + """
 void main() {
     vec3 norm = normalize(Normal);
     vec3 result = vec3(0.1) * object_color;
@@ -65,7 +125,8 @@ void main() {
             float diff = max(dot(norm, lightDir), 0.0);
             float att  = 1.0 - (dist / lights[i].radius);
             att = att * att;
-            result += (diff * lights[i].color * lights[i].intensity * att) * object_color;
+            float shadow = calcPointShadow(lights[i].shadowIndex, toLight, lights[i].radius, diff);
+            result += (1.0 - shadow) * (diff * lights[i].color * lights[i].intensity * att) * object_color;
         }
     }
     FragColor = vec4(result, alpha);
@@ -102,10 +163,9 @@ in vec3 Normal;
 in highp vec2 TexCoords;
 
 uniform sampler2D texture_diffuse;
-struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; };
+struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; int shadowIndex; };
 uniform Light lights[8];
-uniform int active_lights;
-
+uniform int active_lights;""" + SHADOW_GLSL + """
 void main() {
     vec4 texColor = texture(texture_diffuse, TexCoords);
     if(texColor.a < 0.1) discard;
@@ -123,7 +183,8 @@ void main() {
             float diff = max(dot(norm, lightDir), 0.0);
             float att  = 1.0 - (dist / lights[i].radius);
             att = att * att;
-            result += (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
+            float shadow = calcPointShadow(lights[i].shadowIndex, toLight, lights[i].radius, diff);
+            result += (1.0 - shadow) * (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
         }
     }
     FragColor = vec4(result, texColor.a);
@@ -611,20 +672,27 @@ void main() {
     FragColor = vec4(finalRGB, alpha);
 }""",
     
-    'shadow_volume.vert': """#version 330 core
-precision highp float;
+    # Depth cube-map pass: renders scene geometry from a point light's position
+    # into one cube face, storing linear distance (0..1 = 0..far_plane) so the
+    # lighting shaders can do an omnidirectional shadow test.  One draw per face
+    # (6 faces) keeps this portable to GL 3.3 with no geometry-shader dependency.
+    'depth_cube.vert': """#version 330 core
 layout (location = 0) in vec3 aPos;
 uniform mat4 model;
-uniform mat4 view;
-uniform mat4 projection;
+uniform mat4 lightSpaceMatrix;   // proj * view for the current cube face
+out vec3 FragPos;
 void main() {
-    gl_Position = projection * view * model * vec4(aPos, 1.0);
+    vec4 world = model * vec4(aPos, 1.0);
+    FragPos = world.xyz;
+    gl_Position = lightSpaceMatrix * world;
 }""",
-    'shadow_volume.frag': """#version 330 core
-precision mediump float;
-out vec4 FragColor;
+    'depth_cube.frag': """#version 330 core
+in vec3 FragPos;
+uniform vec3 lightPos;
+uniform float far_plane;
 void main() {
-    FragColor = vec4(0.0, 0.0, 0.0, 0.5);
+    // Store distance to the light, normalised into [0, 1].
+    gl_FragDepth = length(FragPos - lightPos) / far_plane;
 }""",
 
     'terrain.vert': """#version 330 core
@@ -676,11 +744,12 @@ struct Light {
     vec3 color;
     float intensity;
     highp float radius;
+    int shadowIndex;
 };
 
 uniform Light lights[8];
 uniform int active_lights;
-
+""" + SHADOW_GLSL + """
 highp float hash(highp vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
@@ -750,13 +819,15 @@ void main() {
     result += fillDiff * skyColor * texColor;
     
     for (int i = 0; i < active_lights; i++) {
-        highp float distance = length(lights[i].position - FragPos);
+        highp vec3  toLight  = lights[i].position - FragPos;
+        highp float distance = length(toLight);
         if (distance < lights[i].radius) {
-            vec3  lightDir    = normalize(lights[i].position - FragPos);
+            vec3  lightDir    = toLight / distance;
             float diff        = max(dot(norm, lightDir), 0.0);
             float attenuation = 1.0 - smoothstep(0.0, lights[i].radius, distance);
             attenuation       = attenuation * attenuation;
-            result += diff * lights[i].color * lights[i].intensity * attenuation * texColor;
+            float shadow      = calcPointShadow(lights[i].shadowIndex, toLight, lights[i].radius, diff);
+            result += (1.0 - shadow) * diff * lights[i].color * lights[i].intensity * attenuation * texColor;
         }
     }
     
@@ -789,9 +860,9 @@ in vec3 FragPos;
 in vec3 Normal;
 uniform vec3 object_color;
 uniform float alpha;
-struct Light { vec3 position; vec3 color; float intensity; float radius; };
+struct Light { vec3 position; vec3 color; float intensity; float radius; int shadowIndex; };
 uniform Light lights[16];
-uniform int active_lights;
+uniform int active_lights;""" + SHADOW_GLSL + """
 void main() {
     vec3 norm = normalize(Normal);
     vec3 result = vec3(0.12) * object_color;
@@ -805,7 +876,8 @@ void main() {
             float diff = max(dot(norm, lightDir), 0.0);
             float att = 1.0 - (dist / lights[i].radius);
             att = att * att;
-            result += (diff * lights[i].color * lights[i].intensity * att) * object_color;
+            float shadow = calcPointShadow(lights[i].shadowIndex, toLight, lights[i].radius, diff);
+            result += (1.0 - shadow) * (diff * lights[i].color * lights[i].intensity * att) * object_color;
         }
     }
     FragColor = vec4(result, alpha);
@@ -836,9 +908,9 @@ in vec3 FragPos;
 in vec3 Normal;
 in vec2 TexCoords;
 uniform sampler2D texture_diffuse;
-struct Light { vec3 position; vec3 color; float intensity; float radius; };
+struct Light { vec3 position; vec3 color; float intensity; float radius; int shadowIndex; };
 uniform Light lights[16];
-uniform int active_lights;
+uniform int active_lights;""" + SHADOW_GLSL + """
 void main() {
     vec4 texColor = texture(texture_diffuse, TexCoords);
     if(texColor.a < 0.1) discard;
@@ -854,7 +926,8 @@ void main() {
             float diff = max(dot(norm, lightDir), 0.0);
             float att = 1.0 - (dist / lights[i].radius);
             att = att * att;
-            result += (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
+            float shadow = calcPointShadow(lights[i].shadowIndex, toLight, lights[i].radius, diff);
+            result += (1.0 - shadow) * (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
         }
     }
     FragColor = vec4(result, texColor.a);
@@ -949,7 +1022,7 @@ SHADER_MAP = {
     'lit':           ('lit.vert',            'lit.frag'),
     'textured':      ('textured.vert',       'textured.frag'),
     'sprite':        ('sprite.vert',         'sprite.frag'),
-    'shadow_volume': ('shadow_volume.vert',  'shadow_volume.frag'),
+    'depth_cube':    ('depth_cube.vert',     'depth_cube.frag'),
     'fog':           ('fog.vert',            'fog.frag'),
     'water':         ('water.vert',          'water.frag'),
     'glass':         ('glass.vert',          'glass.frag'),

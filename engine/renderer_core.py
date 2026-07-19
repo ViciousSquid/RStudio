@@ -65,26 +65,6 @@ class UniformCache:
         return self._cache.get(name, default)
 
 
-class ShadowBatch:
-    __slots__ = ('positions', 'scales', 'rotations', 'alphas', 'count', 'capacity')
-    def __init__(self, capacity=1024):
-        self.capacity = capacity
-        self.positions = np.zeros((capacity, 3), dtype=np.float32)
-        self.scales = np.zeros((capacity, 3), dtype=np.float32)
-        self.rotations = np.zeros(capacity, dtype=np.float32)
-        self.alphas = np.zeros(capacity, dtype=np.float32)
-        self.count = 0
-    def reset(self):
-        self.count = 0
-    def add(self, pos, scale, rotation, alpha):
-        if self.count >= self.capacity:
-            return False
-        i = self.count
-        self.positions[i], self.scales[i], self.rotations[i], self.alphas[i] = pos, scale, rotation, alpha
-        self.count += 1
-        return True
-
-
 class LODManager:
     __slots__ = ('full_dist_sq', 'cull_dist_sq')
     LOD_FULL, LOD_REDUCED, LOD_CULLED = 0, 1, 2
@@ -190,6 +170,11 @@ class BaseRenderer:
     MAX_LIGHTS = 16
     MAX_PORTALS = 8      # maximum portal pairs rendered per frame
 
+    # --- Depth cube-map shadow mapping (omnidirectional point-light shadows) ---
+    MAX_SHADOW_LIGHTS = 4          # number of point lights that can cast shadows at once
+    SHADOW_MAP_SIZE = 1024         # per-face resolution of each depth cube-map
+    SHADOW_TEXTURE_UNIT_BASE = 4   # shadow cube-maps bind to units 4..(4+MAX_SHADOW_LIGHTS-1)
+
     def __init__(self, texture_loader, initial_grid_size, initial_world_size, config=None):
         self.texture_manager = {}
         self.loaded_models = {}
@@ -212,8 +197,11 @@ class BaseRenderer:
         self.skip_culling_in_renderer = True   # trust pre‑culled data
 
         self._model_matrix = glm.mat4(1.0)
-        self._floor_shadow_batch = ShadowBatch(2048)
-        self._wall_shadow_batch = ShadowBatch(1024)
+
+        # Depth cube-map shadow-mapping state (created lazily once GL is ready).
+        self._shadow_fbo = None
+        self._shadow_cubemaps = []          # texture ids, one cube-map per shadow slot
+        self._light_shadow_index = {}       # id(light) -> shadow slot index for this frame
 
         # Per‑frame caches
         self._frame_lights = []
@@ -271,7 +259,7 @@ class BaseRenderer:
         self._portal_rim_view_loc = None
         self._portal_rim_color_loc = None
 
-        # Compile common shaders (simple, sprite, shadow_volume, water, glass, fog, terrain)
+        # Compile common shaders (simple, sprite, depth_cube, water, glass, fog, terrain)
         self.shader_loader = ShaderLoader()
         self._compile_common_shaders()
 
@@ -291,6 +279,7 @@ class BaseRenderer:
             self.load_texture('default.png', 'textures')
             self.load_texture('caulk', 'textures')
             self._init_portal_gl()
+            self._init_shadow_resources()
 
     # --------------------------------------------------------------------------
     # Platform detection
@@ -331,12 +320,13 @@ class BaseRenderer:
             self.uniforms['sprite'] = UniformCache(self.shaders['sprite'])
             self.uniforms['sprite'].preload(['projection', 'view', 'sprite_texture', 'sprite_pos_world', 'sprite_size'])
 
-            # shadow_volume
-            vs_src = DEFAULT_SHADERS.get('shadow_volume.vert', '')
-            fs_src = DEFAULT_SHADERS.get('shadow_volume.frag', '')
-            self.shaders['shadow_volume'] = self.shader_loader.compile_from_source(vs_src, fs_src)
-            self.uniforms['shadow_volume'] = UniformCache(self.shaders['shadow_volume'])
-            self.uniforms['shadow_volume'].preload(['projection', 'view', 'model', 'light_pos'])
+            # depth_cube – renders scene depth into a point light's cube-map for
+            # omnidirectional shadow mapping (replaces the old projected shadows).
+            vs_src = DEFAULT_SHADERS.get('depth_cube.vert', '')
+            fs_src = DEFAULT_SHADERS.get('depth_cube.frag', '')
+            self.shaders['depth_cube'] = self.shader_loader.compile_from_source(vs_src, fs_src)
+            self.uniforms['depth_cube'] = UniformCache(self.shaders['depth_cube'])
+            self.uniforms['depth_cube'].preload(['model', 'lightSpaceMatrix', 'lightPos', 'far_plane'])
 
             # water
             vs_src = DEFAULT_SHADERS.get('water.vert', '')
@@ -620,7 +610,12 @@ class BaseRenderer:
         gl.glDisable(gl.GL_CULL_FACE)
         if hasattr(terrain, 'get_tri_count'):
             self.render_stats.visible_tris += terrain.get_tri_count()
-        terrain.update_and_render(projection, view, camera_pos, frustum_planes, lights, active_lights_count)
+        terrain.update_and_render(
+            projection, view, camera_pos, frustum_planes, lights, active_lights_count,
+            shadow_cubemaps=(self._shadow_cubemaps if self.shadows_enabled else None),
+            shadow_index_map=self._light_shadow_index,
+            shadow_unit_base=self.SHADOW_TEXTURE_UNIT_BASE,
+        )
 
     # --------------------------------------------------------------------------
     # Models
@@ -1232,12 +1227,232 @@ class BaseRenderer:
         uniforms = self.uniforms[shader_name]
         num_lights = min(len(lights), self.MAX_LIGHTS)
         gl.glUniform1i(uniforms['active_lights'], num_lights)
+        shadow_index_map = self._light_shadow_index
         for i in range(num_lights):
             light = lights[i]
             gl.glUniform3fv(uniforms[f'lights[{i}].position'], 1, light.pos)
             gl.glUniform3fv(uniforms[f'lights[{i}].color'], 1, light.get_color())
             gl.glUniform1f(uniforms[f'lights[{i}].intensity'], light.get_intensity())
             gl.glUniform1f(uniforms[f'lights[{i}].radius'], light.get_radius())
+            loc = uniforms[f'lights[{i}].shadowIndex']
+            if loc != -1:
+                gl.glUniform1i(loc, shadow_index_map.get(id(light), -1))
+        # Bind the depth cube-maps so the shadow test can sample them.
+        self._bind_shadow_maps(uniforms)
+
+    # --------------------------------------------------------------------------
+    # Depth cube-map shadow mapping
+    # --------------------------------------------------------------------------
+    def _init_shadow_resources(self):
+        """Allocate the FBO and the pool of depth cube-maps used for
+        omnidirectional point-light shadows.  Called once, after the GL context
+        and shaders are ready."""
+        if 'depth_cube' not in self.shaders:
+            return
+        try:
+            prev_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
+            self._shadow_fbo = int(gl.glGenFramebuffers(1))
+            self._shadow_cubemaps = []
+            size = self.SHADOW_MAP_SIZE
+            for _ in range(self.MAX_SHADOW_LIGHTS):
+                cm = int(gl.glGenTextures(1))
+                gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
+                for face in range(6):
+                    gl.glTexImage2D(gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0,
+                                    gl.GL_DEPTH_COMPONENT24, size, size, 0,
+                                    gl.GL_DEPTH_COMPONENT, gl.GL_FLOAT, None)
+                gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
+                gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
+                gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+                gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+                gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_R, gl.GL_CLAMP_TO_EDGE)
+                self._shadow_cubemaps.append(cm)
+            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+
+            # Depth-only FBO: validate completeness with the first face attached.
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._shadow_fbo)
+            gl.glDrawBuffer(gl.GL_NONE)
+            gl.glReadBuffer(gl.GL_NONE)
+            gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
+                                      gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X, self._shadow_cubemaps[0], 0)
+            status = gl.glCheckFramebufferStatus(gl.GL_FRAMEBUFFER)
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, prev_fbo)
+            if status != gl.GL_FRAMEBUFFER_COMPLETE:
+                print(f"[Shadow] depth cube-map FBO incomplete (0x{status:x}); shadows disabled")
+                self._shadow_fbo = None
+                self._shadow_cubemaps = []
+            else:
+                print(f"[Shadow] depth cube-map shadows ready "
+                      f"({self.MAX_SHADOW_LIGHTS} lights @ {size}px)")
+        except Exception as e:
+            print(f"[Shadow] initialisation failed: {e}")
+            self._shadow_fbo = None
+            self._shadow_cubemaps = []
+
+    def _thing_model_matrix(self, thing):
+        """Model matrix for a model-carrying Thing, matching draw_models()."""
+        pos = thing.pos
+        scale = thing.properties.get('scale', 1.0)
+        if isinstance(scale, (int, float)):
+            scale = [scale, scale, scale]
+        rot = thing.properties.get('rotation', [0, 0, 0])
+        mat = glm.translate(self._identity_mat4, glm.vec3(*pos))
+        mat = glm.rotate(mat, glm.radians(rot[1]), glm.vec3(0, 1, 0))
+        mat = glm.rotate(mat, glm.radians(rot[0]), glm.vec3(1, 0, 0))
+        mat = glm.rotate(mat, glm.radians(rot[2]), glm.vec3(0, 0, 1))
+        mat = glm.scale(mat, glm.vec3(*scale))
+        return mat
+
+    def _bind_shadow_maps(self, uniforms):
+        """Bind every depth cube-map to its reserved texture unit and point the
+        matching ``shadowMaps[i]`` sampler at it.  Unused slots are still bound
+        so the samplers stay valid; the shaders simply never sample a slot whose
+        ``shadowIndex`` no light references."""
+        if not self._shadow_cubemaps:
+            return
+        base = self.SHADOW_TEXTURE_UNIT_BASE
+        for i, cm in enumerate(self._shadow_cubemaps):
+            loc = uniforms[f'shadowMaps[{i}]']
+            if loc != -1:
+                gl.glActiveTexture(gl.GL_TEXTURE0 + base + i)
+                gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
+                gl.glUniform1i(loc, base + i)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+
+    def render_shadow_maps(self, shadow_lights, brushes, things, config):
+        """Render scene depth into a cube-map for each shadow-casting point
+        light.  Populates ``self._light_shadow_index`` (id(light) -> slot) which
+        the lighting shaders use to look up the right cube-map."""
+        self._light_shadow_index = {}
+        if not self._shadow_cubemaps or 'depth_cube' not in self.shaders:
+            return
+        lights = list(shadow_lights)[:self.MAX_SHADOW_LIGHTS]
+        if not lights:
+            return
+
+        # ---- Gather casters ------------------------------------------------
+        caster_brushes = []
+        for b in brushes:
+            if b.get('hidden') or b.get('is_trigger') or b.get('is_fog') or b.get('operation') == 'subtract':
+                continue
+            if is_water_brush(b) or b.get('shader') in ('Fog', 'Glass', 'Glow'):
+                continue
+            caster_brushes.append(b)
+        caster_models = [t for t in things
+                         if isinstance(t, Thing) and t.properties.get('model_path')]
+
+        # ---- Save GL state we are about to clobber -------------------------
+        prev_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
+        prev_vp = gl.glGetIntegerv(gl.GL_VIEWPORT)
+        scissor_was = bool(gl.glIsEnabled(gl.GL_SCISSOR_TEST))
+        cull_was = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
+        blend_was = bool(gl.glIsEnabled(gl.GL_BLEND))
+
+        shader = self.shaders['depth_cube']
+        u = self.uniforms['depth_cube']
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._shadow_fbo)
+        gl.glDrawBuffer(gl.GL_NONE)
+        gl.glReadBuffer(gl.GL_NONE)
+        gl.glViewport(0, 0, self.SHADOW_MAP_SIZE, self.SHADOW_MAP_SIZE)
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl.glDisable(gl.GL_SCISSOR_TEST)
+        gl.glDisable(gl.GL_BLEND)
+        gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glDepthFunc(gl.GL_LESS)
+        # No face culling: brush cube winding isn't guaranteed and models may be
+        # single-sided/open. The shader-side depth bias handles self-shadowing.
+        gl.glDisable(gl.GL_CULL_FACE)
+
+        model_loc = u['model']
+        lsm_loc = u['lightSpaceMatrix']
+        lightpos_loc = u['lightPos']
+        far_loc = u['far_plane']
+        cube_vao = self.vaos['cube']
+
+        # Cube-face look-at basis (standard GL cube-map orientation).
+        face_dirs = (
+            (glm.vec3( 1, 0, 0), glm.vec3(0, -1,  0)),
+            (glm.vec3(-1, 0, 0), glm.vec3(0, -1,  0)),
+            (glm.vec3( 0, 1, 0), glm.vec3(0,  0,  1)),
+            (glm.vec3( 0,-1, 0), glm.vec3(0,  0, -1)),
+            (glm.vec3( 0, 0, 1), glm.vec3(0, -1,  0)),
+            (glm.vec3( 0, 0,-1), glm.vec3(0, -1,  0)),
+        )
+
+        for idx, light in enumerate(lights):
+            lpos = light.pos
+            lx, ly, lz = float(lpos[0]), float(lpos[1]), float(lpos[2])
+            center = glm.vec3(lx, ly, lz)
+            far_plane = max(float(light.get_radius()), 1.0)
+            near_plane = max(far_plane * 0.002, 1.0)
+            proj = glm.perspective(glm.radians(90.0), 1.0, near_plane, far_plane)
+            reach = far_plane
+            reach_sq = reach * reach
+            cubemap = self._shadow_cubemaps[idx]
+
+            gl.glUniform3f(lightpos_loc, lx, ly, lz)
+            gl.glUniform1f(far_loc, far_plane)
+
+            for face in range(6):
+                gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
+                                          gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, cubemap, 0)
+                gl.glClear(gl.GL_DEPTH_BUFFER_BIT)
+                lsm = proj * glm.lookAt(center, center + face_dirs[face][0], face_dirs[face][1])
+                gl.glUniformMatrix4fv(lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
+
+                # Brush casters (shared unit cube VAO).
+                gl.glBindVertexArray(cube_vao)
+                for b in caster_brushes:
+                    bpos = b.get('pos', [0, 0, 0])
+                    bsize = b.get('size', [64, 64, 64])
+                    br = 0.5 * max(bsize[0], bsize[1], bsize[2])
+                    dx = bpos[0] - lx; dy = bpos[1] - ly; dz = bpos[2] - lz
+                    limit = reach + br
+                    if (dx * dx + dy * dy + dz * dz) > limit * limit:
+                        continue
+                    gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE,
+                                          glm.value_ptr(self._brush_model_matrix(b)))
+                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+
+                # Model casters.
+                for t in caster_models:
+                    obj = self.load_model(t.properties.get('model_path'))
+                    if not obj or not obj.is_loaded:
+                        continue
+                    mpos = t.pos
+                    dx = mpos[0] - lx; dy = mpos[1] - ly; dz = mpos[2] - lz
+                    # Generous bound: model extent is unknown, so 2x reach.
+                    if (dx * dx + dy * dy + dz * dz) > reach_sq * 4.0:
+                        continue
+                    gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE,
+                                          glm.value_ptr(self._thing_model_matrix(t)))
+                    gl.glBindVertexArray(obj.vao)
+                    if getattr(obj, 'ebo', None) is not None and getattr(obj, 'index_count', 0):
+                        gl.glDrawElements(gl.GL_TRIANGLES, obj.index_count, gl.GL_UNSIGNED_INT, None)
+                    else:
+                        gl.glDrawArrays(gl.GL_TRIANGLES, 0, obj.vertex_count)
+
+            self._light_shadow_index[id(light)] = idx
+
+        # ---- Restore state -------------------------------------------------
+        gl.glBindVertexArray(0)
+        gl.glCullFace(gl.GL_BACK)
+        if cull_was:
+            gl.glEnable(gl.GL_CULL_FACE)
+        else:
+            gl.glDisable(gl.GL_CULL_FACE)
+        if blend_was:
+            gl.glEnable(gl.GL_BLEND)
+        else:
+            gl.glDisable(gl.GL_BLEND)
+        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, prev_fbo)
+        gl.glViewport(int(prev_vp[0]), int(prev_vp[1]), int(prev_vp[2]), int(prev_vp[3]))
+        if scissor_was:
+            gl.glEnable(gl.GL_SCISSOR_TEST)
+        self._current_shader = None
 
     def _resolve_model_texture_path(self, material, texture_name):
         """
@@ -1678,71 +1893,6 @@ class BaseRenderer:
             gl.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
         gl.glBindVertexArray(0)
-
-    def render_projected_shadows_optimized(self, projection, view, camera_pos, all_brushes, shadow_lights):
-        if 'shadow_volume' not in self.shaders:
-            return
-        shader = self.shaders['shadow_volume']
-        uniforms = self.uniforms['shadow_volume']
-        gl.glUseProgram(shader)
-        self._current_shader = shader
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-        gl.glBindVertexArray(self.vaos['cube'])
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        gl.glDepthMask(gl.GL_FALSE)
-        gl.glDepthFunc(gl.GL_LEQUAL)
-        gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
-        gl.glPolygonOffset(-1.0, -1.0)
-        model_loc = uniforms['model']
-        light_pos_loc = uniforms.get('light_pos', -1)
-        FLOOR_Y = 0.0
-        shadow_count = 0
-        for light in shadow_lights:
-            lpos = light.pos
-            lx, ly, lz = float(lpos[0]), float(lpos[1]), float(lpos[2])
-            light_radius = float(light.properties.get('radius', 512.0))
-            light_radius_sq = light_radius * light_radius
-            light_intensity = float(light.properties.get('intensity', 1.0))
-            if light_pos_loc is not None and light_pos_loc >= 0:
-                gl.glUniform3f(light_pos_loc, lx, ly, lz)
-            if ly <= FLOOR_Y:
-                continue
-            for brush in all_brushes:
-                if brush.get('hidden') or brush.get('is_trigger') or brush.get('is_fog') or \
-                   is_water_brush(brush) or brush.get('shader') in ('Fog','Glass','Glow'):
-                    continue
-                bpos = brush.get('pos', [0,0,0])
-                bx, by, bz = float(bpos[0]), float(bpos[1]), float(bpos[2])
-                dx,dy,dz = bx-lx, by-ly, bz-lz
-                dist_sq = dx*dx+dy*dy+dz*dz
-                if dist_sq > light_radius_sq:
-                    continue
-                bsize = brush.get('size', [64,64,64])
-                bsx, bsy, bsz = float(bsize[0]), float(bsize[1]), float(bsize[2])
-                nx, ny, nz, nd = 0.0, 1.0, 0.0, -FLOOR_Y
-                dot_val = nx*lx + ny*ly + nz*lz + nd  # = ly - FLOOR_Y
-                shadow_mat = glm.mat4(
-                    glm.vec4(dot_val - lx*nx, -ly*nx,       -lz*nx,       -nx),
-                    glm.vec4(-lx*ny,          dot_val - ly*ny, -lz*ny,     -ny),
-                    glm.vec4(-lx*nz,          -ly*nz,       dot_val - lz*nz, -nz),
-                    glm.vec4(-lx*nd,          -ly*nd,       -lz*nd,       dot_val - nd)
-                )
-                brush_model = glm.scale(glm.translate(self._identity_mat4, glm.vec3(bx,by,bz)), glm.vec3(bsx,bsy,bsz))
-                final = shadow_mat * brush_model
-                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(final))
-                dist_ratio = min(1.0, dist_sq / light_radius_sq)
-                alpha = max(0.05, (1.0 - dist_ratio) * min(light_intensity, 1.0) * 0.6)
-                # currently shadow_volume.frag uses fixed alpha, ignoring this uniform
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
-                shadow_count += 1
-                self.render_stats.draw_calls += 1
-        gl.glDisable(gl.GL_POLYGON_OFFSET_FILL)
-        gl.glDepthMask(gl.GL_TRUE)
-        gl.glDepthFunc(gl.GL_LESS)
-        gl.glBindVertexArray(0)
-        self.render_stats.shadow_draw_calls = shadow_count
 
     # --------------------------------------------------------------------------
     # Portal rendering (used by deferred/forward as needed)
