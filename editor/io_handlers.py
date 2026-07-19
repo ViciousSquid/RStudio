@@ -65,12 +65,36 @@ def register_all_input_handlers(io_manager: IOManager):
                 entity.properties['colour'] = [r, g, b]
         except (ValueError, IndexError):
             pass
-    
+
+    def _light_shadows_on(entity):
+        """Read casts_shadows robustly (may be a bool or a "true"/"false" str)."""
+        val = entity.properties.get('casts_shadows', False)
+        if isinstance(val, str):
+            return val.strip().lower() in ('1', 'true', 'yes', 'on')
+        return bool(val)
+
+    def light_enable_shadows(entity, param, logic):
+        entity.properties['casts_shadows'] = True
+        logic.io_manager.fire_output(entity, 'OnShadowsEnabled')
+
+    def light_disable_shadows(entity, param, logic):
+        entity.properties['casts_shadows'] = False
+        logic.io_manager.fire_output(entity, 'OnShadowsDisabled')
+
+    def light_toggle_shadows(entity, param, logic):
+        if _light_shadows_on(entity):
+            light_disable_shadows(entity, param, logic)
+        else:
+            light_enable_shadows(entity, param, logic)
+
     io_manager.register_input_handler('light', 'turnon', light_turn_on)
     io_manager.register_input_handler('light', 'turnoff', light_turn_off)
     io_manager.register_input_handler('light', 'toggle', light_toggle)
     io_manager.register_input_handler('light', 'setbrightness', light_set_brightness)
     io_manager.register_input_handler('light', 'setcolor', light_set_color)
+    io_manager.register_input_handler('light', 'enableshadows', light_enable_shadows)
+    io_manager.register_input_handler('light', 'disableshadows', light_disable_shadows)
+    io_manager.register_input_handler('light', 'toggleshadows', light_toggle_shadows)
     
     # ==========================================================================
     # DOOR INPUTS

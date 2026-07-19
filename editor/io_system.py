@@ -568,6 +568,9 @@ def register_default_io():
             IODef('Toggle', 'Toggle on/off state'),
             IODef('SetBrightness', 'Set intensity (0-10)', 'float'),
             IODef('SetColor', 'Set color (R G B)', 'color'),
+            IODef('EnableShadows', 'Start casting depth cube-map shadows'),
+            IODef('DisableShadows', 'Stop casting shadows'),
+            IODef('ToggleShadows', 'Toggle shadow casting on/off'),
             IODef('FadeIn', 'Fade in over time', 'float'),
             IODef('FadeOut', 'Fade out over time', 'float'),
             IODef('Hide', 'Hide this light entity'),
@@ -577,6 +580,8 @@ def register_default_io():
         outputs=[
             IODef('OnTurnedOn', 'Fired when light turns on'),
             IODef('OnTurnedOff', 'Fired when light turns off'),
+            IODef('OnShadowsEnabled', 'Fired when shadow casting is enabled'),
+            IODef('OnShadowsDisabled', 'Fired when shadow casting is disabled'),
         ]
     )
     
