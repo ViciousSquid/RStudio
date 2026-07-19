@@ -189,9 +189,16 @@ class BaseRenderer:
         if config is not None:
             self.arm_mode = config.getboolean('Renderer', 'arm_mode', fallback=True)
             self.shadows_enabled = config.getboolean('Renderer', 'shadows_enabled', fallback=not is_arm)
+            try:
+                shadow_size = config.getint('Renderer', 'shadow_map_size', fallback=self.SHADOW_MAP_SIZE)
+            except Exception:
+                shadow_size = self.SHADOW_MAP_SIZE
         else:
             self.arm_mode = True
             self.shadows_enabled = not is_arm
+            shadow_size = self.SHADOW_MAP_SIZE
+        # Clamp to a sane, power-of-two-ish range. Lower = faster, blockier.
+        self.shadow_map_size = max(256, min(2048, int(shadow_size)))
 
         self.fog_quality = 'low'      # 'low' = 16 steps, 'high' = 32 steps
         self.skip_culling_in_renderer = True   # trust pre‑culled data
@@ -202,6 +209,10 @@ class BaseRenderer:
         self._shadow_fbo = None
         self._shadow_cubemaps = []          # texture ids, one cube-map per shadow slot
         self._light_shadow_index = {}       # id(light) -> shadow slot index for this frame
+        # Per-slot cache so a light's cube-map is only re-rendered when it (or one
+        # of its in-range casters) actually moves — static lights become ~free.
+        self._shadow_slot_owner = [None] * self.MAX_SHADOW_LIGHTS   # id(light) per slot
+        self._shadow_slot_sig = [None] * self.MAX_SHADOW_LIGHTS     # last-rendered signature
 
         # Per‑frame caches
         self._frame_lights = []
@@ -1253,7 +1264,7 @@ class BaseRenderer:
             prev_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
             self._shadow_fbo = int(gl.glGenFramebuffers(1))
             self._shadow_cubemaps = []
-            size = self.SHADOW_MAP_SIZE
+            size = self.shadow_map_size
             for _ in range(self.MAX_SHADOW_LIGHTS):
                 cm = int(gl.glGenTextures(1))
                 gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
@@ -1319,18 +1330,91 @@ class BaseRenderer:
                 gl.glUniform1i(loc, base + i)
         gl.glActiveTexture(gl.GL_TEXTURE0)
 
-    def render_shadow_maps(self, shadow_lights, brushes, things, config):
-        """Render scene depth into a cube-map for each shadow-casting point
-        light.  Populates ``self._light_shadow_index`` (id(light) -> slot) which
-        the lighting shaders use to look up the right cube-map."""
+    def _collect_shadow_casters(self, brushes, models, lx, ly, lz, reach):
+        """Return the brushes/models within *reach* of a light plus a hashable
+        signature of their transforms (used to detect when a cube-map is stale).
+        Filtering once per light — rather than once per cube face — also cuts the
+        non-cached path's CPU work by 6x."""
+        in_brushes, bkeys = [], []
+        for b in brushes:
+            pos = b.get('pos', (0, 0, 0))
+            size = b.get('size', (64, 64, 64))
+            br = 0.5 * max(size[0], size[1], size[2])
+            dx = pos[0] - lx; dy = pos[1] - ly; dz = pos[2] - lz
+            limit = reach + br
+            if (dx * dx + dy * dy + dz * dz) > limit * limit:
+                continue
+            in_brushes.append(b)
+            axis = b.get('rot_axis')
+            bkeys.append((pos[0], pos[1], pos[2], size[0], size[1], size[2],
+                          b.get('_rot_angle'), tuple(axis) if axis else None))
+
+        in_models, mkeys = [], []
+        reach4_sq = reach * reach * 4.0
+        for t in models:
+            pos = t.pos
+            dx = pos[0] - lx; dy = pos[1] - ly; dz = pos[2] - lz
+            if (dx * dx + dy * dy + dz * dz) > reach4_sq:
+                continue
+            in_models.append(t)
+            props = t.properties
+            scale = props.get('scale', 1.0)
+            scale_key = scale if isinstance(scale, (int, float)) else tuple(scale)
+            mkeys.append((pos[0], pos[1], pos[2], props.get('model_path'),
+                          tuple(props.get('rotation', (0, 0, 0))), scale_key))
+
+        return in_brushes, in_models, (tuple(bkeys), tuple(mkeys))
+
+    def render_shadow_maps(self, shadow_lights, brushes, things, config, camera_pos=None):
+        """Refresh the depth cube-map for each shadow-casting point light.
+
+        Cube-maps are cached per slot: a light's map is only re-rendered when the
+        light or one of its in-range casters actually moves.  A fully static scene
+        therefore does *zero* GPU shadow work after the first frame — only the
+        cheap CPU signature check runs.  Populates ``self._light_shadow_index``
+        (id(light) -> slot) every frame so the lighting shaders sample correctly.
+        """
         self._light_shadow_index = {}
         if not self._shadow_cubemaps or 'depth_cube' not in self.shaders:
             return
-        lights = list(shadow_lights)[:self.MAX_SHADOW_LIGHTS]
+        lights = list(shadow_lights)
         if not lights:
+            # Release every slot so a light enabled later re-renders cleanly.
+            for s in range(self.MAX_SHADOW_LIGHTS):
+                self._shadow_slot_owner[s] = None
+                self._shadow_slot_sig[s] = None
             return
 
-        # ---- Gather casters ------------------------------------------------
+        # Over budget? Keep the shadow lights nearest the camera.
+        if len(lights) > self.MAX_SHADOW_LIGHTS:
+            if camera_pos is not None:
+                cx, cy, cz = float(camera_pos.x), float(camera_pos.y), float(camera_pos.z)
+                lights.sort(key=lambda l: (l.pos[0] - cx) ** 2 + (l.pos[1] - cy) ** 2 + (l.pos[2] - cz) ** 2)
+            lights = lights[:self.MAX_SHADOW_LIGHTS]
+
+        # ---- Stable slot assignment (a light keeps its slot across frames) ---
+        current_ids = {id(l) for l in lights}
+        for s in range(self.MAX_SHADOW_LIGHTS):
+            if self._shadow_slot_owner[s] not in current_ids:
+                self._shadow_slot_owner[s] = None
+                self._shadow_slot_sig[s] = None
+        light_slot = {}
+        for l in lights:                       # lights that already own a slot keep it
+            for s in range(self.MAX_SHADOW_LIGHTS):
+                if self._shadow_slot_owner[s] == id(l):
+                    light_slot[id(l)] = s
+                    break
+        for l in lights:                       # remaining lights grab free slots
+            if id(l) in light_slot:
+                continue
+            for s in range(self.MAX_SHADOW_LIGHTS):
+                if self._shadow_slot_owner[s] is None:
+                    self._shadow_slot_owner[s] = id(l)
+                    self._shadow_slot_sig[s] = None
+                    light_slot[id(l)] = s
+                    break
+
+        # ---- Filter casters once & decide which lights are dirty ------------
         caster_brushes = []
         for b in brushes:
             if b.get('hidden') or b.get('is_trigger') or b.get('is_fog') or b.get('operation') == 'subtract':
@@ -1340,6 +1424,24 @@ class BaseRenderer:
             caster_brushes.append(b)
         caster_models = [t for t in things
                          if isinstance(t, Thing) and t.properties.get('model_path')]
+
+        to_render = []   # (light, slot, in_brushes, in_models)
+        for l in lights:
+            slot = light_slot.get(id(l))
+            if slot is None:
+                continue
+            lx, ly, lz = float(l.pos[0]), float(l.pos[1]), float(l.pos[2])
+            radius = max(float(l.get_radius()), 1.0)
+            in_brushes, in_models, caster_keys = self._collect_shadow_casters(
+                caster_brushes, caster_models, lx, ly, lz, radius)
+            sig = (round(lx, 3), round(ly, 3), round(lz, 3), round(radius, 3), caster_keys)
+            self._light_shadow_index[id(l)] = slot
+            if self._shadow_slot_sig[slot] == sig:
+                continue                       # cube-map still valid -> skip GPU work
+            to_render.append((l, slot, in_brushes, in_models, sig))
+
+        if not to_render:
+            return                             # everything cached: no GL work this frame
 
         # ---- Save GL state we are about to clobber -------------------------
         prev_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
@@ -1355,7 +1457,8 @@ class BaseRenderer:
         gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._shadow_fbo)
         gl.glDrawBuffer(gl.GL_NONE)
         gl.glReadBuffer(gl.GL_NONE)
-        gl.glViewport(0, 0, self.SHADOW_MAP_SIZE, self.SHADOW_MAP_SIZE)
+        size = self.shadow_map_size
+        gl.glViewport(0, 0, size, size)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         gl.glDisable(gl.GL_SCISSOR_TEST)
         gl.glDisable(gl.GL_BLEND)
@@ -1382,19 +1485,23 @@ class BaseRenderer:
             (glm.vec3( 0, 0,-1), glm.vec3(0, -1,  0)),
         )
 
-        for idx, light in enumerate(lights):
-            lpos = light.pos
-            lx, ly, lz = float(lpos[0]), float(lpos[1]), float(lpos[2])
+        for light, slot, in_brushes, in_models, sig in to_render:
+            lx, ly, lz = float(light.pos[0]), float(light.pos[1]), float(light.pos[2])
             center = glm.vec3(lx, ly, lz)
             far_plane = max(float(light.get_radius()), 1.0)
             near_plane = max(far_plane * 0.002, 1.0)
             proj = glm.perspective(glm.radians(90.0), 1.0, near_plane, far_plane)
-            reach = far_plane
-            reach_sq = reach * reach
-            cubemap = self._shadow_cubemaps[idx]
+            cubemap = self._shadow_cubemaps[slot]
 
             gl.glUniform3f(lightpos_loc, lx, ly, lz)
             gl.glUniform1f(far_loc, far_plane)
+
+            # Resolve model objects once (not once per face).
+            resolved_models = []
+            for t in in_models:
+                obj = self.load_model(t.properties.get('model_path'))
+                if obj and obj.is_loaded:
+                    resolved_models.append((t, obj))
 
             for face in range(6):
                 gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
@@ -1403,30 +1510,15 @@ class BaseRenderer:
                 lsm = proj * glm.lookAt(center, center + face_dirs[face][0], face_dirs[face][1])
                 gl.glUniformMatrix4fv(lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
 
-                # Brush casters (shared unit cube VAO).
+                # Brush casters (shared unit cube VAO), pre-filtered by reach.
                 gl.glBindVertexArray(cube_vao)
-                for b in caster_brushes:
-                    bpos = b.get('pos', [0, 0, 0])
-                    bsize = b.get('size', [64, 64, 64])
-                    br = 0.5 * max(bsize[0], bsize[1], bsize[2])
-                    dx = bpos[0] - lx; dy = bpos[1] - ly; dz = bpos[2] - lz
-                    limit = reach + br
-                    if (dx * dx + dy * dy + dz * dz) > limit * limit:
-                        continue
+                for b in in_brushes:
                     gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE,
                                           glm.value_ptr(self._brush_model_matrix(b)))
                     gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
 
                 # Model casters.
-                for t in caster_models:
-                    obj = self.load_model(t.properties.get('model_path'))
-                    if not obj or not obj.is_loaded:
-                        continue
-                    mpos = t.pos
-                    dx = mpos[0] - lx; dy = mpos[1] - ly; dz = mpos[2] - lz
-                    # Generous bound: model extent is unknown, so 2x reach.
-                    if (dx * dx + dy * dy + dz * dz) > reach_sq * 4.0:
-                        continue
+                for t, obj in resolved_models:
                     gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE,
                                           glm.value_ptr(self._thing_model_matrix(t)))
                     gl.glBindVertexArray(obj.vao)
@@ -1435,7 +1527,8 @@ class BaseRenderer:
                     else:
                         gl.glDrawArrays(gl.GL_TRIANGLES, 0, obj.vertex_count)
 
-            self._light_shadow_index[id(light)] = idx
+            # Mark the slot valid only once its 6 faces are actually drawn.
+            self._shadow_slot_sig[slot] = sig
 
         # ---- Restore state -------------------------------------------------
         gl.glBindVertexArray(0)

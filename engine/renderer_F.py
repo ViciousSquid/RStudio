@@ -341,7 +341,7 @@ class Renderer_F(BaseRenderer):
             if shadow_lights:
                 shadow_brushes = config.get('all_brushes', brushes)
                 shadow_things = config.get('all_things', things)
-                self.render_shadow_maps(shadow_lights, shadow_brushes, shadow_things, config)
+                self.render_shadow_maps(shadow_lights, shadow_brushes, shadow_things, config, camera_pos)
 
         terrain = config.get('terrain', None)
         if terrain and terrain.enabled:
