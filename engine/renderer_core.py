@@ -168,7 +168,20 @@ def normalize_color(rgb, default=None):
 # ---------- Base Renderer ----------
 class BaseRenderer:
     MAX_LIGHTS = 16
-    MAX_PORTALS = 8      # maximum portal pairs rendered per frame
+    MAX_PORTALS = 8      # maximum portal apertures rendered per frame
+
+    # How many times a portal may be seen recursively through another portal.
+    # 1 = classic single virtual view (default; identical to the original
+    # behaviour). Raise to 2-3 for a bounded "infinite corridor" effect — that
+    # path is wired up but costs an extra full scene pass per level of depth, so
+    # verify performance/appearance in-engine before shipping it enabled.
+    MAX_PORTAL_RECURSION = 1
+
+    # Within this many world units of a portal plane the aperture mask is drawn
+    # across the screen instead of as world geometry, so the camera's near plane
+    # can't clip the mask and reveal the wall behind the portal during the last
+    # step before transit. Set to 0.0 to disable (exact original behaviour).
+    PORTAL_NEAR_STRADDLE = 24.0
 
     # --- Depth cube-map shadow mapping (omnidirectional point-light shadows) ---
     MAX_SHADOW_LIGHTS = 4          # number of point lights that can cast shadows at once
@@ -271,6 +284,11 @@ class BaseRenderer:
         self._portal_rim_proj_loc = None
         self._portal_rim_view_loc = None
         self._portal_rim_color_loc = None
+        # Cached inverse of the main projection matrix, reused across every
+        # oblique-clip computation in a frame (the projection is constant, only
+        # the per-portal view changes).
+        self._portal_proj_inv_sig = None
+        self._portal_proj_inv = None
 
         # Compile common shaders (simple, sprite, depth_cube, water, glass, fog, terrain)
         self.shader_loader = ShaderLoader()
@@ -2029,18 +2047,17 @@ class BaseRenderer:
                      brushes, things, lights, config, draw_scene_fn):
         if not self._portal_gl_ready or not portal_things:
             return
-        from editor.things import Portal
         by_name = {}
         for p in portal_things:
             name = p.properties.get('name', '')
             if name:
                 by_name[name] = p
-        proj_ptr = glm.value_ptr(projection)
-        stencil_id = 1
+        # Pre-multiplied view-projection for screen-space scissor rects.
+        pv = projection * main_view
+        rendered = 0
         for portal_a in portal_things:
             # Render while any opacity remains (covers both fading-in and fading-out)
-            fade_a = getattr(portal_a, '_fade_alpha', 1.0)
-            if fade_a <= 0.01:
+            if getattr(portal_a, '_fade_alpha', 1.0) <= 0.01:
                 continue
             target_name = portal_a.properties.get('portal_target', '')
             if not target_name:
@@ -2050,80 +2067,128 @@ class BaseRenderer:
                 continue
 
             a_direction = portal_a.properties.get('portal_direction', 'both')
-
             # Forward: portal_a sees out of portal_b (render B's view into A's aperture)
             render_forward = a_direction in ('forward', 'both')
             # Reverse: portal_b sees out of portal_a (render A's view into B's aperture)
             render_reverse = a_direction in ('reverse', 'both')
 
-            if stencil_id > self.MAX_PORTALS:
-                break
-
             if render_forward:
-                self._draw_one_portal(portal_a, portal_b, projection, proj_ptr, main_view, camera_pos,
-                                      brushes, things, lights, config, draw_scene_fn, stencil_id)
-                stencil_id += 1
-                if stencil_id > self.MAX_PORTALS:
+                if rendered >= self.MAX_PORTALS:
                     break
-
+                self._draw_one_portal(portal_a, portal_b, projection, main_view, camera_pos,
+                                      brushes, things, lights, config, draw_scene_fn,
+                                      pv, portal_things, by_name, depth=1)
+                rendered += 1
             if render_reverse:
-                self._draw_one_portal(portal_b, portal_a, projection, proj_ptr, main_view, camera_pos,
-                                      brushes, things, lights, config, draw_scene_fn, stencil_id)
-                stencil_id += 1
+                if rendered >= self.MAX_PORTALS:
+                    break
+                self._draw_one_portal(portal_b, portal_a, projection, main_view, camera_pos,
+                                      brushes, things, lights, config, draw_scene_fn,
+                                      pv, portal_things, by_name, depth=1)
+                rendered += 1
 
+        # Restore global state and wipe the whole stencil buffer for the passes
+        # that follow (scissor is already off — each portal disables it).
+        gl.glDisable(gl.GL_SCISSOR_TEST)
         gl.glDisable(gl.GL_STENCIL_TEST)
         gl.glStencilMask(0xFF)
         gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
         gl.glDepthMask(gl.GL_TRUE)
         gl.glClear(gl.GL_STENCIL_BUFFER_BIT)
 
-    def _draw_one_portal(self, portal_a, portal_b, projection, proj_ptr, main_view, camera_pos,
-                         brushes, things, lights, config, draw_scene_fn, stencil_id):
+    def _draw_one_portal(self, portal_a, portal_b, projection, main_view, camera_pos,
+                         brushes, things, lights, config, draw_scene_fn,
+                         pv, portal_things, by_name, depth=1):
+        """Render portal_a's aperture showing the view out of portal_b.
+
+        Stencil is level-based: a fragment inside the aperture at recursion
+        ``depth`` carries stencil value ``depth``.  The mask pass increments
+        from the parent level (depth-1) to ``depth`` — so at depth 1 it goes
+        0→1 exactly like the original REPLACE(1) scheme, and nested portals
+        (depth>1) stack cleanly without wiping their parent's mask.
+        """
         corners_a = portal_a.get_corners_world()
+        proj_ptr = glm.value_ptr(projection)
         view_ptr = glm.value_ptr(main_view)
-        # Current rendered opacity — drives the fade-in/out overlay and rim brightness
         fade_a = getattr(portal_a, '_fade_alpha', 1.0)
+
+        # --- Scissor to the aperture's screen rect (skips whole-screen overdraw
+        #     of the virtual scene). None => straddling the near plane. ---
+        rect = self._portal_screen_rect(corners_a, pv)
+        if rect is not None:
+            if rect[2] <= 0 or rect[3] <= 0:
+                return  # aperture is entirely off-screen
+            gl.glEnable(gl.GL_SCISSOR_TEST)
+            gl.glScissor(*rect)
+
+        # --- Near-plane straddle: within PORTAL_NEAR_STRADDLE of the plane the
+        #     world-space mask quad would be near-clipped, revealing the wall
+        #     behind the portal. Cover the screen in NDC instead. ---
+        nrm = portal_a.get_normal()
+        cam_d = ((camera_pos.x - portal_a.pos[0]) * nrm[0] +
+                 (camera_pos.y - portal_a.pos[1]) * nrm[1] +
+                 (camera_pos.z - portal_a.pos[2]) * nrm[2])
+        straddle = (depth == 1 and self.PORTAL_NEAR_STRADDLE > 0.0 and
+                    abs(cam_d) < self.PORTAL_NEAR_STRADDLE and
+                    portal_a.contains_point(camera_pos.x - cam_d * nrm[0],
+                                            camera_pos.y - cam_d * nrm[1],
+                                            camera_pos.z - cam_d * nrm[2],
+                                            margin=0.0))
+        if straddle:
+            gl.glDisable(gl.GL_SCISSOR_TEST)  # cover the whole screen
+            mask_quad = [(-1.0, -1.0, 0.0), (1.0, -1.0, 0.0),
+                         (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0)]
+            id_ptr = glm.value_ptr(self._identity_mat4)
+            mask_proj_ptr, mask_view_ptr = id_ptr, id_ptr
+        else:
+            mask_quad = corners_a
+            mask_proj_ptr, mask_view_ptr = proj_ptr, view_ptr
+
+        parent_level = depth - 1
         gl.glDisable(gl.GL_CULL_FACE)
-        # mask pass
         gl.glEnable(gl.GL_STENCIL_TEST)
         gl.glStencilMask(0xFF)
-        gl.glClear(gl.GL_STENCIL_BUFFER_BIT)
+        if depth == 1:
+            # Only the top level clears; nested levels must keep the parent mask.
+            gl.glClear(gl.GL_STENCIL_BUFFER_BIT)
+
+        # mask pass: stamp `depth` where the aperture is (and, for depth>1, only
+        # inside the parent aperture where stencil already == parent_level).
         gl.glColorMask(gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE)
         gl.glDepthMask(gl.GL_FALSE)
-        gl.glStencilFunc(gl.GL_ALWAYS, stencil_id, 0xFF)
-        gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_REPLACE)
-        self._portal_upload_quad(corners_a)
+        if straddle:
+            gl.glDisable(gl.GL_DEPTH_TEST)
+        gl.glStencilFunc(gl.GL_EQUAL, parent_level, 0xFF)
+        gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_INCR)
+        self._portal_upload_quad(mask_quad)
         gl.glUseProgram(self._portal_mask_shader)
-        gl.glUniformMatrix4fv(self._portal_mask_proj_loc, 1, gl.GL_FALSE, proj_ptr)
-        gl.glUniformMatrix4fv(self._portal_mask_view_loc, 1, gl.GL_FALSE, view_ptr)
+        gl.glUniformMatrix4fv(self._portal_mask_proj_loc, 1, gl.GL_FALSE, mask_proj_ptr)
+        gl.glUniformMatrix4fv(self._portal_mask_view_loc, 1, gl.GL_FALSE, mask_view_ptr)
         gl.glBindVertexArray(self._portal_quad_vao)
         gl.glDrawArrays(gl.GL_TRIANGLE_FAN, 0, 4)
-        # depth prime to far
-        gl.glColorMask(gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE)
+        if straddle:
+            gl.glEnable(gl.GL_DEPTH_TEST)
+
+        # depth prime to far, only where this level's mask was written
         gl.glDepthMask(gl.GL_TRUE)
         gl.glDepthFunc(gl.GL_ALWAYS)
-        gl.glStencilFunc(gl.GL_EQUAL, stencil_id, 0xFF)
+        gl.glStencilFunc(gl.GL_EQUAL, depth, 0xFF)
         gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
         gl.glDepthRange(1.0, 1.0)
-        self._portal_upload_quad(corners_a)
-        gl.glUseProgram(self._portal_mask_shader)
-        gl.glUniformMatrix4fv(self._portal_mask_proj_loc, 1, gl.GL_FALSE, proj_ptr)
-        gl.glUniformMatrix4fv(self._portal_mask_view_loc, 1, gl.GL_FALSE, view_ptr)
+        self._portal_upload_quad(mask_quad)
         gl.glDrawArrays(gl.GL_TRIANGLE_FAN, 0, 4)
         gl.glDepthRange(0.0, 1.0)
         gl.glDepthFunc(gl.GL_LESS)
-        gl.glDepthMask(gl.GL_TRUE)
         gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
-        # virtual scene
+
+        # --- virtual scene through portal_b ---
         virtual_view, virtual_cam = self._portal_build_virtual_view(portal_a, portal_b, main_view, camera_pos)
-        
-        # Apply oblique clipping to slice away the wall behind portal B
+        # Oblique-clip away the wall behind portal B.
         clip_proj = self._calculate_oblique_projection(projection, virtual_view, portal_b.pos, portal_b.get_normal())
-        
         self._portal_virtual_view = virtual_view
         self._portal_virtual_proj = clip_proj
-        
-        gl.glStencilFunc(gl.GL_EQUAL, stencil_id, 0xFF)
+
+        gl.glStencilFunc(gl.GL_EQUAL, depth, 0xFF)
         gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
         gl.glStencilMask(0x00)
         old_proj_ptr = self._proj_ptr
@@ -2131,26 +2196,28 @@ class BaseRenderer:
         self._proj_ptr = glm.value_ptr(self._portal_virtual_proj)
         self._view_ptr = glm.value_ptr(self._portal_virtual_view)
         self._current_shader = None
-        
-        # Pass clip_proj into the draw function, NOT projection
-        draw_scene_fn(clip_proj, virtual_view, virtual_cam, brushes, things, lights, config) 
-        
+        draw_scene_fn(clip_proj, virtual_view, virtual_cam, brushes, things, lights, config)
         self._proj_ptr = old_proj_ptr
         self._view_ptr = old_view_ptr
         self._current_shader = None
         gl.glStencilMask(0xFF)
-        # rim glow (border only)
+
+        # --- recursion: portals visible from the virtual camera ---
+        if depth < self.MAX_PORTAL_RECURSION:
+            self._draw_nested_portals(portal_a, portal_b, clip_proj, virtual_view, virtual_cam,
+                                      brushes, things, lights, config, draw_scene_fn,
+                                      portal_things, by_name, depth + 1)
+
+        # rim glow (border only) — drawn with real geometry/matrices
         if portal_a.properties.get('show_rim', True):
-            # FIX: Keep stencil test ON — only draw where portal mask is
             gl.glEnable(gl.GL_STENCIL_TEST)
-            gl.glStencilFunc(gl.GL_EQUAL, stencil_id, 0xFF)
+            gl.glStencilFunc(gl.GL_EQUAL, depth, 0xFF)
             gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
-            gl.glStencilMask(0x00)  # Don't write to stencil during rim
+            gl.glStencilMask(0x00)
             gl.glEnable(gl.GL_BLEND)
             gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE)
-            raw_col = portal_a.properties.get('color', [255,255,255])
-            color = normalize_color(raw_col, default=[1.0,1.0,1.0])
-            r,g,b = color
+            raw_col = portal_a.properties.get('color', [255, 255, 255])
+            r, g, b = normalize_color(raw_col, default=[1.0, 1.0, 1.0])
             self._portal_upload_quad(corners_a)
             gl.glUseProgram(self._portal_rim_shader)
             gl.glUniformMatrix4fv(self._portal_rim_proj_loc, 1, gl.GL_FALSE, proj_ptr)
@@ -2160,11 +2227,11 @@ class BaseRenderer:
             gl.glDrawArrays(gl.GL_LINE_LOOP, 0, 4)
             gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
             gl.glDisable(gl.GL_BLEND)
-        # Fade overlay: filled black quad over the aperture, alpha = 1 − fade_a.
-        # During fade-in the aperture reveals from black; during fade-out it returns to black.
+
+        # Fade overlay: black quad over the aperture, alpha = 1 − fade_a.
         if fade_a < 0.999:
             gl.glEnable(gl.GL_STENCIL_TEST)
-            gl.glStencilFunc(gl.GL_EQUAL, stencil_id, 0xFF)
+            gl.glStencilFunc(gl.GL_EQUAL, depth, 0xFF)
             gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
             gl.glStencilMask(0x00)
             gl.glEnable(gl.GL_BLEND)
@@ -2177,14 +2244,101 @@ class BaseRenderer:
             gl.glBindVertexArray(self._portal_quad_vao)
             gl.glDrawArrays(gl.GL_TRIANGLE_FAN, 0, 4)
             gl.glDisable(gl.GL_BLEND)
+
         gl.glDisable(gl.GL_STENCIL_TEST)
+        gl.glDisable(gl.GL_SCISSOR_TEST)
         gl.glBindVertexArray(0)
+
+    def _draw_nested_portals(self, from_a, from_b, projection, view, cam,
+                             brushes, things, lights, config, draw_scene_fn,
+                             portal_things, by_name, depth):
+        """Render portals visible from a virtual camera, one recursion deeper.
+
+        Experimental (only reached when MAX_PORTAL_RECURSION > 1). Kept behind
+        that constant because it costs an extra scene pass per level and has not
+        been validated on-GPU in this build.
+        """
+        pv = projection * view
+        for portal_a in portal_things:
+            if getattr(portal_a, '_fade_alpha', 1.0) <= 0.01:
+                continue
+            # Skip the portal we are currently looking out of, to avoid an
+            # immediate degenerate self-reflection.
+            if portal_a is from_b:
+                continue
+            target_name = portal_a.properties.get('portal_target', '')
+            if not target_name:
+                continue
+            portal_b = by_name.get(target_name)
+            if portal_b is None:
+                continue
+            self._draw_one_portal(portal_a, portal_b, projection, view, cam,
+                                  brushes, things, lights, config, draw_scene_fn,
+                                  pv, portal_things, by_name, depth=depth)
+
+    def _portal_screen_rect(self, corners, pv):
+        """Screen-space integer AABB (x, y, w, h) of the aperture, clamped to the
+        viewport, for use as a scissor rect.  Returns None when any corner is at
+        or behind the near plane (the rect would be unreliable — caller falls
+        back to no scissor / straddle handling)."""
+        vp = gl.glGetIntegerv(gl.GL_VIEWPORT)
+        vx, vy, vw, vh = int(vp[0]), int(vp[1]), int(vp[2]), int(vp[3])
+        minx = miny = float('inf')
+        maxx = maxy = float('-inf')
+        for c in corners:
+            clip = pv * glm.vec4(float(c[0]), float(c[1]), float(c[2]), 1.0)
+            if clip.w <= 1e-5:
+                return None
+            sx = vx + (clip.x / clip.w * 0.5 + 0.5) * vw
+            sy = vy + (clip.y / clip.w * 0.5 + 0.5) * vh
+            minx = min(minx, sx); maxx = max(maxx, sx)
+            miny = min(miny, sy); maxy = max(maxy, sy)
+        pad = 2.0
+        minx = max(vx, minx - pad)
+        miny = max(vy, miny - pad)
+        maxx = min(vx + vw, maxx + pad)
+        maxy = min(vy + vh, maxy + pad)
+        if maxx <= minx or maxy <= miny:
+            return (vx, vy, 0, 0)  # off-screen
+        return (int(minx), int(miny),
+                int(math.ceil(maxx - minx)), int(math.ceil(maxy - miny)))
+
+    @staticmethod
+    def _frustum_planes(m):
+        """Six normalized frustum planes (a,b,c,d) from a view-projection matrix
+        ``m`` (column-major, m[col][row]).  A point is inside when
+        a*x+b*y+c*z+d >= 0 for every plane."""
+        def norm(a, b, c, d):
+            l = math.sqrt(a * a + b * b + c * c)
+            if l < 1e-8:
+                return (0.0, 0.0, 0.0, 0.0)
+            return (a / l, b / l, c / l, d / l)
+        return (
+            norm(m[0][3] + m[0][0], m[1][3] + m[1][0], m[2][3] + m[2][0], m[3][3] + m[3][0]),
+            norm(m[0][3] - m[0][0], m[1][3] - m[1][0], m[2][3] - m[2][0], m[3][3] - m[3][0]),
+            norm(m[0][3] + m[0][1], m[1][3] + m[1][1], m[2][3] + m[2][1], m[3][3] + m[3][1]),
+            norm(m[0][3] - m[0][1], m[1][3] - m[1][1], m[2][3] - m[2][1], m[3][3] - m[3][1]),
+            norm(m[0][3] + m[0][2], m[1][3] + m[1][2], m[2][3] + m[2][2], m[3][3] + m[3][2]),
+            norm(m[0][3] - m[0][2], m[1][3] - m[1][2], m[2][3] - m[2][2], m[3][3] - m[3][2]),
+        )
+
+    @staticmethod
+    def _brush_visible_in_frustum(planes, brush):
+        """Conservative bounding-sphere frustum test for a brush dict.  Sphere
+        (not AABB) so it stays correct for rotated brushes without inflating the
+        box."""
+        pos = brush.get('pos', (0.0, 0.0, 0.0))
+        size = brush.get('size', (64.0, 64.0, 64.0))
+        cx, cy, cz = float(pos[0]), float(pos[1]), float(pos[2])
+        radius = 0.5 * math.sqrt(float(size[0]) ** 2 + float(size[1]) ** 2 + float(size[2]) ** 2)
+        for a, b, c, d in planes:
+            if a * cx + b * cy + c * cz + d < -radius:
+                return False
+        return True
 
     def _portal_upload_quad(self, corners):
         # corners should be a list of 4 [x,y,z] points
         vdata = np.array(corners, dtype=np.float32).flatten()
-        # Debug: print the order to verify it's not crossing
-        # print("Portal corners:", corners)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_quad_vbo)
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, vdata.nbytes, vdata)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
@@ -2194,17 +2348,17 @@ class BaseRenderer:
         # The normal faces OUT of the destination portal, keeping everything in front of it.
         normal = glm.vec3(*plane_normal)
         pos = glm.vec3(*plane_pos)
-        
+
         # Nudge the plane slightly backward into the wall to prevent z-fighting with the portal itself
-        pos -= normal * 0.05 
-        
+        pos -= normal * 0.05
+
         dist = -glm.dot(normal, pos)
         plane_world = glm.vec4(normal.x, normal.y, normal.z, dist)
-        
+
         # 2. Transform the plane to view space
         inv_trans_view = glm.transpose(glm.inverse(view))
         plane_view = inv_trans_view * plane_world
-        
+
         # 3. Modify the projection matrix using Lengyel's oblique near-plane algorithm
         q = glm.vec4(
             1.0 if plane_view.x >= 0.0 else -1.0,
@@ -2212,58 +2366,50 @@ class BaseRenderer:
             1.0,
             1.0
         )
-        
-        q_view = glm.inverse(projection) * q
+
+        # The projection is constant for the whole frame, so cache its inverse
+        # instead of recomputing it for every portal (up to MAX_PORTALS*2 times).
+        proj_inv = self._get_cached_proj_inverse(projection)
+        q_view = proj_inv * q
         c = plane_view * (2.0 / glm.dot(plane_view, q_view))
-        
+
         oblique_proj = glm.mat4(projection)
         # Replace the third column (Z-mapping) of the projection matrix
         oblique_proj[0][2] = c.x - oblique_proj[0][3]
         oblique_proj[1][2] = c.y - oblique_proj[1][3]
         oblique_proj[2][2] = c.z - oblique_proj[2][3]
         oblique_proj[3][2] = c.w - oblique_proj[3][3]
-        
+
         return oblique_proj
 
+    def _get_cached_proj_inverse(self, projection):
+        # Cheap signature from the entries that actually vary between frames.
+        sig = (float(projection[0][0]), float(projection[1][1]),
+               float(projection[2][2]), float(projection[2][3]),
+               float(projection[3][2]))
+        if sig != self._portal_proj_inv_sig:
+            self._portal_proj_inv = glm.inverse(projection)
+            self._portal_proj_inv_sig = sig
+        return self._portal_proj_inv
+
     def _portal_build_virtual_view(self, portal_a, portal_b, current_view, camera_pos):
-        import math
-        yaw_a = portal_a.get_yaw_radians()
-        yaw_b = portal_b.get_yaw_radians()
-        pos_a = glm.vec3(*portal_a.pos)
-        pos_b = glm.vec3(*portal_b.pos)
-        cam = glm.vec3(*camera_pos)
-        normal_a = glm.vec3(*portal_a.get_normal())
-        to_player = cam - pos_a
-        player_side = glm.dot(to_player, normal_a)
+        """Virtual camera for looking through portal_a out of portal_b.
 
-        # Force the same "looking OUT of portal B" view onto both faces.
-        # When player is in front of portal A (player_side > 0), do NOT add
-        # the extra 180° flip — the raw yaw difference already places the
-        # virtual camera in front of portal B looking outward.
-        # When player is behind portal A, keep the existing +pi flip.
-        if player_side > 0:
-            delta_yaw = yaw_b - yaw_a
-        else:
-            delta_yaw = (yaw_b - yaw_a) + math.pi
+        Uses the SAME shared link transform (Portal.map_point / map_direction)
+        that the logic thread's teleport uses, so the view rendered through the
+        aperture and the frame the player lands in can never disagree — and
+        pitched / floor portals are handled because the up vector is mapped too,
+        not assumed to be (0,1,0)."""
+        vc = portal_a.map_point(portal_b, float(camera_pos.x), float(camera_pos.y), float(camera_pos.z))
+        virtual_cam = glm.vec3(*vc)
+        fwd = (-float(current_view[0][2]), -float(current_view[1][2]), -float(current_view[2][2]))
+        up  = ( float(current_view[0][1]),  float(current_view[1][1]),  float(current_view[2][1]))
+        nf = portal_a.map_direction(portal_b, fwd[0], fwd[1], fwd[2])
+        nu = portal_a.map_direction(portal_b, up[0], up[1], up[2])
+        new_fwd = glm.normalize(glm.vec3(*nf))
+        new_up = glm.vec3(*nu)
+        return glm.lookAt(virtual_cam, virtual_cam + new_fwd, new_up), virtual_cam
 
-        cos_d = math.cos(delta_yaw)
-        sin_d = math.sin(delta_yaw)
-        relative = cam - pos_a
-        rotated_pos = glm.vec3(
-            relative.x * cos_d - relative.z * sin_d,
-            relative.y,
-            relative.x * sin_d + relative.z * cos_d
-        )
-        virtual_cam = pos_b + rotated_pos
-        fwd = -glm.vec3(current_view[0][2], current_view[1][2], current_view[2][2])
-        new_fwd = glm.vec3(
-            fwd.x * cos_d - fwd.z * sin_d,
-            fwd.y,
-            fwd.x * sin_d + fwd.z * cos_d
-        )
-        new_fwd = glm.normalize(new_fwd)
-        return glm.lookAt(virtual_cam, virtual_cam + new_fwd, glm.vec3(0,1,0)), virtual_cam
-    
 
     # --------------------------------------------------------------------------
     # VAO creation

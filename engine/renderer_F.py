@@ -12,6 +12,11 @@ from .renderer_core import BaseRenderer, normalize_color
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from editor.things import Thing, Light, PathNode, Portal, Pickup, Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger
 
+# Beyond this distance from the camera a portal's virtual view is not rendered
+# (the aperture just shows its fade/rim). Portals are still discovered for I/O
+# and transit regardless.
+PORTAL_RENDER_DISTANCE = 2048.0
+
 
 def _light_casts_shadows(light):
     """True if a light should cast depth cube-map shadows.
@@ -357,16 +362,25 @@ class Renderer_F(BaseRenderer):
                 # Distance check: only render virtual camera if player is close enough
                 portal_pos = glm.vec3(*t.pos)
                 dist_sq = glm.distance2(portal_pos, camera_pos)
-                if dist_sq <= (2048.0 * 2048.0):
+                if dist_sq <= (PORTAL_RENDER_DISTANCE * PORTAL_RENDER_DISTANCE):
                     portal_things.append(t)
             if portal_things:
                 try:
                     def _portal_draw_scene(proj, vw, cam, br, th, sel, cfg):
-                        # Re-sort from the FULL unculled brush set
+                        # Re-sort from the FULL unculled brush set, but cull it
+                        # against the VIRTUAL camera frustum first — otherwise
+                        # every portal re-shades the entire level. Sphere-based
+                        # test is conservative, so nothing visible is dropped.
                         all_br = cfg.get('all_brushes', br)
-                        all_th = cfg.get('all_things', th) 
+                        all_th = cfg.get('all_things', th)
+                        try:
+                            planes = self._frustum_planes(proj * vw)
+                            all_br = [b for b in all_br
+                                      if self._brush_visible_in_frustum(planes, b)]
+                        except Exception:
+                            pass  # never let culling break the portal view
                         _opaque, _transparent, _sprites, _fog, _water, _glass, _glow = \
-                            self._sort_objects(all_br, all_th, cfg) 
+                            self._sort_objects(all_br, all_th, cfg)
 
                         _t_opaque, _solid = self._split_opaque(_opaque)
                         _t_brush_mode = cfg.get('brush_display_mode', 'Textured')

@@ -271,8 +271,11 @@ class LogicThread(threading.Thread):
         self._monster_by_id = {}
 
         # ── Portal transit state ───────────────────────────────────────────
-        self._portal_last_side: Dict[int, float] = {}
         self._portal_cooldowns: Dict[int, float] = {}
+        # Player position at the end of the previous portal update.  Kept so a
+        # crossing can be tested against the point where the movement *segment*
+        # pierces the aperture (anti-tunnelling), not just the post-move point.
+        self._portal_prev_player_pos = None
         # Portal name → Portal lookup cache; rebuilt on play start and when
         # the things list changes.  Avoids an O(n) rebuild every physics tick.
         self._portals_by_name: Dict[str, object] = {}
@@ -724,8 +727,8 @@ class LogicThread(threading.Thread):
             self.cinematic_state = None
 
             # Reset portal transit state
-            self._portal_last_side.clear()
             self._portal_cooldowns.clear()
+            self._portal_prev_player_pos = None
             self._portals_cache_dirty = True
 
             # Reset portal fade state so portals start at the correct opacity
@@ -787,8 +790,8 @@ class LogicThread(threading.Thread):
             self.cinematic_state = None
 
             # Reset portal transit state
-            self._portal_last_side.clear()
             self._portal_cooldowns.clear()
+            self._portal_prev_player_pos = None
             self._portals_cache_dirty = True
 
             # Reset portal fade state to match 'active' property (editor view stays correct)
@@ -1247,7 +1250,17 @@ class LogicThread(threading.Thread):
             self._portals_cache_dirty = False
         portals_by_name = self._portals_by_name
 
-        player_pos = self.player.pos
+        cur = (float(self.player.pos.x), float(self.player.pos.y), float(self.player.pos.z))
+        prev = self._portal_prev_player_pos
+        if prev is None:
+            prev = cur
+        # Player half-extents — used for radius-aware exit clearance so the body
+        # never emerges embedded in the wall behind the destination.
+        half = getattr(self.player, '_half', None)
+        try:
+            hx, hy, hz = float(half.x), float(half.y), float(half.z)
+        except AttributeError:
+            hx, hy, hz = 25.0, 50.0, 25.0
 
         for portal_a in list(portals_by_name.values()):
             if not portal_a.is_active():
@@ -1258,71 +1271,122 @@ class LogicThread(threading.Thread):
             portal_b = portals_by_name.get(target_name)
             if portal_b is None or not portal_b.is_active():
                 continue
-
-            pid_a = id(portal_a)
-            if pid_a in self._portal_cooldowns:
+            if id(portal_a) in self._portal_cooldowns:
                 continue
 
-            nx, ny, nz = portal_a.get_normal()
-            ox, oy, oz = portal_a.pos
-            ppx = float(player_pos.x)
-            ppy = float(player_pos.y)
-            ppz = float(player_pos.z)
-            signed = (ppx - ox) * nx + (ppy - oy) * ny + (ppz - oz) * nz
+            hit = self._segment_crosses_aperture(portal_a, prev, cur)
+            if hit is not None:
+                self._execute_portal_transit(portal_a, portal_b, hx, hy, hz)
+                cd = getattr(Portal, 'TRANSIT_COOLDOWN', _PORTAL_TRANSIT_COOLDOWN)
+                self._portal_cooldowns[id(portal_a)] = cd
+                self._portal_cooldowns[id(portal_b)] = cd
+                if self.io_manager:
+                    self.io_manager.fire_output(portal_a, 'OnPlayerEnter')
+                debug_log(
+                    "Portal",
+                    f"Player transited '{portal_a.properties.get('name')}' "
+                    f"→ '{portal_b.properties.get('name')}'"
+                )
+                break  # one transit per frame; player pos has now jumped
 
-            last = self._portal_last_side.get(pid_a, signed)
-            self._portal_last_side[pid_a] = signed
-
-            if last >= 0.0 and signed < 0.0:
-                if self._player_within_aperture(portal_a, ppx, ppy, ppz):
-                    self._execute_portal_transit(portal_a, portal_b)
-                    self._portal_cooldowns[id(portal_a)] = _PORTAL_TRANSIT_COOLDOWN
-                    self._portal_cooldowns[id(portal_b)] = _PORTAL_TRANSIT_COOLDOWN
-                    self._portal_last_side[id(portal_b)] = 0.1
-                    if self.io_manager:
-                        self.io_manager.fire_output(portal_a, 'OnPlayerEnter')
-                    debug_log(
-                        "Portal",
-                        f"Player transited '{portal_a.properties.get('name')}' "
-                        f"→ '{portal_b.properties.get('name')}'"
-                    )
+        # Store the post-update position so next frame's segment starts here.
+        # After a transit that is the emerged position, so the paired portal
+        # won't see a bogus crossing.
+        self._portal_prev_player_pos = (
+            float(self.player.pos.x), float(self.player.pos.y), float(self.player.pos.z)
+        )
 
     @staticmethod
-    def _player_within_aperture(portal, px: float, py: float, pz: float) -> bool:
-        ox, oy, oz = portal.pos
-        yaw = portal.get_yaw_radians()
-        rx = math.cos(yaw)
-        rz = -math.sin(yaw)
-        dx = px - ox
-        dy = py - oy
-        dz = pz - oz
-        local_right = dx * rx + dz * rz
-        local_up    = dy
-        hw = portal.get_width()  / 2.0 * 1.0
-        hh = portal.get_height() / 2.0 * 1.0
-        return abs(local_right) <= hw and abs(local_up) <= hh
+    def _segment_crosses_aperture(portal, prev, cur):
+        """Return the world crossing point if the segment prev→cur passes
+        through ``portal`` front-to-back within its aperture, else None.
 
-    def _execute_portal_transit(self, portal_a, portal_b):
-        yaw_a = portal_a.get_yaw_radians()
-        yaw_b = portal_b.get_yaw_radians()
-        delta_yaw = (yaw_b - yaw_a) + math.pi
-        pos_a = glm.vec3(*portal_a.pos)
-        pos_b = glm.vec3(*portal_b.pos)
-        relative = self.player.pos - pos_a
-        cos_d = math.cos(delta_yaw)
-        sin_d = math.sin(delta_yaw)
-        rotated = glm.vec3(
-            relative.x * cos_d - relative.z * sin_d,
-            relative.y,
-            relative.x * sin_d + relative.z * cos_d,
-        )
-        self.player.pos = pos_b + rotated
-        nx_b, ny_b, nz_b = portal_b.get_normal()
-        self.player.pos += glm.vec3(nx_b, ny_b, nz_b) * 8.0
-        vx = self.player.velocity.x * cos_d - self.player.velocity.z * sin_d
-        vz = self.player.velocity.x * sin_d + self.player.velocity.z * cos_d
-        self.player.velocity = glm.vec3(vx, self.player.velocity.y, vz)
-        self.player.angle = self.player.angle + delta_yaw
+        Testing the actual segment/plane intersection (rather than the endpoint)
+        stops fast movers from tunnelling through a small aperture between
+        frames.
+        """
+        nx, ny, nz = portal.get_normal()
+        ox, oy, oz = portal.pos
+        s_prev = (prev[0] - ox) * nx + (prev[1] - oy) * ny + (prev[2] - oz) * nz
+        s_cur  = (cur[0]  - ox) * nx + (cur[1]  - oy) * ny + (cur[2]  - oz) * nz
+        # Only a front(>=0) → back(<0) crossing counts.
+        if not (s_prev >= 0.0 and s_cur < 0.0):
+            return None
+        denom = s_prev - s_cur
+        t = s_prev / denom if denom > 1e-9 else 0.0
+        t = min(1.0, max(0.0, t))
+        hit = (prev[0] + (cur[0] - prev[0]) * t,
+               prev[1] + (cur[1] - prev[1]) * t,
+               prev[2] + (cur[2] - prev[2]) * t)
+        if portal.contains_point(hit[0], hit[1], hit[2], margin=0.0):
+            return hit
+        return None
+
+    def _execute_portal_transit(self, portal_a, portal_b, hx=25.0, hy=50.0, hz=25.0):
+        """Teleport the player through portal_a to portal_b using the portal's
+        shared link transform, so this exactly matches the view the renderer
+        draws through the aperture.  Position, velocity and look direction are
+        all carried through, including pitch for tilted/floor portals."""
+        p = self.player.pos
+        # Position and velocity through the shared transform.
+        tx, ty, tz = portal_a.map_point(portal_b, float(p.x), float(p.y), float(p.z))
+        vx, vy, vz = portal_a.map_direction(
+            portal_b, float(self.player.velocity.x),
+            float(self.player.velocity.y), float(self.player.velocity.z))
+
+        # Push out along the destination normal by the body's extent along that
+        # normal plus a small clearance, so we never spawn inside the far wall.
+        bnx, bny, bnz = portal_b.get_normal()
+        clearance = abs(bnx) * hx + abs(bny) * hy + abs(bnz) * hz + Portal.EXIT_CLEARANCE
+        self.player.pos = glm.vec3(tx + bnx * clearance,
+                                   ty + bny * clearance,
+                                   tz + bnz * clearance)
+        self.player.velocity = glm.vec3(vx, vy, vz)
+
+        # Re-derive yaw (and pitch) from the transformed look direction so the
+        # camera comes out pointing the right way even for pitched portals.
+        angle = float(self.player.angle)
+        pitch = float(getattr(self.player, 'pitch', 0.0))
+        fx = math.sin(angle) * math.cos(pitch)
+        fy = math.sin(pitch)
+        fz = math.cos(angle) * math.cos(pitch)
+        mfx, mfy, mfz = portal_a.map_direction(portal_b, fx, fy, fz)
+        self.player.angle = math.atan2(mfx, mfz)
+        if hasattr(self.player, 'pitch'):
+            self.player.pitch = math.asin(max(-1.0, min(1.0, mfy)))
+
+    def _transit_projectile_through_portals(self, proj, prev_pos):
+        """Teleport a monster projectile through any active portal pair whose
+        aperture its movement segment crossed this frame.  Position and
+        velocity are carried through the shared link transform, so a fireball
+        that flies into portal A comes out of portal B on course.
+
+        No cooldown is needed: the projectile emerges in front of B travelling
+        *away* from it, so the front-to-back crossing test cannot re-fire on the
+        following frame (its stored prev position becomes the emerged point)."""
+        if Portal is None or not self._portals_by_name:
+            return
+        cur = (proj['pos'][0], proj['pos'][1], proj['pos'][2])
+        for portal_a in self._portals_by_name.values():
+            if not portal_a.is_active():
+                continue
+            target_name = portal_a.properties.get('portal_target', '')
+            if not target_name:
+                continue
+            portal_b = self._portals_by_name.get(target_name)
+            if portal_b is None or not portal_b.is_active():
+                continue
+            if self._segment_crosses_aperture(portal_a, prev_pos, cur) is None:
+                continue
+            npx, npy, npz = portal_a.map_point(portal_b, cur[0], cur[1], cur[2])
+            nvx, nvy, nvz = portal_a.map_direction(
+                portal_b, proj['vel'][0], proj['vel'][1], proj['vel'][2])
+            bnx, bny, bnz = portal_b.get_normal()
+            proj['pos'][0] = npx + bnx * Portal.EXIT_CLEARANCE
+            proj['pos'][1] = npy + bny * Portal.EXIT_CLEARANCE
+            proj['pos'][2] = npz + bnz * Portal.EXIT_CLEARANCE
+            proj['vel'][0], proj['vel'][1], proj['vel'][2] = nvx, nvy, nvz
+            break
 
     # =========================================================================
     # LOGIC TIMER UPDATE
@@ -2158,9 +2222,14 @@ class LogicThread(threading.Thread):
         for proj in self._monster_projectiles:
             # Update position
             vel = proj['vel']
+            prev_pos = (proj['pos'][0], proj['pos'][1], proj['pos'][2])
             proj['pos'][0] += vel[0] * delta
             proj['pos'][1] += vel[1] * delta
             proj['pos'][2] += vel[2] * delta
+
+            # Route the projectile through any portal it crossed this step, so
+            # ranged attacks can travel between linked portals like the player.
+            self._transit_projectile_through_portals(proj, prev_pos)
 
             # Track distance travelled
             speed = math.sqrt(vel[0]**2 + vel[1]**2 + vel[2]**2)
