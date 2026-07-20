@@ -28,7 +28,7 @@ class Renderer_F(BaseRenderer):
     def __init__(self, texture_loader, initial_grid_size, initial_world_size, config=None):
         super().__init__(texture_loader, initial_grid_size, initial_world_size, config)
         self._current_shader = None
-        self._frame_lights_uploaded = False
+        self._frame_lights_uploaded = {}
 
         # Texture batch cache for draw_textured_brushes_optimized.
         # Key: tuple of (brush_id, sorted_tex_items) per brush.
@@ -98,9 +98,6 @@ class Renderer_F(BaseRenderer):
             return self._identity_mat3
 
     # ------------------------------------------------------------------
-
-    def _upload_lights_once(self, shader_name, lights):
-        super()._upload_lights_once(shader_name, lights)
 
     def draw_lit_brushes_optimized(self, projection, view, camera_pos, brushes, lights, config, is_transparent_pass=False):
         if not brushes or 'lit' not in self.shaders:
@@ -309,7 +306,7 @@ class Renderer_F(BaseRenderer):
         self._view_ptr = glm.value_ptr(view)
         self.render_stats.reset()
         self.render_stats.total_brushes = len(brushes)
-        self._frame_lights_uploaded = False
+        self._frame_lights_uploaded.clear()
         self._current_shader = None
         if current_mode == RENDER_MODE_WIREFRAME:
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)

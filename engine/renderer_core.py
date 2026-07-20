@@ -216,7 +216,9 @@ class BaseRenderer:
 
         # Per‑frame caches
         self._frame_lights = []
-        self._frame_lights_uploaded = False
+        # shader_name -> tuple of light ids uploaded this frame; cleared at
+        # the start of every render_scene() so animated lights stay fresh.
+        self._frame_lights_uploaded = {}
         self._current_shader = None
 
         # PERF: memoized monster-sprite texture-key strings, keyed by the
@@ -1235,6 +1237,12 @@ class BaseRenderer:
     def _upload_lights_once(self, shader_name, lights):
         if shader_name not in self.uniforms:
             return
+        # Skip if this shader already received this exact light list this
+        # frame (portal passes may use a different list, so key on ids).
+        key = tuple(map(id, lights[:self.MAX_LIGHTS]))
+        if self._frame_lights_uploaded.get(shader_name) == key:
+            return
+        self._frame_lights_uploaded[shader_name] = key
         uniforms = self.uniforms[shader_name]
         num_lights = min(len(lights), self.MAX_LIGHTS)
         gl.glUniform1i(uniforms['active_lights'], num_lights)
