@@ -1166,6 +1166,15 @@ class PropertyEditor(QWidget):
             elif isinstance(thing, Light) and key == 'state':
                 combo = _make_combo(['on', 'off'], value, lambda t: self.update_object_prop(key, t))
                 form.addRow(label_text, combo)
+            elif isinstance(thing, Light) and key == 'shadow_map_size':
+                cur = str(thing.get_shadow_map_size())
+                combo = _make_combo(
+                    ['256', '512', '1024', '2048'], cur,
+                    lambda t: self.update_object_prop('shadow_map_size', int(t)),
+                    tooltip=("Per-face shadow cube-map resolution for this light.\n"
+                             "Higher = sharper shadow edges, but ~4x the VRAM and\n"
+                             "fill cost per step. Only used when 'Casts Shadows' is on."))
+                form.addRow("Shadow Map Size:", combo)
             elif isinstance(thing, Speaker) and key == 'sound_file':
                 self.add_sound_file_widget(form, thing, key, value)
             elif isinstance(thing, LogicGate) and key == 'logic_type':

@@ -1100,8 +1100,11 @@ class Portal(Thing):
     width          (float) Aperture width in world units.  Default 128.
     height         (float) Aperture height in world units.  Default 256.
     rotation       (list)  [yaw_degrees, pitch_degrees, roll_degrees].
-                           Only yaw is used for the portal normal; pitch
-                           and roll are reserved for future use.
+                           All three orient the aperture: pitch tilts it off
+                           vertical (pitch = ±90 gives a floor/ceiling portal)
+                           and roll spins it about its facing axis.  The view
+                           through the portal and the teleport both honour the
+                           full orientation.
     active         (bool)  When False the portal acts as a solid wall.
                            Toggle at runtime via Enable/Disable/Toggle inputs.
     color          (list)  [r, g, b] 0-255 rim/glow tint.  Default white.
@@ -1123,8 +1126,10 @@ class Portal(Thing):
     -------------------------
     * Infinite corridor  — face both portals toward each other in a short
       hallway.
-    * Gravity flip       — rotate portal_b's yaw by 180° and place it on the
-      ceiling; the player emerges walking on what was the ceiling.
+    * Floor/ceiling drop — pitch a portal to ±90° so it lies flat; the player
+      falls in and is flung out of the paired portal along its normal.  (Gravity
+      itself stays world-down — the transit reorients position, velocity and
+      view, not the world's up-axis.)
     * Loop room          — four portals forming a closed square so exiting any
       wall re-enters the opposite one.
     * Size distortion    — make the apertures different sizes; the scene
@@ -1141,6 +1146,11 @@ class Portal(Thing):
 
     # Duration of a full fade-in or fade-out transition (seconds).
     FADE_DURATION = 0.35
+
+    # Minimum clearance (world units) pushed along the destination normal when a
+    # body emerges, so it never spawns embedded in the wall behind portal B.
+    # Call sites add the body's own half-depth on top of this.
+    EXIT_CLEARANCE = 8.0
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -1206,25 +1216,62 @@ class Portal(Thing):
         except (TypeError, ValueError):
             return self.DEFAULT_HEIGHT
 
-    def get_yaw_radians(self) -> float:
-        """Return the portal's yaw (facing direction) in radians."""
+    def _rotation_component(self, index: int) -> float:
         rot = self.properties.get('rotation', [0.0, 0.0, 0.0])
         try:
-            return math.radians(float(rot[0]))
+            return float(rot[index])
         except (TypeError, ValueError, IndexError):
             return 0.0
 
+    def get_yaw_radians(self) -> float:
+        """Return the portal's yaw (facing direction) in radians."""
+        return math.radians(self._rotation_component(0))
+
     def get_yaw_degrees(self) -> float:
         """Return the portal's yaw (facing direction) in degrees."""
-        rot = self.properties.get('rotation', [0.0, 0.0, 0.0])
-        try:
-            return float(rot[0])
-        except (TypeError, ValueError, IndexError):
-            return 0.0
+        return self._rotation_component(0)
+
+    def get_pitch_radians(self) -> float:
+        """Pitch in radians. Non-zero pitch tilts the aperture off vertical
+        (e.g. a floor/ceiling portal uses pitch = ±90)."""
+        return math.radians(self._rotation_component(1))
+
+    def get_pitch_degrees(self) -> float:
+        return self._rotation_component(1)
+
+    def get_roll_radians(self) -> float:
+        """Roll in radians (spin about the portal's facing axis)."""
+        return math.radians(self._rotation_component(2))
+
+    def get_roll_degrees(self) -> float:
+        return self._rotation_component(2)
 
     def set_yaw_degrees(self, yaw: float) -> None:
         self.properties['rotation'][0] = yaw
         self.properties['angle'] = yaw
+
+    def get_basis(self):
+        """
+        Return the portal's orthonormal frame as ``(right, up, normal)`` where
+        each axis is a 3-tuple of floats.  Built from yaw/pitch/roll via
+        ``R = Ry(yaw) @ Rx(pitch) @ Rz(roll)`` applied to the base frame
+        right=(1,0,0), up=(0,1,0), normal=(0,0,1).
+
+        With pitch = roll = 0 this reduces exactly to the historical
+        horizontal-facing portal: normal = (sin yaw, 0, cos yaw),
+        right = (cos yaw, 0, -sin yaw), up = (0, 1, 0).  ``normal`` points out
+        of the front face (toward the viewer that approaches the portal).
+        """
+        yaw = self.get_yaw_radians()
+        pitch = self.get_pitch_radians()
+        roll = self.get_roll_radians()
+        cy, sy = math.cos(yaw), math.sin(yaw)
+        cp, sp = math.cos(pitch), math.sin(pitch)
+        cr, sr = math.cos(roll), math.sin(roll)
+        right  = (cy * cr + sy * sp * sr,  cp * sr,  -sy * cr + cy * sp * sr)
+        up     = (-cy * sr + sy * sp * cr, cp * cr,   sy * sr + cy * sp * cr)
+        normal = (sy * cp,                 -sp,       cy * cp)
+        return right, up, normal
 
     def set_parent_local_transform(self, mover_pos, mover_yaw) -> None:
         """Compute and store local position and yaw offset from the mover's current transform."""
@@ -1239,10 +1286,11 @@ class Portal(Thing):
         """
         Return the outward-facing unit normal of this portal as a 3-tuple
         (x, y, z).  The normal points toward the viewer side of the portal
-        (the face the player approaches from).
+        (the face the player approaches from).  Supports full yaw/pitch/roll
+        orientation, so floor/ceiling and tilted portals report a normal that
+        actually points up/down.
         """
-        yaw = self.get_yaw_radians()
-        return (math.sin(yaw), 0.0, math.cos(yaw))
+        return self.get_basis()[2]
 
     def get_corners_world(self):
         """
@@ -1254,18 +1302,72 @@ class Portal(Thing):
         px, py, pz = self.pos
         w2 = self.get_width()  / 2.0
         h2 = self.get_height() / 2.0
-        yaw = self.get_yaw_radians()
-
-        # Right vector (perpendicular to normal in the XZ plane)
-        rx =  math.cos(yaw)
-        rz = -math.sin(yaw)
+        (rx, ry, rz), (ux, uy, uz), _ = self.get_basis()
 
         return [
-            [px - rx * w2, py - h2, pz - rz * w2],
-            [px + rx * w2, py - h2, pz + rz * w2],
-            [px + rx * w2, py + h2, pz + rz * w2],
-            [px - rx * w2, py + h2, pz - rz * w2],
+            [px - rx * w2 - ux * h2, py - ry * w2 - uy * h2, pz - rz * w2 - uz * h2],
+            [px + rx * w2 - ux * h2, py + ry * w2 - uy * h2, pz + rz * w2 - uz * h2],
+            [px + rx * w2 + ux * h2, py + ry * w2 + uy * h2, pz + rz * w2 + uz * h2],
+            [px - rx * w2 + ux * h2, py - ry * w2 + uy * h2, pz - rz * w2 + uz * h2],
         ]
+
+    # ── Shared portal link transform ──────────────────────────────────────────
+    # These two methods are the single source of truth for how space maps from
+    # this portal to its destination.  BOTH the renderer's virtual camera and
+    # the logic thread's teleport call them, so the view you look *through* and
+    # the frame you *teleport into* can never disagree (previously each computed
+    # its own, subtly different, rotation).
+    #
+    # The map is the standard portal transform  M_dest · flip · M_self^-1  where
+    # flip is a 180° rotation about the aperture's up axis — i.e. mirror the
+    # right and normal local components.  A point just past this portal's plane
+    # therefore lands just in front of the destination, and a velocity heading
+    # into this portal emerges heading out of the destination.
+
+    def _local_of(self, x: float, y: float, z: float):
+        """World point → (right, up, normal) coordinates in this portal's frame."""
+        r, u, n = self.get_basis()
+        dx = x - self.pos[0]
+        dy = y - self.pos[1]
+        dz = z - self.pos[2]
+        return (dx * r[0] + dy * r[1] + dz * r[2],
+                dx * u[0] + dy * u[1] + dz * u[2],
+                dx * n[0] + dy * n[1] + dz * n[2])
+
+    def map_point(self, dest, x: float, y: float, z: float):
+        """Map a world-space point through this portal to ``dest``."""
+        lr, lu, ln = self._local_of(x, y, z)
+        lr, ln = -lr, -ln  # 180° about up
+        r, u, n = dest.get_basis()
+        return (dest.pos[0] + lr * r[0] + lu * u[0] + ln * n[0],
+                dest.pos[1] + lr * r[1] + lu * u[1] + ln * n[1],
+                dest.pos[2] + lr * r[2] + lu * u[2] + ln * n[2])
+
+    def map_direction(self, dest, x: float, y: float, z: float):
+        """Map a world-space direction/velocity through this portal to ``dest``
+        (rotation only, no translation)."""
+        r, u, n = self.get_basis()
+        lr = x * r[0] + y * r[1] + z * r[2]
+        lu = x * u[0] + y * u[1] + z * u[2]
+        ln = x * n[0] + y * n[1] + z * n[2]
+        lr, ln = -lr, -ln
+        r2, u2, n2 = dest.get_basis()
+        return (lr * r2[0] + lu * u2[0] + ln * n2[0],
+                lr * r2[1] + lu * u2[1] + ln * n2[1],
+                lr * r2[2] + lu * u2[2] + ln * n2[2])
+
+    def contains_point(self, x: float, y: float, z: float, margin: float = 0.0) -> bool:
+        """True when the world point projects inside the aperture rectangle.
+
+        ``margin`` grows the rectangle on every side — pass the transiting
+        body's radius so something is only considered "through" once its centre
+        clears the frame, avoiding half-in/half-out pops.  Uses the full
+        yaw/pitch/roll basis so tilted portals test correctly.
+        """
+        lr, lu, _ = self._local_of(x, y, z)
+        hw = self.get_width()  / 2.0 + margin
+        hh = self.get_height() / 2.0 + margin
+        return abs(lr) <= hw and abs(lu) <= hh
 
     def tick_fade(self, delta: float) -> None:
         """Advance _fade_alpha toward _fade_target.  Called every logic tick."""
