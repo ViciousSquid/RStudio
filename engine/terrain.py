@@ -319,6 +319,23 @@ class HeightCache:
                 wz = self.world_z + iz * self.step
                 self.heights[ix, iz] = height_func(wx, wz)
         self.is_valid = True
+
+    def build_batch(self, height_func_batch):
+        """Vectorised equivalent of build(): evaluate the whole grid in one
+        batched call instead of resolution*resolution scalar Python calls.
+        The scalar path evaluates a few fbm/ridge octaves per point, so the
+        pure-Python double loop dominates chunk upload time and stalls the
+        render thread; the batched noise path is 1-2 orders of magnitude
+        faster for the same result."""
+        ix = np.arange(self.resolution, dtype=np.float32)
+        iz = np.arange(self.resolution, dtype=np.float32)
+        ixg, izg = np.meshgrid(ix, iz, indexing='ij')
+        wx = (self.world_x + ixg * self.step).ravel()
+        wz = (self.world_z + izg * self.step).ravel()
+        heights = height_func_batch(wx, wz)
+        self.heights = np.asarray(heights, dtype=np.float32).reshape(
+            (self.resolution, self.resolution))
+        self.is_valid = True
     
     def get_height(self, world_x: float, world_z: float) -> Optional[float]:
         if not self.is_valid or self.heights is None:
@@ -417,6 +434,7 @@ class Terrain:
         self.rock_tex = 0
         self.sand_tex = 0
         self.snow_tex = 0
+        self._placeholder_cubemap = 0
         if texture_manager:
             self.load_terrain_textures(texture_manager)
         self._init_shader()
@@ -751,7 +769,7 @@ class Terrain:
     
     def _upload_chunk(self, chunk: TerrainChunk, resolution: int):
         if chunk.height_cache and not chunk.height_cache.is_valid:
-            chunk.height_cache.build(self._get_height_scalar)
+            chunk.height_cache.build_batch(self._get_heights_batch)
         vertex_data = self._generate_chunk_mesh(chunk, resolution)
         chunk.vertex_count = len(vertex_data) // 14
         if not chunk.vao:
@@ -795,6 +813,29 @@ class Terrain:
             if a * px + b * py + c * pz + d < 0: return False
         return True
     
+    def _ensure_placeholder_cubemap(self) -> int:
+        """Lazily create a 1x1 complete cube-map used for shadow sampler units
+        that have no real depth cube-map (shadows off, or fewer cube-maps than
+        sampler slots).  A complete texture on every unit guarantees no
+        samplerCube is left referencing texture unit 0 or an incomplete texture,
+        either of which can make glDrawArrays raise GL_INVALID_OPERATION."""
+        if self._placeholder_cubemap:
+            return self._placeholder_cubemap
+        tex = int(gl.glGenTextures(1))
+        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, tex)
+        black = (ctypes.c_ubyte * 4)(0, 0, 0, 255)
+        for face in range(6):
+            gl.glTexImage2D(gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, gl.GL_RGBA,
+                            1, 1, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, black)
+        gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
+        gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
+        gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+        gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+        gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_R, gl.GL_CLAMP_TO_EDGE)
+        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+        self._placeholder_cubemap = tex
+        return self._placeholder_cubemap
+
     def update_and_render(self, projection: glm.mat4, view: glm.mat4, camera_pos: glm.vec3, frustum_planes=None, lights=None, active_lights_count=0,
                           shadow_cubemaps=None, shadow_index_map=None, shadow_unit_base=4):
         if not self.enabled: return
@@ -802,11 +843,25 @@ class Terrain:
             self._init_shader()
             if not self.shader_program: return
 
-        # Ensure late-bound uniforms exist (can happen if shader was set externally)
-        if 'use_textures' not in self.uniforms:
-            self.uniforms['use_textures'] = gl.glGetUniformLocation(self.shader_program, 'use_textures')
-        if 'lod_level' not in self.uniforms:
-            self.uniforms['lod_level'] = gl.glGetUniformLocation(self.shader_program, 'lod_level')
+        # Re-resolve late-bound uniforms against the *current* program.  The
+        # renderer can swap in an externally-compiled program whose uniform
+        # table only covers a subset of locations (see
+        # Renderer.setup_terrain_shader), so any sampler we rely on must be
+        # looked up here or it stays unbound.  An unassigned ``samplerCube``
+        # defaults to texture unit 0, collides with the ``sampler2D`` terrain
+        # textures bound there, and makes glDrawArrays raise
+        # GL_INVALID_OPERATION.
+        for name in ('use_textures', 'lod_level'):
+            if name not in self.uniforms:
+                self.uniforms[name] = gl.glGetUniformLocation(self.shader_program, name)
+        for i in range(8):
+            key = f'lights[{i}].shadowIndex'
+            if key not in self.uniforms:
+                self.uniforms[key] = gl.glGetUniformLocation(self.shader_program, key)
+        for i in range(shaders.MAX_SHADOW_LIGHTS):
+            key = f'shadowMaps[{i}]'
+            if key not in self.uniforms:
+                self.uniforms[key] = gl.glGetUniformLocation(self.shader_program, key)
 
         self.visible_chunks = 0
         self.culled_chunks = 0
@@ -846,14 +901,30 @@ class Terrain:
                 gl.glUniform1i(sidx_loc, shadow_index_map.get(id(light), -1))
 
         # Bind depth cube-maps so terrain receives point-light shadows.
-        if shadow_cubemaps:
-            for i, cm in enumerate(shadow_cubemaps):
-                loc = self.uniforms.get(f'shadowMaps[{i}]', -1)
-                if loc is not None and loc != -1:
-                    gl.glActiveTexture(gl.GL_TEXTURE0 + shadow_unit_base + i)
-                    gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
-                    gl.glUniform1i(loc, shadow_unit_base + i)
-            gl.glActiveTexture(gl.GL_TEXTURE0)
+        #
+        # Every ``samplerCube shadowMaps[i]`` uniform must be pointed at its own
+        # reserved texture unit *unconditionally*.  GLSL samplers default to
+        # texture unit 0, which already holds a ``sampler2D`` (texGrass).  The
+        # spec forbids two different sampler types referencing the same texture
+        # image unit, so leaving the cube samplers on unit 0 makes the driver
+        # raise GL_INVALID_OPERATION on the very next draw call.  We therefore
+        # always assign the units and bind a *complete* cube-map to each — the
+        # real depth cube-map when available, otherwise a 1x1 placeholder — even
+        # when shadows are disabled or fewer cube-maps than sampler slots are
+        # supplied.  Binding the incomplete default texture (name 0) would leave
+        # an active samplerCube pointing at an incomplete texture, which some
+        # drivers also reject at draw time.
+        shadow_cubemaps = shadow_cubemaps or []
+        placeholder = self._ensure_placeholder_cubemap()
+        for i in range(shaders.MAX_SHADOW_LIGHTS):
+            loc = self.uniforms.get(f'shadowMaps[{i}]', -1)
+            if loc is None or loc == -1:
+                continue
+            cm = shadow_cubemaps[i] if (i < len(shadow_cubemaps) and shadow_cubemaps[i]) else placeholder
+            gl.glActiveTexture(gl.GL_TEXTURE0 + shadow_unit_base + i)
+            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
+            gl.glUniform1i(loc, shadow_unit_base + i)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
         
         lod_level_loc = self.uniforms.get('lod_level', -1)
 
