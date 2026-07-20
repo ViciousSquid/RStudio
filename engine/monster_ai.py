@@ -1,6 +1,5 @@
 """
 Monster AI – all enemy behaviour, patrol logic, sight, shooting, and physics.
-Extracted from LogicThread for easier maintenance and extension.
 
 PERF: All brush collision/raycast methods delegate to SpatialGrid,
 reducing per-monster cost from O(all_brushes) to O(nearby_brushes).
