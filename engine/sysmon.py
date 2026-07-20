@@ -1,13 +1,10 @@
 """System Monitor widget for QtGameView.
 
-Extracted from qt_game_view.py to keep the game view focused on rendering
-and delegate all sysmon drawing / interaction to this module.
-
-PERFORMANCE-OPTIMIZED for game engine use:
+PERFORMANCE-OPTIMIZED:
   - Pre-allocated numpy ring buffer for frame times (O(1) append)
   - Incremental max tracking (no deque scan)
   - FPS string cached (only rebuilds when value changes)
-  - 60-point graph resolution (was 100)
+  - 60-point graph resolution
   - Pre-allocated QPoint array for graph (zero per-frame allocation)
   - All stats text and metrics cached (rebuilt once/sec)
   - All drawing via QPainter directly (no QPixmap cache, no raw GL)
