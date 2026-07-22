@@ -363,7 +363,8 @@ class AssetBrowserTab(QWidget):
             self.face_btn.setStyleSheet(face_style)
             self.face_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
             self.face_btn.clicked.connect(self.on_face_mode_clicked)
-            self.face_btn.setToolTip("Toggle Face Selection Mode")
+            self.face_btn.setToolTip("Toggle Face Selection Mode\n"
+                                     "Page Up / Page Down rotates the highlighted face's texture")
             button_layout.addWidget(self.face_btn)
 
             self.fit_btn = QPushButton("FIT")

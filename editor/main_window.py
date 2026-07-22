@@ -179,6 +179,13 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.reposition_overlays)
         self.ctrl_tab_shortcut = QShortcut(QKeySequence("Ctrl+Tab"), self)
         self.ctrl_tab_shortcut.activated.connect(self.cycle_2d_view)
+
+        # Page Up / Page Down rotate brush-face textures 90 degrees. Window-
+        # level shortcuts so they fire no matter which panel has focus.
+        self.tex_rot_cw_shortcut = QShortcut(QKeySequence(Qt.Key_PageUp), self)
+        self.tex_rot_cw_shortcut.activated.connect(lambda: self.rotate_textures(1))
+        self.tex_rot_ccw_shortcut = QShortcut(QKeySequence(Qt.Key_PageDown), self)
+        self.tex_rot_ccw_shortcut.activated.connect(lambda: self.rotate_textures(-1))
         self.setFocus()
         self.update_global_font()
         self.load_layout()
@@ -1493,15 +1500,19 @@ class MainWindow(QMainWindow):
         if not hasattr(self, 'view_3d'): return
 
         self.view_3d.face_mode_active = active
-        
-        # Sync button state if triggered via ESC or other means
-        if hasattr(self, 'asset_browser') and hasattr(self.asset_browser, 'face_btn'):
-             self.asset_browser.face_btn.blockSignals(True)
-             self.asset_browser.face_btn.setChecked(active)
-             self.asset_browser.face_btn.blockSignals(False)
+
+        # Sync the FACE button state if triggered via ESC or other means. The
+        # FACE button lives on the textures tab of the asset browser.
+        tex_tab = getattr(getattr(self, 'asset_browser', None), 'tab_textures', None)
+        if tex_tab is not None:
+            face_btn = getattr(tex_tab, 'face_btn', None)
+            if face_btn is not None:
+                face_btn.blockSignals(True)
+                face_btn.setChecked(active)
+                face_btn.blockSignals(False)
         
         if active:
-            self.show_toast("FACE MODE: Select a face to texture (Purple)", duration=3000)
+            self.show_toast("FACE MODE: Select a face to texture (Purple) — Page Up/Down rotates it", duration=3000)
             self.set_selected_object(None) # Deselect current object to clear gizmos and allow clean hover
             
             # Change cursor to indicate mode
@@ -1527,8 +1538,52 @@ class MainWindow(QMainWindow):
             brush['textures'] = {}
 
         brush['textures'][face_name] = texture_name
+        # Remember the last-textured face so the rotate-texture button / Page
+        # Up-Down keys know which face to act on when nothing is hovered.
+        self.face_texture_target = (brush, face_name)
         self.update_views()
         self.show_toast(f"Applied to {face_name}")
+
+    ALL_FACE_KEYS = ('north', 'south', 'east', 'west', 'top', 'down')
+
+    def _bump_face_rotation(self, brush, face_name, steps):
+        """Advance one face's texture rotation by ``steps`` quarter-turns."""
+        rotations = brush.setdefault('uv_rotation', {})
+        rotations[face_name] = (rotations.get(face_name, 0) + steps) % 4
+        return rotations[face_name]
+
+    def rotate_textures(self, steps=1):
+        """Rotate brush-face texture(s) by ``steps`` * 90 degrees (Page Up/Down).
+
+        In face mode the highlighted face (falling back to the last-textured
+        face) is rotated on its own. Otherwise, if a brush is selected, every
+        face on that brush is rotated together.
+        """
+        steps = 1 if steps >= 0 else -1
+
+        # --- Face mode: rotate only the highlighted / last-textured face ---
+        if getattr(self.view_3d, 'face_mode_active', False):
+            target = getattr(self.view_3d, 'hovered_face_info', None) \
+                or getattr(self, 'face_texture_target', None)
+            if not target:
+                self.show_toast("Hover a face to rotate its texture", is_error=True)
+                return
+            brush, face_name = target
+            self.save_state()
+            rot = self._bump_face_rotation(brush, face_name, steps)
+            self.face_texture_target = (brush, face_name)
+            self.update_views()
+            self.show_toast(f"{face_name}: texture {rot * 90}°")
+            return
+
+        # --- Otherwise: rotate every face of the selected brush together ---
+        selected = self.state.selected_object
+        if isinstance(selected, dict):
+            self.save_state()
+            for face_name in self.ALL_FACE_KEYS:
+                self._bump_face_rotation(selected, face_name, steps)
+            self.update_views()
+            self.show_toast(f"Brush textures rotated {steps * 90:+d}°")
 
     def apply_texture_to_brush(self, texture_path, tiled=False):
         """
@@ -2824,7 +2879,7 @@ class MainWindow(QMainWindow):
         self.clip_mode = active
         # Keep the toolbar button's checked state in sync (e.g. when toggled by
         # the Esc key rather than by clicking the button).
-        btn = getattr(self, 'clip_btn', None)
+        btn = getattr(self, 'scissor_btn', None)
         if btn is not None and btn.isChecked() != active:
             btn.blockSignals(True)
             btn.setChecked(active)
