@@ -23,6 +23,7 @@ from .threaded_game_state import ThreadedGameState, RenderState
 from .player import Player
 from .camera import Camera
 from .constants import is_water_brush
+from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
 
 # Import Thing subclasses for type checking
 try:
@@ -375,6 +376,71 @@ class LogicThread(threading.Thread):
                 return t
         return None
 
+    def _angled_brush_is_solid(self, brush):
+        """Which angled brushes get solid mesh collision.
+
+        Mirrors the player's own collision-skip logic (hidden / water / fog /
+        trigger volumes are non-solid) and excludes movers/doors, which keep
+        their existing dynamic AABB path.  Non-solid angled brushes simply fall
+        through to the default AABB handling — a water/trigger volume never
+        blocks the player, angled or not.
+        """
+        if brush.get('hidden') or brush.get('is_fog'):
+            return False
+        if is_water_brush(brush):
+            return False
+        if brush.get('operation') == 'subtract':
+            return False
+        if brush.get('is_mover') or brush.get('is_door'):
+            return False
+        if brush.get('is_trigger'):
+            return False
+        return True
+
+    def _prepare_angled_brush_collision(self):
+        """Attach swept-mesh collision to angled (clipped/convex) brushes.
+
+        Angled brushes carry a ``geometry`` plane set instead of a plain box, so
+        they can't collide as an AABB.  Here we bake each solid angled brush into
+        world-space collision triangles and flag it ``_collision_mode='mesh'`` —
+        the exact format the player's collide-and-slide path already uses for
+        models — so ramps and wedges collide correctly and you can walk up
+        slopes.  Box brushes are left untouched and keep the fast AABB path.
+
+        Runs at play start; results are private keys stripped on save.
+        """
+        count = 0
+        for brush in self.brushes:
+            if not brush_has_geometry(brush):
+                continue
+            if not self._angled_brush_is_solid(brush):
+                # Ensure a previously-solid brush that became non-solid loses
+                # its stale mesh flag.
+                self._clear_brush_collision(brush)
+                continue
+            if build_collision_mesh(brush):
+                count += 1
+            else:
+                # Degenerate geometry — fall back to AABB rather than break.
+                self._clear_brush_collision(brush)
+        if count:
+            debug_log("Collision", f"Prepared mesh collision for {count} angled brush(es)")
+        return count
+
+    @staticmethod
+    def _clear_brush_collision(brush):
+        """Strip runtime mesh-collision keys so the brush reverts to AABB."""
+        for k in GEO_RUNTIME_KEYS:
+            if k in ('_geo_cache', '_geo_cache_sig'):
+                continue  # keep the geometry render/query cache
+            brush.pop(k, None)
+
+    def _clear_angled_brush_collision(self):
+        """Remove play-time mesh-collision data from all angled brushes."""
+        for brush in self.brushes:
+            if brush_has_geometry(brush):
+                self._clear_brush_collision(brush)
+
     def _build_model_collision_brushes(self):
         """Create collision data for model entities. Supports AABB or mesh-accurate."""
         if not getattr(self, 'model_collision_enabled', True):
@@ -654,6 +720,12 @@ class LogicThread(threading.Thread):
             self._init_parented_lights()
             self._init_parented_portals()
 
+            # Bake swept-mesh collision for angled (clipped/convex) brushes so
+            # they collide as real slopes/wedges.  Must run before the spatial
+            # grid is populated below so the grid indexes them by their true
+            # geometry bounds.
+            self._prepare_angled_brush_collision()
+
             # Build collision brushes for model entities
             self._model_collision_brushes = self._build_model_collision_brushes()
             self._refresh_collision_brushes_cache()
@@ -769,6 +841,7 @@ class LogicThread(threading.Thread):
             self._reset_doors()
             self._reset_parented_lights()
             self._reset_parented_portals()
+            self._clear_angled_brush_collision()
             self._model_collision_brushes = []
             self._refresh_collision_brushes_cache()
             self.current_hud_message = ""
