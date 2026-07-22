@@ -125,9 +125,9 @@ def _intersect_swept_sphere_triangle(sphere_pos, sphere_vel, radius, triangle, n
 def _collide_and_slide(sphere_pos, velocity, radius, mesh_tris, mesh_bounds, max_iterations=3):
     """
     Fauerby-style collide-and-slide against a triangle mesh.
-    
+
     Returns: (new_position, new_velocity, ground_normal, hit_ground)
-    
+
     The key insight: when we hit a triangle, we don't stop. Instead:
     1. Move to just before the collision point
     2. Define a "sliding plane" perpendicular to the collision normal
@@ -135,39 +135,39 @@ def _collide_and_slide(sphere_pos, velocity, radius, mesh_tris, mesh_bounds, max
     4. Recurse with the new velocity
     """
     VERY_CLOSE_DIST = 0.005  # Don't move all the way to the surface
-    
+
     # Broad-phase rejection
     if mesh_bounds:
         min_b, max_b = mesh_bounds
         vel_mag = glm.length(velocity)
         expanded_min = (min_b[0] - radius - vel_mag, min_b[1] - radius - vel_mag, min_b[2] - radius - vel_mag)
         expanded_max = (max_b[0] + radius + vel_mag, max_b[1] + radius + vel_mag, max_b[2] + radius + vel_mag)
-        
+
         sp = (sphere_pos.x, sphere_pos.y, sphere_pos.z)
         if (sp[0] < expanded_min[0] or sp[0] > expanded_max[0] or
             sp[1] < expanded_min[1] or sp[1] > expanded_max[1] or
             sp[2] < expanded_min[2] or sp[2] > expanded_max[2]):
             return sphere_pos + velocity, velocity, None, False
-    
+
     # Working copies
     pos = glm.vec3(sphere_pos)
     vel = glm.vec3(velocity)
-    
+
     ground_normal = None
     hit_ground = False
-    
+
     # Keep track of sliding planes to prevent corner jitter
     sliding_planes = []
-    
+
     for iteration in range(max_iterations):
         if glm.length(vel) < VERY_CLOSE_DIST:
             break
-        
+
         # Find nearest collision
         nearest_t = 1.0
         nearest_hit_point = None
         nearest_normal = None
-        
+
         for tri, normal in mesh_tris:
             hit, t, hit_point, hit_normal = _intersect_swept_sphere_triangle(
                 pos, vel, radius, tri, normal
@@ -176,22 +176,22 @@ def _collide_and_slide(sphere_pos, velocity, radius, mesh_tris, mesh_bounds, max
                 nearest_t = t
                 nearest_hit_point = hit_point
                 nearest_normal = hit_normal
-        
+
         # No collision - move freely
         if nearest_normal is None:
             pos = pos + vel
             break
-        
+
         # Collision found - move close to intersection but not exactly to it
         if nearest_t >= VERY_CLOSE_DIST:
             # Move to just before the collision
             move_dist = nearest_t - VERY_CLOSE_DIST / glm.length(vel)
             pos = pos + vel * move_dist
-        
+
         # Define sliding plane
         # The sliding plane origin is the collision point, normal is the collision normal
         # We want to project the remaining velocity onto this plane
-        
+
         # Distance from destination to sliding plane
         dest = pos + vel * (1.0 - nearest_t)
         slide_plane_d = -glm.dot(nearest_normal, nearest_hit_point)
@@ -381,26 +381,25 @@ class Player:
             else:
                 aabb_brushes.append(b)
 
-        # A. Horizontal movement with mesh collision (X then Z using collide-and-slide)
-        self._move_with_mesh_collision(delta, mesh_brushes, axis='x')
-        self._move_with_mesh_collision(delta, mesh_brushes, axis='z')
-
-        # B. Horizontal movement with AABB collision
+        # A. Horizontal movement with AABB collision.  This integrates X/Z
+        # once (it advances pos even with an empty brush list), so mesh brushes
+        # must NOT integrate again — they are resolved by depenetration below.
         self._move_with_collision(delta, aabb_brushes, axis='x')
         self._move_with_collision(delta, aabb_brushes, axis='z')
 
-        # C. Vertical Y Movement
+        # B. Vertical Y Movement
         self.pos.y += self.velocity.y * delta
 
         # Reset ground state before Y collision check
         self.on_ground     = False
         self.ground_object = None
 
-        # 1. Mesh collision for Y (ground detection)
-        self._resolve_mesh_collision_y(delta, mesh_brushes)
-
-        # 2. AABB / mover collision for Y
+        # 1. AABB / mover collision for Y
         self._resolve_collision(aabb_brushes, axis='y', delta=delta)
+
+        # 2. Angled (mesh) brushes: capsule depenetration for X/Y/Z together —
+        #    pushes the player out of ramps/wedges and lands them on slopes.
+        self._resolve_mesh_capsule(mesh_brushes)
 
         # 2. Terrain collision
         if terrain and terrain.is_solid():
@@ -691,117 +690,126 @@ class Player:
         self.pos.y = lifted_y
         return True
 
-    def _move_with_mesh_collision(self, delta, mesh_brushes, axis):
+    def _capsule_offsets(self):
+        """Vertical sample points + radius approximating the player as a capsule.
+
+        The player is a 50x100x50 box; a single centre sphere (radius ~half
+        width) leaves the feet 50 units below it, so on a ramp the body sinks
+        in until that centre sphere finally touches the slope.  Sampling the
+        vertical axis at feet / mid / head — each a sphere of the footprint's
+        inscribed radius — lets the lowest sphere rest the feet on the surface
+        and the upper spheres block the torso against angled walls.
         """
-        Move player along one horizontal axis using collide-and-slide against mesh brushes.
-        This allows smooth sliding along ramps and slopes.
+        r = min(self._half.x, self._half.z)
+        span = max(self._half.y - r, 0.0)
+        offsets = (glm.vec3(0.0, -span, 0.0),
+                   glm.vec3(0.0, 0.0, 0.0),
+                   glm.vec3(0.0, span, 0.0))
+        return offsets, r
+
+    def _resolve_mesh_capsule(self, mesh_brushes):
+        """Resolve the player capsule against angled (mesh) brushes by pushing
+        it out of any penetration, and set ground/ceiling state from the
+        contact normals.
+
+        This runs *after* the shared position integration (the AABB pass moves
+        X/Z, ``pos.y += vel.y*dt`` moves Y), so it only corrects for angled
+        geometry.  A discrete depenetration model is what makes ramps behave:
+        walking into an incline embeds the capsule, then the push-out along the
+        face normal lifts the feet onto the slope (you climb) and leaves the
+        body resting exactly on the surface instead of sinking in — while a
+        vertical angled face just shoves you back like a wall.
+
+        Each brush is a convex solid, so a sphere is depenetrated with the
+        separating-plane rule: the plane of greatest signed distance gives the
+        minimum push out.  That works whether the sphere merely clips a face or
+        has its centre fully inside the solid (which the earlier triangle test
+        missed, letting the player tunnel through angled walls).
         """
         if not mesh_brushes:
             return
 
-        # Build velocity for this axis
-        if axis == 'x':
-            vel = glm.vec3(self.velocity.x * delta, 0, 0)
-        else:
-            vel = glm.vec3(0, 0, self.velocity.z * delta)
+        offsets, radius = self._capsule_offsets()
+        ground_normal = None      # steepest-up contact this resolve
+        wall_normal = None        # last horizontal contact, for velocity slide
+        hit_ceiling = False
 
-        if glm.length(vel) < 0.001:
-            return
-
-        # Combine all triangles from all mesh brushes
-        all_tris = []
-        all_bounds = None
-        for brush in mesh_brushes:
-            tris = brush.get('_mesh_triangles', [])
-            bounds = brush.get('_mesh_bounds')
-            if tris:
-                all_tris.extend(tris)
-            # Merge bounds
-            if bounds:
-                if all_bounds is None:
-                    all_bounds = [list(bounds[0]), list(bounds[1])]
-                else:
-                    for i in range(3):
-                        all_bounds[0][i] = min(all_bounds[0][i], bounds[0][i])
-                        all_bounds[1][i] = max(all_bounds[1][i], bounds[1][i])
-
-        if not all_tris:
-            return
-
-        radius = min(self._half.x, self._half.z) * 0.9
-
-        # Use collide-and-slide
-        new_pos, new_vel, ground_normal, hit_ground = _collide_and_slide(
-            self.pos, vel, radius, all_tris, all_bounds
-        )
-
-        # Apply result
-        if axis == 'x':
-            self.pos.x = new_pos.x
-            # If we slid, the new velocity reflects the slide direction
-            if abs(new_vel.x) < 0.001 and glm.length(new_vel) > 0.001:
-                # We slid into another direction - zero X but keep the intent
-                self.velocity.x = 0
-            elif glm.length(new_vel) < 0.001:
-                self.velocity.x = 0
-        else:
-            self.pos.z = new_pos.z
-            if abs(new_vel.z) < 0.001 and glm.length(new_vel) > 0.001:
-                self.velocity.z = 0
-            elif glm.length(new_vel) < 0.001:
-                self.velocity.z = 0
-
-        # If we hit ground during horizontal movement, update state
-        if hit_ground and ground_normal:
-            self.on_ground = True
-            # Find which brush we hit
+        # A few relaxation passes: each pushes out of the deepest overlap, then
+        # re-tests, so a capsule touching several faces settles cleanly.
+        for _ in range(4):
+            deepest = 1e-4
+            push = None
+            push_n = None
             for brush in mesh_brushes:
-                if brush.get('_mesh_triangles'):
-                    self.ground_object = brush
-                    break
+                planes = brush.get('_mesh_planes')
+                if not planes:
+                    continue
+                bounds = brush.get('_mesh_bounds')
+                if bounds:
+                    mn, mx = bounds
+                    pmn = self.pos - self._half
+                    pmx = self.pos + self._half
+                    if (pmx.x < mn[0] - radius or pmn.x > mx[0] + radius or
+                        pmx.y < mn[1] - radius or pmn.y > mx[1] + radius or
+                        pmx.z < mn[2] - radius or pmn.z > mx[2] + radius):
+                        continue
+                for off in offsets:
+                    cx = self.pos.x + off.x
+                    cy = self.pos.y + off.y
+                    cz = self.pos.z + off.z
+                    # Sphere vs convex: largest signed distance across faces.
+                    best_sd = -1e30
+                    best_n = None
+                    separated = False
+                    for (nx, ny, nz, d) in planes:
+                        sd = nx * cx + ny * cy + nz * cz - d
+                        if sd > radius:
+                            separated = True   # a separating plane exists
+                            break
+                        if sd > best_sd:
+                            best_sd = sd
+                            best_n = (nx, ny, nz)
+                    if separated or best_n is None:
+                        continue
+                    pen = radius - best_sd
+                    if pen > deepest:
+                        deepest = pen
+                        push = (best_n[0] * pen, best_n[1] * pen, best_n[2] * pen)
+                        push_n = best_n
 
-    def _resolve_mesh_collision_y(self, delta, mesh_brushes):
-        """Handle vertical mesh collision - mainly for landing on slopes."""
-        if not mesh_brushes:
-            return
+            if push is None:
+                break
 
-        vel = glm.vec3(0, self.velocity.y * delta, 0)
-        if glm.length(vel) < 0.001:
-            return
+            self.pos.x += push[0]
+            self.pos.y += push[1]
+            self.pos.z += push[2]
 
-        all_tris = []
-        all_bounds = None
-        for brush in mesh_brushes:
-            tris = brush.get('_mesh_triangles', [])
-            bounds = brush.get('_mesh_bounds')
-            if tris:
-                all_tris.extend(tris)
-            if bounds:
-                if all_bounds is None:
-                    all_bounds = [list(bounds[0]), list(bounds[1])]
-                else:
-                    for i in range(3):
-                        all_bounds[0][i] = min(all_bounds[0][i], bounds[0][i])
-                        all_bounds[1][i] = max(all_bounds[1][i], bounds[1][i])
+            if push_n[1] > 0.3:
+                if ground_normal is None or push_n[1] > ground_normal[1]:
+                    ground_normal = push_n
+            elif push_n[1] < -0.3:
+                hit_ceiling = True
+            else:
+                wall_normal = push_n
 
-        if not all_tris:
-            return
-
-        radius = min(self._half.x, self._half.z) * 0.9
-
-        new_pos, new_vel, ground_normal, hit_ground = _collide_and_slide(
-            self.pos, vel, radius, all_tris, all_bounds
-        )
-
-        self.pos.y = new_pos.y
-
-        if hit_ground and ground_normal and ground_normal.y > 0.3:
-            self.velocity.y = 0
+        # Apply the resulting contact state to velocity + ground flags.
+        if ground_normal is not None:
+            if self.velocity.y < 0.0:
+                self.velocity.y = 0.0
             self.on_ground = True
             for brush in mesh_brushes:
                 if brush.get('_mesh_triangles'):
                     self.ground_object = brush
                     break
+        if hit_ceiling and self.velocity.y > 0.0:
+            self.velocity.y = 0.0
+        if wall_normal is not None:
+            # Cancel the horizontal velocity heading into the wall so the
+            # player slides along it instead of jamming.
+            vn = self.velocity.x * wall_normal[0] + self.velocity.z * wall_normal[2]
+            if vn < 0.0:
+                self.velocity.x -= wall_normal[0] * vn
+                self.velocity.z -= wall_normal[2] * vn
 
     def _has_headroom(self, brush, player_min, player_max):
         # Mesh collision: use mesh bounds for broad-phase AABB check

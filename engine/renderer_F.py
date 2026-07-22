@@ -38,7 +38,7 @@ class Renderer_F(BaseRenderer):
         # Texture batch cache for draw_textured_brushes_optimized.
         # Key: tuple of (brush_id, sorted_tex_items) per brush.
         # Storing None initially forces a build on the first frame.
-        self._tex_batch_cache     = None   # defaultdict(list) | None
+        self._tex_batch_cache     = None   # (defaultdict(list), geo_brush_list) | None
         self._tex_batch_cache_key = None   # last key tuple | None
 
     # ------------------------------------------------------------------
@@ -135,8 +135,9 @@ class Renderer_F(BaseRenderer):
             fill_mode = gl.GL_FILL if display_mode != "Wireframe" else gl.GL_LINE
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
 
+        cube_vao = self.vaos['cube']
+        bound_vao = cube_vao
         for brush in visible:
-            self.render_stats.visible_tris += 12
             model_matrix = self._brush_model_matrix(brush)
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
             if normal_mat_loc > 0:
@@ -155,7 +156,19 @@ class Renderer_F(BaseRenderer):
                 alpha = 1.0
             gl.glUniform3fv(color_loc, 1, color)
             gl.glUniform1f(alpha_loc, alpha)
-            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+            mesh = self._get_geo_mesh(brush)
+            if mesh is not None:
+                if bound_vao != mesh.vao:
+                    gl.glBindVertexArray(mesh.vao)
+                    bound_vao = mesh.vao
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
+                self.render_stats.visible_tris += mesh.count // 3
+            else:
+                if bound_vao != cube_vao:
+                    gl.glBindVertexArray(cube_vao)
+                    bound_vao = cube_vao
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+                self.render_stats.visible_tris += 12
             self.render_stats.draw_calls += 1
 
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
@@ -195,16 +208,25 @@ class Renderer_F(BaseRenderer):
         is_play = config.get('play_mode', False)
 
         # ---- Texture batch cache -----------------------------------------
+        # Angled (convex-geometry) brushes carry per-plane faces instead of
+        # the six cube faces, so they are pulled out of the cube batches and
+        # drawn per-face below.  Their geometry signature is part of the key
+        # so clipping a brush invalidates the cached batches.
+        from engine.brush_geometry import brush_has_geometry, geometry_signature
         cache_key = None if is_play else tuple(
-            (id(b), tuple(sorted(b.get('textures', {}).items())))
+            (id(b), tuple(sorted(b.get('textures', {}).items())), geometry_signature(b))
             for b in visible
         )
 
         if not is_play and cache_key == self._tex_batch_cache_key and self._tex_batch_cache is not None:
-            batches = self._tex_batch_cache
+            batches, geo_brushes = self._tex_batch_cache
         else:
             batches = defaultdict(list)
+            geo_brushes = []
             for brush in visible:
+                if brush_has_geometry(brush):
+                    geo_brushes.append(brush)
+                    continue
                 for i, face_key in enumerate(['south', 'north', 'west', 'east', 'down', 'top']):
                     tex_name = brush.get('textures', {}).get(face_key, 'default.png')
                     if tex_name == 'caulk.jpg':
@@ -215,7 +237,7 @@ class Renderer_F(BaseRenderer):
                              self.load_texture_callback(tex_name, 'textures')
                     batches[tex_id].append((brush, i, face_key))
             if not is_play:
-                self._tex_batch_cache     = batches
+                self._tex_batch_cache     = (batches, geo_brushes)
                 self._tex_batch_cache_key = cache_key
         # ------------------------------------------------------------------
 
@@ -259,6 +281,35 @@ class Renderer_F(BaseRenderer):
                         gl.glUniform2f(tex_scale_loc, 1.0, 1.0)
                 gl.glDrawArrays(gl.GL_TRIANGLES, face_idx * 6, 6)
                 self.render_stats.draw_calls += 1
+
+        # ---- Angled brushes: one draw per convex face --------------------
+        for brush in geo_brushes:
+            mesh = self._get_geo_mesh(brush)
+            if mesh is None:
+                continue  # degenerate plane set — nothing to draw
+            model_matrix = self._brush_model_matrix(brush)
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+            if normal_mat_loc > 0:
+                nmat = self._compute_normal_matrix(model_matrix, brush)
+                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(nmat))
+            gl.glBindVertexArray(mesh.vao)
+            for run in mesh.runs:
+                tex_name = self._geo_run_texture(brush, run)
+                if tex_name == 'caulk.jpg':
+                    continue
+                if is_play and tex_name == 'nodraw.jpg':
+                    continue
+                tex_id = self.texture_manager.get(os.path.join('textures', tex_name)) or \
+                         self.load_texture_callback(tex_name, 'textures')
+                if tex_id != current_tex:
+                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                    current_tex = tex_id
+                if tex_scale_loc != -1:
+                    su, sv = self._geo_run_tex_scale(brush, run, tex_name)
+                    gl.glUniform2f(tex_scale_loc, su, sv)
+                gl.glDrawArrays(gl.GL_TRIANGLES, run['first'], run['count'])
+                self.render_stats.visible_tris += run['count'] // 3
+                self.render_stats.draw_calls += 1
         gl.glBindVertexArray(0)
 
     def draw_glow_brushes(self, projection, view, camera_pos, brushes, lights, config):
@@ -280,6 +331,8 @@ class Renderer_F(BaseRenderer):
         normal_mat_loc = uniforms.get('normalMatrix', -1)
         if normal_mat_loc is None:
             normal_mat_loc = -1
+        cube_vao = self.vaos['cube']
+        bound_vao = cube_vao
         for brush in brushes:
             self.render_stats.visible_tris += 12
             model_matrix = self._brush_model_matrix(brush)
@@ -293,7 +346,17 @@ class Renderer_F(BaseRenderer):
             overbright = [min(c * intensity, 10.0) for c in base_color]
             gl.glUniform3fv(color_loc, 1, overbright)
             gl.glUniform1f(alpha_loc, 1.0)
-            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+            mesh = self._get_geo_mesh(brush)
+            if mesh is not None:
+                if bound_vao != mesh.vao:
+                    gl.glBindVertexArray(mesh.vao)
+                    bound_vao = mesh.vao
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
+            else:
+                if bound_vao != cube_vao:
+                    gl.glBindVertexArray(cube_vao)
+                    bound_vao = cube_vao
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
             self.render_stats.draw_calls += 1
         gl.glBindVertexArray(0)
 
@@ -311,6 +374,7 @@ class Renderer_F(BaseRenderer):
         self._view_ptr = glm.value_ptr(view)
         self.render_stats.reset()
         self.render_stats.total_brushes = len(brushes)
+        self._begin_geo_frame()
         self._frame_lights_uploaded.clear()
         self._current_shader = None
         if current_mode == RENDER_MODE_WIREFRAME:

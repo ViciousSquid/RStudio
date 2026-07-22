@@ -656,6 +656,110 @@ def clip_brush(brush, clip_normal, clip_d, keep_positive=False, texture=None,
     return True
 
 
+def translate_planes(planes, delta):
+    """Shift every plane by world-space ``delta``.
+
+    A point ``p`` is inside ``dot(n, p) <= d``; after moving the solid by
+    ``delta`` the same material point sits at ``p + delta`` and is inside iff
+    ``dot(n, p) <= d + dot(n, delta)`` — so only each plane's offset changes.
+    """
+    t = _v(delta)
+    out = []
+    for p in planes:
+        q = dict(p)
+        q['d'] = float(p['d']) + float(_v(p['n']) @ t)
+        out.append(q)
+    return out
+
+
+def translate_brush(brush, delta):
+    """Move an angled brush by ``delta`` in world space, keeping its geometry,
+    ``pos`` and cached surface all in sync.
+
+    Dragging a brush in the editor only rewrites ``pos``; for a brush that
+    carries a plane set that would leave the geometry (and its 2D silhouette,
+    3D mesh and collision planes) behind.  This shifts the planes too.  No-op
+    for plain box brushes (they have no geometry to move).  Returns ``True``
+    when geometry was translated.
+    """
+    if not brush_has_geometry(brush):
+        return False
+    new_planes = translate_planes(
+        [_plane_from_json(p) for p in brush['geometry']['planes']], delta)
+    brush['geometry'] = {'planes': [_plane_to_json(p) for p in new_planes]}
+    _invalidate(brush)
+    d = _v(delta)
+    pos = brush.get('pos', [0, 0, 0])
+    brush['pos'] = [float(pos[0] + d[0]), float(pos[1] + d[1]), float(pos[2] + d[2])]
+    return True
+
+
+def scale_planes(planes, scale, translate):
+    """Apply the affine map ``p' = scale ⊙ p + translate`` to a plane set.
+
+    Under a per-axis scale ``s`` and translation ``t`` a point satisfies the
+    old inside test ``dot(n, p) <= d`` iff, in the new frame, ``dot(m, p') <=
+    d + dot(m, t)`` with ``m_i = n_i / s_i``.  Each plane is rebuilt from that
+    (and renormalised).  ``scale`` components must be non-zero.
+    """
+    s = _v(scale)
+    t = _v(translate)
+    out = []
+    for p in planes:
+        n = _v(p['n'])
+        m = n / s                                  # n_i / s_i
+        length = math.sqrt(float(m @ m))
+        if length < 1e-12:
+            out.append(dict(p))
+            continue
+        q = dict(p)
+        d_new = float(p['d']) + float(m @ t)
+        q['n'] = [float(m[0] / length), float(m[1] / length), float(m[2] / length)]
+        q['d'] = d_new / length
+        out.append(q)
+    return out
+
+
+def fit_brush_to_bounds(brush, new_lo, new_hi):
+    """Scale an angled brush's geometry so its AABB becomes ``[new_lo, new_hi]``.
+
+    The convex shape is stretched to fill the new box, keeping its proportions
+    (a clipped ramp keeps its slope ratio but fits the new dimensions).  This
+    lets the resize handles work on angled brushes the same way they do on
+    boxes.  No-op for plain box brushes; returns ``True`` when geometry was
+    resized.
+    """
+    if not brush_has_geometry(brush):
+        return False
+    convex = get_convex(brush)
+    if convex is None or not convex.is_valid:
+        return False
+    old_lo, old_hi = convex.bounds
+    old_lo, old_hi = _v(old_lo), _v(old_hi)
+    lo, hi = _v(new_lo), _v(new_hi)
+    old_ext = old_hi - old_lo
+    s = np.ones(3)
+    t = np.zeros(3)
+    for i in range(3):
+        if abs(old_ext[i]) > 1e-9:
+            s[i] = (hi[i] - lo[i]) / old_ext[i]
+        if abs(s[i]) < 1e-9:
+            s[i] = 1e-9                             # never let a plane vanish
+        # p' = s*(p - old_lo) + lo  =>  t = lo - s*old_lo
+        t[i] = lo[i] - s[i] * old_lo[i]
+    new_planes = scale_planes(
+        [_plane_from_json(p) for p in brush['geometry']['planes']], s, t)
+    trial = ConvexGeometry(new_planes)
+    if not trial.is_valid:
+        return False
+    brush['geometry'] = {'planes': [_plane_to_json(p) for p in new_planes]}
+    _invalidate(brush)
+    brush['_geo_cache'] = trial
+    brush['_geo_cache_sig'] = geometry_signature(brush)
+    sync_brush_bounds(brush)
+    return True
+
+
 def rotate_brush(brush, angle_deg, axis, pivot=None):
     """Rotate ``brush`` about ``pivot`` (defaults to its centre); makes it angled."""
     box_to_geometry(brush)
@@ -690,6 +794,15 @@ def build_collision_mesh(brush):
     brush['_collision_mode'] = 'mesh'
     brush['_mesh_triangles'] = convex.collision_triangles()
     brush['_mesh_bounds'] = convex.collision_bounds()
+    # Half-space planes (unit normal + offset, inside = dot(n,p) <= d) for the
+    # player's sphere-vs-convex depenetration.  Baking them here keeps the
+    # collision thread free of any geometry rebuild and lets it push a capsule
+    # out of a solid convex brush even when the sphere centre is fully inside.
+    planes = []
+    for p in convex.planes:
+        n = _normalize(p['n'])
+        planes.append((float(n[0]), float(n[1]), float(n[2]), float(p['d'])))
+    brush['_mesh_planes'] = planes
     return True
 
 
@@ -743,5 +856,5 @@ def _invalidate(brush):
 # strip these before serialisation / undo / deepcopy-for-JSON.
 GEO_RUNTIME_KEYS = frozenset({
     '_geo_cache', '_geo_cache_sig',
-    '_collision_mode', '_mesh_triangles', '_mesh_bounds',
+    '_collision_mode', '_mesh_triangles', '_mesh_bounds', '_mesh_planes',
 })
