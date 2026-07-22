@@ -101,6 +101,17 @@ class View2D(QWidget):
         self.clip_hover = None         # QPointF current cursor in 2D world coords
         self.clip_keep_positive = False  # which half-space to keep
 
+        # --- Free-rotate tool state (toggled globally by the rotate button) ---
+        # A left-drag spins the selection about this view's depth axis.  We keep
+        # the on-screen pivot, the cursor angle where the drag began, and the
+        # net snapped angle already applied so each mouse move only rotates by
+        # the delta (rotations compose exactly about a fixed pivot/axis).
+        self.rotate_dragging = False
+        self.rotate_pivot = None       # QPointF pivot in this view's 2D world coords
+        self.rotate_start_ang = 0.0    # cursor angle (radians) at drag start
+        self.rotate_applied = 0.0      # net snapped degrees applied so far
+        self.rotate_snap_deg = 15.0    # step size while grid snap is enabled
+
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.ClickFocus)
         self.setContextMenuPolicy(Qt.NoContextMenu)
@@ -130,6 +141,8 @@ class View2D(QWidget):
         self.connection_snap_target = None
         self.clip_points = []
         self.clip_hover = None
+        self.rotate_dragging = False
+        self.rotate_pivot = None
         self.update()
 
     # ======================================================================
@@ -155,6 +168,103 @@ class View2D(QWidget):
         self.clip_points = []
         self.clip_hover = None
         self.update()
+
+    # ------------------------------------------------------------------
+    # Free-rotate tool
+    # ------------------------------------------------------------------
+    def _rotate_active(self):
+        """True when the global free-rotate mode is on (rotate toolbar button)."""
+        return bool(getattr(self.main_window, 'rotate_mode', False))
+
+    def _rotate_axis_vec(self):
+        """3D rotation axis for this view: e_axis1 x e_axis2, so a positive drag
+        angle (measured with atan2 in the view's 2D world frame) spins the
+        geometry the same way in that frame."""
+        idx = self._axis_indices()
+        if idx is None:
+            return None
+        a1, a2, _ = idx
+        e1 = [0.0, 0.0, 0.0]; e1[a1] = 1.0
+        e2 = [0.0, 0.0, 0.0]; e2[a2] = 1.0
+        return [e1[1]*e2[2] - e1[2]*e2[1],
+                e1[2]*e2[0] - e1[0]*e2[2],
+                e1[0]*e2[1] - e1[1]*e2[0]]
+
+    def _selected_brush(self):
+        obj = self.editor.state.selected_object
+        return obj if isinstance(obj, dict) else None
+
+    def begin_rotate(self, world_pos):
+        """Start a free-rotate drag around the selected brush's centre."""
+        brush = self._selected_brush()
+        idx = self._axis_indices()
+        if brush is None or idx is None:
+            self.main_window.show_toast("Rotate: select a brush first", is_error=True)
+            return False
+        a1, a2, _ = idx
+        pos = brush.get('pos', [0, 0, 0])
+        self.rotate_pivot = QPointF(float(pos[a1]), float(pos[a2]))
+        self.rotate_start_ang = math.atan2(world_pos.y() - self.rotate_pivot.y(),
+                                           world_pos.x() - self.rotate_pivot.x())
+        self.rotate_applied = 0.0
+        self.rotate_dragging = True
+        self.main_window.save_state()  # single undo checkpoint for the whole drag
+        self.update()
+        return True
+
+    def update_rotate(self, world_pos):
+        """Apply the incremental rotation to reach the cursor's current angle."""
+        if not self.rotate_dragging or self.rotate_pivot is None:
+            return
+        axis = self._rotate_axis_vec()
+        if axis is None:
+            return
+        ang = math.atan2(world_pos.y() - self.rotate_pivot.y(),
+                         world_pos.x() - self.rotate_pivot.x())
+        total_deg = math.degrees(ang - self.rotate_start_ang)
+        if self.snap_to_grid_enabled and self.rotate_snap_deg > 0:
+            total_deg = round(total_deg / self.rotate_snap_deg) * self.rotate_snap_deg
+        delta = total_deg - self.rotate_applied
+        if abs(delta) < 1e-6:
+            return
+        if self.main_window.apply_rotation_to_selection(delta, axis, undoable=False):
+            self.rotate_applied = total_deg
+            self.editor.update_views()
+            sel = self._selected_brush()
+            if sel is not None and hasattr(self.main_window, 'property_editor'):
+                self.main_window.property_editor.set_object(sel)
+
+    def commit_rotate(self):
+        """Finish the drag, keeping the applied rotation (undo already staged)."""
+        if not self.rotate_dragging:
+            return
+        applied = self.rotate_applied
+        self.rotate_dragging = False
+        if abs(applied) < 1e-6:
+            # Nothing actually rotated — drop the checkpoint we pushed.
+            if getattr(self.editor.state, 'undo_stack', None):
+                self.editor.state.undo_stack.pop()
+        else:
+            self.main_window.unsaved_changes = True
+            self.main_window.state.mark_lighting_dirty()
+            self.main_window.show_toast(f"Rotated {applied:.0f}°")
+        self.update()
+
+    def cancel_rotate(self):
+        """Abort an in-progress drag, restoring the pre-drag orientation."""
+        if not self.rotate_dragging:
+            self.rotate_pivot = None
+            return
+        axis = self._rotate_axis_vec()
+        if axis is not None and abs(self.rotate_applied) > 1e-6:
+            self.main_window.apply_rotation_to_selection(-self.rotate_applied, axis,
+                                                         undoable=False)
+        if getattr(self.editor.state, 'undo_stack', None):
+            self.editor.state.undo_stack.pop()
+        self.rotate_dragging = False
+        self.rotate_pivot = None
+        self.rotate_applied = 0.0
+        self.editor.update_views()
 
     def _clip_plane(self):
         """Build the 3D cut plane from the two placed points.
@@ -278,6 +388,30 @@ class View2D(QWidget):
 
         painter.restore()
 
+    def draw_rotate_overlay(self, painter):
+        """Draw the rotate-tool banner, pivot marker and live angle readout."""
+        painter.save()
+        painter.setPen(QColor(255, 200, 0))
+        font = painter.font()
+        font.setPointSize(10)
+        font.setBold(True)
+        painter.setFont(font)
+        mode = "stepped" if self.snap_to_grid_enabled else "free"
+        painter.drawText(10, 20, f"ROTATE MODE ({mode}) — drag to spin the "
+                                 f"selection  (Esc to exit)")
+
+        if self.rotate_pivot is not None:
+            c = self.world_to_screen(self.rotate_pivot)
+            painter.setPen(QPen(QColor(255, 210, 0), 1, Qt.DashLine))
+            painter.drawEllipse(c, 26, 26)
+            painter.setPen(QPen(QColor(255, 255, 255), 1))
+            painter.drawLine(QPointF(c.x() - 6, c.y()), QPointF(c.x() + 6, c.y()))
+            painter.drawLine(QPointF(c.x(), c.y() - 6), QPointF(c.x(), c.y() + 6))
+            if self.rotate_dragging:
+                painter.setPen(QColor(60, 220, 90))
+                painter.drawText(c + QPointF(30, 4), f"{self.rotate_applied:+.0f}°")
+        painter.restore()
+
     def _store_previous_tab_index(self):
         """Store the current tab index before switching to Properties."""
         if hasattr(self.main_window, 'properties_tab_widget'):
@@ -322,6 +456,15 @@ class View2D(QWidget):
         self.update()
 
     def keyPressEvent(self, event):
+        # --- Free-rotate tool keys (only while rotate mode is active) ---
+        if self._rotate_active():
+            if event.key() == Qt.Key_Escape:
+                if self.rotate_dragging:
+                    self.cancel_rotate()            # abort the current spin
+                else:
+                    self.main_window.set_rotate_mode(False)  # exit rotate mode
+                return
+
         # --- Clip / slice tool keys (only while clip mode is active) ---
         if self._clip_active():
             if event.key() in (Qt.Key_Return, Qt.Key_Enter):
@@ -417,16 +560,19 @@ class View2D(QWidget):
                             self.main_window.save_state()
                             self._nudge_in_progress = True
 
-                        pos[0] += delta_x
-                        pos[1] += delta_y
-                        pos[2] += delta_z
-
+                        new_pos = [pos[0] + delta_x, pos[1] + delta_y, pos[2] + delta_z]
                         # Snap to grid if grid is visible
                         if self.grid_visible:
                             grid = self.grid_size
-                            pos[0] = round(pos[0] / grid) * grid
-                            pos[1] = round(pos[1] / grid) * grid
-                            pos[2] = round(pos[2] / grid) * grid
+                            new_pos = [round(v / grid) * grid for v in new_pos]
+
+                        # Angled brushes must move their geometry too, not just pos.
+                        if bg.brush_has_geometry(selected):
+                            bg.translate_brush(selected, [new_pos[0] - pos[0],
+                                                          new_pos[1] - pos[1],
+                                                          new_pos[2] - pos[2]])
+                        else:
+                            pos[0], pos[1], pos[2] = new_pos
                     else:
                         # It's a Thing
                         # Save state on first arrow key press
@@ -633,7 +779,9 @@ class View2D(QWidget):
         self.draw_camera(painter)
         if self._clip_active():
             self.draw_clip_overlay(painter)
-        
+        if self._rotate_active():
+            self.draw_rotate_overlay(painter)
+
         # --- REVISED: Logic/Trigger Connections ---
         # Only draw if the global toggle is ON (F1)
         show_f1_key = getattr(self.editor, 'show_logic_links', False)
@@ -2290,6 +2438,11 @@ class View2D(QWidget):
             return
 
         elif event.button() == Qt.LeftButton:
+            # --- Free-rotate tool: left-drag spins the selection ---
+            if self._rotate_active():
+                self.begin_rotate(world_pos)
+                return
+
             # --- Clip / slice tool: left clicks place the two cut points ---
             if self._clip_active():
                 snapped = self.snap_to_grid(world_pos)
@@ -2414,6 +2567,14 @@ class View2D(QWidget):
         world_pos = self.screen_to_world(event.pos())
         middle_click_pan_enabled = self.main_window.config.getboolean('Controls', 'MiddleClickDrag', fallback=False)
 
+        # Free-rotate tool: a left-drag updates the spin; otherwise fall through.
+        if self.rotate_dragging:
+            if event.buttons() & Qt.LeftButton:
+                self.update_rotate(world_pos)
+                return
+            # Button already released elsewhere — finish the drag.
+            self.commit_rotate()
+
         # Clip tool: track the cursor so the preview line and kept side follow it.
         if self._clip_active():
             self.clip_hover = world_pos
@@ -2472,9 +2633,17 @@ class View2D(QWidget):
                 ax_map = {'x': 0, 'y': 1, 'z': 2}
                 new_obj_pos = self.snap_to_grid(world_pos + self.drag_offset)
                 pos_ref = obj['pos'] if isinstance(obj, dict) else obj.pos
-                
+
+                # Angled brushes carry a world-space plane set; moving only 'pos'
+                # would leave the geometry (silhouette / 3D mesh / collision)
+                # behind.  Translate the whole solid by the same delta instead.
+                if isinstance(obj, dict) and bg.brush_has_geometry(obj):
+                    delta = [0.0, 0.0, 0.0]
+                    delta[ax_map[ax1]] = new_obj_pos.x() - pos_ref[ax_map[ax1]]
+                    delta[ax_map[ax2]] = new_obj_pos.y() - pos_ref[ax_map[ax2]]
+                    bg.translate_brush(obj, delta)
                 # Always store as list to maintain JSON serializability
-                if isinstance(pos_ref, list):
+                elif isinstance(pos_ref, list):
                     pos_ref[ax_map[ax1]] = new_obj_pos.x()
                     pos_ref[ax_map[ax2]] = new_obj_pos.y()
                 else:
@@ -2512,11 +2681,16 @@ class View2D(QWidget):
             self.contextMenuEvent(event)
         
         self.is_panning = False
-        
+
         if event.button() == Qt.LeftButton:
+            # Free-rotate tool: releasing the button commits the spin.
+            if self.rotate_dragging:
+                self.commit_rotate()
+                return
+
             if self.is_dragging_object: self.is_dragging_object = False
             if self.is_resizing_brush: self.is_resizing_brush = False
-            
+
             # Handle connection completion
             if self.is_connecting:
                 self.is_connecting = False
@@ -3153,10 +3327,22 @@ class View2D(QWidget):
         
         new_size_x = max_x - min_x
         new_size_y = max_y - min_y
-        
+
         if new_size_x < self.grid_size: new_size_x = self.grid_size
         if new_size_y < self.grid_size: new_size_y = self.grid_size
-        
+
+        # Angled brushes: scale the convex geometry to the new handle box (its
+        # slope/shape is preserved, just refitted) rather than only resizing
+        # the AABB — otherwise the plane set would be left behind, exactly like
+        # the move bug.  The depth axis is untouched (handles only edit ix1/ix2).
+        if bg.brush_has_geometry(brush):
+            new_lo = [old_pos[k] - old_size[k] / 2 for k in range(3)]
+            new_hi = [old_pos[k] + old_size[k] / 2 for k in range(3)]
+            new_lo[ix1], new_hi[ix1] = min_x, min_x + new_size_x
+            new_lo[ix2], new_hi[ix2] = min_y, min_y + new_size_y
+            if bg.fit_brush_to_bounds(brush, new_lo, new_hi):
+                return
+
         brush['pos'][ix1] = min_x + new_size_x / 2
         brush['pos'][ix2] = min_y + new_size_y / 2
         brush['size'][ix1] = new_size_x

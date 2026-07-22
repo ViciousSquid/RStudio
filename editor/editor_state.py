@@ -39,6 +39,7 @@ from engine.brush_geometry import (
 _RENDERER_PRIVATE_KEYS = frozenset({
     '_mat_cache_key', '_mat_cache',      # model matrix cache (renderer_F)
     '_nmat_cache_key', '_nmat_cache',    # normal matrix cache (renderer_F)
+    '_render_mesh', '_render_sig',       # angled-brush GPU mesh cache (renderer_F)
 }) | GEO_RUNTIME_KEYS
 
 # Import lightmap bake state

@@ -166,6 +166,7 @@ class MainWindow(QMainWindow):
         self._brush_clipboard = None  # For Ctrl+C / Ctrl+V brush copy-paste
         self.grid_visible = True
         self.clip_mode = False  # Radiant-style clip/slice tool (toggled with X)
+        self.rotate_mode = False  # Free-rotate tool: drag in a 2D view to spin
         self.preview_timer = QTimer(self)  # OPTIMIZATION: Added parent=self for proper cleanup
         self.preview_timer.timeout.connect(self.update_mover_preview)
         self.preview_data = {} 
@@ -958,10 +959,18 @@ class MainWindow(QMainWindow):
             pos_map = {'x': 0, 'y': 1, 'z': 2}
             ax1_name, ax2_name = axis_map.get(current_view.view_type, ('x', 'z'))
             offset = self.grid_size_spinbox.value()
-            pos_ref = new_obj['pos'] if isinstance(new_obj, dict) else new_obj.pos
-            pos_ref[pos_map[ax1_name]] += offset
-            pos_ref[pos_map[ax2_name]] += offset
-            
+            from engine.brush_geometry import translate_brush, brush_has_geometry
+            if isinstance(new_obj, dict) and brush_has_geometry(new_obj):
+                # Angled brush: shift its plane set, not just 'pos'.
+                delta = [0.0, 0.0, 0.0]
+                delta[pos_map[ax1_name]] += offset
+                delta[pos_map[ax2_name]] += offset
+                translate_brush(new_obj, delta)
+            else:
+                pos_ref = new_obj['pos'] if isinstance(new_obj, dict) else new_obj.pos
+                pos_ref[pos_map[ax1_name]] += offset
+                pos_ref[pos_map[ax2_name]] += offset
+
         self.set_selected_object(new_obj)
         
         # Show toast notification
@@ -2656,11 +2665,16 @@ class MainWindow(QMainWindow):
                     # Give it a unique name
                     base_name = pasted.get('name', 'Brush')
                     pasted['name'] = f"{base_name}_copy"
-                    pasted['pos'] = [
-                        pasted['pos'][0] + offset,
-                        pasted['pos'][1],
-                        pasted['pos'][2] + offset,
-                    ]
+                    from engine.brush_geometry import translate_brush, brush_has_geometry
+                    if brush_has_geometry(pasted):
+                        # Angled brush: move the plane set with the offset.
+                        translate_brush(pasted, [offset, 0.0, offset])
+                    else:
+                        pasted['pos'] = [
+                            pasted['pos'][0] + offset,
+                            pasted['pos'][1],
+                            pasted['pos'][2] + offset,
+                        ]
                     # Clear I/O connections on the copy so wires don't duplicate
                     pasted.pop('_io_connections', None)
                     pasted.pop('io_connections', None)
@@ -2805,6 +2819,8 @@ class MainWindow(QMainWindow):
     def set_clip_mode(self, active):
         """Enable/disable the clip tool and sync the toolbar button + cursors."""
         active = bool(active)
+        if active and self.rotate_mode:
+            self.set_rotate_mode(False)  # the two drag tools are exclusive
         self.clip_mode = active
         # Keep the toolbar button's checked state in sync (e.g. when toggled by
         # the Esc key rather than by clicking the button).
@@ -2820,6 +2836,57 @@ class MainWindow(QMainWindow):
             self.show_toast("Clip tool ON — click two points, Enter to cut  (X to exit)")
         else:
             self.show_toast("Clip tool OFF")
+
+    def toggle_rotate_mode(self, checked):
+        """Toolbar handler: enter or leave the free-rotate tool."""
+        self.set_rotate_mode(bool(checked))
+
+    def set_rotate_mode(self, active):
+        """Enable/disable free-rotate and sync the toolbar button + cursors.
+
+        In this mode, dragging with the left mouse in any 2D view spins the
+        selected brush(es) about that view's axis, snapped to a fixed angle
+        increment while grid snap is on (free/continuous when it is off).
+        """
+        active = bool(active)
+        if active and self.clip_mode:
+            self.set_clip_mode(False)  # the two drag tools are exclusive
+        self.rotate_mode = active
+        btn = getattr(self, 'rotate_btn', None)
+        if btn is not None and btn.isChecked() != active:
+            btn.blockSignals(True)
+            btn.setChecked(active)
+            btn.blockSignals(False)
+        for view in (self.view_top, self.view_side, self.view_front):
+            view.cancel_rotate()
+            view.setCursor(Qt.OpenHandCursor if active else Qt.ArrowCursor)
+        if active:
+            self.show_toast("Rotate tool ON — drag in a 2D view to spin "
+                            "(snap toggles free/stepped, Esc exits)")
+        else:
+            self.show_toast("Rotate tool OFF")
+
+    def apply_rotation_to_selection(self, angle_deg, axis, undoable=True):
+        """Rotate every selected brush by ``angle_deg`` about ``axis`` (each
+        around its own centre).  Returns the number of brushes rotated.
+
+        ``undoable`` pushes a single undo checkpoint; the live drag passes
+        ``False`` for the incremental steps and checkpoints once at the start.
+        """
+        from engine.brush_geometry import rotate_brush as _rotate
+        selected = list(getattr(self.state, 'selected_objects', []) or [])
+        if self.state.selected_object and self.state.selected_object not in selected:
+            selected.append(self.state.selected_object)
+        brushes = [b for b in selected if isinstance(b, dict)]
+        if not brushes:
+            return 0
+        if undoable:
+            self.save_state()
+        count = 0
+        for brush in brushes:
+            if _rotate(brush, angle_deg, axis):
+                count += 1
+        return count
 
     def apply_clip_to_selection(self, normal, offset, keep_positive):
         """Clip every selected brush with the given plane; one coalesced undo.

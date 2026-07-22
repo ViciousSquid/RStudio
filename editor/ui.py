@@ -343,12 +343,27 @@ class Ui_MainWindow(object):
         clone_btn.setToolTip("Clone selected brush (Space)")
         clone_btn.clicked.connect(MainWindow.clone_selected_object)
         
+        # Free-rotate tool — checkable toggle; drag in a 2D view to spin the
+        # selection about that view's axis (grid snap toggles stepped/free).
         rotate_btn = QPushButton()
         rotate_btn.setIcon(QIcon("assets/rotate.png"))
         rotate_btn.setIconSize(QSize(icon_size_val, icon_size_val))
         rotate_btn.setFixedSize(icon_size_val, icon_size_val)
-        rotate_btn.setToolTip("Rotate 90 degrees")
-        rotate_btn.clicked.connect(MainWindow.rotate_selected_brush)
+        rotate_btn.setToolTip("Free rotate — toggle rotate mode, then drag in a "
+                              "2D view to spin the selection\n"
+                              "(grid snap on = stepped angles, off = free)")
+        rotate_btn.setCheckable(True)
+        rotate_btn.setStyleSheet("""
+            QPushButton:checked {
+                background-color: #F08000;
+                border: 1px solid #FF9020;
+            }
+            QPushButton:checked:hover {
+                background-color: #FF9020;
+            }
+        """)
+        rotate_btn.toggled.connect(MainWindow.toggle_rotate_mode)
+        MainWindow.rotate_btn = rotate_btn  # Store reference for state sync
         
         subtract_btn = QPushButton()
         subtract_btn.setIcon(QIcon("assets/subtract.png"))
