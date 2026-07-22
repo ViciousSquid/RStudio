@@ -201,6 +201,12 @@ class Renderer_F(BaseRenderer):
             uniforms._cache['tex_scale'] = loc   # write straight into the cache
             tex_scale_loc = loc
 
+        tex_rot_loc = uniforms.get('tex_rot', -1)
+        if tex_rot_loc == -1:
+            loc = gl.glGetUniformLocation(shader, "tex_rot")
+            uniforms._cache['tex_rot'] = loc
+            tex_rot_loc = loc
+
         normal_mat_loc = uniforms.get('normalMatrix', -1)
         if normal_mat_loc is None:
             normal_mat_loc = -1
@@ -254,12 +260,16 @@ class Renderer_F(BaseRenderer):
                 if normal_mat_loc > 0:
                     nmat = self._compute_normal_matrix(model_matrix, brush)
                     gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(nmat))
+                # Per-face texture rotation (90-degree steps, 0..3).
+                rot = brush.get('uv_rotation', {}).get(face_key, 0) & 3
+                if tex_rot_loc != -1:
+                    gl.glUniform1i(tex_rot_loc, rot)
                 if tex_scale_loc != -1:
                     size = brush.get('size', [64, 64, 64])
                     # --- PRIORITY 1: Use pre-computed uv_scale from editor ---
                     uv_scale = brush.get('uv_scale', {}).get(face_key)
                     if uv_scale is not None:
-                        gl.glUniform2f(tex_scale_loc, uv_scale[0], uv_scale[1])
+                        scale_x, scale_y = uv_scale[0], uv_scale[1]
                     # --- PRIORITY 2: Fallback to texture_tiling with actual dimensions ---
                     elif brush.get('texture_tiling', False):
                         tex_name = brush.get('textures', {}).get(face_key, 'default.png')
@@ -267,7 +277,7 @@ class Renderer_F(BaseRenderer):
                         tex_w, tex_h = getattr(self, '_texture_dimensions', {}).get(tex_cache_name, (128, 128))
                         tex_w = max(tex_w, 1)
                         tex_h = max(tex_h, 1)
-                        
+
                         fi = face_idx
                         if fi == 0 or fi == 1:   # south, north
                             scale_x, scale_y = size[0] / tex_w, size[1] / tex_h
@@ -275,14 +285,20 @@ class Renderer_F(BaseRenderer):
                             scale_x, scale_y = size[2] / tex_w, size[1] / tex_h
                         else:                      # down, top
                             scale_x, scale_y = size[0] / tex_w, size[2] / tex_h
-                        gl.glUniform2f(tex_scale_loc, scale_x, scale_y)
                     # --- PRIORITY 3: FIT mode (stretch 0→1) ---
                     else:
-                        gl.glUniform2f(tex_scale_loc, 1.0, 1.0)
+                        scale_x, scale_y = 1.0, 1.0
+                    # A 90/270 rotation swaps the face's U and V axes, so swap
+                    # the tiling factors too to keep texel density consistent.
+                    if rot & 1:
+                        scale_x, scale_y = scale_y, scale_x
+                    gl.glUniform2f(tex_scale_loc, scale_x, scale_y)
                 gl.glDrawArrays(gl.GL_TRIANGLES, face_idx * 6, 6)
                 self.render_stats.draw_calls += 1
 
         # ---- Angled brushes: one draw per convex face --------------------
+        if tex_rot_loc != -1:
+            gl.glUniform1i(tex_rot_loc, 0)  # angled faces don't rotate; reset
         for brush in geo_brushes:
             mesh = self._get_geo_mesh(brush)
             if mesh is None:

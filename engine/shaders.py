@@ -146,12 +146,19 @@ uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
 uniform vec2 tex_scale;
+uniform int tex_rot;      // per-face texture rotation in 90-degree steps (0..3)
 uniform mat3 normalMatrix;
 
 void main() {
     FragPos = vec3(model * vec4(aPos, 1.0));
     Normal = normalize(normalMatrix * aNormal);
-    TexCoords = aTexCoords * tex_scale;
+    // Rotate the base 0..1 face UVs about their centre in exact 90-degree
+    // steps, then apply tiling scale. Integer steps keep it artefact-free.
+    vec2 uv = aTexCoords - vec2(0.5);
+    if (tex_rot == 1)      uv = vec2( uv.y, -uv.x);   // 90 CW
+    else if (tex_rot == 2) uv = vec2(-uv.x, -uv.y);   // 180
+    else if (tex_rot == 3) uv = vec2(-uv.y,  uv.x);   // 270 CW
+    TexCoords = (uv + vec2(0.5)) * tex_scale;
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }""",
     'textured.frag': """#version 330 core
@@ -895,10 +902,17 @@ uniform mat4 view;
 uniform mat4 projection;
 uniform mat3 normalMatrix;
 uniform vec2 tex_scale;
+uniform int tex_rot;      // per-face texture rotation in 90-degree steps (0..3)
 void main() {
     FragPos = vec3(model * vec4(aPos, 1.0));
     Normal = normalMatrix * aNormal;
-    TexCoords = aTexCoords * tex_scale;
+    // Rotate the base 0..1 face UVs about their centre in exact 90-degree
+    // steps, then apply tiling scale. Integer steps keep it artefact-free.
+    vec2 uv = aTexCoords - vec2(0.5);
+    if (tex_rot == 1)      uv = vec2( uv.y, -uv.x);   // 90 CW
+    else if (tex_rot == 2) uv = vec2(-uv.x, -uv.y);   // 180
+    else if (tex_rot == 3) uv = vec2(-uv.y,  uv.x);   // 270 CW
+    TexCoords = (uv + vec2(0.5)) * tex_scale;
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }"""
 
