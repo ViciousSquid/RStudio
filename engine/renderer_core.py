@@ -468,7 +468,7 @@ class BaseRenderer:
         self.shaders['textured'] = tex_shader
         self.uniforms['textured'] = UniformCache(tex_shader)
         self._preload_lit_uniforms('textured')
-        self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale', 'tex_rot', 'normalMatrix'])
+        self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale', 'tex_angle', 'tex_shift', 'normalMatrix'])
 
     def _compile_standard_shaders(self):
         lit_shader = self.shader_loader.compile_shader_program('lit.vert', 'lit.frag')
@@ -481,7 +481,7 @@ class BaseRenderer:
         self.shaders['textured'] = tex_shader
         self.uniforms['textured'] = UniformCache(tex_shader)
         self._preload_lit_uniforms('textured')
-        self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale', 'tex_rot', 'normalMatrix'])
+        self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale', 'tex_angle', 'tex_shift', 'normalMatrix'])
 
     def _preload_lit_uniforms(self, shader_name):
         uniforms = self.uniforms[shader_name]
@@ -786,9 +786,11 @@ class BaseRenderer:
                                 gl.glActiveTexture(gl.GL_TEXTURE0)
                                 gl.glUniform1i(u['texture_diffuse'], 0)
                                 # Models use their own UVs — clear any brush
-                                # face rotation left in the shared uniform.
-                                if u.get('tex_rot', -1) != -1:
-                                    gl.glUniform1i(u['tex_rot'], 0)
+                                # face transform left in the shared uniforms.
+                                if u.get('tex_angle', -1) != -1:
+                                    gl.glUniform1f(u['tex_angle'], 0.0)
+                                if u.get('tex_shift', -1) != -1:
+                                    gl.glUniform2f(u['tex_shift'], 0.0, 0.0)
                             # Resolve texture path relative to MTL directory first
                             resolved_path = self._resolve_model_texture_path(material, use_texture)
                             if resolved_path and os.path.exists(resolved_path):
@@ -856,9 +858,11 @@ class BaseRenderer:
                             gl.glActiveTexture(gl.GL_TEXTURE0)
                             gl.glUniform1i(u['texture_diffuse'], 0)
                             # Models use their own UVs — clear any brush face
-                            # rotation left in the shared uniform.
-                            if u.get('tex_rot', -1) != -1:
-                                gl.glUniform1i(u['tex_rot'], 0)
+                            # transform left in the shared uniforms.
+                            if u.get('tex_angle', -1) != -1:
+                                gl.glUniform1f(u['tex_angle'], 0.0)
+                            if u.get('tex_shift', -1) != -1:
+                                gl.glUniform2f(u['tex_shift'], 0.0, 0.0)
                         resolved_path = self._resolve_model_texture_path({'texture': tex_name}, tex_name)
                         if resolved_path and os.path.exists(resolved_path) and not resolved_path.startswith('assets'):
                             # Load from resolved absolute path

@@ -6,6 +6,7 @@ import glm
 import OpenGL.GL as gl
 import numpy as np
 from collections import defaultdict
+import math
 import os
 
 from .renderer_core import BaseRenderer, normalize_color
@@ -201,11 +202,17 @@ class Renderer_F(BaseRenderer):
             uniforms._cache['tex_scale'] = loc   # write straight into the cache
             tex_scale_loc = loc
 
-        tex_rot_loc = uniforms.get('tex_rot', -1)
-        if tex_rot_loc == -1:
-            loc = gl.glGetUniformLocation(shader, "tex_rot")
-            uniforms._cache['tex_rot'] = loc
-            tex_rot_loc = loc
+        tex_angle_loc = uniforms.get('tex_angle', -1)
+        if tex_angle_loc == -1:
+            loc = gl.glGetUniformLocation(shader, "tex_angle")
+            uniforms._cache['tex_angle'] = loc
+            tex_angle_loc = loc
+
+        tex_shift_loc = uniforms.get('tex_shift', -1)
+        if tex_shift_loc == -1:
+            loc = gl.glGetUniformLocation(shader, "tex_shift")
+            uniforms._cache['tex_shift'] = loc
+            tex_shift_loc = loc
 
         normal_mat_loc = uniforms.get('normalMatrix', -1)
         if normal_mat_loc is None:
@@ -260,10 +267,13 @@ class Renderer_F(BaseRenderer):
                 if normal_mat_loc > 0:
                     nmat = self._compute_normal_matrix(model_matrix, brush)
                     gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(nmat))
-                # Per-face texture rotation (90-degree steps, 0..3).
-                rot = brush.get('uv_rotation', {}).get(face_key, 0) & 3
-                if tex_rot_loc != -1:
-                    gl.glUniform1i(tex_rot_loc, rot)
+                # Per-face surface-inspector transform: free rotation + shift.
+                if tex_angle_loc != -1:
+                    angle = brush.get('uv_angle', {}).get(face_key, 0.0)
+                    gl.glUniform1f(tex_angle_loc, math.radians(angle))
+                if tex_shift_loc != -1:
+                    shift = brush.get('uv_shift', {}).get(face_key, (0.0, 0.0))
+                    gl.glUniform2f(tex_shift_loc, shift[0], shift[1])
                 if tex_scale_loc != -1:
                     size = brush.get('size', [64, 64, 64])
                     # --- PRIORITY 1: Use pre-computed uv_scale from editor ---
@@ -288,17 +298,15 @@ class Renderer_F(BaseRenderer):
                     # --- PRIORITY 3: FIT mode (stretch 0→1) ---
                     else:
                         scale_x, scale_y = 1.0, 1.0
-                    # A 90/270 rotation swaps the face's U and V axes, so swap
-                    # the tiling factors too to keep texel density consistent.
-                    if rot & 1:
-                        scale_x, scale_y = scale_y, scale_x
                     gl.glUniform2f(tex_scale_loc, scale_x, scale_y)
                 gl.glDrawArrays(gl.GL_TRIANGLES, face_idx * 6, 6)
                 self.render_stats.draw_calls += 1
 
         # ---- Angled brushes: one draw per convex face --------------------
-        if tex_rot_loc != -1:
-            gl.glUniform1i(tex_rot_loc, 0)  # angled faces don't rotate; reset
+        if tex_angle_loc != -1:
+            gl.glUniform1f(tex_angle_loc, 0.0)  # angled faces use raw UVs; reset
+        if tex_shift_loc != -1:
+            gl.glUniform2f(tex_shift_loc, 0.0, 0.0)
         for brush in geo_brushes:
             mesh = self._get_geo_mesh(brush)
             if mesh is None:

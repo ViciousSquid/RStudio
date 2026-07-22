@@ -1645,7 +1645,7 @@ class LogicThread(threading.Thread):
                     key_name = found_door_brush.get('door_key_name', '')
                     
                     if is_locked:
-                        self.current_hud_message = "This door is locked remotely"
+                        self.current_hud_message = "Locked"
                         if use_key_pressed and self.io_manager:
                             self.io_manager.fire_output(found_door_brush, 'OnLockedUse')
                         door_consumed_use = use_key_pressed
@@ -1653,14 +1653,14 @@ class LogicThread(threading.Thread):
                         has_key = key_name in self.collected_keys
                         pretty_key_name = key_name.replace('_', ' ').title() if key_name else "Key"
                         if has_key:
-                            self.current_hud_message = f"Press E to unlock ({pretty_key_name})"
+                            self.current_hud_message = f"[E] Unlock ({pretty_key_name})"
                             if use_key_pressed:
                                 self._trigger_door_open(found_door_idx, found_door_brush)
                                 door_consumed_use = True
                         else:
-                            self.current_hud_message = f"You need the {pretty_key_name}"
+                            self.current_hud_message = f"NEED: {pretty_key_name}"
                     else:
-                        self.current_hud_message = "Press E to open"
+                        self.current_hud_message = "[E] Open"
                         if use_key_pressed:
                             self._trigger_door_open(found_door_idx, found_door_brush)
                             door_consumed_use = True

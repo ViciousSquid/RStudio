@@ -145,20 +145,21 @@ out vec2 TexCoords;
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
-uniform vec2 tex_scale;
-uniform int tex_rot;      // per-face texture rotation in 90-degree steps (0..3)
+uniform vec2 tex_scale;   // per-face stretch / tiling factor
+uniform float tex_angle;  // per-face free rotation in radians
+uniform vec2 tex_shift;   // per-face UV offset (in texture repeats)
 uniform mat3 normalMatrix;
 
 void main() {
     FragPos = vec3(model * vec4(aPos, 1.0));
     Normal = normalize(normalMatrix * aNormal);
-    // Rotate the base 0..1 face UVs about their centre in exact 90-degree
-    // steps, then apply tiling scale. Integer steps keep it artefact-free.
+    // Surface-inspector transform: rotate the base 0..1 face UVs about their
+    // centre, then apply stretch and shift (Radiant-style free controls).
     vec2 uv = aTexCoords - vec2(0.5);
-    if (tex_rot == 1)      uv = vec2( uv.y, -uv.x);   // 90 CW
-    else if (tex_rot == 2) uv = vec2(-uv.x, -uv.y);   // 180
-    else if (tex_rot == 3) uv = vec2(-uv.y,  uv.x);   // 270 CW
-    TexCoords = (uv + vec2(0.5)) * tex_scale;
+    float s = sin(tex_angle);
+    float c = cos(tex_angle);
+    uv = vec2(uv.x * c - uv.y * s, uv.x * s + uv.y * c);
+    TexCoords = (uv + vec2(0.5)) * tex_scale + tex_shift;
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }""",
     'textured.frag': """#version 330 core
@@ -901,18 +902,19 @@ uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
 uniform mat3 normalMatrix;
-uniform vec2 tex_scale;
-uniform int tex_rot;      // per-face texture rotation in 90-degree steps (0..3)
+uniform vec2 tex_scale;   // per-face stretch / tiling factor
+uniform float tex_angle;  // per-face free rotation in radians
+uniform vec2 tex_shift;   // per-face UV offset (in texture repeats)
 void main() {
     FragPos = vec3(model * vec4(aPos, 1.0));
     Normal = normalMatrix * aNormal;
-    // Rotate the base 0..1 face UVs about their centre in exact 90-degree
-    // steps, then apply tiling scale. Integer steps keep it artefact-free.
+    // Surface-inspector transform: rotate the base 0..1 face UVs about their
+    // centre, then apply stretch and shift (Radiant-style free controls).
     vec2 uv = aTexCoords - vec2(0.5);
-    if (tex_rot == 1)      uv = vec2( uv.y, -uv.x);   // 90 CW
-    else if (tex_rot == 2) uv = vec2(-uv.x, -uv.y);   // 180
-    else if (tex_rot == 3) uv = vec2(-uv.y,  uv.x);   // 270 CW
-    TexCoords = (uv + vec2(0.5)) * tex_scale;
+    float s = sin(tex_angle);
+    float c = cos(tex_angle);
+    uv = vec2(uv.x * c - uv.y * s, uv.x * s + uv.y * c);
+    TexCoords = (uv + vec2(0.5)) * tex_scale + tex_shift;
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }"""
 
