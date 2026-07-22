@@ -12,7 +12,7 @@
 **Key Features**
 - Edit and play in the same runtime
 - Hit "play" instantly: no import, compile or bake step
-- Generate fully playable procedural maps with one click
+- Generate fully playable procedural maps with two clicks
 - Entity I/O logic system inspired by Source engine
 - Classic brush-based CSG editing
 - Non-Euclidean portal connections between any two points in a level
