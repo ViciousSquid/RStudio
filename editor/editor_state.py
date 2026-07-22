@@ -23,13 +23,23 @@ try:
 except ImportError:
     IO_AVAILABLE = False
 
-# Keys written to brush dicts by the renderer at runtime.
-# They hold GLM matrix objects (not JSON-serialisable) and must be stripped
+# Convex-brush geometry helpers (angled brushes & clipping).  NumPy-only, safe
+# to import head-less / off the GL thread.
+from engine.brush_geometry import (
+    GEO_RUNTIME_KEYS, clip_brush as _geo_clip_brush,
+    rotate_brush as _geo_rotate_brush, brush_has_geometry as _geo_has_geometry,
+    is_axis_aligned_box as _geo_is_box,
+)
+
+# Keys written to brush dicts by the renderer/geometry layer at runtime.
+# They hold GLM/NumPy objects (not JSON-serialisable) and must be stripped
 # before any serialisation path: undo stack, file save, or deepcopy-for-JSON.
+# GEO_RUNTIME_KEYS covers the convex-geometry cache and mesh-collision data
+# attached to angled brushes during play.
 _RENDERER_PRIVATE_KEYS = frozenset({
     '_mat_cache_key', '_mat_cache',      # model matrix cache (renderer_F)
     '_nmat_cache_key', '_nmat_cache',    # normal matrix cache (renderer_F)
-})
+}) | GEO_RUNTIME_KEYS
 
 # Import lightmap bake state
 try:
@@ -89,6 +99,60 @@ class EditorState:
 
     def count_static_brushes(self) -> int:
         return sum(1 for b in self.brushes if b.get('lightmap_static', False))
+
+    # =========================================================================
+    # ANGLED BRUSHES  (convex geometry / clipping)
+    # =========================================================================
+
+    def brush_is_angled(self, brush: dict) -> bool:
+        """True if a brush carries convex geometry (i.e. has been clipped/angled)."""
+        return _geo_has_geometry(brush)
+
+    def clip_brush(self, brush: dict, normal, offset, keep_positive=False,
+                   texture=None, uv_scale=None) -> bool:
+        """Cut ``brush`` with a plane, turning it into an angled brush.
+
+        ``normal``/``offset`` define the plane ``dot(normal, p) == offset``; the
+        kept half is the inside (``<= offset``) side unless ``keep_positive``.
+        Pushes an undo state and returns ``True`` on success (``False`` and no
+        change if the cut would empty the brush).
+        """
+        self.save_state()
+        if _geo_clip_brush(brush, normal, offset, keep_positive=keep_positive,
+                           texture=texture, uv_scale=uv_scale):
+            self.mark_lighting_dirty()
+            return True
+        # Nothing changed -> discard the undo snapshot we just pushed.
+        if self.undo_stack:
+            self.undo_stack.pop()
+        return False
+
+    def rotate_brush(self, brush: dict, angle_deg, axis, pivot=None) -> bool:
+        """Rotate ``brush`` about ``pivot`` (default: its centre), making it angled."""
+        self.save_state()
+        if _geo_rotate_brush(brush, angle_deg, axis, pivot=pivot):
+            self.mark_lighting_dirty()
+            return True
+        if self.undo_stack:
+            self.undo_stack.pop()
+        return False
+
+    def reset_brush_to_box(self, brush: dict) -> None:
+        """Drop convex geometry, returning the brush to its axis-aligned box form."""
+        if not _geo_has_geometry(brush):
+            return
+        self.save_state()
+        brush.pop('geometry', None)
+        brush.pop('_geo_cache', None)
+        brush.pop('_geo_cache_sig', None)
+        self.mark_lighting_dirty()
+
+    def simplify_brush_geometry(self, brush: dict) -> None:
+        """If a geometry brush is really an axis-aligned box, drop to pos/size."""
+        if _geo_has_geometry(brush) and _geo_is_box(brush):
+            brush.pop('geometry', None)
+            brush.pop('_geo_cache', None)
+            brush.pop('_geo_cache_sig', None)
 
     # =========================================================================
     # SCENE MANAGEMENT

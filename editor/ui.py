@@ -364,12 +364,42 @@ class Ui_MainWindow(object):
         tint_btn.setToolTip("Tint selected brush colour")
         tint_btn.clicked.connect(MainWindow.tint_selected_brush)
 
+        # Clip / slice tool — checkable toggle, Radiant-style X shortcut.
+        clip_btn = QPushButton("Clip")
+        clip_btn.setFixedHeight(icon_size_val)
+        clip_btn.setMinimumWidth(icon_size_val + 20)
+        clip_btn.setToolTip("Clip / slice brush — toggle clip mode (X)\n"
+                            "Click two points in a 2D view, then Enter to cut")
+        clip_btn.setCheckable(True)
+        clip_btn.setShortcut("X")
+        clip_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #555;
+                border: 1px solid #666;
+                color: white;
+                font-weight: bold;
+            }
+            QPushButton:checked {
+                background-color: #F08000;
+                border: 1px solid #FF9020;
+            }
+            QPushButton:hover {
+                background-color: #6a6a6a;
+            }
+            QPushButton:checked:hover {
+                background-color: #FF9020;
+            }
+        """)
+        clip_btn.toggled.connect(MainWindow.toggle_clip_mode)
+        MainWindow.clip_btn = clip_btn  # Store reference for state sync
+
         top_toolbar.addWidget(room_btn)
         top_toolbar.addWidget(hollow_btn)
         top_toolbar.addWidget(clone_btn)
         top_toolbar.addWidget(rotate_btn)
         top_toolbar.addWidget(subtract_btn)
         top_toolbar.addWidget(tint_btn)
+        top_toolbar.addWidget(clip_btn)
 
         terrain_menu_btn = QPushButton()
         terrain_menu_btn.setIcon(QIcon("assets/terrain.png"))

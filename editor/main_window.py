@@ -165,6 +165,7 @@ class MainWindow(QMainWindow):
         self.keys_pressed = set()
         self._brush_clipboard = None  # For Ctrl+C / Ctrl+V brush copy-paste
         self.grid_visible = True
+        self.clip_mode = False  # Radiant-style clip/slice tool (toggled with X)
         self.preview_timer = QTimer(self)  # OPTIMIZATION: Added parent=self for proper cleanup
         self.preview_timer.timeout.connect(self.update_mover_preview)
         self.preview_data = {} 
@@ -2792,6 +2793,65 @@ class MainWindow(QMainWindow):
         if hasattr(self.view_3d, 'grid_visible'):
             self.view_3d.grid_visible = visible
             self.view_3d.update()
+
+    # ======================================================================
+    # Clip / slice tool  (Radiant-style, toggled with X)
+    # ======================================================================
+
+    def toggle_clip_mode(self, checked):
+        """Toolbar/shortcut handler: enter or leave clip mode."""
+        self.set_clip_mode(bool(checked))
+
+    def set_clip_mode(self, active):
+        """Enable/disable the clip tool and sync the toolbar button + cursors."""
+        active = bool(active)
+        self.clip_mode = active
+        # Keep the toolbar button's checked state in sync (e.g. when toggled by
+        # the Esc key rather than by clicking the button).
+        btn = getattr(self, 'clip_btn', None)
+        if btn is not None and btn.isChecked() != active:
+            btn.blockSignals(True)
+            btn.setChecked(active)
+            btn.blockSignals(False)
+        for view in (self.view_top, self.view_side, self.view_front):
+            view.clear_clip()
+            view.setCursor(Qt.CrossCursor if active else Qt.ArrowCursor)
+        if active:
+            self.show_toast("Clip tool ON — click two points, Enter to cut  (X to exit)")
+        else:
+            self.show_toast("Clip tool OFF")
+
+    def apply_clip_to_selection(self, normal, offset, keep_positive):
+        """Clip every selected brush with the given plane; one coalesced undo.
+
+        Returns the number of brushes actually cut.  Things and non-brush
+        selections are ignored.
+        """
+        selected = list(getattr(self.state, 'selected_objects', []) or [])
+        if self.state.selected_object and self.state.selected_object not in selected:
+            selected.append(self.state.selected_object)
+        brushes = [b for b in selected if isinstance(b, dict)]
+        if not brushes:
+            return 0
+
+        from engine.brush_geometry import clip_brush as _clip
+        self.save_state()  # single undo checkpoint for the whole operation
+        count = 0
+        for brush in brushes:
+            # Clip in place without an extra per-brush undo snapshot.
+            if _clip(brush, normal, offset, keep_positive=keep_positive):
+                count += 1
+        if count:
+            self.state.mark_lighting_dirty()
+            self.unsaved_changes = True
+            self.update_views()
+            if self.state.selected_object in brushes:
+                self.property_editor.set_object(self.state.selected_object)
+        else:
+            # Nothing changed — drop the checkpoint we just pushed.
+            if self.state.undo_stack:
+                self.state.undo_stack.pop()
+        return count
 
     def save_level_as(self):
         filePath, _ = QFileDialog.getSaveFileName(self, "Save Level As", "maps", "JSON Files (*.json)")

@@ -9,6 +9,7 @@ from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Mo
                           LogicGate, LogicRelay, LogicTimer, LevelChanger, PathNode,
                           LogicCamera, LogicSpawner, Portal, LogicKeyValueStore)
 from editor.scene_hierarchy import SceneHierarchy
+from engine import brush_geometry as bg  # convex/angled-brush geometry
 # I/O System imports for drawing connections
 try:
     from editor.io_system import get_connections
@@ -91,6 +92,15 @@ class View2D(QWidget):
         self.connection_snap_target = None  # Target object we're snapping to
         self.connection_snap_threshold = 30  # Pixels to snap within
 
+        # --- Clip / slice tool state (Radiant-style, toggled globally with X) ---
+        # clip_points holds up to two world-space (axis1, axis2) points defining
+        # the cut line in THIS view; the plane is that line extruded along the
+        # view's depth axis.  clip_hover tracks the cursor so the kept side can
+        # be previewed live and frozen on Enter.
+        self.clip_points = []          # list[QPointF] in this view's 2D world coords
+        self.clip_hover = None         # QPointF current cursor in 2D world coords
+        self.clip_keep_positive = False  # which half-space to keep
+
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.ClickFocus)
         self.setContextMenuPolicy(Qt.NoContextMenu)
@@ -118,7 +128,155 @@ class View2D(QWidget):
         self.is_connecting = False
         self.connection_source = None
         self.connection_snap_target = None
+        self.clip_points = []
+        self.clip_hover = None
         self.update()
+
+    # ======================================================================
+    # Clip / slice tool
+    # ======================================================================
+
+    def _clip_active(self):
+        """True when the global clip mode is on (toggled by the X button)."""
+        return bool(getattr(self.main_window, 'clip_mode', False))
+
+    def _axis_indices(self):
+        """(axis1_idx, axis2_idx, depth_idx) for this ortho view."""
+        ax_map = {'x': 0, 'y': 1, 'z': 2}
+        ax1, ax2 = self.get_axes()
+        if not ax1 or not ax2:
+            return None
+        a1, a2 = ax_map[ax1], ax_map[ax2]
+        depth = ({0, 1, 2} - {a1, a2}).pop()
+        return a1, a2, depth
+
+    def clear_clip(self):
+        """Discard the in-progress cut (points/preview) but stay in clip mode."""
+        self.clip_points = []
+        self.clip_hover = None
+        self.update()
+
+    def _clip_plane(self):
+        """Build the 3D cut plane from the two placed points.
+
+        Returns ``(normal_list, offset, keep_positive)`` where a point ``p`` is
+        kept when ``dot(normal, p) <= offset`` (unless keep_positive), matching
+        ``brush_geometry``'s convention.  Returns ``None`` until two points exist.
+        """
+        if len(self.clip_points) < 2:
+            return None
+        idx = self._axis_indices()
+        if idx is None:
+            return None
+        a1, a2, depth = idx
+        A, B = self.clip_points[0], self.clip_points[1]
+        dx, dy = B.x() - A.x(), B.y() - A.y()
+        if abs(dx) < 1e-6 and abs(dy) < 1e-6:
+            return None
+        # Normal perpendicular to the cut line, lying in the view plane.
+        nx, ny = dy, -dx
+        length = math.hypot(nx, ny)
+        nx, ny = nx / length, ny / length
+        normal = [0.0, 0.0, 0.0]
+        normal[a1] = nx
+        normal[a2] = ny
+        # Offset for the (already unit) normal: dot(n, point_on_plane).
+        offset = nx * A.x() + ny * A.y()
+        # Keep the side the cursor is on.
+        keep_positive = self.clip_keep_positive
+        return normal, offset, keep_positive
+
+    def _update_clip_keep_side(self):
+        """Set keep_positive from which side of the cut line the cursor is on."""
+        if len(self.clip_points) < 2 or self.clip_hover is None:
+            return
+        A, B = self.clip_points[0], self.clip_points[1]
+        dx, dy = B.x() - A.x(), B.y() - A.y()
+        nx, ny = dy, -dx
+        side = nx * (self.clip_hover.x() - A.x()) + ny * (self.clip_hover.y() - A.y())
+        # Cursor on the +n side -> keep the +n (positive) half.
+        self.clip_keep_positive = side > 0
+
+    def apply_clip(self):
+        """Perform the cut on the current selection, keeping the previewed side."""
+        plane = self._clip_plane()
+        if plane is None:
+            self.main_window.show_toast("Clip: place two points first", is_error=True)
+            return
+        normal, offset, keep_positive = plane
+        n = self.main_window.apply_clip_to_selection(normal, offset, keep_positive)
+        if n:
+            self.main_window.show_toast(f"Clipped {n} brush(es)")
+        else:
+            self.main_window.show_toast("Clip: select a brush to slice", is_error=True)
+        self.clear_clip()
+
+    def draw_clip_overlay(self, painter):
+        """Draw the clip-tool banner, cut line, points and kept-side arrow."""
+        painter.save()
+
+        # Banner / hint in the top-left corner.
+        painter.setPen(QColor(255, 200, 0))
+        font = painter.font()
+        font.setPointSize(10)
+        font.setBold(True)
+        painter.setFont(font)
+        if len(self.clip_points) == 0:
+            hint = "CLIP MODE — click two points to set the cut  (X to exit)"
+        elif len(self.clip_points) == 1:
+            hint = "CLIP MODE — click the second point"
+        else:
+            hint = "CLIP MODE — move to pick the side to KEEP, Enter to cut  (Esc cancels)"
+        painter.drawText(10, 20, hint)
+
+        cut_pen = QPen(QColor(255, 210, 0), 1, Qt.DashLine)
+        pt_pen = QPen(QColor(255, 255, 255), 2)
+
+        # First point placed: rubber-band to the cursor.
+        if len(self.clip_points) == 1:
+            p0 = self.world_to_screen(self.clip_points[0])
+            painter.setPen(cut_pen)
+            if self.clip_hover is not None:
+                painter.drawLine(p0, self.world_to_screen(self.clip_hover))
+            painter.setPen(pt_pen)
+            painter.drawEllipse(p0, 4, 4)
+
+        # Both points placed: full cut line + kept-side arrow.
+        elif len(self.clip_points) >= 2:
+            A, B = self.clip_points[0], self.clip_points[1]
+            pA, pB = self.world_to_screen(A), self.world_to_screen(B)
+            # Extend the line across the whole widget.
+            dx, dy = pB.x() - pA.x(), pB.y() - pA.y()
+            length = math.hypot(dx, dy) or 1.0
+            ux, uy = dx / length, dy / length
+            far = float(self.width() + self.height())
+            painter.setPen(cut_pen)
+            painter.drawLine(QPointF(pA.x() - ux * far, pA.y() - uy * far),
+                             QPointF(pB.x() + ux * far, pB.y() + uy * far))
+            painter.setPen(pt_pen)
+            painter.drawEllipse(pA, 4, 4)
+            painter.drawEllipse(pB, 4, 4)
+
+            # Kept-side arrow: offset the midpoint in world space toward the kept
+            # half, then map to screen so the view's axis flips are handled.
+            mid = QPointF((A.x() + B.x()) * 0.5, (A.y() + B.y()) * 0.5)
+            # Perpendicular in world coords (kept-side nudge direction):
+            wdx, wdy = B.x() - A.x(), B.y() - A.y()
+            wnx, wny = wdy, -wdx
+            wlen = math.hypot(wnx, wny) or 1.0
+            wnx, wny = wnx / wlen, wny / wlen
+            sign = 1.0 if self.clip_keep_positive else -1.0
+            keep_world = QPointF(mid.x() + wnx * sign * 32.0 / self.zoom_factor,
+                                 mid.y() + wny * sign * 32.0 / self.zoom_factor)
+            s_mid = self.world_to_screen(mid)
+            s_keep = self.world_to_screen(keep_world)
+            painter.setPen(QPen(QColor(60, 220, 90), 2))
+            painter.drawLine(s_mid, s_keep)
+            painter.drawEllipse(s_keep, 5, 5)
+            painter.setPen(QColor(60, 220, 90))
+            painter.drawText(s_keep + QPointF(8, 4), "keep")
+
+        painter.restore()
 
     def _store_previous_tab_index(self):
         """Store the current tab index before switching to Properties."""
@@ -164,6 +322,18 @@ class View2D(QWidget):
         self.update()
 
     def keyPressEvent(self, event):
+        # --- Clip / slice tool keys (only while clip mode is active) ---
+        if self._clip_active():
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                self.apply_clip()
+                return
+            if event.key() == Qt.Key_Escape:
+                if self.clip_points:
+                    self.clear_clip()               # cancel the pending cut
+                else:
+                    self.main_window.set_clip_mode(False)  # exit clip mode
+                return
+
         # F1 Synchronization ---
         if event.key() == Qt.Key_F1:
             # Toggle the global flag on the editor state
@@ -461,6 +631,8 @@ class View2D(QWidget):
         self.draw_brushes(painter, visible_bounds)
         self.draw_things(painter, visible_bounds)
         self.draw_camera(painter)
+        if self._clip_active():
+            self.draw_clip_overlay(painter)
         
         # --- REVISED: Logic/Trigger Connections ---
         # Only draw if the global toggle is ON (F1)
@@ -863,7 +1035,20 @@ class View2D(QWidget):
             p1 = self.world_to_screen(w_pos)
             p2 = self.world_to_screen(w_pos + w_size)
             screen_rect = QRectF(p1, p2).normalized()
-            painter.drawRect(screen_rect)
+
+            # Angled (clipped) brushes draw their true convex outline; plain box
+            # brushes draw the fast bounding rectangle.  screen_rect is still
+            # computed above for labels/handles/colour tags.
+            hull = None
+            if bg.brush_has_geometry(brush):
+                convex = bg.get_convex(brush)
+                if convex is not None and convex.is_valid:
+                    hull = convex.silhouette(axis1_idx, axis2_idx)
+            if hull:
+                poly = QPolygonF([self.world_to_screen(QPointF(a, b)) for a, b in hull])
+                painter.drawPolygon(poly)
+            else:
+                painter.drawRect(screen_rect)
 
                         # Build combined type label for trigger/mover/door
             type_labels = []
@@ -2105,6 +2290,17 @@ class View2D(QWidget):
             return
 
         elif event.button() == Qt.LeftButton:
+            # --- Clip / slice tool: left clicks place the two cut points ---
+            if self._clip_active():
+                snapped = self.snap_to_grid(world_pos)
+                if len(self.clip_points) >= 2:
+                    self.clip_points = []   # start a fresh cut
+                self.clip_points.append(snapped)
+                self.clip_hover = snapped
+                self._update_clip_keep_side()
+                self.update()
+                return
+
             # If we're in connection mode (started from property editor), complete on click
             if self.is_connecting:
                 # Complete the connection
@@ -2217,7 +2413,15 @@ class View2D(QWidget):
     def mouseMoveEvent(self, event):
         world_pos = self.screen_to_world(event.pos())
         middle_click_pan_enabled = self.main_window.config.getboolean('Controls', 'MiddleClickDrag', fallback=False)
-        
+
+        # Clip tool: track the cursor so the preview line and kept side follow it.
+        if self._clip_active():
+            self.clip_hover = world_pos
+            self._update_clip_keep_side()
+            if self.clip_points:
+                self.update()
+            # fall through so panning (right/middle drag) still works below
+
         # Handle connection mode first - works with or without button pressed
         if self.is_connecting:
             # Update connection drag line endpoint with snap detection
