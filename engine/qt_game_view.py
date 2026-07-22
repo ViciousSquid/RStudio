@@ -1911,6 +1911,9 @@ class QtGameView(QOpenGLWidget):
             if self.hovered_face_info:
                 brush, face = self.hovered_face_info
                 self.editor.apply_texture_to_specific_face(brush, face)
+                # Open the Radiant-style Surface Inspector for the clicked face.
+                if hasattr(self.editor, 'show_surface_inspector'):
+                    self.editor.show_surface_inspector(brush, face)
             return
         if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ControlModifier and not self.play_mode:
             face = self.get_face_at(event.pos())

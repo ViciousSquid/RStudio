@@ -316,7 +316,12 @@ class Ui_MainWindow(object):
     def create_toolbars(self, MainWindow):
         top_toolbar = QToolBar("Main Tools")
         top_toolbar.setObjectName("MainToolbar")
-        MainWindow.addToolBar(top_toolbar)
+        # Dockable across the top under the menus (horizontal) or on the far
+        # right (vertical). Qt flips the orientation automatically as it's
+        # dragged between the two areas. Default to the top under the menus.
+        top_toolbar.setMovable(True)
+        top_toolbar.setAllowedAreas(Qt.TopToolBarArea | Qt.RightToolBarArea)
+        MainWindow.addToolBar(Qt.TopToolBarArea, top_toolbar)
 
         # Determine icon size based on config setting
         big_toolbar_buttons = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
@@ -343,12 +348,27 @@ class Ui_MainWindow(object):
         clone_btn.setToolTip("Clone selected brush (Space)")
         clone_btn.clicked.connect(MainWindow.clone_selected_object)
         
+        # Free-rotate tool — checkable toggle; drag in a 2D view to spin the
+        # selection about that view's axis (grid snap toggles stepped/free).
         rotate_btn = QPushButton()
         rotate_btn.setIcon(QIcon("assets/rotate.png"))
         rotate_btn.setIconSize(QSize(icon_size_val, icon_size_val))
         rotate_btn.setFixedSize(icon_size_val, icon_size_val)
-        rotate_btn.setToolTip("Rotate 90 degrees")
-        rotate_btn.clicked.connect(MainWindow.rotate_selected_brush)
+        rotate_btn.setToolTip("Free rotate — toggle rotate mode, then drag in a "
+                              "2D view to spin the selection\n"
+                              "(grid snap on = stepped angles, off = free)")
+        rotate_btn.setCheckable(True)
+        rotate_btn.setStyleSheet("""
+            QPushButton:checked {
+                background-color: #F08000;
+                border: 1px solid #FF9020;
+            }
+            QPushButton:checked:hover {
+                background-color: #FF9020;
+            }
+        """)
+        rotate_btn.toggled.connect(MainWindow.toggle_rotate_mode)
+        MainWindow.rotate_btn = rotate_btn  # Store reference for state sync
         
         subtract_btn = QPushButton()
         subtract_btn.setIcon(QIcon("assets/subtract.png"))
@@ -364,11 +384,33 @@ class Ui_MainWindow(object):
         tint_btn.setToolTip("Tint selected brush colour")
         tint_btn.clicked.connect(MainWindow.tint_selected_brush)
 
+        # Scissor / clip tool — checkable toggle, Radiant-style X shortcut.
+        scissor_btn = QPushButton()
+        scissor_btn.setIcon(QIcon("assets/scissor.png"))
+        scissor_btn.setIconSize(QSize(icon_size_val, icon_size_val))
+        scissor_btn.setFixedSize(icon_size_val, icon_size_val)
+        scissor_btn.setToolTip("Scissor — toggle clip/scissor mode (X)\n"
+                               "Click two points in a 2D view, then Enter to cut")
+        scissor_btn.setCheckable(True)
+        scissor_btn.setShortcut("X")
+        scissor_btn.setStyleSheet("""
+            QPushButton:checked {
+                background-color: #F08000;
+                border: 1px solid #FF9020;
+            }
+            QPushButton:checked:hover {
+                background-color: #FF9020;
+            }
+        """)
+        scissor_btn.toggled.connect(MainWindow.toggle_clip_mode)
+        MainWindow.scissor_btn = scissor_btn  # Store reference for state sync
+
         top_toolbar.addWidget(room_btn)
         top_toolbar.addWidget(hollow_btn)
         top_toolbar.addWidget(clone_btn)
         top_toolbar.addWidget(rotate_btn)
         top_toolbar.addWidget(subtract_btn)
+        top_toolbar.addWidget(scissor_btn)
         top_toolbar.addWidget(tint_btn)
 
         terrain_menu_btn = QPushButton()

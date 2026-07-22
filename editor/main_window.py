@@ -165,6 +165,8 @@ class MainWindow(QMainWindow):
         self.keys_pressed = set()
         self._brush_clipboard = None  # For Ctrl+C / Ctrl+V brush copy-paste
         self.grid_visible = True
+        self.clip_mode = False  # Radiant-style clip/slice tool (toggled with X)
+        self.rotate_mode = False  # Free-rotate tool: drag in a 2D view to spin
         self.preview_timer = QTimer(self)  # OPTIMIZATION: Added parent=self for proper cleanup
         self.preview_timer.timeout.connect(self.update_mover_preview)
         self.preview_data = {} 
@@ -177,12 +179,20 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.reposition_overlays)
         self.ctrl_tab_shortcut = QShortcut(QKeySequence("Ctrl+Tab"), self)
         self.ctrl_tab_shortcut.activated.connect(self.cycle_2d_view)
+
+        # Page Up / Page Down rotate brush-face textures 90 degrees. Window-
+        # level shortcuts so they fire no matter which panel has focus.
+        self.tex_rot_cw_shortcut = QShortcut(QKeySequence(Qt.Key_PageUp), self)
+        self.tex_rot_cw_shortcut.activated.connect(lambda: self.rotate_textures(1))
+        self.tex_rot_ccw_shortcut = QShortcut(QKeySequence(Qt.Key_PageDown), self)
+        self.tex_rot_ccw_shortcut.activated.connect(lambda: self.rotate_textures(-1))
         self.setFocus()
         self.update_global_font()
         self.load_layout()
         
         self.terrain = None
         self.terrain_editor_window = None
+        self.surface_inspector = None  # lazily created Face-mode Surface Inspector
 
         # debug_console is embedded in the properties tab widget (created in setupUi)
         self.debug_console = DebugConsole.get_instance(self)
@@ -957,10 +967,18 @@ class MainWindow(QMainWindow):
             pos_map = {'x': 0, 'y': 1, 'z': 2}
             ax1_name, ax2_name = axis_map.get(current_view.view_type, ('x', 'z'))
             offset = self.grid_size_spinbox.value()
-            pos_ref = new_obj['pos'] if isinstance(new_obj, dict) else new_obj.pos
-            pos_ref[pos_map[ax1_name]] += offset
-            pos_ref[pos_map[ax2_name]] += offset
-            
+            from engine.brush_geometry import translate_brush, brush_has_geometry
+            if isinstance(new_obj, dict) and brush_has_geometry(new_obj):
+                # Angled brush: shift its plane set, not just 'pos'.
+                delta = [0.0, 0.0, 0.0]
+                delta[pos_map[ax1_name]] += offset
+                delta[pos_map[ax2_name]] += offset
+                translate_brush(new_obj, delta)
+            else:
+                pos_ref = new_obj['pos'] if isinstance(new_obj, dict) else new_obj.pos
+                pos_ref[pos_map[ax1_name]] += offset
+                pos_ref[pos_map[ax2_name]] += offset
+
         self.set_selected_object(new_obj)
         
         # Show toast notification
@@ -1483,15 +1501,19 @@ class MainWindow(QMainWindow):
         if not hasattr(self, 'view_3d'): return
 
         self.view_3d.face_mode_active = active
-        
-        # Sync button state if triggered via ESC or other means
-        if hasattr(self, 'asset_browser') and hasattr(self.asset_browser, 'face_btn'):
-             self.asset_browser.face_btn.blockSignals(True)
-             self.asset_browser.face_btn.setChecked(active)
-             self.asset_browser.face_btn.blockSignals(False)
+
+        # Sync the FACE button state if triggered via ESC or other means. The
+        # FACE button lives on the textures tab of the asset browser.
+        tex_tab = getattr(getattr(self, 'asset_browser', None), 'tab_textures', None)
+        if tex_tab is not None:
+            face_btn = getattr(tex_tab, 'face_btn', None)
+            if face_btn is not None:
+                face_btn.blockSignals(True)
+                face_btn.setChecked(active)
+                face_btn.blockSignals(False)
         
         if active:
-            self.show_toast("FACE MODE: Select a face to texture (Purple)", duration=3000)
+            self.show_toast("FACE MODE: Select a face to texture (Purple) — Page Up/Down rotates it", duration=3000)
             self.set_selected_object(None) # Deselect current object to clear gizmos and allow clean hover
             
             # Change cursor to indicate mode
@@ -1500,6 +1522,8 @@ class MainWindow(QMainWindow):
             self.show_toast("FACE MODE: OFF")
             self.view_3d.hovered_face_info = None # Clear highlight
             self.view_3d.setCursor(Qt.ArrowCursor)
+            if self.surface_inspector is not None:
+                self.surface_inspector.hide()
             
         self.view_3d.update()
 
@@ -1517,8 +1541,61 @@ class MainWindow(QMainWindow):
             brush['textures'] = {}
 
         brush['textures'][face_name] = texture_name
+        # Remember the last-textured face so the rotate-texture button / Page
+        # Up-Down keys know which face to act on when nothing is hovered.
+        self.face_texture_target = (brush, face_name)
         self.update_views()
         self.show_toast(f"Applied to {face_name}")
+
+    ALL_FACE_KEYS = ('north', 'south', 'east', 'west', 'top', 'down')
+
+    def _bump_face_angle(self, brush, face_name, delta_deg):
+        """Advance one face's texture rotation by ``delta_deg`` degrees."""
+        angles = brush.setdefault('uv_angle', {})
+        angles[face_name] = (angles.get(face_name, 0.0) + delta_deg) % 360.0
+        return angles[face_name]
+
+    def rotate_textures(self, steps=1):
+        """Rotate brush-face texture(s) by ``steps`` * 90 degrees (Page Up/Down).
+
+        In face mode the highlighted face (falling back to the last-textured
+        face) is rotated on its own. Otherwise, if a brush is selected, every
+        face on that brush is rotated together.
+        """
+        delta = 90.0 if steps >= 0 else -90.0
+
+        # --- Face mode: rotate only the highlighted / last-textured face ---
+        if getattr(self.view_3d, 'face_mode_active', False):
+            target = getattr(self.view_3d, 'hovered_face_info', None) \
+                or getattr(self, 'face_texture_target', None)
+            if not target:
+                self.show_toast("Hover a face to rotate its texture", is_error=True)
+                return
+            brush, face_name = target
+            self.save_state()
+            angle = self._bump_face_angle(brush, face_name, delta)
+            self.face_texture_target = (brush, face_name)
+            self.update_views()
+            if getattr(self, 'surface_inspector', None):
+                self.surface_inspector.refresh_from_face()
+            self.show_toast(f"{face_name}: texture {int(angle)}°")
+            return
+
+        # --- Otherwise: rotate every face of the selected brush together ---
+        selected = self.state.selected_object
+        if isinstance(selected, dict):
+            self.save_state()
+            for face_name in self.ALL_FACE_KEYS:
+                self._bump_face_angle(selected, face_name, delta)
+            self.update_views()
+            self.show_toast(f"Brush textures rotated {int(delta):+d}°")
+
+    def show_surface_inspector(self, brush, face_name):
+        """Open (or re-target) the Face-mode Surface Inspector for a face."""
+        if self.surface_inspector is None:
+            from editor.surface_inspector import SurfaceInspector
+            self.surface_inspector = SurfaceInspector(self, self)
+        self.surface_inspector.set_target(brush, face_name)
 
     def apply_texture_to_brush(self, texture_path, tiled=False):
         """
@@ -2655,11 +2732,16 @@ class MainWindow(QMainWindow):
                     # Give it a unique name
                     base_name = pasted.get('name', 'Brush')
                     pasted['name'] = f"{base_name}_copy"
-                    pasted['pos'] = [
-                        pasted['pos'][0] + offset,
-                        pasted['pos'][1],
-                        pasted['pos'][2] + offset,
-                    ]
+                    from engine.brush_geometry import translate_brush, brush_has_geometry
+                    if brush_has_geometry(pasted):
+                        # Angled brush: move the plane set with the offset.
+                        translate_brush(pasted, [offset, 0.0, offset])
+                    else:
+                        pasted['pos'] = [
+                            pasted['pos'][0] + offset,
+                            pasted['pos'][1],
+                            pasted['pos'][2] + offset,
+                        ]
                     # Clear I/O connections on the copy so wires don't duplicate
                     pasted.pop('_io_connections', None)
                     pasted.pop('io_connections', None)
@@ -2792,6 +2874,118 @@ class MainWindow(QMainWindow):
         if hasattr(self.view_3d, 'grid_visible'):
             self.view_3d.grid_visible = visible
             self.view_3d.update()
+
+    # ======================================================================
+    # Clip / slice tool  (Radiant-style, toggled with X)
+    # ======================================================================
+
+    def toggle_clip_mode(self, checked):
+        """Toolbar/shortcut handler: enter or leave clip mode."""
+        self.set_clip_mode(bool(checked))
+
+    def set_clip_mode(self, active):
+        """Enable/disable the clip tool and sync the toolbar button + cursors."""
+        active = bool(active)
+        if active and self.rotate_mode:
+            self.set_rotate_mode(False)  # the two drag tools are exclusive
+        self.clip_mode = active
+        # Keep the toolbar button's checked state in sync (e.g. when toggled by
+        # the Esc key rather than by clicking the button).
+        btn = getattr(self, 'scissor_btn', None)
+        if btn is not None and btn.isChecked() != active:
+            btn.blockSignals(True)
+            btn.setChecked(active)
+            btn.blockSignals(False)
+        for view in (self.view_top, self.view_side, self.view_front):
+            view.clear_clip()
+            view.setCursor(Qt.CrossCursor if active else Qt.ArrowCursor)
+        if active:
+            self.show_toast("Clip tool ON — click two points, Enter to cut  (X to exit)")
+        else:
+            self.show_toast("Clip tool OFF")
+
+    def toggle_rotate_mode(self, checked):
+        """Toolbar handler: enter or leave the free-rotate tool."""
+        self.set_rotate_mode(bool(checked))
+
+    def set_rotate_mode(self, active):
+        """Enable/disable free-rotate and sync the toolbar button + cursors.
+
+        In this mode, dragging with the left mouse in any 2D view spins the
+        selected brush(es) about that view's axis, snapped to a fixed angle
+        increment while grid snap is on (free/continuous when it is off).
+        """
+        active = bool(active)
+        if active and self.clip_mode:
+            self.set_clip_mode(False)  # the two drag tools are exclusive
+        self.rotate_mode = active
+        btn = getattr(self, 'rotate_btn', None)
+        if btn is not None and btn.isChecked() != active:
+            btn.blockSignals(True)
+            btn.setChecked(active)
+            btn.blockSignals(False)
+        for view in (self.view_top, self.view_side, self.view_front):
+            view.cancel_rotate()
+            view.setCursor(Qt.OpenHandCursor if active else Qt.ArrowCursor)
+        if active:
+            self.show_toast("Rotate tool ON — drag in a 2D view to spin "
+                            "(snap toggles free/stepped, Esc exits)")
+        else:
+            self.show_toast("Rotate tool OFF")
+
+    def apply_rotation_to_selection(self, angle_deg, axis, undoable=True):
+        """Rotate every selected brush by ``angle_deg`` about ``axis`` (each
+        around its own centre).  Returns the number of brushes rotated.
+
+        ``undoable`` pushes a single undo checkpoint; the live drag passes
+        ``False`` for the incremental steps and checkpoints once at the start.
+        """
+        from engine.brush_geometry import rotate_brush as _rotate
+        selected = list(getattr(self.state, 'selected_objects', []) or [])
+        if self.state.selected_object and self.state.selected_object not in selected:
+            selected.append(self.state.selected_object)
+        brushes = [b for b in selected if isinstance(b, dict)]
+        if not brushes:
+            return 0
+        if undoable:
+            self.save_state()
+        count = 0
+        for brush in brushes:
+            if _rotate(brush, angle_deg, axis):
+                count += 1
+        return count
+
+    def apply_clip_to_selection(self, normal, offset, keep_positive):
+        """Clip every selected brush with the given plane; one coalesced undo.
+
+        Returns the number of brushes actually cut.  Things and non-brush
+        selections are ignored.
+        """
+        selected = list(getattr(self.state, 'selected_objects', []) or [])
+        if self.state.selected_object and self.state.selected_object not in selected:
+            selected.append(self.state.selected_object)
+        brushes = [b for b in selected if isinstance(b, dict)]
+        if not brushes:
+            return 0
+
+        from engine.brush_geometry import clip_brush as _clip
+        self.save_state()  # single undo checkpoint for the whole operation
+        count = 0
+        for brush in brushes:
+            # Clip in place without an extra per-brush undo snapshot.
+            if _clip(brush, normal, offset, keep_positive=keep_positive):
+                count += 1
+        if count:
+            self.state.mark_lighting_dirty()
+            self.unsaved_changes = True
+            self.update_views()
+            if self.state.selected_object in brushes:
+                self.property_editor.set_object(self.state.selected_object)
+        else:
+            # Nothing changed — drop the checkpoint we just pushed.
+            if self.state.undo_stack:
+                self.state.undo_stack.pop()
+        return count
 
     def save_level_as(self):
         filePath, _ = QFileDialog.getSaveFileName(self, "Save Level As", "maps", "JSON Files (*.json)")
