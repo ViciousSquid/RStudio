@@ -192,6 +192,7 @@ class MainWindow(QMainWindow):
         
         self.terrain = None
         self.terrain_editor_window = None
+        self.surface_inspector = None  # lazily created Face-mode Surface Inspector
 
         # debug_console is embedded in the properties tab widget (created in setupUi)
         self.debug_console = DebugConsole.get_instance(self)
@@ -1521,6 +1522,8 @@ class MainWindow(QMainWindow):
             self.show_toast("FACE MODE: OFF")
             self.view_3d.hovered_face_info = None # Clear highlight
             self.view_3d.setCursor(Qt.ArrowCursor)
+            if self.surface_inspector is not None:
+                self.surface_inspector.hide()
             
         self.view_3d.update()
 
@@ -1546,11 +1549,11 @@ class MainWindow(QMainWindow):
 
     ALL_FACE_KEYS = ('north', 'south', 'east', 'west', 'top', 'down')
 
-    def _bump_face_rotation(self, brush, face_name, steps):
-        """Advance one face's texture rotation by ``steps`` quarter-turns."""
-        rotations = brush.setdefault('uv_rotation', {})
-        rotations[face_name] = (rotations.get(face_name, 0) + steps) % 4
-        return rotations[face_name]
+    def _bump_face_angle(self, brush, face_name, delta_deg):
+        """Advance one face's texture rotation by ``delta_deg`` degrees."""
+        angles = brush.setdefault('uv_angle', {})
+        angles[face_name] = (angles.get(face_name, 0.0) + delta_deg) % 360.0
+        return angles[face_name]
 
     def rotate_textures(self, steps=1):
         """Rotate brush-face texture(s) by ``steps`` * 90 degrees (Page Up/Down).
@@ -1559,7 +1562,7 @@ class MainWindow(QMainWindow):
         face) is rotated on its own. Otherwise, if a brush is selected, every
         face on that brush is rotated together.
         """
-        steps = 1 if steps >= 0 else -1
+        delta = 90.0 if steps >= 0 else -90.0
 
         # --- Face mode: rotate only the highlighted / last-textured face ---
         if getattr(self.view_3d, 'face_mode_active', False):
@@ -1570,10 +1573,12 @@ class MainWindow(QMainWindow):
                 return
             brush, face_name = target
             self.save_state()
-            rot = self._bump_face_rotation(brush, face_name, steps)
+            angle = self._bump_face_angle(brush, face_name, delta)
             self.face_texture_target = (brush, face_name)
             self.update_views()
-            self.show_toast(f"{face_name}: texture {rot * 90}°")
+            if getattr(self, 'surface_inspector', None):
+                self.surface_inspector.refresh_from_face()
+            self.show_toast(f"{face_name}: texture {int(angle)}°")
             return
 
         # --- Otherwise: rotate every face of the selected brush together ---
@@ -1581,9 +1586,16 @@ class MainWindow(QMainWindow):
         if isinstance(selected, dict):
             self.save_state()
             for face_name in self.ALL_FACE_KEYS:
-                self._bump_face_rotation(selected, face_name, steps)
+                self._bump_face_angle(selected, face_name, delta)
             self.update_views()
-            self.show_toast(f"Brush textures rotated {steps * 90:+d}°")
+            self.show_toast(f"Brush textures rotated {int(delta):+d}°")
+
+    def show_surface_inspector(self, brush, face_name):
+        """Open (or re-target) the Face-mode Surface Inspector for a face."""
+        if self.surface_inspector is None:
+            from editor.surface_inspector import SurfaceInspector
+            self.surface_inspector = SurfaceInspector(self, self)
+        self.surface_inspector.set_target(brush, face_name)
 
     def apply_texture_to_brush(self, texture_path, tiled=False):
         """
