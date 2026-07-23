@@ -778,10 +778,11 @@ def register_default_io():
             IODef('SetHeight',   'Set portal height in units', 'float'),
         ],
         outputs=[
-            IODef('OnEnabled',   'Fired when portal is activated'),
-            IODef('OnDisabled',  'Fired when portal is deactivated'),
-            IODef('OnToggled',   'Fired when portal is toggled'),
-            IODef('OnTeleport',  'Fired when an entity passes through'),
+            IODef('OnEnabled',    'Fired when portal is activated'),
+            IODef('OnDisabled',   'Fired when portal is deactivated'),
+            IODef('OnToggled',    'Fired when portal is toggled'),
+            IODef('OnTeleport',   'Fired when an entity passes through'),
+            IODef('OnPlayerEnter','Fired once per transit when the player passes through'),
         ]
     )
 

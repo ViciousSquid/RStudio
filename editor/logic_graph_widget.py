@@ -101,6 +101,11 @@ TYPE_HDR: Dict[str, QColor] = {
     'levelchanger': QColor(205,  75, 160),
     'model':        QColor(115, 115, 115),
     'brush':        QColor( 95, 115, 130),
+    'portal':       QColor(120,  60, 200),
+    'path_node':    QColor( 60, 150, 140),
+    'logic_camera': QColor(150,  90, 200),
+    'logic_spawner':QColor( 45, 160, 120),
+    'logic_keyvalue': QColor(170, 140,  50),
 }
 C_HDR_DEFAULT = QColor(85, 85, 95)
 

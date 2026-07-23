@@ -87,6 +87,62 @@ def register_all_input_handlers(io_manager: IOManager):
         else:
             light_enable_shadows(entity, param, logic)
 
+    def _light_nominal_intensity(entity):
+        """The intensity a light fades *up* to.  Captured once so repeated
+        FadeOut/FadeIn cycles return to the light's authored brightness rather
+        than to whatever (possibly 0) value it currently sits at.
+
+        Stored as a plain instance attribute (not in ``properties``) so it is
+        never serialized into saved map files."""
+        nominal = getattr(entity, '_fade_nominal', None)
+        if nominal is None:
+            cur = float(entity.properties.get('intensity', 1.0))
+            nominal = cur if cur > 0.0 else 1.0
+            try:
+                entity._fade_nominal = nominal
+            except (AttributeError, TypeError):
+                pass
+        return float(nominal)
+
+    def _start_light_fade(entity, logic, target, duration, end_off):
+        if not hasattr(logic, 'light_fade_states'):
+            logic.light_fade_states = {}
+        try:
+            duration = max(0.0, float(duration))
+        except (ValueError, TypeError):
+            duration = 1.0
+        start = float(entity.properties.get('intensity', 0.0))
+        if duration <= 0.0:
+            # Instant: apply immediately, no per-frame state needed.
+            entity.properties['intensity'] = target
+            entity.properties['state'] = 'off' if end_off else 'on'
+            logic.light_fade_states.pop(id(entity), None)
+            return
+        logic.light_fade_states[id(entity)] = {
+            'entity':   entity,
+            'from':     start,
+            'to':       target,
+            'elapsed':  0.0,
+            'duration': duration,
+            'end_off':  end_off,
+        }
+
+    def light_fade_in(entity, param, logic):
+        """Fade the light up to its nominal intensity over `param` seconds."""
+        target = _light_nominal_intensity(entity)
+        # A light that was off starts its fade from black.
+        if entity.properties.get('state', 'on') != 'on':
+            entity.properties['intensity'] = 0.0
+        entity.properties['state'] = 'on'
+        _start_light_fade(entity, logic, target, param or 1.0, end_off=False)
+        logic.io_manager.fire_output(entity, 'OnTurnedOn')
+
+    def light_fade_out(entity, param, logic):
+        """Fade the light down to zero over `param` seconds, then turn off."""
+        # Remember the current brightness so a later FadeIn returns to it.
+        _light_nominal_intensity(entity)
+        _start_light_fade(entity, logic, 0.0, param or 1.0, end_off=True)
+
     io_manager.register_input_handler('light', 'turnon', light_turn_on)
     io_manager.register_input_handler('light', 'turnoff', light_turn_off)
     io_manager.register_input_handler('light', 'toggle', light_toggle)
@@ -95,6 +151,8 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('light', 'enableshadows', light_enable_shadows)
     io_manager.register_input_handler('light', 'disableshadows', light_disable_shadows)
     io_manager.register_input_handler('light', 'toggleshadows', light_toggle_shadows)
+    io_manager.register_input_handler('light', 'fadein', light_fade_in)
+    io_manager.register_input_handler('light', 'fadeout', light_fade_out)
     
     # ==========================================================================
     # DOOR INPUTS
@@ -197,16 +255,23 @@ def register_all_input_handlers(io_manager: IOManager):
     
     def mover_enable(entity, param, logic):
         entity['start_on'] = True
-    
+
     def mover_disable(entity, param, logic):
         entity['start_on'] = False
-    
+
+    def mover_set_speed(entity, param, logic):
+        try:
+            entity['speed'] = max(0.0, float(param)) if param else 64.0
+        except (ValueError, TypeError):
+            pass
+
     io_manager.register_input_handler('mover', 'open', mover_open)
     io_manager.register_input_handler('mover', 'close', mover_close)
     io_manager.register_input_handler('mover', 'toggle', mover_toggle)
     io_manager.register_input_handler('mover', 'setposition', mover_set_position)
     io_manager.register_input_handler('mover', 'enable', mover_enable)
     io_manager.register_input_handler('mover', 'disable', mover_disable)
+    io_manager.register_input_handler('mover', 'setspeed', mover_set_speed)
 
     # ==========================================================================
     # MOVER — PathNode waypoint inputs
@@ -437,11 +502,26 @@ def register_all_input_handlers(io_manager: IOManager):
     
     def relay_toggle(entity, param, logic):
         entity.properties['disabled'] = not entity.properties.get('disabled', False)
-    
+
+    def relay_cancel_pending(entity, param, logic):
+        """Cancel any delayed events this relay has already queued."""
+        mgr = logic.io_manager
+        if not mgr:
+            return
+        relay_name = entity.properties.get('name', getattr(entity, 'name', ''))
+        before = len(mgr.pending_events)
+        mgr.pending_events = [
+            ev for ev in mgr.pending_events if ev.source_name != relay_name
+        ]
+        cancelled = before - len(mgr.pending_events)
+        if cancelled:
+            debug_log('IO', f"LogicRelay '{relay_name}': cancelled {cancelled} pending event(s)")
+
     io_manager.register_input_handler('logic_relay', 'trigger', relay_trigger)
     io_manager.register_input_handler('logic_relay', 'enable', relay_enable)
     io_manager.register_input_handler('logic_relay', 'disable', relay_disable)
     io_manager.register_input_handler('logic_relay', 'toggle', relay_toggle)
+    io_manager.register_input_handler('logic_relay', 'cancelpending', relay_cancel_pending)
     
     # ==========================================================================
     # LOGIC_GATE INPUTS
@@ -537,12 +617,23 @@ def register_all_input_handlers(io_manager: IOManager):
             entity.properties['interval'] = max(0.1, float(param))
         except ValueError:
             pass
-    
+
+    def timer_reset(entity, param, logic):
+        """Reset the countdown to the full interval without firing."""
+        if not hasattr(logic, 'timer_states'):
+            logic.timer_states = {}
+        interval = float(entity.properties.get('interval', 1.0))
+        logic.timer_states[id(entity)] = {
+            'remaining': interval,
+            'interval': interval,
+        }
+
     io_manager.register_input_handler('logic_timer', 'enable', timer_enable)
     io_manager.register_input_handler('logic_timer', 'disable', timer_disable)
     io_manager.register_input_handler('logic_timer', 'toggle', timer_toggle)
     io_manager.register_input_handler('logic_timer', 'firetimer', timer_fire)
     io_manager.register_input_handler('logic_timer', 'settime', timer_set_time)
+    io_manager.register_input_handler('logic_timer', 'resettimer', timer_reset)
     
     # ==========================================================================
     # MODEL INPUTS
@@ -550,12 +641,37 @@ def register_all_input_handlers(io_manager: IOManager):
     
     def model_enable(entity, param, logic):
         entity.properties['hidden'] = False
-    
+
     def model_disable(entity, param, logic):
         entity.properties['hidden'] = True
-    
+
+    def model_set_skin(entity, param, logic):
+        """Record the requested skin index (read by the model renderer)."""
+        try:
+            entity.properties['skin'] = int(param)
+        except (ValueError, TypeError):
+            pass
+
+    def model_set_animation(entity, param, logic):
+        """Record the requested animation name (read by the model renderer)."""
+        if param:
+            entity.properties['animation'] = param.strip()
+
     io_manager.register_input_handler('model', 'enable', model_enable)
     io_manager.register_input_handler('model', 'disable', model_disable)
+    io_manager.register_input_handler('model', 'setskin', model_set_skin)
+    io_manager.register_input_handler('model', 'setanimation', model_set_animation)
+
+    # ==========================================================================
+    # PATH NODE INPUTS
+    # (Enable/Disable fall through to the generic 'disabled' toggle; Toggle needs
+    #  an explicit handler because the generic dispatcher has no 'toggle' case.)
+    # ==========================================================================
+
+    def path_node_toggle(entity, param, logic):
+        entity.properties['disabled'] = not entity.properties.get('disabled', False)
+
+    io_manager.register_input_handler('path_node', 'toggle', path_node_toggle)
     
     # ==========================================================================
     # MONSTER INPUTS
@@ -625,6 +741,13 @@ def register_all_input_handlers(io_manager: IOManager):
         name = entity.get('name', 'unnamed')
         debug_log('IO', f"Brush '{name}' tint cleared")
 
+    def brush_toggle_solid(entity, param, logic):
+        """Toggle a generic brush's solidity (Enable/Disable ↔ 'disabled')."""
+        entity['disabled'] = not entity.get('disabled', False)
+        name = entity.get('name', 'unnamed')
+        state = "non-solid" if entity.get('disabled') else "solid"
+        debug_log('IO', f"Brush '{name}' toggled → {state}")
+
     # Register for every brush-based type
     for btype in ('brush', 'door', 'mover', 'trigger'):
         io_manager.register_input_handler(btype, 'hide', brush_hide)
@@ -632,6 +755,10 @@ def register_all_input_handlers(io_manager: IOManager):
         io_manager.register_input_handler(btype, 'togglevisibility', brush_toggle_vis)
         io_manager.register_input_handler(btype, 'settint', brush_set_tint)
         io_manager.register_input_handler(btype, 'cleartint', brush_clear_tint)
+
+    # Generic solid brushes get a solidity Toggle (door/mover/trigger define
+    # their own domain-specific Toggle handlers above, so only 'brush' here).
+    io_manager.register_input_handler('brush', 'toggle', brush_toggle_solid)
 
     # ==========================================================================
     # THING (ENTITY) HIDE / SHOW INPUTS
