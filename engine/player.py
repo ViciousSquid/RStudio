@@ -513,7 +513,7 @@ class Player:
     @staticmethod
     def _waterjump_solid(brush):
         """Solid AABB obstacles a waterjump can vault onto (or be blocked by)."""
-        if brush.get('hidden') or brush.get('is_fog') or is_water_brush(brush):
+        if brush.get('hidden') or brush.get('disabled') or brush.get('is_fog') or is_water_brush(brush):
             return False
         if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
             return False
@@ -847,7 +847,7 @@ class Player:
             if ignore_brush and brush is ignore_brush:
                 continue
 
-            if brush.get('hidden') or is_water_brush(brush) or brush.get('is_fog'):
+            if brush.get('hidden') or brush.get('disabled') or is_water_brush(brush) or brush.get('is_fog'):
                 continue
 
             is_dynamic_solid = brush.get('is_mover') or brush.get('is_door')
@@ -978,7 +978,7 @@ class Player:
         player_max = self.pos + half
 
         for brush in brushes:
-            if brush.get('hidden') or is_water_brush(brush) or brush.get('is_fog'):
+            if brush.get('hidden') or brush.get('disabled') or is_water_brush(brush) or brush.get('is_fog'):
                 continue
 
             is_dynamic_solid = brush.get('is_mover') or brush.get('is_door')

@@ -190,6 +190,9 @@ class LogicThread(threading.Thread):
         
         # Timer states for logic_timer entities
         self.timer_states: Dict[int, Dict[str, float]] = {}
+
+        # Active light FadeIn/FadeOut transitions, keyed by id(light entity)
+        self.light_fade_states: Dict[int, Dict[str, Any]] = {}
         
         # Hurt trigger timers
         self.hurt_trigger_timers: Dict[int, float] = {}
@@ -814,6 +817,15 @@ class LogicThread(threading.Thread):
 
             self.level_complete_ui = None
 
+            # Reset light fade transitions for a clean play session, and drop
+            # any cached fade "nominal" so intensity edits made in the editor
+            # between sessions are picked up on the next FadeIn.
+            self.light_fade_states.clear()
+            if Light is not None:
+                for _t in self.things:
+                    if isinstance(_t, Light) and hasattr(_t, '_fade_nominal'):
+                        del _t._fade_nominal
+
             # Clear monster projectiles
             self._monster_projectiles.clear()
 
@@ -848,6 +860,7 @@ class LogicThread(threading.Thread):
             self.current_hud_message = ""
             self.gate_inputs = {}
             self.timer_states = {}
+            self.light_fade_states.clear()
             self.active_weapon = None
             self.bullet_marks = []
             self.player_dead = False
@@ -1149,6 +1162,9 @@ class LogicThread(threading.Thread):
         # Update logic timers
         self._update_logic_timers(delta)
 
+        # Update light FadeIn/FadeOut transitions
+        self._update_light_fades(delta)
+
         # ---- Cinematic camera: suppress player input while active ----
         self._update_cinematic_camera(delta)
         if self.cinematic_state:
@@ -1355,6 +1371,10 @@ class LogicThread(threading.Thread):
                 self._portal_cooldowns[id(portal_a)] = cd
                 self._portal_cooldowns[id(portal_b)] = cd
                 if self.io_manager:
+                    # Fire both output names so connections made against either
+                    # the canonical 'OnTeleport' pin (logic graph editor / IO
+                    # registry) or the legacy 'OnPlayerEnter' pin both trigger.
+                    self.io_manager.fire_output(portal_a, 'OnTeleport')
                     self.io_manager.fire_output(portal_a, 'OnPlayerEnter')
                 debug_log(
                     "Portal",
@@ -1488,6 +1508,37 @@ class LogicThread(threading.Thread):
                 if self.io_manager:
                     self.io_manager.fire_output(thing, 'OnTimer')
                 state['remaining'] = state['interval']
+
+    # =========================================================================
+    # LIGHT FADE UPDATE
+    # =========================================================================
+
+    def _update_light_fades(self, delta: float):
+        """Advance any active light FadeIn/FadeOut transitions.
+
+        Fade state is created by the light 'fadein'/'fadeout' I/O handlers.
+        Each frame we lerp the light's intensity toward its target; when the
+        transition completes we snap to the target and, for a fade-out, turn
+        the light off and fire OnTurnedOff.
+        """
+        if not self.light_fade_states:
+            return
+        finished = []
+        for key, st in self.light_fade_states.items():
+            entity = st['entity']
+            st['elapsed'] += delta
+            duration = st['duration']
+            t = 1.0 if duration <= 0.0 else min(1.0, st['elapsed'] / duration)
+            entity.properties['intensity'] = st['from'] + (st['to'] - st['from']) * t
+            if t >= 1.0:
+                entity.properties['intensity'] = st['to']
+                if st['end_off']:
+                    entity.properties['state'] = 'off'
+                    if self.io_manager:
+                        self.io_manager.fire_output(entity, 'OnTurnedOff')
+                finished.append(key)
+        for key in finished:
+            self.light_fade_states.pop(key, None)
 
     # =========================================================================
     # TRIGGER HANDLING
@@ -1957,6 +2008,9 @@ class LogicThread(threading.Thread):
                 self.player.pos += glm.vec3(float(move_delta[0]), float(move_delta[1]), float(move_delta[2]))
 
             if self.io_manager:
+                # Per-node arrival event (fires at every PathNode in the chain),
+                # plus OnFullyOpen for backward compatibility with existing maps.
+                self.io_manager.fire_output(brush, 'OnPathNodeReached', value=node_name)
                 self.io_manager.fire_output(brush, 'OnFullyOpen')
 
             wait_time = node.get_wait_time()
@@ -2222,6 +2276,8 @@ class LogicThread(threading.Thread):
                     'volume': 1.0,
                     'entity_id': id(closest_monster)
                 })
+                if self.io_manager:
+                    self.io_manager.fire_output(closest_monster, 'OnDamaged')
                 if new_health <= 0:
                     closest_monster.properties['dead'] = True
                     closest_monster.properties.pop('is_shooting', None)

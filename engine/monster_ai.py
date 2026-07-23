@@ -560,6 +560,9 @@ class MonsterAI:
         new_health = health - damage
         victim.properties['health'] = new_health
 
+        if self.lt.io_manager:
+            self.lt.io_manager.fire_output(victim, 'OnDamaged')
+
         if self.monster_debug_active:
             v_name = victim.properties.get('name', '?')
             a_name = attacker.properties.get('name', '?') if attacker else '?'
