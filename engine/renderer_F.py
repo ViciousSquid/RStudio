@@ -138,6 +138,11 @@ class Renderer_F(BaseRenderer):
 
         cube_vao = self.vaos['cube']
         bound_vao = cube_vao
+        # Portal virtual scene: cull each brush's interior faces so the oblique
+        # clip can't expose their dark back-faces. Cube and convex-geometry
+        # meshes wind oppositely, so the culled face is switched alongside the
+        # VAO below. No-op in the main pass.
+        self._portal_begin_cull(is_geo=False)
         for brush in visible:
             model_matrix = self._brush_model_matrix(brush)
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
@@ -162,16 +167,19 @@ class Renderer_F(BaseRenderer):
                 if bound_vao != mesh.vao:
                     gl.glBindVertexArray(mesh.vao)
                     bound_vao = mesh.vao
+                    self._portal_set_cull(is_geo=True)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
                 self.render_stats.visible_tris += mesh.count // 3
             else:
                 if bound_vao != cube_vao:
                     gl.glBindVertexArray(cube_vao)
                     bound_vao = cube_vao
+                    self._portal_set_cull(is_geo=False)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
                 self.render_stats.visible_tris += 12
             self.render_stats.draw_calls += 1
 
+        self._portal_end_cull()
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         gl.glBindVertexArray(0)
 
@@ -254,6 +262,10 @@ class Renderer_F(BaseRenderer):
                 self._tex_batch_cache_key = cache_key
         # ------------------------------------------------------------------
 
+        # Portal virtual scene: cull cube-brush interiors so the oblique clip
+        # can't reveal their (dark) back-faces. Cube batches first (GL_FRONT).
+        self._portal_begin_cull(is_geo=False)
+
         current_tex = None
         for tex_id, items in batches.items():
             if tex_id != current_tex:
@@ -307,6 +319,8 @@ class Renderer_F(BaseRenderer):
             gl.glUniform1f(tex_angle_loc, 0.0)  # angled faces use raw UVs; reset
         if tex_shift_loc != -1:
             gl.glUniform2f(tex_shift_loc, 0.0, 0.0)
+        # Convex-geometry meshes wind the opposite way to the cube (GL_BACK).
+        self._portal_set_cull(is_geo=True)
         for brush in geo_brushes:
             mesh = self._get_geo_mesh(brush)
             if mesh is None:
@@ -334,6 +348,7 @@ class Renderer_F(BaseRenderer):
                 gl.glDrawArrays(gl.GL_TRIANGLES, run['first'], run['count'])
                 self.render_stats.visible_tris += run['count'] // 3
                 self.render_stats.draw_calls += 1
+        self._portal_end_cull()
         gl.glBindVertexArray(0)
 
     def draw_glow_brushes(self, projection, view, camera_pos, brushes, lights, config):

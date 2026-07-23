@@ -317,6 +317,11 @@ class BaseRenderer:
         self._portal_quad_vao = None
         self._portal_quad_vbo = None
         self._portal_gl_ready = False
+        # True only while the opaque brush passes are drawing a portal's virtual
+        # scene. The oblique near-plane clip slices solid brushes open at the
+        # destination portal, so the brush passes enable back-face culling for
+        # this flag to hide the exposed interior faces (see the brush draws).
+        self._portal_scene_pass = False
         self._portal_mask_proj_loc = None
         self._portal_mask_view_loc = None
         self._portal_rim_proj_loc = None
@@ -2149,6 +2154,37 @@ class BaseRenderer:
         self._portal_gl_ready = True
         print("[Portal] GL resources initialised")
 
+    def _portal_begin_cull(self, is_geo=False):
+        """Enable back-face culling for the portal virtual scene, culling the
+        interior face of the geometry type currently being drawn.
+
+        The oblique near-plane clip slices solid brushes open at the destination
+        portal; with culling off the exposed interior/underside back-faces show
+        through the aperture as a dark strip along the bottom. Culling the
+        interior faces keeps solids solid, exactly as they look in the main
+        view. Cube brushes are wound clockwise-outward (interior == GL_FRONT)
+        while generated convex-geometry meshes are counter-clockwise-outward
+        (interior == GL_BACK), so the caller says which it is drawing. No-op
+        outside the portal pass, so the main scene is left untouched."""
+        if not getattr(self, '_portal_scene_pass', False):
+            return
+        gl.glEnable(gl.GL_CULL_FACE)
+        gl.glCullFace(gl.GL_BACK if is_geo else gl.GL_FRONT)
+
+    def _portal_set_cull(self, is_geo):
+        """Switch the culled face mid-pass (cube batches vs. convex-geometry
+        meshes wind oppositely). No-op outside the portal pass."""
+        if not getattr(self, '_portal_scene_pass', False):
+            return
+        gl.glCullFace(gl.GL_BACK if is_geo else gl.GL_FRONT)
+
+    def _portal_end_cull(self):
+        """Restore the default (culling off, GL_BACK) after a portal brush pass."""
+        if not getattr(self, '_portal_scene_pass', False):
+            return
+        gl.glDisable(gl.GL_CULL_FACE)
+        gl.glCullFace(gl.GL_BACK)
+
     def draw_portals(self, portal_things, projection, main_view, camera_pos,
                      brushes, things, lights, config, draw_scene_fn):
         if not self._portal_gl_ready or not portal_things:
@@ -2302,7 +2338,11 @@ class BaseRenderer:
         self._proj_ptr = glm.value_ptr(self._portal_virtual_proj)
         self._view_ptr = glm.value_ptr(self._portal_virtual_view)
         self._current_shader = None
-        draw_scene_fn(clip_proj, virtual_view, virtual_cam, brushes, things, lights, config)
+        self._portal_scene_pass = True
+        try:
+            draw_scene_fn(clip_proj, virtual_view, virtual_cam, brushes, things, lights, config)
+        finally:
+            self._portal_scene_pass = False
         self._proj_ptr = old_proj_ptr
         self._view_ptr = old_view_ptr
         self._current_shader = None
