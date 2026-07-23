@@ -80,7 +80,7 @@ PICKUP_CLASSNAMES = {
     'ammo': 'item_rockets',
     'gun1': 'weapon_shotgun',
     'gun2': 'weapon_nailgun',
-    'gun3': 'weapon_rocketlauncher',
+    'cig': 'weapon_rocketlauncher',
     'key': 'item_key',
     'armor': 'item_armor1',
     'default': 'item_health',
