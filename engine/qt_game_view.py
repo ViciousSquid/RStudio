@@ -1390,7 +1390,7 @@ class QtGameView(QOpenGLWidget):
             'LevelChanger': 'levelchanger.png',
             'Portal': 'portal.png',
         }
-        for weapon in ['gun1', 'gun2', 'gun3']:
+        for weapon in ['gun1', 'gun2', 'cig']:
             tid = self.load_texture(f'{weapon}HUD.png', 'sprites')
             if tid:
                 self.sprite_textures[f'{weapon}_hud'] = tid
@@ -1929,12 +1929,15 @@ class QtGameView(QOpenGLWidget):
                 return
             active_weapon = getattr(render_state, 'active_weapon', None)
             if active_weapon:
-                self.game_state.queue_shot()
-                from engine.monster_constants import WEAPON_SHOOT_SOUND
-                sound_file = WEAPON_SHOOT_SOUND.get(active_weapon, 'shoot.wav')
-                sound = self._get_sound_instance(sound_file)
-                if sound:
-                    sound.play()
+                from engine.monster_constants import WEAPON_SHOOT_SOUND, NON_FIRING_WEAPONS
+                # Non-firing weapons (e.g. cig) are display-only: clicking
+                # equips nothing to shoot — no shot, no muzzle flash, no sound.
+                if active_weapon not in NON_FIRING_WEAPONS:
+                    self.game_state.queue_shot()
+                    sound_file = WEAPON_SHOOT_SOUND.get(active_weapon, 'shoot.wav')
+                    sound = self._get_sound_instance(sound_file)
+                    if sound:
+                        sound.play()
                 return
         if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ShiftModifier and not self.play_mode:
             obj = self.get_object_at_3d(event.x(), event.y())

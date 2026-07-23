@@ -81,6 +81,7 @@ from .monster_constants import (
     MONSTER_DETOUR_RANGE,
     WEAPON_DAMAGE,
     WEAPON_SHOOT_SOUND,
+    NON_FIRING_WEAPONS,
 )
 
 # Import the extracted MonsterAI class and new thread
@@ -1752,7 +1753,7 @@ class LogicThread(threading.Thread):
             key_name = pickup.properties.get('key_name', '')
             if key_name:
                 self.collected_keys.add(key_name)
-        elif item_type in ['gun1', 'gun2']:
+        elif item_type in ['gun1', 'gun2', 'cig']:
             self.active_weapon = item_type
             self.current_hud_message = f"Picked up {item_type.upper()}"
         pickup.properties['collected'] = True
@@ -2147,6 +2148,10 @@ class LogicThread(threading.Thread):
 
     def _handle_shooting(self):
         if not self.player or not self.active_weapon:
+            return
+        # Non-firing weapons (e.g. cig) never fire: no muzzle flash, no
+        # hitscan/projectile, no damage, and no gunfire noise event.
+        if self.active_weapon in NON_FIRING_WEAPONS:
             return
         self.muzzle_flash_active = True
         yaw_rad = self.player.angle
