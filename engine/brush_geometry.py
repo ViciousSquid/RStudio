@@ -84,6 +84,19 @@ def _normalize(n):
     return n / length
 
 
+def _cross(a, b):
+    """Cross product of two 3-vectors.
+
+    ``np.cross`` carries a large fixed per-call cost (axis normalisation +
+    ``moveaxis``) that dwarfs the arithmetic for single vectors; the winding
+    builder calls it once per plane, so the explicit form is a real win while
+    giving bit-identical results.
+    """
+    return np.array([a[1] * b[2] - a[2] * b[1],
+                     a[2] * b[0] - a[0] * b[2],
+                     a[0] * b[1] - a[1] * b[0]])
+
+
 def _poly_normal(verts):
     """Newell's method — robust polygon normal (unit) for a planar loop."""
     n = np.zeros(3)
@@ -121,7 +134,7 @@ def make_plane(normal, point_on_plane, texture=None, uv_scale=None, face=None):
 def plane_from_points(p1, p2, p3, **kw):
     """Plane through three points; outward normal follows CCW winding p1->p2->p3."""
     p1, p2, p3 = _v(p1), _v(p2), _v(p3)
-    n = np.cross(p2 - p1, p3 - p1)
+    n = _cross(p2 - p1, p3 - p1)
     return make_plane(n, p1, **kw)
 
 
@@ -149,7 +162,14 @@ def box_planes(pos, size, textures=None, uv_scale=None):
 
 
 def _plane_arrays(planes):
-    """Vectorised (normals Nx3, offsets N) view of a plane list."""
+    """Vectorised (normals Nx3, offsets N) view of a plane list.
+
+    An empty plane list yields correctly-shaped ``(0, 3)`` / ``(0,)`` arrays so
+    downstream ``normals @ p`` broadcasts cleanly (an empty solid then reads as
+    the vacuous intersection of no half-spaces) instead of raising.
+    """
+    if not planes:
+        return np.zeros((0, 3), dtype=np.float64), np.zeros((0,), dtype=np.float64)
     normals = np.array([p['n'] for p in planes], dtype=np.float64)
     offsets = np.array([p['d'] for p in planes], dtype=np.float64)
     return normals, offsets
@@ -169,7 +189,7 @@ def _base_winding(n, d):
     up[axis] = 1.0
     up = up - n * float(up @ n)
     up = up / math.sqrt(float(up @ up))
-    right = np.cross(n, up)  # right-handed around +n
+    right = _cross(n, up)  # right-handed around +n
     up *= _BOGUS
     right *= _BOGUS
     return np.array([
@@ -181,21 +201,31 @@ def _base_winding(n, d):
 
 
 def _clip_winding(verts, n, d, eps=EPS):
-    """Sutherland-Hodgman clip: keep the ``dot(n, p) <= d`` (inside) half-space."""
-    if len(verts) == 0:
+    """Sutherland-Hodgman clip: keep the ``dot(n, p) <= d`` (inside) half-space.
+
+    Windings here are tiny (4-8 verts), so the scalar loop beats a fully
+    vectorised clip — NumPy's per-call overhead dominates at that size.  The
+    signed distances are still computed in one batched ``verts @ n`` pass; the
+    loop only walks the (few) edges, skips the modulo, and touches the far
+    vertex ``b`` solely on the rare straddling edge.
+    """
+    m = len(verts)
+    if m == 0:
         return verts
     dists = verts @ n - d
     out = []
-    m = len(verts)
     for i in range(m):
-        a = verts[i]
         da = dists[i]
         if da <= eps:
-            out.append(a)
-        b = verts[(i + 1) % m]
-        db = dists[(i + 1) % m]
+            out.append(verts[i])
+        nxt = i + 1
+        if nxt == m:
+            nxt = 0
+        db = dists[nxt]
         # Edge straddles the plane -> add the intersection point.
         if (da < -eps and db > eps) or (da > eps and db < -eps):
+            a = verts[i]
+            b = verts[nxt]
             t = da / (da - db)
             out.append(a + t * (b - a))
     if not out:
@@ -204,19 +234,29 @@ def _clip_winding(verts, n, d, eps=EPS):
 
 
 def _weld(points, eps=EPS):
-    """Deduplicate near-coincident points; return (unique Nx3, index remap)."""
+    """Deduplicate near-coincident points; return (unique Nx3, index remap).
+
+    The integer quantisation key for every point is computed in one batched
+    ``np.rint`` (round-half-to-even, matching Python ``round``) instead of
+    3 scalar ``round(float(...))`` calls each; the dict pass then preserves
+    first-seen order so vertex indices stay identical to the scalar version.
+    """
+    points = np.asarray(points, dtype=np.float64)
+    if len(points) == 0:
+        return np.zeros((0, 3)), []
+    scale = 1.0 / max(eps, 1e-9)
+    keys = np.rint(points * scale).astype(np.int64)
     unique = []
     index = []
-    scale = 1.0 / max(eps, 1e-9)
     lookup = {}
-    for p in points:
-        key = (round(float(p[0]) * scale), round(float(p[1]) * scale),
-               round(float(p[2]) * scale))
+    for i in range(len(points)):
+        row = keys[i]
+        key = (int(row[0]), int(row[1]), int(row[2]))
         idx = lookup.get(key)
         if idx is None:
             idx = len(unique)
             lookup[key] = idx
-            unique.append(p)
+            unique.append(points[i])
         index.append(idx)
     return (np.array(unique) if unique else np.zeros((0, 3))), index
 
@@ -233,16 +273,27 @@ def compute_windings(planes, eps=EPS):
     A plane that contributes no surface (redundant / outside the solid) is
     simply omitted.  Returns ``([], [])`` when the plane set encloses no volume.
     """
+    N = len(planes)
+    if N == 0:
+        return np.zeros((0, 3)), []
+
+    # Extract the clip planes' normals/offsets once as arrays rather than
+    # rebuilding a NumPy vector (``_v``) and float for every (i, j) pair in the
+    # O(N^2) clip loop below — that re-extraction dominated the profile.
+    raw_normals = np.array([p['n'] for p in planes], dtype=np.float64)
+    raw_offsets = np.array([p['d'] for p in planes], dtype=np.float64)
+
     raw_faces = []
     all_points = []
     counts = []
-    for i, pi in enumerate(planes):
+    for i in range(N):
+        pi = planes[i]
         n_i = _normalize(pi['n'])
         w = _base_winding(n_i, pi['d'])
-        for j, pj in enumerate(planes):
+        for j in range(N):
             if i == j:
                 continue
-            w = _clip_winding(w, _v(pj['n']), float(pj['d']), eps)
+            w = _clip_winding(w, raw_normals[j], raw_offsets[j], eps)
             if len(w) < 3:
                 break
         if len(w) < 3:
@@ -250,7 +301,7 @@ def compute_windings(planes, eps=EPS):
         # Enforce outward orientation (CCW when viewed from +n).
         if float(_poly_normal(w) @ n_i) < 0:
             w = w[::-1]
-        raw_faces.append((i, w))
+        raw_faces.append((i, n_i))
         all_points.append(w)
         counts.append(len(w))
 
@@ -261,7 +312,7 @@ def compute_windings(planes, eps=EPS):
 
     faces = []
     cursor = 0
-    for (plane_idx, w), count in zip(raw_faces, counts):
+    for (plane_idx, n), count in zip(raw_faces, counts):
         indices = remap[cursor:cursor + count]
         cursor += count
         # Collapse any duplicate consecutive indices produced by welding.
@@ -273,8 +324,9 @@ def compute_windings(planes, eps=EPS):
             dedup.pop()
         if len(dedup) < 3:
             continue
+        # ``n`` is the plane's unit normal, already computed above — reuse it
+        # instead of normalising a second time.
         p = planes[plane_idx]
-        n = _normalize(p['n'])
         faces.append({
             'plane': plane_idx,
             'indices': dedup,
@@ -293,13 +345,18 @@ def compute_windings(planes, eps=EPS):
 class ConvexGeometry:
     """Derived, cached surface of a convex brush (built from its plane set)."""
 
-    __slots__ = ('planes', 'verts', 'faces', '_bounds')
+    __slots__ = ('planes', 'verts', 'faces', '_bounds',
+                 '_plane_cache', '_coll_cache')
 
     def __init__(self, planes):
         # Store copies so later mutation of the source list can't corrupt us.
         self.planes = [dict(p) for p in planes]
         self.verts, self.faces = compute_windings(self.planes)
         self._bounds = None
+        # Lazily-built, immutable-for-this-instance NumPy views of the plane
+        # set, shared by the point/AABB queries so they never rebuild arrays.
+        self._plane_cache = None   # (normals Nx3, offsets N)
+        self._coll_cache = None    # (normals Mx3, offsets M) incl. bevels
 
     # -- validity ----------------------------------------------------------
     @property
@@ -337,18 +394,29 @@ class ConvexGeometry:
         positions, normals, uvs = [], [], []
         for face in self.faces:
             idx = face['indices']
+            k = len(idx)
+            if k < 3:
+                continue
             n = np.array(face['normal'])
             uaxis, vaxis = _uv_axes(n)
             su, sv = (face['uv_scale'] or (1.0 / 128.0, 1.0 / 128.0))
-            ring = [self.verts[i] for i in idx]
-            for k in range(1, len(ring) - 1):
-                for p in (ring[0], ring[k], ring[k + 1]):
-                    positions.append(p)
-                    normals.append(n)
-                    uvs.append((float(p @ uaxis) * su, float(p @ vaxis) * sv))
-        return (np.array(positions, dtype=np.float32),
-                np.array(normals, dtype=np.float32),
-                np.array(uvs, dtype=np.float32))
+            ring = self.verts[idx]                       # (k, 3)
+            # Fan triangles (ring[0], ring[t], ring[t+1]) built in one shot per
+            # face rather than appending vertex-by-vertex.
+            ntri = k - 2
+            tri = np.empty((ntri * 3, 3), dtype=np.float64)
+            tri[0::3] = ring[0]
+            tri[1::3] = ring[1:k - 1]
+            tri[2::3] = ring[2:k]
+            positions.append(tri)
+            normals.append(np.broadcast_to(n, (ntri * 3, 3)))
+            uvs.append(np.stack(((tri @ uaxis) * su, (tri @ vaxis) * sv), axis=1))
+        if not positions:
+            empty = np.zeros((0, 3), dtype=np.float32)
+            return empty, empty, np.zeros((0, 2), dtype=np.float32)
+        return (np.concatenate(positions).astype(np.float32),
+                np.concatenate(normals).astype(np.float32),
+                np.concatenate(uvs).astype(np.float32))
 
     # -- 2D editor silhouette (PR2) ---------------------------------------
     def silhouette(self, axis1, axis2):
@@ -376,12 +444,12 @@ class ConvexGeometry:
         for face in self.faces:
             idx = face['indices']
             n = face['normal']
-            ring = [self.verts[i] for i in idx]
-            v0 = (float(ring[0][0]), float(ring[0][1]), float(ring[0][2]))
+            # One batched conversion to nested Python floats beats per-corner
+            # float() calls; the output tuple format is unchanged.
+            ring = self.verts[idx].tolist()
+            v0 = tuple(ring[0])
             for k in range(1, len(ring) - 1):
-                v1 = (float(ring[k][0]), float(ring[k][1]), float(ring[k][2]))
-                v2 = (float(ring[k + 1][0]), float(ring[k + 1][1]), float(ring[k + 1][2]))
-                tris.append(((v0, v1, v2), n))
+                tris.append(((v0, tuple(ring[k]), tuple(ring[k + 1])), n))
         return tris
 
     def collision_bounds(self):
@@ -390,9 +458,15 @@ class ConvexGeometry:
                 [float(hi[0]), float(hi[1]), float(hi[2])])
 
     # -- point / AABB queries ---------------------------------------------
+    def _plane_arrays_cached(self):
+        """(normals Nx3, offsets N) for the face planes, built once."""
+        if self._plane_cache is None:
+            self._plane_cache = _plane_arrays(self.planes)
+        return self._plane_cache
+
     def contains_point(self, p, eps=EPS):
         p = _v(p)
-        normals, offsets = _plane_arrays(self.planes)
+        normals, offsets = self._plane_arrays_cached()
         return bool(np.all(normals @ p - offsets <= eps))
 
     def aabb_penetration(self, box_center, box_half):
@@ -408,21 +482,36 @@ class ConvexGeometry:
         """
         c = _v(box_center)
         h = np.abs(_v(box_half))
-        best_normal = None
-        best_depth = math.inf
-        for n, d in _collision_plane_arrays(self.planes):
-            # Expand the plane outward by the box's support along n (Minkowski).
-            support = float(np.abs(n) @ h)
-            dist = float(n @ c) - d - support
-            if dist > EPS:
-                return None  # a separating axis exists -> no overlap
-            depth = -dist  # >= 0, how far inside this expanded plane we are
-            if depth < best_depth:
-                best_depth = depth
-                best_normal = n
-        if best_normal is None:
+        normals, offsets = self._collision_planes_cached()
+        if len(offsets) == 0:
             return None
-        return best_normal.copy(), best_depth
+        # Expand every plane outward by the box's support along its normal
+        # (Minkowski sum) and test all candidate axes in one batched pass.
+        support = np.abs(normals) @ h
+        dist = normals @ c - offsets - support
+        if np.any(dist > EPS):
+            return None  # a separating axis exists -> no overlap
+        depth = -dist  # >= 0, how far inside each expanded plane we are
+        k = int(np.argmin(depth))  # smallest penetration = min-translation axis
+        return normals[k].copy(), float(depth[k])
+
+    def _collision_planes_cached(self):
+        """Face planes + axis bevels as (normals Mx3, offsets M), built once.
+
+        Reuses this geometry's already-computed ``verts`` for the bevel bounds
+        instead of recomputing the windings from scratch (the old path ran the
+        full O(N^2) CSG a second time on every query).
+        """
+        if self._coll_cache is None:
+            rows = _collision_plane_arrays(self.planes, self.verts)
+            if rows:
+                normals = np.array([n for n, _ in rows], dtype=np.float64)
+                offsets = np.array([d for _, d in rows], dtype=np.float64)
+            else:
+                normals = np.zeros((0, 3))
+                offsets = np.zeros((0,))
+            self._coll_cache = (normals, offsets)
+        return self._coll_cache
 
 
 # --------------------------------------------------------------------------
@@ -461,14 +550,19 @@ def _convex_hull_2d(points):
     return lower[:-1] + upper[:-1]
 
 
-def _collision_plane_arrays(planes):
+def _collision_plane_arrays(planes, verts=None):
     """Face planes + the six axis-aligned bevel planes from the vertex bounds.
 
     The bevels give an AABB-vs-convex test the box-edge separating axes it would
     otherwise miss on the diagonal corners of a wedge.
+
+    ``verts`` may be supplied by a caller that already holds this plane set's
+    welded corners (a :class:`ConvexGeometry`), avoiding a second full winding
+    computation; when ``None`` the windings are built here as before.
     """
     out = [(_normalize(p['n']), float(p['d'])) for p in planes]
-    verts, _ = compute_windings(planes)
+    if verts is None:
+        verts, _ = compute_windings(planes)
     if len(verts) == 0:
         return out
     lo = verts.min(axis=0)
@@ -798,10 +892,20 @@ def build_collision_mesh(brush):
     # player's sphere-vs-convex depenetration.  Baking them here keeps the
     # collision thread free of any geometry rebuild and lets it push a capsule
     # out of a solid convex brush even when the sphere centre is fully inside.
-    planes = []
-    for p in convex.planes:
-        n = _normalize(p['n'])
-        planes.append((float(n[0]), float(n[1]), float(n[2]), float(p['d'])))
+    src = convex.planes
+    if src:
+        # Batch-normalise every plane normal at once, then pack the (nx, ny, nz,
+        # d) tuples the collision thread consumes.
+        raw = np.array([p['n'] for p in src], dtype=np.float64)
+        lengths = np.sqrt(np.einsum('ij,ij->i', raw, raw))
+        safe = lengths >= 1e-12
+        unit = np.where(safe[:, None], raw / np.where(safe[:, None], lengths[:, None], 1.0),
+                        np.array([0.0, 1.0, 0.0]))
+        offsets = [float(p['d']) for p in src]
+        planes = [(float(unit[i, 0]), float(unit[i, 1]), float(unit[i, 2]), offsets[i])
+                  for i in range(len(src))]
+    else:
+        planes = []
     brush['_mesh_planes'] = planes
     return True
 
