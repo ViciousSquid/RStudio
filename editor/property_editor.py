@@ -1269,7 +1269,7 @@ class PropertyEditor(QWidget):
         form.addRow("Variant:", variant_combo)
 
     def _build_pickup_item_type_row(self, form, thing):
-        combo = _make_combo(['health', 'key', 'gun1', 'gun2'],
+        combo = _make_combo(['health', 'key', 'gun1', 'gun2', 'cig'],
                             thing.properties.get('item_type', 'health'),
                             self.on_pickup_item_type_changed)
         form.addRow("Item Type:", combo)
@@ -2412,7 +2412,7 @@ class PropertyEditor(QWidget):
         self.update_object_prop('item_type', item_type)
         is_key = item_type == 'key'
         is_health = item_type == 'health'
-        is_gun = item_type in ('gun1', 'gun2')
+        is_gun = item_type in ('gun1', 'gun2', 'cig')
 
         current_key = self.current_object.properties.get('key_name', 'red_key')
 

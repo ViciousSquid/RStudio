@@ -626,7 +626,8 @@ class Pickup(Thing):
     
     GUN_SPRITES = {
         'gun1': 'assets/sprites/gun1.png',
-        'gun2': 'assets/sprites/gun2.png'
+        'gun2': 'assets/sprites/gun2.png',
+        'cig': 'assets/sprites/cig.png'
     }
     
     _dynamic_sprite_cache = {}
@@ -644,7 +645,7 @@ class Pickup(Thing):
         self.properties.setdefault('custom_sprite', '')
 
     def is_gun(self):
-        return self.properties.get('item_type') in ['gun1', 'gun2']
+        return self.properties.get('item_type') in ['gun1', 'gun2', 'cig']
     
     def is_key(self):
         return self.properties.get('item_type') == 'key'
