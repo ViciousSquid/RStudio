@@ -21,7 +21,7 @@
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
 ### [💾 Download Binaries for Windows/macOS/Linux](https://github.com/ViciousSquid/Fio/releases)  
-### View the [Wiki](https://github.com/ViciousSquid/Fio/wiki/) | [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
+### Documentation: [Wiki](https://github.com/ViciousSquid/Fio/wiki/) | [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
 #### or use the included Dockerfile or [run from source](https://github.com/ViciousSquid/Fio#-quickstart)
 
 <img src="https://github.com/user-attachments/assets/a68a33ac-1da7-4626-8796-46a6435cf95c" width="800">
