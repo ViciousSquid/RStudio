@@ -57,9 +57,7 @@ Fio explores a unified approach to level editing and runtime simulation:
 - Lean OpenGL 3.3 renderer engineered for performance and broad compatibility.
 - Dynamic lighting, shadows, fog, glass and water
 - Frustum culling
-- **World portals** — non-Euclidean view-through portals with stencil-buffer masking, 
-  oblique near-plane clipping, and I/O-driven fade transitions. Place two portals, 
-  link them by name, walk through seamlessly.
+- Native **world portals** — seamless non-Euclidean connections between arbitrary locations using stencil-buffer masking and oblique near-plane clipping. No BSP, VIS/PVS preprocessing or offline visibility compilation is required.
 
 ### Under the Hood
 - **Python 3.10+ Core:** High-level logic and orchestration paired with C-accelerated NumPy arrays for vector math, scene transformations, and batch numeric processing.
