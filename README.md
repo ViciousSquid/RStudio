@@ -62,13 +62,11 @@ Fio explores a unified approach to level editing and runtime simulation:
   link them by name, walk through seamlessly.
 
 ### Under the Hood
-- Python 3.10+ runtime
-- NumPy used for batch numeric operations and scene updates
-- Multi-threaded subsystems (render / simulation separation where applicable)
-- Designed for CPU-bound performance on low-power hardware (ARM-class)
-- Runtime state is shared between editor and engine layers; no serialization boundary during play mode
-
-🗎 Modular architecture, fully open source (MIT License)
+- **Python 3.10+ Core:** High-level logic and orchestration paired with C-accelerated NumPy arrays for vector math, scene transformations, and batch numeric processing.
+- **Hardware-Conscious Design:** Optimized for low-power, ARM-class CPUs—minimizing unnecessary memory allocations and redundant compute cycles before leaning on raw GPU power.
+- **Zero Serialization Overhead:** Editor and engine share the same runtime memory state, enabling instant execution with no compile, bake, or scene-deserialization delay.
+- **Modular Multi-Threading:** Subsystems (render pipeline, physics, and world simulation) are strictly decoupled to keep framerates steady during heavy runtime tasks.
+- **Open Architecture:** Fully open-source, modular codebase (MIT License) designed for easy extendability and low-level experimentation.
 
 ------------------------------
 
