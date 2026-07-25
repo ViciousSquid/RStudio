@@ -95,9 +95,7 @@ Contributions, feedback, and experiments are welcome. Check issues or open a dis
 
 <img src="https://github.com/user-attachments/assets/c6c6b036-2425-4508-a2fe-05816429303f" width="800"><br>
 
-<img src="https://raw.githubusercontent.com/ViciousSquid/Fio/1.3.0.0_Latest/assets/__portal.gif" width="800">
-
-<img src="https://github.com/ViciousSquid/Fio/blob/1.3.1.0_M4_rev2_Latest/assets/__portal.gif?raw=true" width="450">
+<img src="https://github.com/ViciousSquid/Fio/blob/2.0.0.0_Latest/assets/__portal.gif" width="500">
 
 <img src="https://github.com/user-attachments/assets/22283623-21a2-4776-a2ae-71649f5276f0" width="700">
 
