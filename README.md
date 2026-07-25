@@ -15,7 +15,7 @@
 - Hit "play" instantly: no import, compile or bake step
 - Generate fully playable procedural maps with two clicks
 - Entity I/O logic system inspired by Source engine
-- Classic brush-based CSG editing
+- Classic brush-based editing with arbitrary convex polyhedra
 - Non-Euclidean portal connections between any two points in a level
 - Export creations as self-contained packages
 - Local split-screen multiplayer
