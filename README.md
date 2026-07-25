@@ -7,7 +7,8 @@
 
 ## Fio — Liminal World Editor & Procedural Engine
 
-### Unified editor and runtime inspired by Radiant and Hammer. Optimised for low-power CPUs
+### Unified editor and runtime inspired by Radiant and Hammer.
+**Engineered on low-power ARM hardware to eliminate unnecessary work before relying on faster hardware.**
 
 **Key Features**
 - Edit and play in the same runtime
@@ -53,7 +54,7 @@ Fio explores a unified approach to level editing and runtime simulation:
 - Keys/values can be stored globally (persists across level changes)
 
 ### Rendering
-- OpenGL 3.3 forward renderer
+- Lean OpenGL 3.3 renderer engineered for performance and broad compatibility.
 - Dynamic lighting, shadows, fog, glass and water
 - Frustum culling
 - **World portals** — non-Euclidean view-through portals with stencil-buffer masking, 
