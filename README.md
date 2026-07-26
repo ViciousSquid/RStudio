@@ -20,7 +20,7 @@ Fio is a modern, instant-iteration take on classic CSG level editors<br>
 - Generate fully playable procedural maps with two clicks
 - Entity I/O logic system inspired by Source engine
 - Local split-screen multiplayer
-- Export creations as self-contained packages
+- Export projects as portable, self-contained packages
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
 ### [💾 Download Binaries for Windows/macOS/Linux](https://github.com/ViciousSquid/Fio/releases)  
@@ -37,6 +37,7 @@ Fio is a modern, instant-iteration take on classic CSG level editors<br>
  
  ## Why Fio exists
 
+An engine built for rapid experimentation.
 Fio explores a unified approach to level editing and runtime simulation:
 
 - Reducing friction between authoring and execution
