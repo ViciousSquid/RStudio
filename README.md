@@ -13,14 +13,14 @@ Fio is a modern, instant-iteration take on classic CSG level editors<br>
 **Designed on low-power ARM hardware with an efficiency-first philosophy.**
 
 **Key Features**
-• Hit "Play" instantly: no import, compile or bake step
-• Edit and play in the same runtime
-• Classic brush-based editing with arbitrary convex polyhedra
-• Non-Euclidean portal connections between any two points in a level
-• Generate fully playable procedural maps with two clicks
-• Entity I/O logic system inspired by Source engine
-• Local split-screen multiplayer
-• Export creations as self-contained packages
+- Hit "Play" instantly: no import, compile or bake step
+- Edit and play in the same runtime
+- Classic brush-based editing with arbitrary convex polyhedra
+- Non-Euclidean portal connections between any two points in a level
+- Generate fully playable procedural maps with two clicks
+- Entity I/O logic system inspired by Source engine
+- Local split-screen multiplayer
+- Export creations as self-contained packages
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
 ### [💾 Download Binaries for Windows/macOS/Linux](https://github.com/ViciousSquid/Fio/releases)  
