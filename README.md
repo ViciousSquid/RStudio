@@ -8,17 +8,19 @@
 ## Fio — Liminal World Editor & Procedural Engine
 
 ### Unified editor and runtime inspired by Radiant and Hammer.
-**Engineered on low-power ARM hardware to eliminate unnecessary work before relying on faster hardware.**
+
+Fio is a modern, instant-iteration take on classic CSG level editors<br>
+**Designed on low-power ARM hardware with an efficiency-first philosophy.**
 
 **Key Features**
-- Edit and play in the same runtime
-- Hit "play" instantly: no import, compile or bake step
-- Generate fully playable procedural maps with two clicks
-- Entity I/O logic system inspired by Source engine
-- Classic brush-based editing with arbitrary convex polyhedra
-- Non-Euclidean portal connections between any two points in a level
-- Export creations as self-contained packages
-- Local split-screen multiplayer
+• Hit "Play" instantly: no import, compile or bake step
+• Edit and play in the same runtime
+• Classic brush-based editing with arbitrary convex polyhedra
+• Non-Euclidean portal connections between any two points in a level
+• Generate fully playable procedural maps with two clicks
+• Entity I/O logic system inspired by Source engine
+• Local split-screen multiplayer
+• Export creations as self-contained packages
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
 ### [💾 Download Binaries for Windows/macOS/Linux](https://github.com/ViciousSquid/Fio/releases)  
@@ -42,7 +44,7 @@ Fio explores a unified approach to level editing and runtime simulation:
 - Treating gameplay logic as a visible, editable system
 - Supporting rapid experimental iteration in rendering and world design
 - Enabling native non-Euclidean level design via world portals
-- Decision tracking/branching narratives: maps can affect other maps
+- Persistent global key/value storage allows maps to influence later maps and enables branching narratives.
 
   -----------------
 
