@@ -36,7 +36,7 @@ version = 0.1.0
 #   numpy   -> vector/matrix math and geometry batching (has a p4a recipe)
 #   pyopengl-> GL ES entry points
 #   pillow  -> texture decoding from streamed asset bytes
-requirements = python3,pygame,numpy,pyopengl,pillow
+requirements = python3==3.11.9,pygame,numpy,pyopengl,pillow
 
 orientation = landscape
 fullscreen = 1
