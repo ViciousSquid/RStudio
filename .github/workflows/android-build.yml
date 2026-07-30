@@ -21,7 +21,10 @@ on:
 
 jobs:
   build-apk:
-    runs-on: ubuntu-latest
+    # Ubuntu 22.04: python-for-android's toolchain (and packages like
+    # libtinfo5 / libncurses5-dev) is reliable here. 24.04 ("noble", what
+    # ubuntu-latest now is) dropped libtinfo5, which the Android NDK needs.
+    runs-on: ubuntu-22.04
     timeout-minutes: 90
 
     steps:
@@ -39,8 +42,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             git zip unzip openjdk-17-jdk autoconf libtool pkg-config \
-            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 \
-            cmake libffi-dev libssl-dev build-essential ccache
+            zlib1g-dev libncurses-dev cmake libffi-dev libssl-dev \
+            build-essential ccache wget
+          # The Android SDK build-tools link against libtinfo.so.5. It ships in
+          # the repos on 22.04 but was dropped in 24.04 (noble); fetch the deb
+          # directly if apt can't find it, so this works on any runner image.
+          if ! sudo apt-get install -y libtinfo5 2>/dev/null; then
+            echo "libtinfo5 not in apt; fetching the package directly..."
+            for url in \
+              http://mirrors.kernel.org/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb \
+              http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb \
+              http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2_amd64.deb ; do
+              if wget -q "$url" -O /tmp/libtinfo5.deb; then break; fi
+            done
+            sudo dpkg -i /tmp/libtinfo5.deb || sudo apt-get -f install -y
+          fi
 
       - name: Install buildozer
         run: |
