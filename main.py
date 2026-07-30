@@ -108,6 +108,17 @@ dark_stylesheet = """
 
 if __name__ == "__main__":
 
+    # ---------------------------------------------------------
+    # Android / standalone player entry point.
+    # Under python-for-android (ANDROID_ARGUMENT is set), or when FIO_PLAYER=1
+    # on the desktop, launch the touch-first .fiopak player instead of the
+    # PyQt5 editor. This branch runs before any PyQt import so the editor's
+    # desktop-only dependencies are never touched on mobile.
+    # ---------------------------------------------------------
+    if os.environ.get("ANDROID_ARGUMENT") or os.environ.get("FIO_PLAYER"):
+        from player.main import main as _player_main
+        raise SystemExit(_player_main([]))
+
     from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout, QProgressBar
     from PyQt5.QtGui import QPixmap, QSurfaceFormat, QIcon
     from PyQt5.QtCore import Qt
