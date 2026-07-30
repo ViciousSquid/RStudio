@@ -21,7 +21,10 @@ on:
 
 jobs:
   build-apk:
-    runs-on: ubuntu-latest
+    # Ubuntu 22.04: python-for-android's toolchain (and packages like
+    # libtinfo5 / libncurses5-dev) is reliable here. 24.04 ("noble", what
+    # ubuntu-latest now is) dropped libtinfo5, which the Android NDK needs.
+    runs-on: ubuntu-22.04
     timeout-minutes: 90
 
     steps:
