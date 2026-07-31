@@ -1,5 +1,7 @@
 # Fio Player (Android)
 
+[ Work in progress. Incomplete ]
+
 A standalone, **player-only** front end for the Fio engine. It loads and plays
 exported `.fiopak` game packages on Android — no editor, no CSG authoring, no
 PyQt5. The heavy runtime systems in [`engine/`](../engine) (map loading, entity
