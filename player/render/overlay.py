@@ -44,6 +44,9 @@ _CIRCLE_SEGMENTS = 40
 
 
 def _gl():
+    import os
+    if os.environ.get("ANDROID_ARGUMENT"):
+        os.environ.setdefault("PYOPENGL_PLATFORM", "egl")  # GLES via EGL
     import OpenGL.GL as gl
     return gl
 
