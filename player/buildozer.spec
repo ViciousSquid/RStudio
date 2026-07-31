@@ -36,7 +36,7 @@ version = 0.1.0
 #   numpy   -> vector/matrix math and geometry batching (has a p4a recipe)
 #   pyopengl-> GL ES entry points
 #   pillow  -> texture decoding from streamed asset bytes
-requirements = python3==3.11.9,pygame,numpy,pyopengl,pillow
+requirements = python3,pygame,numpy,pyopengl,pillow
 
 orientation = landscape
 fullscreen = 1
@@ -47,8 +47,10 @@ fullscreen = 1
 android.entrypoint = org.kivy.android.PythonActivity
 
 # --- Android platform ---
+# minapi 24 = Android 7.0; GLES 3.x is universal by then. NOTE: buildozer does
+# NOT strip inline comments from value lines, so keep comments on their own line.
 android.api = 34
-android.minapi = 24               # Android 7.0 — GLES 3.x is universal by here
+android.minapi = 24
 android.ndk_api = 24
 # arm64-v8a covers essentially all modern phones and keeps CI fast. Add
 # armeabi-v7a for older-device reach (roughly doubles build time).
