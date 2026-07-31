@@ -69,16 +69,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.buildozer
-          # The key is salted with the p4a pin so a toolchain change starts from
-          # a clean cache. No restore-keys: a partial restore could bring back a
-          # stale python-for-android checkout that fights the pinned one.
+          # Salted with the p4a pin. restore-keys is scoped to the SAME pin so a
+          # minor spec edit reuses the already-built recipes from a prior run,
+          # but a pin change still starts clean (no stale-toolchain contamination).
           key: buildozer-global-${{ runner.os }}-p4a-2023.09.16-${{ hashFiles('player/buildozer.spec') }}
+          restore-keys: buildozer-global-${{ runner.os }}-p4a-2023.09.16-
 
       - name: Cache buildozer local dir
         uses: actions/cache@v4
         with:
           path: player/.buildozer
           key: buildozer-local-${{ runner.os }}-p4a-2023.09.16-${{ hashFiles('player/buildozer.spec') }}
+          restore-keys: buildozer-local-${{ runner.os }}-p4a-2023.09.16-
 
       # Bundle a real map so the APK loads an actual package (the loader path
       # runs on-device). Remove this step to ship an empty bring-up build.
