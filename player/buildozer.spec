@@ -70,9 +70,12 @@ android.allow_backup = 1
 # controllers still work without advertising the feature; add it back only if
 # you later move to a newer p4a that supports --feature.
 
-# GLES 3.x requirement advertised to the Play Store so incompatible devices are
-# filtered out.
-android.manifest_placeholders = glEsVersion=0x00030000
+# NOTE: android.manifest_placeholders is intentionally not set. p4a injects its
+# value straight into a Groovy map in build.gradle, and the pinned p4a expects
+# `key:value` (colon), not `key=value` — a stray entry there fails gradle
+# evaluation ("Could not set unknown property"). The GLES 3.x <uses-feature>
+# Play-Store hint isn't referenced by the manifest anyway; add it later via a
+# proper manifest entry if you need Play filtering.
 
 # --- Presentation ---
 presplash.filename = %(source.dir)s/assets/splash.png
