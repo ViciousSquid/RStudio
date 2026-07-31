@@ -77,9 +77,7 @@ python -m player.main path/to/game.fiopak
 
 Controls in the harness: **WASD** move, **mouse-drag** look, **Space** jump,
 **E** use, **left click** fire, **Esc** pause. Touchscreens and controllers work
-through the same code paths the phone uses. Milestone 1 draws a rotating
-reference triangle through the translated `simple` shader to confirm the ES
-pipeline end-to-end, with the **on-screen virtual controls drawn on top**.
+through the same code paths the phone uses.
 
 ### Virtual controls
 
@@ -191,7 +189,7 @@ Implemented and tested (off-device):
 
 Next milestones (seams are marked `TODO(port)` in the code):
 
-- [ ] **M3 — render maps**: port `engine/renderer_core.py` brush/mesh geometry
+- [X] **M3 — render maps**: port `engine/renderer_core.py` brush/mesh geometry
       upload and draw passes onto the ES context (`renderer.py:load_scene` /
       `render_scene`), using the already-translated shader programs.
 - [ ] **M4 — player movement**: drive `engine/player.py` + `engine/physics.py`
