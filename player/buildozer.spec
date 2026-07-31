@@ -65,9 +65,10 @@ android.ndk_api = 24
 android.archs = arm64-v8a
 android.allow_backup = 1
 
-# Controllers + immersive full-screen.
-android.permissions =
-android.features = android.hardware.gamepad
+# NOTE: android.features (a manifest <uses-feature> hint) is intentionally not
+# set — the pinned p4a v2023.09.16 does not accept p4a's --feature flag. Game
+# controllers still work without advertising the feature; add it back only if
+# you later move to a newer p4a that supports --feature.
 
 # GLES 3.x requirement advertised to the Play Store so incompatible devices are
 # filtered out.
