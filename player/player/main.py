@@ -18,6 +18,16 @@ import argparse
 import os
 import sys
 
+# --- Android GL setup (must run before PyOpenGL is imported anywhere) --------
+# On Android there is no desktop libGL; the device provides libGLESv2.so /
+# libEGL.so. PyOpenGL otherwise auto-selects its GLX (X11) backend and dies with
+# "ImportError: Unable to load OpenGL or GL library". Selecting the EGL platform
+# makes PyOpenGL's GL library fall back to libGLESv2.so, so our existing
+# `import OpenGL.GL` binds to GLES on the device. This env var is read by
+# PyOpenGL at first import, so it has to be set here at module load.
+if os.environ.get("ANDROID_ARGUMENT"):
+    os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+
 from .fiopak import FioPackage, PackageError
 from .platform.base import HostConfig
 from .app import FioPlayerApp, is_android
