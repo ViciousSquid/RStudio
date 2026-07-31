@@ -23,9 +23,12 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
+import math
+
 from .gles_context import build_program_set
 from .overlay import OverlayRenderer
 from . import glmath
+from . import scene as _scene
 
 
 class GLESRenderer:
@@ -41,6 +44,15 @@ class GLESRenderer:
         self._start_time = 0.0
         self.overlay = OverlayRenderer()
 
+        # Scene geometry (Milestone 3): world-space brush mesh + map lights.
+        self._scene_vao = None
+        self._scene_vbo = None
+        self._scene_vertex_count = 0
+        self._lights = []
+        self.fov_deg = 70.0
+        self.near = 1.0
+        self.far = 8000.0
+
     # ------------------------------------------------------------------
     # GL lifecycle
     # ------------------------------------------------------------------
@@ -52,6 +64,11 @@ class GLESRenderer:
 
         gl = _gl()
         self._start_time = time.perf_counter()
+
+        # Any GL handles from a previous (now-lost) context are invalid; drop
+        # them so fresh ones are generated below and in _upload_scene.
+        self._triangle_vao = self._triangle_vbo = None
+        self._scene_vao = self._scene_vbo = None
 
         sources = build_gles_shader_set(prefer_arm=True)
         shader_map = build_gles_shader_map()
@@ -151,12 +168,82 @@ class GLESRenderer:
         self._upload_scene()
 
     def _upload_scene(self) -> None:
-        # TODO(port): translate engine/renderer_core.py geometry upload to ES.
-        pass
+        """Build the brush mesh and upload it as an interleaved VBO/VAO."""
+        import ctypes
+
+        gl = _gl()
+        map_data = self._scene["map"] if self._scene else {}
+        vertices, count = _scene.build_brush_mesh(map_data)
+        self._scene_vertex_count = count
+        self._lights = _scene.extract_lights(map_data)
+        if count == 0:
+            return
+
+        if self._scene_vao is None:
+            self._scene_vao = gl.glGenVertexArrays(1)
+        gl.glBindVertexArray(self._scene_vao)
+        if self._scene_vbo is None:
+            self._scene_vbo = gl.glGenBuffers(1)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._scene_vbo)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, vertices.nbytes, vertices, gl.GL_STATIC_DRAW)
+
+        stride = 6 * 4  # 6 floats * 4 bytes
+        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(0))
+        gl.glEnableVertexAttribArray(0)
+        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(12))
+        gl.glEnableVertexAttribArray(1)
+        gl.glBindVertexArray(0)
+        print(f"[GLES] scene uploaded: {count} verts, {len(self._lights)} lights")
 
     def render_scene(self, render_state) -> None:
-        # TODO(port): drive engine/renderer_core.py draw passes on this context.
-        self._draw_reference_triangle()
+        """Draw the brush mesh with the lit shader from the player camera."""
+        gl = _gl()
+        prog = self.programs.get("lit")
+        if prog is None or self._scene_vertex_count == 0:
+            self._draw_reference_triangle()
+            return
+
+        cam_pos = (render_state or {}).get("cam_pos", (0.0, 64.0, 0.0))
+        yaw = (render_state or {}).get("cam_yaw", -90.0)
+        pitch = (render_state or {}).get("cam_pitch", 0.0)
+        front = glmath.front_from_angles(yaw, pitch)
+        center = (cam_pos[0] + front[0], cam_pos[1] + front[1], cam_pos[2] + front[2])
+        aspect = self.width / max(1, self.height)
+        view = glmath.look_at(cam_pos, center)
+        proj = glmath.perspective(math.radians(self.fov_deg), aspect, self.near, self.far)
+
+        gl.glUseProgram(prog)
+        _set_mat4(gl, prog, "model", glmath.identity())
+        _set_mat4(gl, prog, "view", view)
+        _set_mat4(gl, prog, "projection", proj)
+        _set_mat3(gl, prog, "normalMatrix", glmath.identity()[:3, :3].copy())
+        _set_vec3(gl, prog, "object_color", (0.60, 0.62, 0.66))
+        _set_float(gl, prog, "alpha", 1.0)
+
+        self._apply_lights(gl, prog, cam_pos)
+
+        gl.glBindVertexArray(self._scene_vao)
+        gl.glDrawArrays(gl.GL_TRIANGLES, 0, self._scene_vertex_count)
+        gl.glBindVertexArray(0)
+
+    def _apply_lights(self, gl, prog, cam_pos) -> None:
+        # Map lights, plus a camera "headlight" so the area around the player is
+        # always lit during bring-up (bounded by the shader's 8-light array).
+        lights = list(self._lights[:7])
+        lights.append({
+            "pos": tuple(cam_pos), "color": (1.0, 0.97, 0.92),
+            "intensity": 1.0, "radius": 1400.0,
+        })
+        gl.glUniform1i(gl.glGetUniformLocation(prog, "active_lights"), len(lights))
+        for i, lt in enumerate(lights):
+            base = f"lights[{i}]"
+            _set_vec3(gl, prog, f"{base}.position", lt["pos"])
+            _set_vec3(gl, prog, f"{base}.color", lt["color"])
+            _set_float(gl, prog, f"{base}.intensity", lt["intensity"])
+            _set_float(gl, prog, f"{base}.radius", lt["radius"])
+            loc = gl.glGetUniformLocation(prog, f"{base}.shadowIndex")
+            if loc != -1:
+                gl.glUniform1i(loc, -1)
 
 
 # ----------------------------------------------------------------------
@@ -174,6 +261,12 @@ def _set_mat4(gl, prog, name, mat) -> None:
     loc = gl.glGetUniformLocation(prog, name)
     if loc != -1:
         gl.glUniformMatrix4fv(loc, 1, gl.GL_TRUE, mat)
+
+
+def _set_mat3(gl, prog, name, mat) -> None:
+    loc = gl.glGetUniformLocation(prog, name)
+    if loc != -1:
+        gl.glUniformMatrix3fv(loc, 1, gl.GL_TRUE, mat)
 
 
 def _set_vec3(gl, prog, name, vec) -> None:

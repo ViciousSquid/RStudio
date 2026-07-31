@@ -61,6 +61,52 @@ def ortho(left: float, right: float, bottom: float, top: float,
     return m
 
 
+def perspective(fovy_rad: float, aspect: float, near: float, far: float) -> "np.ndarray":
+    """Row-major perspective projection (same formula as glm::perspective)."""
+    f = 1.0 / math.tan(fovy_rad / 2.0)
+    m = np.zeros((4, 4), dtype=np.float32)
+    m[0, 0] = f / max(aspect, 1e-6)
+    m[1, 1] = f
+    m[2, 2] = (far + near) / (near - far)
+    m[2, 3] = (2.0 * far * near) / (near - far)
+    m[3, 2] = -1.0
+    return m
+
+
+def look_at(eye, center, up=(0.0, 1.0, 0.0)) -> "np.ndarray":
+    """Row-major view matrix (same result as glm::lookAt)."""
+    eye = np.asarray(eye, dtype=np.float64)
+    center = np.asarray(center, dtype=np.float64)
+    up = np.asarray(up, dtype=np.float64)
+    f = _normalize(center - eye)
+    s = _normalize(np.cross(f, up))
+    u = np.cross(s, f)
+    m = np.identity(4, dtype=np.float32)
+    m[0, :3] = s
+    m[1, :3] = u
+    m[2, :3] = -f
+    m[0, 3] = -float(np.dot(s, eye))
+    m[1, 3] = -float(np.dot(u, eye))
+    m[2, 3] = float(np.dot(f, eye))
+    return m
+
+
+def front_from_angles(yaw_deg: float, pitch_deg: float):
+    """Camera forward vector from yaw/pitch in degrees (engine convention)."""
+    yaw = math.radians(yaw_deg)
+    pitch = math.radians(pitch_deg)
+    return (
+        math.cos(yaw) * math.cos(pitch),
+        math.sin(pitch),
+        math.sin(yaw) * math.cos(pitch),
+    )
+
+
+def _normalize(v):
+    n = float(np.linalg.norm(v))
+    return v / n if n > 1e-9 else v
+
+
 def mul(*mats: "np.ndarray") -> "np.ndarray":
     """Matrix product left-to-right (mul(A, B, C) == A @ B @ C)."""
     out = mats[0]
