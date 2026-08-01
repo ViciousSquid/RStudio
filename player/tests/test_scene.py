@@ -64,6 +64,34 @@ class TestSceneMesh(unittest.TestCase):
         things = [{"type": "light", "pos": [i, 0, 0], "properties": {}} for i in range(20)]
         self.assertEqual(len(scene.extract_lights(self._map(things=things), limit=8)), 8)
 
+    def test_textured_batches_group_by_texture(self):
+        m = self._map([
+            {"pos": [0, 0, 0], "size": [10, 10, 10],
+             "textures": {k: "wall.png" for k in
+                          ("north", "south", "east", "west", "top", "down")}},
+        ])
+        batches = scene.build_textured_batches(m)
+        self.assertIn("wall.png", batches)
+        verts = batches["wall.png"]
+        self.assertEqual(verts.size % 8, 0)          # 8 floats per vertex
+        self.assertEqual(verts.size // 8, 36)        # all 6 faces, one texture
+
+    def test_textured_batches_split_and_uv_tiling(self):
+        # A 256-wide face at texel=128 should tile the U axis twice (0..2).
+        m = self._map([
+            {"pos": [0, 0, 0], "size": [256, 10, 10],
+             "textures": {"top": "a.png", "down": "b.png"}},
+        ])
+        batches = scene.build_textured_batches(m, texel=128.0)
+        self.assertEqual(set(batches) - {""}, {"a.png", "b.png"})
+        uv = batches["a.png"].reshape(-1, 8)[:, 6:]  # top face spans X(256)/Z(10)
+        self.assertAlmostEqual(uv[:, 0].max(), 2.0, places=4)   # U tiles twice
+
+    def test_untextured_faces_use_empty_key(self):
+        m = self._map([{"pos": [0, 0, 0], "size": [10, 10, 10]}])  # no textures
+        batches = scene.build_textured_batches(m)
+        self.assertEqual(set(batches), {""})
+
     def test_bounds(self):
         m = self._map([{"pos": [0, 0, 0], "size": [10, 10, 10]},
                        {"pos": [100, 0, 0], "size": [10, 10, 10]}])
