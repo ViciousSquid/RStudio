@@ -112,23 +112,11 @@ class OverlayRenderer:
 
         s = min(w, h)
 
-        # --- movement stick ------------------------------------------------
-        stick = controls.move_stick
-        base_r = stick.radius * s
-        if stick.origin is not None:
-            bx, by = stick.origin
-        else:
-            bx, by = 0.16 * w, 0.78 * h            # resting "home" hint
-        self._disc(bx, by, base_r, (1.0, 1.0, 1.0), 0.14)
-        self._disc(bx, by, base_r * 0.30,          # rim dot at centre
-                   (1.0, 1.0, 1.0), 0.10)
-
-        # Knob follows the actual movement axis (any source that moved it).
-        knob_x = bx + inp.move_x * base_r
-        knob_y = by - inp.move_y * base_r           # screen y is down
-        active = stick.origin is not None or inp.move_x or inp.move_y
-        self._disc(knob_x, knob_y, base_r * 0.42,
-                   (0.95, 0.95, 1.0), 0.55 if active else 0.30)
+        # --- movement + look sticks ---------------------------------------
+        # Draw the knob from each stick's own deflection (recorded by the input
+        # model), not the merged input axes, so both sticks read independently.
+        self._draw_stick(controls.move_stick, getattr(controls, "move_value", (0.0, 0.0)), w, h, s)
+        self._draw_stick(controls.look_stick, getattr(controls, "look_value", (0.0, 0.0)), w, h, s)
 
         # --- action buttons ------------------------------------------------
         for btn in controls.buttons:
@@ -142,6 +130,24 @@ class OverlayRenderer:
         gl.glBindVertexArray(0)
         gl.glDisable(gl.GL_BLEND)
         gl.glEnable(gl.GL_DEPTH_TEST)
+
+    # ------------------------------------------------------------------
+    def _draw_stick(self, stick, value, w, h, s) -> None:
+        """Draw one floating stick: translucent base ring + brighter knob."""
+        base_r = stick.radius * s
+        if stick.origin is not None:
+            bx, by = stick.origin
+        else:
+            bx, by = stick.home_x * w, stick.home_y * h   # resting hint
+        self._disc(bx, by, base_r, (1.0, 1.0, 1.0), 0.14)
+        self._disc(bx, by, base_r * 0.30, (1.0, 1.0, 1.0), 0.10)
+
+        vx, vy = value
+        knob_x = bx + vx * base_r
+        knob_y = by - vy * base_r                          # screen y is down
+        active = stick.origin is not None
+        self._disc(knob_x, knob_y, base_r * 0.42,
+                   (0.95, 0.95, 1.0), 0.55 if active else 0.28)
 
     # ------------------------------------------------------------------
     def _disc(self, cx, cy, radius, color, alpha) -> None:
