@@ -37,6 +37,15 @@ _FACES = [
 FLOATS_PER_VERTEX = 6
 VERTS_PER_BRUSH = 36  # 6 faces * 2 triangles * 3 verts
 
+# Per-face metadata, index-aligned with _FACES:
+#   * the map's texture key for that face
+#   * (u_axis, v_axis) — which size components span the face, for UV tiling
+_FACE_KEYS = ("south", "north", "east", "west", "top", "down")
+_FACE_UV_AXES = ((0, 1), (0, 1), (2, 1), (2, 1), (0, 2), (0, 2))
+
+FLOATS_PER_VERTEX_TEX = 8       # pos3 + normal3 + uv2
+DEFAULT_TEXEL = 128.0           # world units per texture repeat
+
 
 def _is_renderable(brush: dict) -> bool:
     if not isinstance(brush, dict):
@@ -75,6 +84,43 @@ def build_brush_mesh(map_data: dict) -> Tuple["np.ndarray", int]:
                     row += 1
 
     return out.reshape(-1), row
+
+
+def build_textured_batches(
+    map_data: dict, texel: float = DEFAULT_TEXEL
+) -> Dict[str, "np.ndarray"]:
+    """Group brush faces by texture into interleaved (pos3, normal3, uv2) arrays.
+
+    Returns ``{texture_name: vertices}``. Faces with no texture assigned land
+    under the empty-string key ``""`` (drawn untextured by the renderer). UVs
+    tile every ``texel`` world units so textures keep a constant real-world size
+    regardless of face dimensions (Radiant-style), and repeat via GL_REPEAT.
+    """
+    batches: Dict[str, list] = {}
+    for b in map_data.get("brushes", []):
+        if not _is_renderable(b):
+            continue
+        cx, cy, cz = (float(v) for v in b["pos"])
+        size = [abs(float(v)) for v in b["size"]]
+        sx, sy, sz = (float(v) for v in b["size"])
+        textures = b.get("textures") if isinstance(b.get("textures"), dict) else {}
+
+        for fi, (normal, corners) in enumerate(_FACES):
+            texname = textures.get(_FACE_KEYS[fi]) or ""
+            ua, va = _FACE_UV_AXES[fi]
+            span_u = size[ua] / texel if texel else 1.0
+            span_v = size[va] / texel if texel else 1.0
+            group = batches.setdefault(texname, [])
+            for a, bi, c in ((0, 1, 2), (0, 2, 3)):
+                for idx in (a, bi, c):
+                    ox, oy, oz = corners[idx]
+                    group.extend((
+                        cx + ox * sx, cy + oy * sy, cz + oz * sz,
+                        normal[0], normal[1], normal[2],
+                        (corners[idx][ua] + 0.5) * span_u,
+                        (corners[idx][va] + 0.5) * span_v,
+                    ))
+    return {name: np.asarray(v, dtype=np.float32) for name, v in batches.items() if v}
 
 
 def extract_lights(map_data: dict, limit: int = 8) -> List[Dict]:
