@@ -63,19 +63,34 @@ class TestTouchControls(unittest.TestCase):
         tc = TouchControls()
         st = InputState()
         st.begin_frame()
-        # FIRE button centre is (0.90*W, 0.82*H) = (900, 410).
-        tc.apply(st, {5: (900.0, 410.0)}, self.W, self.H)
+        # FIRE button centre is (0.92*W, 0.55*H) = (920, 275).
+        tc.apply(st, {5: (920.0, 275.0)}, self.W, self.H)
         self.assertTrue(st.is_down(ACTION_FIRE))
 
-    def test_look_drag_turns(self):
+    def test_look_stick_deflection_turns(self):
         tc = TouchControls()
         st = InputState()
         st.begin_frame()
-        # Land on the right side (not over a button) -> look pointer.
+        # Land on the right side (not over a button) -> look stick centre.
         tc.apply(st, {9: (600.0, 200.0)}, self.W, self.H)
         st.begin_frame()
-        tc.apply(st, {9: (660.0, 200.0)}, self.W, self.H)  # drag right
-        self.assertGreater(st.look_x, 0.0)
+        tc.apply(st, {9: (660.0, 200.0)}, self.W, self.H)  # deflect right
+        self.assertGreater(st.look_x, 0.0)                 # turn right
+        self.assertNotEqual(tc.look_value, (0.0, 0.0))
+
+    def test_two_sticks_independent(self):
+        # A finger on the left drives move only; a finger on the right drives
+        # look only — simultaneously, without cross-talk.
+        tc = TouchControls(dead_zone=0.0)
+        st = InputState()
+        st.begin_frame()
+        tc.apply(st, {1: (200.0, 250.0), 2: (700.0, 250.0)}, self.W, self.H)  # grab both
+        st.begin_frame()
+        tc.apply(st, {1: (250.0, 250.0), 2: (760.0, 200.0)}, self.W, self.H)  # deflect both
+        self.assertGreater(st.move_x, 0.0)   # left stick moved right
+        self.assertEqual(round(st.move_y, 3), 0.0)
+        self.assertGreater(st.look_x, 0.0)   # right stick turned right
+        self.assertGreater(st.look_y, 0.0)   # right stick looked up
 
     def test_lift_releases_move_origin(self):
         tc = TouchControls()
