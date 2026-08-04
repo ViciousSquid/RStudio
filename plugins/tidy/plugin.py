@@ -27,7 +27,7 @@ class TidyPlugin(FioPlugin):
     version = "1.0.0"
     description = "Pick-up-and-put-away gameplay for large object-tidying games."
     category = "Tidy"
-    enabled = False
+    enabled = True
 
     # -- load time ----------------------------------------------------------
     def register(self, api):
