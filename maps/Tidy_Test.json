@@ -21,7 +21,7 @@
     "down": "Dev/512.jpg"
    },
    "is_trigger": false,
-   "id": "8199be7f-e1da-4198-8b3a-50eae8c0f99e"
+   "id": "d4d617df-1e94-484f-a7a4-a01393fe80e8"
   },
   {
    "pos": [
@@ -43,7 +43,7 @@
     "down": "Dev/512.jpg"
    },
    "is_trigger": false,
-   "id": "8091938c-e0b8-4a1d-8324-4f9c7ec48177"
+   "id": "6104c0e8-ab03-41e6-832e-0212ea7869d4"
   },
   {
    "pos": [
@@ -65,7 +65,7 @@
     "down": "Dev/512.jpg"
    },
    "is_trigger": false,
-   "id": "4e083e61-0fea-4ed6-982f-27e7f1f5791a"
+   "id": "56dc5b0f-cada-4566-b663-1c595a0e4a9e"
   },
   {
    "pos": [
@@ -87,7 +87,7 @@
     "down": "Dev/512.jpg"
    },
    "is_trigger": false,
-   "id": "fe180b0f-170e-4a87-80c2-0aec0027cd1c"
+   "id": "df17c847-50d7-4043-81a0-3db29fc2a8f0"
   },
   {
    "pos": [
@@ -109,7 +109,7 @@
     "down": "Dev/512.jpg"
    },
    "is_trigger": false,
-   "id": "2176df30-161a-4b0c-b353-b01a717bf41e"
+   "id": "6434a55e-f296-4df6-b406-1ccb63d47c05"
   },
   {
    "pos": [
@@ -131,7 +131,7 @@
     "down": "Dev/512.jpg"
    },
    "is_trigger": false,
-   "id": "e9831b2a-e05f-4065-8834-fe16d58d0229"
+   "id": "1af9ad49-c72d-4722-a956-425d678ffad4"
   },
   {
    "pos": [
@@ -153,7 +153,7 @@
     "down": "Dev/512.jpg"
    },
    "is_trigger": false,
-   "id": "23481531-ba31-4464-b5a2-cc2a763e4af3"
+   "id": "c0010102-60c9-497c-8dcc-288f385015bb"
   }
  ],
  "things": [
@@ -168,7 +168,7 @@
     "angle": 180.0,
     "type": "playerstart",
     "name": "PlayerStart_1",
-    "id": "03bcd38b-fa45-432c-8f8f-9103ae15b4c5"
+    "id": "52cf6d09-2599-4cd1-b46e-2e869bc93821"
    },
    "io_connections": []
   },
@@ -185,7 +185,7 @@
     "state": "on",
     "type": "light",
     "name": "Light_1",
-    "id": "2d0c94aa-b00f-4b01-9126-832abf7b5b82",
+    "id": "caed68a1-2aac-4a6c-a780-458ca7ef3f4c",
     "colour": [
      255,
      255,
@@ -226,7 +226,7 @@
     ],
     "reach": 180.0,
     "type": "tidyreceptacle",
-    "id": "b77a0b65-61f0-48e3-b38d-9208ba1c2369",
+    "id": "13802323-7cc3-4904-8a47-2659dc8ea8d7",
     "disabled": false
    },
    "io_connections": []
@@ -242,8 +242,8 @@
     "name": "Book_1",
     "category": "book",
     "type": "tidyobject",
-    "id": "9d3d16de-06b7-4c28-aaf6-3b94304977ad",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "7f442965-539a-4a85-82a9-37d9e2dbd07f",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -254,6 +254,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_08.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -271,8 +272,8 @@
     "name": "Book_2",
     "category": "book",
     "type": "tidyobject",
-    "id": "0c9a318d-751c-403f-8923-392ca9ad5760",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "455206e7-69e1-447b-b6ce-b4603dd3106f",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -283,6 +284,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -300,8 +302,8 @@
     "name": "Book_3",
     "category": "book",
     "type": "tidyobject",
-    "id": "e73fe06d-e268-44f4-8d9b-9b19aa852d78",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "61279c42-bd4d-4644-9b91-39af8c80caba",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -312,6 +314,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_03.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -329,8 +332,8 @@
     "name": "Book_4",
     "category": "book",
     "type": "tidyobject",
-    "id": "34abaf60-ecfc-4891-b7c8-5f0c4abcd357",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "af214761-8b22-4a1a-a20b-70225c81534e",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -341,6 +344,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_07.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -358,8 +362,8 @@
     "name": "Book_5",
     "category": "book",
     "type": "tidyobject",
-    "id": "c5328caa-551f-40b6-8519-3d36f5f7d9a7",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "4cc70f96-d052-49f1-95c2-33e8a64ab404",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -370,6 +374,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_04.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -387,8 +392,8 @@
     "name": "Book_6",
     "category": "book",
     "type": "tidyobject",
-    "id": "5dc9d587-fde0-42e7-bf11-4f05ba55d8f2",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "49e9d916-852b-4b20-8c36-a9ed098fbcc0",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -399,6 +404,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_09.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -416,8 +422,8 @@
     "name": "Book_7",
     "category": "book",
     "type": "tidyobject",
-    "id": "10392ecc-5fdf-45ca-b037-74ecb8e16888",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "39d4378a-ed34-4594-8abe-82a06af99f34",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -428,6 +434,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_07.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -445,8 +452,8 @@
     "name": "Book_8",
     "category": "book",
     "type": "tidyobject",
-    "id": "027bd372-4df7-4f8f-92ad-deb8b38d416d",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "eaee738e-2a19-4766-b7ca-3048f4a2c648",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -457,6 +464,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_08.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -474,8 +482,8 @@
     "name": "Book_9",
     "category": "book",
     "type": "tidyobject",
-    "id": "642ea506-217f-427f-8e8f-3689bf5467b1",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "a7fd5733-ffeb-461e-b96d-fc9293695485",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -486,6 +494,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_04.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -503,8 +512,8 @@
     "name": "Book_10",
     "category": "book",
     "type": "tidyobject",
-    "id": "de253b61-b945-4ff1-820a-8f0cbc981278",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "e980361f-b20e-4620-a8ca-06f89ecd127b",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -515,6 +524,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_09.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -532,8 +542,8 @@
     "name": "Book_11",
     "category": "book",
     "type": "tidyobject",
-    "id": "12d7cdc6-62a9-4ce3-b5fa-69f2a7597bba",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "a2de95d6-1b3d-4ba1-8d20-9cb7ddc123f8",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -544,6 +554,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_02.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -561,8 +572,8 @@
     "name": "Book_12",
     "category": "book",
     "type": "tidyobject",
-    "id": "05dbd2ba-4e89-4775-903b-cfbcf28fbdc5",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "141fb0fa-e8af-42a4-a924-865e0c04054a",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -573,6 +584,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -590,8 +602,8 @@
     "name": "Book_13",
     "category": "book",
     "type": "tidyobject",
-    "id": "746fe880-8bf1-40e0-bb6d-8e93bb3f2a5f",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "0f9b5708-90b4-4550-94c1-6904c897a171",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -602,6 +614,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_05.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -619,8 +632,8 @@
     "name": "Book_14",
     "category": "book",
     "type": "tidyobject",
-    "id": "71f0d2c0-e7f5-49b1-a181-d745f6a1851a",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "27420ac1-6f2d-47f4-8887-31bc3318d833",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -631,6 +644,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_08.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -648,8 +662,8 @@
     "name": "Book_15",
     "category": "book",
     "type": "tidyobject",
-    "id": "4d088cff-1d59-4620-aca2-cd6123fede9e",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "3ad8692d-ca4a-45df-96dc-1a4dfd00500e",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -660,6 +674,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_01.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -677,8 +692,8 @@
     "name": "Book_16",
     "category": "book",
     "type": "tidyobject",
-    "id": "760edc1f-f966-40ed-a18f-8df20f30ba65",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "2c160fad-f485-4334-adf7-14df8c3acd5a",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -689,6 +704,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_03.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -706,8 +722,8 @@
     "name": "Book_17",
     "category": "book",
     "type": "tidyobject",
-    "id": "93c136a4-684a-4e49-b00f-66b2368b4653",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "993aaaba-c7b2-4f22-b521-44ab09a51d41",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -718,6 +734,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_04.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -735,8 +752,8 @@
     "name": "Book_18",
     "category": "book",
     "type": "tidyobject",
-    "id": "8e57b2ca-a24a-454f-9c33-b749b2f359b0",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "c15f7aeb-14f0-4286-b44a-27af60bc3d91",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -747,6 +764,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_03.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -764,8 +782,8 @@
     "name": "Book_19",
     "category": "book",
     "type": "tidyobject",
-    "id": "e2f92597-63c4-4d8c-8906-952ca401c6bb",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "4b25f5e2-9882-4111-aac6-698e885c3a8a",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -776,6 +794,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_11.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -793,8 +812,8 @@
     "name": "Book_20",
     "category": "book",
     "type": "tidyobject",
-    "id": "f5d54efa-3873-4b68-902b-2d7ec4013be1",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "c2aadf40-3f7c-4869-9ec9-276ba931ea5a",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -805,6 +824,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_08.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -822,8 +842,8 @@
     "name": "Book_21",
     "category": "book",
     "type": "tidyobject",
-    "id": "ef151f11-bc33-4787-8b6a-f3a83ded1b38",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "4ea46ee1-aa26-41a6-a0f8-d98e452d739a",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -834,6 +854,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -851,8 +872,8 @@
     "name": "Book_22",
     "category": "book",
     "type": "tidyobject",
-    "id": "6e2ec1d1-e852-42ba-9d01-f9d45ee14c23",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "55943628-b7dc-4279-b519-56cb79a50e2e",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -863,6 +884,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -880,8 +902,8 @@
     "name": "Book_23",
     "category": "book",
     "type": "tidyobject",
-    "id": "c88a9e15-24ce-498c-b296-f5b4d41b4811",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "a14dd96b-5c13-46ae-84a8-4204a65c1a96",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -892,6 +914,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_04.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -909,8 +932,8 @@
     "name": "Book_24",
     "category": "book",
     "type": "tidyobject",
-    "id": "f3f92d43-a799-454a-b994-1af1e0ba41cb",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "8a5d67ce-867b-474b-ac0a-ccf43949c4c5",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -921,6 +944,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -938,8 +962,8 @@
     "name": "Book_25",
     "category": "book",
     "type": "tidyobject",
-    "id": "a63602f0-2cac-4da6-b7c4-d37f80464409",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "0f4a24fa-f177-4fa0-821f-9ad605b9d78c",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -950,6 +974,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_06.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -967,8 +992,8 @@
     "name": "Book_26",
     "category": "book",
     "type": "tidyobject",
-    "id": "049d0a93-c02f-46f8-a0b7-cd21f918a8fe",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "e8856838-8bce-47bd-a5ae-d774cb357c56",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -979,6 +1004,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -996,8 +1022,8 @@
     "name": "Book_27",
     "category": "book",
     "type": "tidyobject",
-    "id": "ec888f78-131d-41d5-b121-fc8c258524a8",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "0b78b8aa-396c-4167-bbdc-dac87d6764c7",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -1008,6 +1034,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -1025,8 +1052,8 @@
     "name": "Book_28",
     "category": "book",
     "type": "tidyobject",
-    "id": "2eed08d1-8926-48bd-8769-64b064db3d74",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "77dce366-1eaa-472c-b7eb-57a3f4fd70b2",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -1037,6 +1064,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_07.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -1054,8 +1082,8 @@
     "name": "Book_29",
     "category": "book",
     "type": "tidyobject",
-    "id": "c62b288b-290a-450c-b612-310d1cf223f9",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "7fb0e105-5407-45d2-8fad-f5c2e0c6b94e",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -1066,6 +1094,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_01.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -1083,8 +1112,8 @@
     "name": "Book_30",
     "category": "book",
     "type": "tidyobject",
-    "id": "682b3932-42fd-45ba-9320-677e2f9b8cf9",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "29327c2c-121f-4379-bbef-905ecca5bc8f",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -1095,6 +1124,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_07.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -1112,8 +1142,8 @@
     "name": "Book_31",
     "category": "book",
     "type": "tidyobject",
-    "id": "151cf0c7-b1b3-4f44-a5d4-6943613ba73f",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "d3003192-5e31-4864-be85-f2548b0bc0f6",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -1124,6 +1154,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_06.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -1141,8 +1172,8 @@
     "name": "Book_32",
     "category": "book",
     "type": "tidyobject",
-    "id": "c127ef9a-cb40-476b-b400-d74a0dc48bc8",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "072889fb-6bf7-478a-8502-f5a519853287",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -1153,6 +1184,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_01.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -1170,8 +1202,8 @@
     "name": "Book_33",
     "category": "book",
     "type": "tidyobject",
-    "id": "91fb8027-3dcb-44ca-8d43-bb1da60471da",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "3c60d9da-80b8-489e-9927-563b5a91e407",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -1182,6 +1214,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -1199,8 +1232,8 @@
     "name": "Book_34",
     "category": "book",
     "type": "tidyobject",
-    "id": "c4e33022-56db-4f1f-a3bf-7dce4916321e",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "a8d1eb3c-e9d5-4491-a936-ababcc48d101",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -1211,6 +1244,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_12.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -1228,8 +1262,8 @@
     "name": "Book_35",
     "category": "book",
     "type": "tidyobject",
-    "id": "e8f20bb3-1473-48a2-a95b-8059e8712694",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "4e816f12-eda6-4908-9709-17bb266e8988",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -1240,6 +1274,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_06.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -1257,8 +1292,8 @@
     "name": "Book_36",
     "category": "book",
     "type": "tidyobject",
-    "id": "f156d28b-ab35-45ed-9627-5245ef9c26bb",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "8ad408d5-4cda-46d3-a027-13e702eb2e2f",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -1269,6 +1304,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_12.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -1286,8 +1322,8 @@
     "name": "Book_37",
     "category": "book",
     "type": "tidyobject",
-    "id": "cb1caf1e-9f29-4816-949a-bacc82e2c480",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "7a1d937c-4b00-438b-a20a-a505f86d1085",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -1298,6 +1334,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -1315,8 +1352,8 @@
     "name": "Book_38",
     "category": "book",
     "type": "tidyobject",
-    "id": "2eba9f7d-181a-45b9-a503-53e92b6c5b22",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "0e1be42d-2cd4-489d-8a6f-4bc8fb828d5b",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -1327,6 +1364,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_05.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -1344,8 +1382,8 @@
     "name": "Book_39",
     "category": "book",
     "type": "tidyobject",
-    "id": "a64f2e89-2bd4-46ce-a03a-eceb04175c5b",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "5b61a062-1451-4bbc-916f-2175addf5ec2",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -1356,6 +1394,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_09.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -1373,8 +1412,8 @@
     "name": "Book_40",
     "category": "book",
     "type": "tidyobject",
-    "id": "2a48b441-5b4b-4157-802a-543eb688a3dd",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "59fc264a-070a-4b22-ad5c-772a1e1d3d2d",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -1385,6 +1424,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_09.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -1402,8 +1442,8 @@
     "name": "Book_41",
     "category": "book",
     "type": "tidyobject",
-    "id": "1c27a586-18da-4de1-b1bb-7eff69ff5182",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "49bd0314-a385-4264-a5a7-aa97e0af962f",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -1414,6 +1454,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_09.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -1431,8 +1472,8 @@
     "name": "Book_42",
     "category": "book",
     "type": "tidyobject",
-    "id": "9ecb1dc5-f71c-4f59-b9a6-58150abc3049",
-    "model_path": "plugins/tidy/assets/tidy_object.obj",
+    "id": "be20e0c8-405b-4946-a846-ca33ee6adf12",
+    "model_path": "plugins/tidy/assets/book.obj",
     "rotation": [
      0,
      0,
@@ -1443,6 +1484,7 @@
      1,
      1
     ],
+    "texture": "plugins/tidy/assets/covers/cover_01.png",
     "no_collision": true,
     "tidied": false,
     "disabled": false
@@ -1461,7 +1503,7 @@
     "target": "all",
     "category": "any",
     "type": "tidygoal",
-    "id": "9f2c800d-e3fc-471d-a17a-f302e0cae2ef",
+    "id": "7562eb46-6cac-41b9-99cf-72c1b6b2994f",
     "show_hud": true,
     "disabled": false
    },
@@ -1473,7 +1515,7 @@
      "parameter": "",
      "delay": 0.0,
      "fire_once": false,
-     "target_id": "b77a0b65-61f0-48e3-b38d-9208ba1c2369"
+     "target_id": "13802323-7cc3-4904-8a47-2659dc8ea8d7"
     }
    ]
   }

@@ -31,12 +31,28 @@ from .api import EditorAPI, FioPlugin, RuntimeAPI, TickContext
 
 
 def _log(message: str):
-    """Route through the editor debug console when present, else print."""
+    """Emit a plugin message (errors/warnings) to the console.
+
+    Routes through the editor debug console when present, else prints. Reserved
+    for things the user should see — failures. Informational chatter goes
+    through :func:`_debug` instead, which is silent unless FIO_PLUGIN_DEBUG is
+    set, so a normal launch shows nothing about plugins loading.
+    """
     try:
         from editor.debug_console import debug_log
         debug_log("Plugins", message)
     except Exception:
         print(f"[Plugins] {message}")
+
+
+def _debug(message: str):
+    """Emit an informational plugin message only when debugging is enabled.
+
+    Enable with the ``FIO_PLUGIN_DEBUG`` environment variable. Kept quiet by
+    default so successful plugin loading does not clutter the console.
+    """
+    if os.environ.get("FIO_PLUGIN_DEBUG"):
+        _log(message)
 
 
 class PluginManager:
@@ -46,6 +62,13 @@ class PluginManager:
         self._loading = False
         # (plugin, label, ThingClass) placement entries for the editor menu.
         self._menu_entries: List[Tuple[FioPlugin, str, type]] = []
+        # Normalised entity-type name -> owning plugin (for package export).
+        # Keyed the same way editor.things.from_dict matches: class name,
+        # lowercased, underscores stripped.
+        self._entity_owner: dict = {}
+        # Normalised entity-type name -> entity class. Lets the player host
+        # instantiate plugin entities from map data without the editor palette.
+        self._entity_classes: dict = {}
         # Disabled plugin names (by directory or plugin.name). Populated from
         # the FIO_DISABLED_PLUGINS env var, comma-separated.
         self._disabled = {
@@ -56,7 +79,12 @@ class PluginManager:
 
     # -- logging ------------------------------------------------------------
     def _log(self, message: str):
+        """Console-visible message (failures)."""
         _log(message)
+
+    def _debug(self, message: str):
+        """Informational message, silent unless FIO_PLUGIN_DEBUG is set."""
+        _debug(message)
 
     # -- discovery + load ---------------------------------------------------
     def discover_and_load(self):
@@ -74,7 +102,7 @@ class PluginManager:
             if mod_name.startswith("_"):
                 continue
             if mod_name.lower() in self._disabled:
-                self._log(f"Skipping disabled plugin package '{mod_name}'")
+                self._debug(f"Skipping disabled plugin package '{mod_name}'")
                 continue
             self._load_one(mod_name)
             found += 1
@@ -84,9 +112,9 @@ class PluginManager:
 
         if self.plugins:
             names = ", ".join(f"{p.name} v{p.version}" for p in self.plugins)
-            self._log(f"Loaded {len(self.plugins)} plugin(s): {names}")
+            self._debug(f"Loaded {len(self.plugins)} plugin(s): {names}")
         elif found == 0:
-            self._log("No plugins found.")
+            self._debug("No plugins found.")
 
     def _load_one(self, mod_name: str):
         try:
@@ -112,7 +140,7 @@ class PluginManager:
             self._log(f"Plugin '{mod_name}' PLUGIN is not a FioPlugin; skipping.")
             return
         if plugin.name.lower() in self._disabled:
-            self._log(f"Skipping disabled plugin '{plugin.name}'")
+            self._debug(f"Skipping disabled plugin '{plugin.name}'")
             return
 
         try:
@@ -141,10 +169,84 @@ class PluginManager:
     def has_plugins(self) -> bool:
         return bool(self.plugins)
 
+    # -- enable / disable ---------------------------------------------------
+    def find_plugin(self, name: str) -> Optional[FioPlugin]:
+        low = str(name).lower()
+        for p in self.plugins:
+            if p.name.lower() == low or self.plugin_package_name(p).lower() == low:
+                return p
+        return None
+
+    def is_enabled(self, plugin) -> bool:
+        return bool(getattr(plugin, "enabled", True))
+
+    def set_enabled(self, plugin_or_name, enabled: bool):
+        """Enable/disable a plugin at runtime.
+
+        A disabled plugin stays loaded (its already-registered entity types
+        remain known) but is skipped for runtime attach and lifecycle/tick
+        dispatch, so its gameplay stops. Placement of its entities is greyed out
+        in the editor menus.
+        """
+        plugin = plugin_or_name
+        if isinstance(plugin_or_name, str):
+            plugin = self.find_plugin(plugin_or_name)
+        if plugin is not None:
+            plugin.enabled = bool(enabled)
+
+    # -- entity ownership / packaging --------------------------------------
+    @staticmethod
+    def _normalise_type(type_name: str) -> str:
+        """Match editor.things.from_dict: lowercased, underscores stripped."""
+        return str(type_name).replace("_", "").lower()
+
+    def _record_entity_owner(self, cls: type, plugin: FioPlugin):
+        key = cls.__name__.lower()
+        self._entity_owner[key] = plugin
+        self._entity_classes[key] = cls
+
+    def plugin_for_type(self, type_name: str) -> Optional[FioPlugin]:
+        """Return the plugin that owns *type_name* (a map entity 'type'), or None."""
+        return self._entity_owner.get(self._normalise_type(type_name))
+
+    def entity_class_for_type(self, type_name: str) -> Optional[type]:
+        """Return the entity class registered for *type_name*, or None.
+
+        Base-agnostic: works whether the class subclasses the editor's ``Thing``
+        or the PyQt-free fallback, so the player host can build instances from
+        map data without the editor.
+        """
+        return self._entity_classes.get(self._normalise_type(type_name))
+
+    def required_plugins_for_types(self, type_names) -> List[FioPlugin]:
+        """Plugins needed to load entities of the given map 'type' strings."""
+        seen, out = set(), []
+        for t in type_names:
+            plugin = self.plugin_for_type(t)
+            if plugin is not None and id(plugin) not in seen:
+                seen.add(id(plugin))
+                out.append(plugin)
+        return out
+
+    def plugin_package_dir(self, plugin: FioPlugin) -> Optional[str]:
+        """Absolute filesystem directory of a plugin's package, or None."""
+        import inspect
+        try:
+            return os.path.dirname(os.path.abspath(inspect.getfile(type(plugin))))
+        except Exception:
+            return None
+
+    def plugin_package_name(self, plugin: FioPlugin) -> str:
+        """The plugin's package basename (e.g. 'tidy')."""
+        d = self.plugin_package_dir(plugin)
+        return os.path.basename(d) if d else plugin.name
+
     # -- runtime attach -----------------------------------------------------
     def attach_runtime(self, logic):
-        """Let every plugin register I/O handlers for this logic thread."""
+        """Let every enabled plugin register I/O handlers for this logic thread."""
         for plugin in self.plugins:
+            if not self.is_enabled(plugin):
+                continue
             try:
                 plugin.register_runtime(RuntimeAPI(self, logic, plugin))
             except Exception:
@@ -153,6 +255,8 @@ class PluginManager:
     # -- lifecycle dispatch -------------------------------------------------
     def dispatch_play_start(self, logic):
         for plugin in self.plugins:
+            if not self.is_enabled(plugin):
+                continue
             try:
                 plugin.on_play_start(logic)
             except Exception:
@@ -160,6 +264,8 @@ class PluginManager:
 
     def dispatch_play_stop(self, logic):
         for plugin in self.plugins:
+            if not self.is_enabled(plugin):
+                continue
             try:
                 plugin.on_play_stop(logic)
             except Exception:
@@ -167,6 +273,8 @@ class PluginManager:
 
     def dispatch_tick(self, logic, ctx: TickContext):
         for plugin in self.plugins:
+            if not self.is_enabled(plugin):
+                continue
             try:
                 plugin.on_tick(logic, ctx)
             except Exception:

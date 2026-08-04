@@ -19,12 +19,21 @@ a log line rather than breaking startup. It patches:
 * ``editor.view_2d.View2D``
     - ``contextMenuEvent``    → add a "Plugins ▸ <plugin>" placement submenu,
                                 reusing the original menu handler unchanged
+* ``editor.ui.Ui_MainWindow``
+    - ``create_menu_bar``     → add a top-level **Plugins** menu bar entry
+* ``editor.package_exporter.PackageExporter``
+    - ``export``              → after the base ``.fiopak`` is written, bundle
+                                the plugins its maps depend on (code + assets)
+                                so the package is self-contained and portable
 
 The equivalent hand-edits (for reference / an alternative to this shim) would
-be three small insertions in those files; see ``plugins/README.md``.
+be small insertions in those files; see ``plugins/README.md``.
 """
 
+
 from __future__ import annotations
+
+from PyQt5.QtWidgets import QMessageBox, QMenu
 
 _applied = False
 
@@ -45,6 +54,8 @@ def apply():
     _applied = True
     _patch_logic_thread()
     _patch_view_2d()
+    _patch_editor_menu()
+    _patch_package_exporter()
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +147,9 @@ def _patch_view_2d():
 
     def contextMenuEvent(self, event):
         try:
-            entries = get_manager().menu_entries()
+            mgr = get_manager()
+            entries = [(pl, label, cls) for pl, label, cls in mgr.menu_entries()
+                       if mgr.is_enabled(pl)]
         except Exception:
             entries = []
         if not entries:
@@ -202,3 +215,217 @@ def _patch_view_2d():
 
     View2D.contextMenuEvent = contextMenuEvent
     View2D._fio_plugins_patched = True
+
+
+# ---------------------------------------------------------------------------
+# editor.ui.Ui_MainWindow  — top-level "Plugins" menu bar entry
+# ---------------------------------------------------------------------------
+
+def _patch_editor_menu():
+    try:
+        from editor.ui import Ui_MainWindow
+    except Exception as exc:
+        _log(f"menu-bar patch skipped ({exc})")
+        return
+
+    if getattr(Ui_MainWindow, "_fio_plugins_patched", False):
+        return
+
+    _orig_create_menu_bar = Ui_MainWindow.create_menu_bar
+
+    def create_menu_bar(self, MainWindow):
+        _orig_create_menu_bar(self, MainWindow)
+        try:
+            _build_plugins_menu(MainWindow)
+        except Exception as exc:
+            _log(f"Plugins menu build failed: {exc}")
+
+    Ui_MainWindow.create_menu_bar = create_menu_bar
+    Ui_MainWindow._fio_plugins_patched = True
+
+
+def _disabled_from_config(MainWindow):
+    """Read the persisted set of disabled plugin names from settings.ini."""
+    cfg = getattr(MainWindow, "config", None)
+    if cfg is None:
+        return set()
+    try:
+        raw = cfg.get("Plugins", "disabled", fallback="")
+    except Exception:
+        raw = ""
+    return {n.strip().lower() for n in raw.split(",") if n.strip()}
+
+
+def _persist_disabled(MainWindow):
+    """Write the current disabled-plugin set back to settings.ini."""
+    from plugins.manager import get_manager
+    cfg = getattr(MainWindow, "config", None)
+    if cfg is None:
+        return
+    mgr = get_manager()
+    disabled = sorted(mgr.plugin_package_name(p).lower()
+                      for p in mgr.plugins if not mgr.is_enabled(p))
+    try:
+        if not cfg.has_section("Plugins"):
+            cfg.add_section("Plugins")
+        cfg.set("Plugins", "disabled", ", ".join(disabled))
+        if hasattr(MainWindow, "save_config"):
+            MainWindow.save_config()
+    except Exception as exc:
+        _log(f"could not persist plugin toggle: {exc}")
+
+
+def _build_plugins_menu(MainWindow):
+    from PyQt5.QtWidgets import QMessageBox
+    from plugins.manager import get_manager
+
+    mgr = get_manager()
+
+    # Apply any persisted enable/disable choices before drawing the menu.
+    persisted_off = _disabled_from_config(MainWindow)
+    for plugin in mgr.plugins:
+        if mgr.plugin_package_name(plugin).lower() in persisted_off or \
+                plugin.name.lower() in persisted_off:
+            plugin.enabled = False
+
+    menubar = MainWindow.menuBar()
+
+    # Insert Plugins immediately before Help
+    help_action = None
+    for action in menubar.actions():
+        if action.text().replace("&", "") == "Help":
+            help_action = action
+            break
+
+    menu = QMenu("Plugins", menubar)
+    if help_action:
+        menubar.insertMenu(help_action, menu)
+    else:
+        menubar.addMenu(menu)
+
+    if not mgr.plugins:
+        act = menu.addAction("No plugins loaded")
+        act.setEnabled(False)
+        return
+
+    for plugin in mgr.plugins:
+        sub = menu.addMenu(f"{plugin.name}  v{plugin.version}")
+
+        # Enable/disable toggle (checked = on).
+        toggle = sub.addAction("Enabled")
+        toggle.setCheckable(True)
+        toggle.setChecked(mgr.is_enabled(plugin))
+        toggle.toggled.connect(
+            lambda checked, p=plugin: _toggle_plugin(MainWindow, p, checked))
+        sub.addSeparator()
+
+        # Placement entries for this plugin's entities.
+        entries = [(label, cls) for pl, label, cls in mgr.menu_entries()
+                   if pl is plugin]
+        if entries:
+            place_hdr = sub.addAction("Add entity (at origin):")
+            place_hdr.setEnabled(False)
+            for label, cls in entries:
+                act = sub.addAction(f"   {label}")
+                act.triggered.connect(
+                    lambda _checked=False, c=cls, l=label, p=plugin:
+                    _place_plugin_entity(MainWindow, p, c, l))
+            sub.addSeparator()
+
+        about = sub.addAction("About…")
+        about.triggered.connect(
+            lambda _checked=False, p=plugin:
+            QMessageBox.information(
+                MainWindow, f"{p.name} v{p.version}",
+                f"{p.description or '(no description)'}\n\n"
+                f"Category: {p.category}\n"
+                f"Place its entities from here or the 2D view's right-click "
+                f"menu under Plugins ▸ {p.name}."))
+
+
+
+def _toggle_plugin(MainWindow, plugin, enabled):
+    from plugins.manager import get_manager
+    get_manager().set_enabled(plugin, enabled)
+    _persist_disabled(MainWindow)
+    if hasattr(MainWindow, "show_toast"):
+        state = "enabled" if enabled else "disabled"
+        MainWindow.show_toast(f"Plugin '{plugin.name}' {state}"
+                              + ("" if enabled else " (restart to fully unload)"))
+
+
+def _place_plugin_entity(MainWindow, plugin, cls, label):
+    """Create a plugin entity at the origin and select it."""
+    from plugins.manager import get_manager
+    if not get_manager().is_enabled(plugin):
+        if hasattr(MainWindow, "show_toast"):
+            MainWindow.show_toast(f"Plugin '{plugin.name}' is disabled",
+                                  is_error=True)
+        return
+    try:
+        if hasattr(MainWindow, "save_state"):
+            MainWindow.save_state()
+        thing = cls(pos=[0, 40, 0])
+        MainWindow.state.things.append(thing)
+        if hasattr(MainWindow, "set_selected_object"):
+            MainWindow.set_selected_object(thing)
+        if hasattr(MainWindow, "update_views"):
+            MainWindow.update_views()
+        if hasattr(MainWindow, "show_toast"):
+            MainWindow.show_toast(f"Added {label} at origin — drag it into place")
+    except Exception as exc:
+        _log(f"menu placement failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# editor.package_exporter.PackageExporter  — bundle plugins into .fiopak
+# ---------------------------------------------------------------------------
+
+def _patch_package_exporter():
+    try:
+        from editor.package_exporter import PackageExporter
+    except Exception as exc:
+        _log(f"package-exporter patch skipped ({exc})")
+        return
+
+    if getattr(PackageExporter, "_fio_plugins_patched", False):
+        return
+
+    _orig_export = PackageExporter.export
+
+    def export(self, output_path, metadata, current_map_path, parent_widget=None):
+        ok, errors = _orig_export(self, output_path, metadata, current_map_path,
+                                  parent_widget)
+        if ok:
+            try:
+                from plugins.packaging import augment_fiopak
+                summary = augment_fiopak(output_path)
+                added = summary.get("added_paths", set())
+                if added and errors:
+                    # Drop cosmetic "Missing asset" warnings for files that the
+                    # plugin bundle actually supplied (plugin assets live outside
+                    # the assets/ tree the base exporter searches).
+                    norm = {a.lower().lstrip("/") for a in added}
+                    errors = [e for e in errors
+                              if not _is_bundled_missing(e, norm)]
+                if summary.get("plugins"):
+                    _log("bundled plugin(s): " + ", ".join(summary["plugins"]))
+            except Exception as exc:
+                _log(f"plugin packaging failed: {exc}")
+        return ok, errors
+
+    PackageExporter.export = export
+    PackageExporter._fio_plugins_patched = True
+
+
+def _is_bundled_missing(error_text, bundled_norm):
+    """True if *error_text* is a 'Missing asset: <p>' now supplied by a plugin."""
+    marker = "Missing asset:"
+    if marker not in str(error_text):
+        return False
+    asset = str(error_text).split(marker, 1)[1].strip().replace("\\", "/").lower().lstrip("/")
+    if asset in bundled_norm:
+        return True
+    # Also match by basename in case the reference used a bare filename.
+    base = asset.rsplit("/", 1)[-1]
+    return any(b.rsplit("/", 1)[-1] == base for b in bundled_norm)

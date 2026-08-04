@@ -21,16 +21,29 @@ editor, serializer and property panel understand them.
 
 from __future__ import annotations
 
-# The Thing hierarchy lives in the editor package. Importing it here is safe:
-# by the time plugins load, editor.things is fully defined. TidyObject reuses
-# Model for 3D rendering; the rest use the Thing base directly.
-from editor.things import Model, Thing
+import random
+
+# The Thing hierarchy normally lives in the editor package (PyQt-backed). In the
+# standalone player / Android build there is no editor package, so fall back to
+# the dependency-free base in plugins.entitybase. Whichever base is available in
+# the current process is used for all three entity classes below.
+try:
+    from editor.things import Model, Thing
+except Exception:  # pragma: no cover - exercised only in the PyQt-free player
+    from plugins.entitybase import Model, Thing
 
 
-#: The default model shipped with the plugin. Path is resolved relative to the
-#: project root by the renderer's model loader (it falls back to a cwd-relative
-#: path when the file is not under assets/models/).
-DEFAULT_TIDY_MODEL = "plugins/tidy/assets/tidy_object.obj"
+#: The UV-mapped book model every TidyObject renders as. Its cover comes from
+#: the per-instance ``texture`` (see COVERS). Resolved relative to the project
+#: root by the renderer's model loader. Regenerate with tools/make_books.py.
+BOOK_MODEL = "plugins/tidy/assets/book.obj"
+#: Back-compat alias.
+DEFAULT_TIDY_MODEL = BOOK_MODEL
+
+#: Random book covers. Each TidyObject picks one at creation, so a pile/shelf of
+#: books shows many different covers instead of identical boxes.
+N_COVERS = 12
+COVERS = [f"plugins/tidy/assets/covers/cover_{i:02d}.png" for i in range(1, N_COVERS + 1)]
 
 
 class TidyObject(Model):
@@ -47,7 +60,9 @@ class TidyObject(Model):
                    collision brush; the player walks up to and through them.
     """
 
-    pixmap_path = "assets/sprites/pickup.png"
+    # The plugin's own editor icon (a book). Resolved relative to the project
+    # root, so it travels with the plugin. Regenerate with tools/make_sprites.py.
+    pixmap_path = "plugins/tidy/assets/tidyobject.png"
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -56,7 +71,11 @@ class TidyObject(Model):
         self.properties['type'] = 'tidyobject'
         self.properties.setdefault('category', 'object')
         if not self.properties.get('model_path'):
-            self.properties['model_path'] = DEFAULT_TIDY_MODEL
+            self.properties['model_path'] = BOOK_MODEL
+        # Give each book a random cover (the renderer applies 'texture' as a
+        # per-instance override). Kept once assigned so saved maps are stable.
+        if not self.properties.get('texture'):
+            self.properties['texture'] = random.choice(COVERS)
         self.properties.setdefault('scale', [1, 1, 1])
         self.properties.setdefault('rotation', [0, 0, 0])
         # Carryable props are non-solid by default (perf + feel).
@@ -84,7 +103,7 @@ class TidyReceptacle(Thing):
     reach:         how close/aligned the player must be to place into it.
     """
 
-    pixmap_path = "assets/sprites/logic_spawner.png"
+    pixmap_path = "plugins/tidy/assets/tidyreceptacle.png"
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -136,7 +155,7 @@ class TidyGoal(Thing):
     show_hud:      show a live "N / M tidied" counter while playing.
     """
 
-    pixmap_path = "assets/sprites/logic_keyvalue.png"
+    pixmap_path = "plugins/tidy/assets/tidygoal.png"
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)

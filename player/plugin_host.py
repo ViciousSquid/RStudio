@@ -1,0 +1,194 @@
+"""
+Player-side plugin host.
+
+Lets the standalone ``.fiopak`` player load and *run* the plugins a package
+depends on — so a game built with, say, the Tidy plugin actually plays outside
+the editor. It is the player-side counterpart to the editor's
+``plugins.integration``: where the editor patches its logic thread to dispatch
+the plugin lifecycle, this drives the same dispatch from the player's frame loop.
+
+Responsibilities:
+
+* **Load** the bundled plugins. If the app already ships the ``plugins``
+  package (the Android build does), that copy is used; otherwise the plugins
+  carried inside the package are extracted to a writable dir and imported.
+* **Bridge** the player's free-look camera to the minimal ``logic`` interface
+  plugin runtimes expect (``things`` / ``player`` / ``io_manager`` /
+  ``current_hud_message``), building entity instances from the map's data.
+* **Dispatch** ``on_play_start`` / ``on_tick`` / ``on_play_stop`` each frame.
+
+Everything is guarded: if the plugin system isn't present or a package needs no
+plugins, the host stays inert and the player runs exactly as before.
+
+Note: the player's renderer is still bringing up map-geometry drawing, so plugin
+*gameplay* runs here (state changes, HUD text) ahead of the visuals catching up
+— ``things`` and ``hud_message`` are exposed for the renderer to consume once it
+draws dynamic models.
+"""
+
+from __future__ import annotations
+
+import math
+import os
+import sys
+import tempfile
+from typing import List, Optional
+
+
+class _CamPlayer:
+    """Adapts the player's free-look camera to the engine player interface.
+
+    Plugin runtimes read ``pos`` / ``angle`` / ``pitch`` / ``camera_height`` and
+    build a forward vector as ``(sin a·cos p, sin p, cos a·cos p)``. The player
+    camera uses a yaw in degrees whose ground forward is ``(cos yaw, sin yaw)``,
+    so ``angle = 90° − yaw`` makes the two conventions agree, and ``pos`` is
+    already the eye (``camera_height = 0``).
+    """
+
+    def __init__(self):
+        self.pos = (0.0, 0.0, 0.0)
+        self.angle = 0.0
+        self.pitch = 0.0
+        self.camera_height = 0.0
+
+    def update(self, cam_pos, cam_yaw_deg: float, cam_pitch_deg: float):
+        self.pos = (float(cam_pos[0]), float(cam_pos[1]), float(cam_pos[2]))
+        self.angle = math.radians(90.0 - cam_yaw_deg)
+        self.pitch = math.radians(cam_pitch_deg)
+
+
+class _NullIO:
+    """No-op I/O manager: plugin output fires are harmless on the player."""
+
+    def fire_output(self, *args, **kwargs):
+        pass
+
+
+class _BridgeLogic:
+    """The ``logic`` object the plugin lifecycle/tick hooks receive."""
+
+    def __init__(self, things):
+        self.things = things
+        self.player = _CamPlayer()
+        self.io_manager = _NullIO()
+        self.current_hud_message = ""
+
+
+class PlayerPluginHost:
+    def __init__(self):
+        self.manager = None
+        self.bridge: Optional[_BridgeLogic] = None
+        self.active = False
+        self.hud_message = ""
+        self._extract_root: Optional[str] = None
+
+    # ------------------------------------------------------------------
+    @property
+    def things(self) -> List:
+        """Plugin entity instances for the current scene (for rendering)."""
+        return self.bridge.things if self.bridge is not None else []
+
+    # ------------------------------------------------------------------
+    def load(self, package, extract_dir: Optional[str] = None) -> bool:
+        """Make the package's plugins importable and load them.
+
+        Returns True if at least one plugin loaded. Safe to call with a package
+        that bundles no plugins (returns False, stays inert).
+        """
+        try:
+            bundled = package is not None and getattr(
+                package, "has_bundled_plugins", lambda: False)()
+            if bundled:
+                root = extract_dir or tempfile.mkdtemp(prefix="fio_plugins_")
+                if self._extract_plugins(package, root):
+                    self._extract_root = root
+                    if root not in sys.path:
+                        sys.path.insert(0, root)
+        except Exception as exc:
+            print(f"[Fio Player] plugin extract failed: {exc}")
+
+        try:
+            from plugins.manager import get_manager, load_plugins
+        except Exception:
+            return False  # no plugin system available (app or package)
+
+        try:
+            load_plugins()
+            self.manager = get_manager()
+        except Exception as exc:
+            print(f"[Fio Player] plugin load failed: {exc}")
+            return False
+
+        self.active = bool(self.manager and self.manager.plugins)
+        return self.active
+
+    def _extract_plugins(self, package, dest: str) -> bool:
+        """Write every ``plugins/**`` entry from the package under *dest*."""
+        wrote = False
+        for name in package.namelist():
+            if not name.startswith("plugins/") or name.endswith("/"):
+                continue
+            raw = package.read_asset(name)
+            if raw is None:
+                # read_asset normalises to asset roots; fall back to raw read.
+                raw = getattr(package, "_read_raw", lambda _n: None)(name)
+            if raw is None:
+                continue
+            out = os.path.join(dest, name)
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+            with open(out, "wb") as f:
+                f.write(raw)
+            wrote = True
+        return wrote
+
+    # ------------------------------------------------------------------
+    def build_and_start(self, map_data: dict) -> None:
+        """Instantiate the map's plugin entities and start the play session."""
+        if not self.active or self.manager is None:
+            return
+        things = []
+        for t in map_data.get("things", []):
+            if not isinstance(t, dict):
+                continue
+            typ = t.get("type") or t.get("properties", {}).get("type")
+            if not typ:
+                continue
+            cls = self.manager.entity_class_for_type(typ)
+            if cls is None:
+                continue
+            try:
+                things.append(cls(pos=list(t.get("pos", [0, 0, 0])),
+                                  properties=dict(t.get("properties", {}))))
+            except Exception:
+                continue
+
+        if not things:
+            self.active = False   # nothing in this map for plugins to act on
+            return
+
+        self.bridge = _BridgeLogic(things)
+        try:
+            self.manager.dispatch_play_start(self.bridge)
+        except Exception as exc:
+            print(f"[Fio Player] plugin play-start failed: {exc}")
+
+    def tick(self, dt: float, cam_pos, cam_yaw_deg: float, cam_pitch_deg: float,
+             use_pressed: bool) -> None:
+        if not self.active or self.bridge is None or self.manager is None:
+            return
+        self.bridge.player.update(cam_pos, cam_yaw_deg, cam_pitch_deg)
+        self.bridge.current_hud_message = ""
+        try:
+            from plugins.api import TickContext
+            ctx = TickContext(delta=dt, use_pressed=bool(use_pressed))
+            self.manager.dispatch_tick(self.bridge, ctx)
+        except Exception:
+            return
+        self.hud_message = self.bridge.current_hud_message
+
+    def stop(self) -> None:
+        if self.active and self.bridge is not None and self.manager is not None:
+            try:
+                self.manager.dispatch_play_stop(self.bridge)
+            except Exception:
+                pass

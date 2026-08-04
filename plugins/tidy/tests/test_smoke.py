@@ -86,7 +86,17 @@ def test_entities_and_serialization():
 
     obj = TidyObject(pos=[100, 40, 0], properties={'category': 'book'})
     _check(obj.properties['type'] == 'tidyobject', "TidyObject type string")
-    _check(obj.properties.get('model_path'), "TidyObject has default model_path")
+    _check(obj.properties.get('model_path', '').endswith('book.obj'),
+           "TidyObject uses the book model")
+
+    # Each book gets a random cover; a batch should show several distinct ones.
+    from plugins.tidy.entities import COVERS
+    covers = {TidyObject().properties.get('texture') for _ in range(40)}
+    _check(covers.issubset(set(COVERS)) and len(covers) >= 3,
+           f"books get random covers ({len(covers)} distinct)")
+    # An explicit texture is preserved (saved maps stay stable).
+    fixed = TidyObject(properties={'texture': COVERS[0]})
+    _check(fixed.properties['texture'] == COVERS[0], "explicit cover preserved")
 
     data = obj.to_dict()
     obj2 = Thing.from_dict(data)
@@ -216,9 +226,9 @@ def test_obj_asset_parses():
     except Exception as exc:
         print(f"  skip: obj_loader unavailable ({exc})")
         return
-    path = os.path.join(_ROOT, "plugins", "tidy", "assets", "tidy_object.obj")
+    path = os.path.join(_ROOT, "plugins", "tidy", "assets", "book.obj")
     model = OBJ(path)
-    _check(getattr(model, "is_loaded", False), "tidy_object.obj loaded")
+    _check(getattr(model, "is_loaded", False), "book.obj loaded")
     _check(getattr(model, "vertex_count", 0) > 0, "model has vertices")
 
 

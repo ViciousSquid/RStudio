@@ -79,14 +79,23 @@ class EditorAPI:
         """
         cat = category or self._plugin.category
         label = menu_label or cls.__name__
+
+        # Record ownership first — this has no dependencies and must work even
+        # in the PyQt-free player (where the editor palette below is skipped),
+        # so the package exporter and the player host can map map entity 'type'
+        # strings back to the owning plugin and its class.
+        self._manager._record_entity_owner(cls, self._plugin)
+
+        # Editor palette registration (needs editor.things → PyQt). Absent in
+        # the standalone player; skip quietly there.
         try:
             from editor.things import ENTITY_TYPES, ENTITY_CATEGORIES
             ENTITY_TYPES[cls.__name__] = cls
             ENTITY_CATEGORIES.setdefault(cat, [])
             if cls.__name__ not in ENTITY_CATEGORIES[cat]:
                 ENTITY_CATEGORIES[cat].append(cls.__name__)
-        except Exception as exc:  # pragma: no cover - defensive
-            self.log(f"register_entity({cls.__name__}) failed: {exc}")
+        except Exception:
+            pass
 
         if placeable:
             self._manager._add_menu_entry(self._plugin, label, cls)
@@ -111,7 +120,9 @@ class EditorAPI:
         )
 
     def log(self, message: str):
-        self._manager._log(f"[{self._plugin.name}] {message}")
+        # Informational by default (silent unless FIO_PLUGIN_DEBUG); plugins
+        # should not spam the console on a normal launch.
+        self._manager._debug(f"[{self._plugin.name}] {message}")
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +155,7 @@ class RuntimeAPI:
             self.io_manager.fire_output(entity, output_name, value)
 
     def log(self, message: str):
-        self._manager._log(f"[{self._plugin.name}] {message}")
+        self._manager._debug(f"[{self._plugin.name}] {message}")
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +200,10 @@ class FioPlugin:
     description: str = ""
     #: Default editor category / menu grouping for this plugin's entities.
     category: str = "Plugins"
+    #: Whether the plugin is active. Toggled from the editor's Plugins menu;
+    #: the manager skips a disabled plugin's runtime attach and lifecycle/tick
+    #: dispatch, so it becomes inert without being unloaded.
+    enabled: bool = True
 
     # -- load-time (editor + engine) ---------------------------------------
     def register(self, api: EditorAPI) -> None:

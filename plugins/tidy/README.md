@@ -16,14 +16,16 @@ Try it: open **`maps/Tidy_Test.json`** and hit Play. Look at a book, press
 Place these from the 2D view's right-click menu under **Plugins ▸ tidy**.
 
 ### Tidy Object
-A single carryable prop. Renders as a real 3D model in play mode (ships with a
-small book-shaped model; swap it via the **Model** picker in the Properties
-panel — any `.obj`/`.glb` works).
+A single carryable prop. Renders in play mode as a **book with a random cover** —
+each object picks one of 12 bundled covers at creation, so a pile or shelf shows
+varied books, not identical boxes. Swap the model/cover in the Properties panel
+if you want something else (any `.obj`/`.glb` works).
 
 | Property | Meaning |
 |----------|---------|
 | `category` | Logical group (`book`, `cup`, `bone`…). A receptacle only takes objects whose category it accepts. |
-| `model_path` | 3D model to render (defaults to the bundled box). |
+| `model_path` | 3D model to render (defaults to the UV-mapped `book.obj`). |
+| `texture` | Per-instance cover image (defaults to a random `covers/cover_NN.png`). |
 | `scale`, `rotation` | Standard model transform. |
 | `no_collision` | `True` by default so thousands of props stay cheap and walk-through. |
 
@@ -103,7 +105,11 @@ Keep `no_collision` on (the default). Give receptacles generous `capacity`.
 - `runtime.py` — `TidySession`: carry/place logic, a `SpatialHash` over
   available objects, receptacle slot maths, goal tracking, and the HUD line.
 - `plugin.py` — registration, I/O handlers, and the play lifecycle wiring.
-- `assets/tidy_object.obj` — the default carryable model.
+- `assets/book.obj` + `assets/covers/cover_NN.png` — the UV-mapped book model
+  and its random covers. Regenerate with `python plugins/tidy/tools/make_books.py`.
+- `assets/tidy{object,receptacle,goal}.png` — the entities' own editor icons
+  (a book, a bookshelf, a checklist). Regenerate with
+  `python plugins/tidy/tools/make_sprites.py`.
 
 Regenerate the demo map with:
 

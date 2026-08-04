@@ -27,6 +27,7 @@ class TidyPlugin(FioPlugin):
     version = "1.0.0"
     description = "Pick-up-and-put-away gameplay for large object-tidying games."
     category = "Tidy"
+    enabled = False
 
     # -- load time ----------------------------------------------------------
     def register(self, api):
@@ -71,7 +72,6 @@ class TidyPlugin(FioPlugin):
                 io_def('OnComplete', "Fired once when the tidy target is reached"),
             ],
         )
-        api.log(f"registered entities and I/O (v{self.version})")
 
     # -- runtime attach -----------------------------------------------------
     def register_runtime(self, api):
@@ -136,10 +136,6 @@ class TidyPlugin(FioPlugin):
         session = TidySession(logic)
         session.start()
         logic._tidy = session
-        if session.total:
-            # Log via the session's I/O-less path; the manager also logs.
-            print(f"[tidy] play started: {session.total} object(s) to tidy, "
-                  f"{len(session.receptacles)} receptacle(s), {len(session.goals)} goal(s)")
 
     def on_play_stop(self, logic):
         session = getattr(logic, '_tidy', None)

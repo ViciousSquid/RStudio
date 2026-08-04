@@ -58,7 +58,8 @@ large editor/engine source files are left untouched.
 | File | Role |
 |------|------|
 | `editor/__init__.py` | Bootstrap: `load_plugins()` + `integration.apply()`, run once when the editor package is first imported (before any map loads). |
-| `plugins/integration.py` | Installs the hooks: attaches plugin runtime I/O + play lifecycle + per-tick dispatch onto `engine.logic_thread.LogicThread`, and a **Plugins ▸ <plugin>** submenu onto `editor.view_2d.View2D`'s right-click "place entity" menu. |
+| `plugins/integration.py` | Installs the hooks: plugin runtime I/O + play lifecycle + per-tick dispatch onto `engine.logic_thread.LogicThread`; a **Plugins ▸ <plugin>** submenu onto `editor.view_2d.View2D`'s right-click menu; a top-level **Plugins** menu onto `editor.ui.Ui_MainWindow`; and plugin bundling onto `editor.package_exporter.PackageExporter.export`. |
+| `plugins/packaging.py` | Bundles the plugins a `.fiopak`'s maps depend on (code + assets + manifest) so exported packages are self-contained. |
 
 Everything else — the property panel, the I/O editor, serialization, and 3D
 model rendering — works for plugin entities *for free*, because plugin entities
@@ -137,23 +138,99 @@ See [`plugins/api.py`](api.py) for the full, documented surface:
 
 ---
 
+## Finding plugins in the editor
+
+Loaded plugins appear two ways:
+
+- **Menu bar → Plugins** — a submenu per plugin with an **Enabled** checkbox to
+  toggle it on/off, its placeable entities (click one to drop it at the origin,
+  then drag it into place), and an *About* entry. The base of the menu has an
+  *About the plugin system* summary.
+- **2D view right-click → Plugins ▸ <plugin>** — place an entity exactly where
+  you click (only shown for enabled plugins).
+
+Plugin entities also get a Properties panel and an I/O tab automatically, and
+the `LogicSpawner` can spawn them at runtime.
+
+Loading is **silent** by default — nothing about plugins appears in the console.
+Set `FIO_PLUGIN_DEBUG=1` to see informational load/registration messages
+(errors are always shown).
+
+## Packaging plugins into a `.fiopak`
+
+`.fiopak` exports are **plugin-aware**. When you export a package
+(File → Export…), the exporter scans the maps it bundles, works out which
+plugins their entities come from, and injects those plugins — **code and
+assets** — plus the plugin-system core into the archive, recording them in
+`metadata.json` under `"plugins"`. The package is then self-contained and loads
+on another machine.
+
+- Plugin assets keep their repo-relative paths (e.g.
+  `plugins/tidy/assets/tidy_object.obj`), so a map's `model_path` resolves
+  straight out of the package — no rewriting.
+- Packages that use no plugin entities are unaffected (the step is a no-op).
+- The player side exposes the dependency: `FioPackage.required_plugins` reads
+  the manifest list, and `plugins.packaging.load_package_plugins(root)` loads
+  the bundled plugins from an extracted package.
+
+The mechanics live in [`plugins/packaging.py`](packaging.py)
+(`augment_fiopak`, `load_package_plugins`) and are wired onto the exporter by
+`integration.py`.
+
+## Running plugins outside the editor (the `.fiopak` player)
+
+Plugin gameplay runs in **both** hosts:
+
+- **Editor Play mode** — the logic thread dispatches the plugin lifecycle/tick
+  (via `plugins.integration`).
+- **Standalone `.fiopak` player** (`player/`, incl. the Android build) — the
+  `player.plugin_host.PlayerPluginHost` loads the package's plugins, builds
+  entity instances from the map, and drives the same lifecycle/tick from the
+  player's frame loop against a camera→player bridge (USE = interact).
+
+To make this work everywhere, the plugin runtime is **dependency-free**: no
+PyGLM (plain-Python vector math) and no PyQt. Plugin entities normally subclass
+the editor's `Thing`/`Model`, but when the editor package is absent (the player)
+they fall back to `plugins/entitybase.py`, a tiny PyQt-free base. So the same
+plugin loads in the editor, the desktop player, and the APK.
+
+> Note: the player's renderer is still bringing up map-model drawing, so plugin
+> gameplay *runs* (state, HUD text via `render_state["hud"]`) ahead of the
+> models being visible on screen. The host exposes `things` and `hud_message`
+> for the renderer to consume once it draws dynamic models.
+
+## Android APK
+
+`player/buildozer.spec` includes `plugins/*`, so the plugin system + bundled
+plugins (code and `.obj`/`.mtl` assets) ship inside the APK. The
+**Android Player Build** workflow (`.github/workflows/android-build.yml`)
+bundles `maps/Tidy_Test.json` as the sample `game.fiopak` (self-contained — the
+plugin travels with it), so the on-device build exercises the plugin loader and
+runtime. Trigger it from **Actions → Android Player Build → Run workflow**; the
+APK is uploaded as the `fio-player-debug-apk` artifact.
+
 ## Enabling / disabling plugins
 
-All discovered plugins load by default. To disable one, set the
-`FIO_DISABLED_PLUGINS` environment variable to a comma-separated list of
-package or plugin names:
+- **Per plugin, in the editor:** toggle **Enabled** in the Plugins menu. A
+  disabled plugin stops its gameplay and greys out placement; the choice is
+  saved to `settings.ini` (`[Plugins] disabled`) and restored next launch.
+  (Entity *registration* isn't undone live, so a re-enable is instant while a
+  full unload happens on restart.)
+- **At startup, globally:** set `FIO_DISABLED_PLUGINS` to a comma-separated list
+  of plugin/package names so they never load:
 
-```bash
-FIO_DISABLED_PLUGINS=tidy python main.py
-```
+  ```bash
+  FIO_DISABLED_PLUGINS=tidy python main.py
+  ```
 
 ---
 
 ## Tests
 
-A headless smoke test exercises discovery, registration, serialization and the
-tidy runtime without a display or OpenGL:
+Headless, no display / OpenGL required:
 
 ```bash
-QT_QPA_PLATFORM=offscreen python plugins/tidy/tests/test_smoke.py
+QT_QPA_PLATFORM=offscreen python plugins/tidy/tests/test_smoke.py       # runtime + integration
+QT_QPA_PLATFORM=offscreen python plugins/tidy/tests/test_packaging.py   # .fiopak bundling
+python plugins/tidy/tests/test_player.py                                # player path (editor/PyQt/glm blocked)
 ```

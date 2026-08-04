@@ -2,8 +2,8 @@
 Runtime behaviour for the Tidy plugin.
 
 All per-play-session state and logic lives in :class:`TidySession`, which the
-plugin attaches to the logic thread as ``logic._tidy`` while play mode is
-active. The core loop, each tick:
+host attaches to its logic object as ``logic._tidy`` while play mode is active.
+The core loop, each tick:
 
   * if the player is **holding** an object, keep it floating at the crosshair
     and, on a use-press, place it into the receptacle under the crosshair
@@ -15,14 +15,17 @@ To stay fast with *thousands* of objects, available (not-yet-stowed) objects
 are indexed in a coarse 2D :class:`SpatialHash` so the per-tick "what am I
 looking at" query only touches the handful of objects in neighbouring cells,
 not the whole map.
+
+The math here is plain Python (no PyGLM/NumPy) so the plugin runs unchanged in
+the editor's play mode *and* in the dependency-light ``.fiopak`` player / its
+Android build. ``player.pos`` may be a ``glm.vec3`` (editor) or a list/tuple
+(player) — both are handled by index access.
 """
 
 from __future__ import annotations
 
 import math
 from typing import Dict, List, Optional
-
-import glm
 
 
 # -- interaction tuning ------------------------------------------------------
@@ -34,18 +37,39 @@ PLACE_AIM_DOT = 0.55          # receptacle aim tolerance (wider — it's a zone)
 GRID_CELL = 160.0             # spatial-hash cell size (world units)
 
 
-def _forward(player) -> glm.vec3:
-    """Full look direction (includes pitch), matching the player camera."""
+# -- tiny vector helpers (plain tuples; no external deps) --------------------
+def _xyz(p):
+    return (float(p[0]), float(p[1]), float(p[2]))
+
+
+def _sub(a, b):
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def _add(a, b):
+    return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+
+
+def _scale(a, s):
+    return (a[0] * s, a[1] * s, a[2] * s)
+
+
+def _dot(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _length(a):
+    return math.sqrt(_dot(a, a))
+
+
+def _forward(player):
+    """Full look direction (includes pitch), matching the engine camera."""
     a, p = player.angle, player.pitch
-    return glm.vec3(
-        math.sin(a) * math.cos(p),
-        math.sin(p),
-        math.cos(a) * math.cos(p),
-    )
+    return (math.sin(a) * math.cos(p), math.sin(p), math.cos(a) * math.cos(p))
 
 
-def _eye(player) -> glm.vec3:
-    return player.pos + glm.vec3(0, getattr(player, 'camera_height', 40.0), 0)
+def _eye(player):
+    return _add(_xyz(player.pos), (0.0, getattr(player, "camera_height", 40.0), 0.0))
 
 
 class SpatialHash:
@@ -141,8 +165,8 @@ class TidySession:
 
         for obj in self.objects:
             p = obj.properties
-            # Remember where the object lives in the editor so we can restore it
-            # when play stops (we move objects around while playing).
+            # Remember where the object lives so we can restore it when play
+            # stops (we move objects around while playing).
             p['_home_pos'] = list(obj.pos)
             p['tidied'] = False
             cat = p.get('category', 'object')
@@ -179,16 +203,11 @@ class TidySession:
         else:
             self._tick_looking(ctx, eye, fwd)
 
-        if ctx and getattr(ctx, 'interaction_consumed', False):
-            # Core already showed a prompt (door/pickup) — don't overwrite it
-            # unless we set our own above (handled inside the branches).
-            pass
-
     def _tick_carrying(self, ctx, eye, fwd):
         held = self.held
         # Keep the held object floating at the crosshair.
-        target = eye + fwd * CARRY_DISTANCE + glm.vec3(0, CARRY_DROP, 0)
-        held.pos = [target.x, target.y, target.z]
+        target = _add(_add(eye, _scale(fwd, CARRY_DISTANCE)), (0.0, CARRY_DROP, 0.0))
+        held.pos = [target[0], target[1], target[2]]
 
         recept = self._receptacle_in_view(eye, fwd, held.properties.get('category', 'object'))
         if recept is not None:
@@ -218,11 +237,11 @@ class TidySession:
             p = obj.properties
             if p.get('tidied') or p.get('disabled'):
                 continue
-            to = glm.vec3(*obj.pos) - eye
-            dist = glm.length(to)
+            to = _sub(_xyz(obj.pos), eye)
+            dist = _length(to)
             if dist > PICKUP_REACH or dist < 1e-3:
                 continue
-            if glm.dot(fwd, to / dist) < PICKUP_AIM_DOT:
+            if _dot(fwd, _scale(to, 1.0 / dist)) < PICKUP_AIM_DOT:
                 continue
             if dist < best_d:
                 best_d = dist
@@ -241,11 +260,11 @@ class TidySession:
             if self._fill_count(r) >= int(rp.get('capacity', 24)):
                 continue
             reach = float(rp.get('reach', 140.0))
-            to = glm.vec3(*r.pos) - eye
-            dist = glm.length(to)
+            to = _sub(_xyz(r.pos), eye)
+            dist = _length(to)
             if dist > reach or dist < 1e-3:
                 continue
-            if glm.dot(fwd, to / dist) < PLACE_AIM_DOT:
+            if _dot(fwd, _scale(to, 1.0 / dist)) < PLACE_AIM_DOT:
                 continue
             if best_d is None or dist < best_d:
                 best_d = dist

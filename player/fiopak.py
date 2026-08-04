@@ -153,15 +153,35 @@ class FioPackage:
     def source(self) -> str:
         return self._source
 
+    @property
+    def required_plugins(self) -> List[str]:
+        """Names of plugins this package depends on (from the manifest).
+
+        Populated by the exporter when a map uses plugin-provided entities; the
+        plugins' code/assets are bundled under ``plugins/`` in the archive. Use
+        :func:`plugins.packaging.load_package_plugins` on the extracted package
+        root to make them available.
+        """
+        return list(self._manifest.get("plugins", []) or [])
+
+    def has_bundled_plugins(self) -> bool:
+        return any(n.startswith("plugins/") for n in self._names)
+
     # ------------------------------------------------------------------
     # Map discovery
     # ------------------------------------------------------------------
     def list_maps(self) -> List[str]:
-        """All map JSON entries in the archive, sorted, manifest excluded."""
+        """All map JSON entries in the archive, sorted, manifest excluded.
+
+        Bundled plugin files (under ``plugins/``) are excluded so a plugin that
+        happens to ship a ``.json`` is never mistaken for a level.
+        """
         maps = [
             n
             for n in self._names
-            if n.lower().endswith(".json") and _basename(n) not in _MANIFEST_NAMES
+            if n.lower().endswith(".json")
+            and _basename(n) not in _MANIFEST_NAMES
+            and not _normalize(n).startswith("plugins/")
         ]
         return sorted(maps)
 
