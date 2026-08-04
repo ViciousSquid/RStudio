@@ -17,12 +17,14 @@ title = Fio Player
 package.name = fioplayer
 package.domain = org.vicioussquid.fio
 
-# Ship the player package and the engine runtime it reuses, plus a bundled
-# game. `source.dir` points at the repo root so both `player/` and `engine/`
-# are packaged.
+# Ship the player package and the engine runtime it reuses, the plugin system,
+# plus a bundled game. `source.dir` points at the repo root so `player/`,
+# `engine/` and `plugins/` are all packaged. Including `plugins/*` bakes the
+# plugin code + assets (e.g. the tidy object model) into the APK, so plugin
+# games run on-device; a .fiopak that carries its own plugins still works too.
 source.dir = ..
 source.include_exts = py,png,jpg,jpeg,tga,bmp,ogg,wav,json,fiopak,glsl,vert,frag,obj,glb,mtl
-source.include_patterns = player/*,engine/*,assets/*,game.fiopak
+source.include_patterns = player/*,engine/*,plugins/*,assets/*,game.fiopak
 # Exclude the desktop-only editor and its heavy PyQt5 dependency. The repo-root
 # main.py IS the entry point (it detects Android and launches the player), so it
 # is intentionally NOT excluded.

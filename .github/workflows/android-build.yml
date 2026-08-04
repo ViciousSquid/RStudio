@@ -83,11 +83,15 @@ jobs:
           restore-keys: buildozer-local-${{ runner.os }}-p4a-2023.09.16-
 
       # Bundle a real map so the APK loads an actual package (the loader path
-      # runs on-device). Remove this step to ship an empty bring-up build.
+      # runs on-device). Tidy_Test.json uses the bundled 'tidy' plugin, so this
+      # also exercises the on-device plugin loader + runtime. The plugin's code
+      # and model ship in the APK via `plugins/*` in buildozer.spec, so the
+      # make_pak "missing asset" note for the plugin model is expected and
+      # harmless. Swap for maps/Simple_Map_Test.json for a plugin-free build.
       - name: Bundle sample game package
         run: |
-          python -m player.tools.make_pak maps/Simple_Map_Test.json \
-            -o player/game.fiopak --root . --title "Fio Player Test"
+          python -m player.tools.make_pak maps/Tidy_Test.json \
+            -o player/game.fiopak --root . --title "Fio Tidy Demo"
 
       - name: Build debug APK
         working-directory: player

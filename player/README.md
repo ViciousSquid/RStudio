@@ -1,7 +1,8 @@
 # Fio Player (Android)
 
 A standalone, **player-only** front end for the Fio engine. It loads and plays
-exported `.fiopak` game packages on Android. The heavy runtime systems in [`engine/`](../engine) (map loading, entity
+exported `.fiopak` game packages on Android — no editor, no CSG authoring, no
+PyQt5. The heavy runtime systems in [`engine/`](../engine) (map loading, entity
 system, physics, AI, audio, gameplay logic) are reused largely unchanged; only
 the parts that touch the OS and the GPU are replaced:
 
@@ -186,18 +187,11 @@ Implemented and tested (off-device):
       reference-triangle proof-of-life; engine bridge seams in place.
 - [x] **Build config** — `buildozer.spec` for debug APK and release AAB.
 
-Runs on-device (verified on hardware): the ES context comes up, the translated
-shaders compile, and the reference triangle + touch overlay render on a phone.
-
 Next milestones (seams are marked `TODO(port)` in the code):
 
-- [~] **M3 — render maps** (in progress): `render/scene.py` builds world-space
-      brush geometry, batched per texture with tiled UVs, and extracts map
-      lights; `renderer.py` streams each texture from the `.fiopak` (Pillow),
-      uploads it, and draws the batches with the `textured` shader (untextured
-      faces fall back to `lit`) from a perspective camera driven by the touch
-      controls — so you navigate a textured level. Still to do: non-box brushes,
-      water/glass/terrain shaders, models, portals.
+- [ ] **M3 — render maps**: port `engine/renderer_core.py` brush/mesh geometry
+      upload and draw passes onto the ES context (`renderer.py:load_scene` /
+      `render_scene`), using the already-translated shader programs.
 - [ ] **M4 — player movement**: drive `engine/player.py` + `engine/physics.py`
       from `InputState` instead of the free-look camera (`app.py:_advance_simulation`).
 - [ ] **M5 — entities, lighting, portals**: `logic_thread.py`, `monster_ai.py`,

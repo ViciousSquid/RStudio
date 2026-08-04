@@ -20,7 +20,8 @@ from typing import Optional
 
 from .fiopak import FioPackage
 from .platform.base import HostConfig, FrameCallbacks
-from .input.state import InputState, ACTION_PAUSE
+from .input.state import InputState, ACTION_PAUSE, ACTION_USE
+from .plugin_host import PlayerPluginHost
 
 
 class FioPlayerApp:
@@ -32,6 +33,11 @@ class FioPlayerApp:
         self.renderer = None            # created on GL ready (needs a context)
         self.host = None
         self.map_data = None
+
+        # Plugin runtime (loads bundled plugins from the package and drives their
+        # per-tick gameplay). Inert unless the package actually needs a plugin.
+        self.plugin_host = PlayerPluginHost()
+        self.hud_message = ""
 
         # Free-look camera state (world units). Yaw/pitch in degrees.
         self.cam_pos = [0.0, 64.0, 0.0]
@@ -84,6 +90,12 @@ class FioPlayerApp:
             self.map_data = self.package.load_start_map()
             self._place_camera_at_spawn()
             self.renderer.load_scene(self.map_data, self.package)
+            # Load and start any plugins this package's map depends on.
+            try:
+                if self.plugin_host.load(self.package):
+                    self.plugin_host.build_and_start(self.map_data)
+            except Exception as exc:
+                print(f"[Fio Player] plugin host error: {exc}")
 
     def _on_resize(self, w: int, h: int) -> None:
         if self.renderer is not None:
@@ -114,6 +126,10 @@ class FioPlayerApp:
         self._paused = True
 
     def _on_shutdown(self) -> None:
+        try:
+            self.plugin_host.stop()
+        except Exception:
+            pass
         if self.package is not None:
             try:
                 self.package.close()
@@ -138,7 +154,19 @@ class FioPlayerApp:
     def _advance_simulation(self, dt: float, inp: InputState) -> None:
         # TODO(port): step engine world simulation (physics, AI, logic) here,
         # feeding `inp` into engine/player.py instead of the free-look camera.
-        pass
+        #
+        # Plugin gameplay already runs from here: the host dispatches each loaded
+        # plugin's per-tick hook against a camera->player bridge, using the USE
+        # button as the interact edge.
+        if self.plugin_host.active:
+            try:
+                self.plugin_host.tick(
+                    dt, self.cam_pos, self.cam_yaw, self.cam_pitch,
+                    inp.just_pressed(ACTION_USE),
+                )
+                self.hud_message = self.plugin_host.hud_message
+            except Exception:
+                pass
 
     def _place_camera_at_spawn(self) -> None:
         """Position the camera at a PlayerStart-like entity if present."""
@@ -160,6 +188,7 @@ class FioPlayerApp:
             "cam_yaw": self.cam_yaw,
             "cam_pitch": self.cam_pitch,
             "paused": self._paused,
+            "hud": self.hud_message,
         }
 
 

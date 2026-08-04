@@ -18,21 +18,6 @@ import argparse
 import os
 import sys
 
-# --- Android GL setup (must run before PyOpenGL is imported anywhere) --------
-# On Android there is no desktop libGL; the device provides libGLESv2.so /
-# libEGL.so. PyOpenGL otherwise auto-selects its GLX (X11) backend and dies with
-# "ImportError: Unable to load OpenGL or GL library". Selecting the EGL platform
-# makes PyOpenGL's GL library fall back to libGLESv2.so, so our existing
-# `import OpenGL.GL` binds to GLES on the device. This env var is read by
-# PyOpenGL at first import, so it has to be set here at module load.
-if os.environ.get("ANDROID_ARGUMENT"):
-    os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
-    # SDL on Android exposes the accelerometer/gyroscope as "joystick 0". Left
-    # unchecked, its tilt axes feed the movement/look sticks — the camera spins
-    # and the player drifts into walls. Disable it so only real controllers and
-    # the touch overlay drive input. Must be set before pygame/SDL init.
-    os.environ.setdefault("SDL_ACCELEROMETER_AS_JOYSTICK", "0")
-
 from .fiopak import FioPackage, PackageError
 from .platform.base import HostConfig
 from .app import FioPlayerApp, is_android
