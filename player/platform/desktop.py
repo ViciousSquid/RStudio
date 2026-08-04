@@ -200,27 +200,12 @@ class DesktopHost(PlatformHost):
     # ------------------------------------------------------------------
     # Gamepad
     # ------------------------------------------------------------------
-    # Device names that are motion sensors, not controllers — never used as
-    # sticks (they cause the "constant spin / walk into walls" tilt drift).
-    _SENSOR_NAMES = ("accelerometer", "gyro", "sensor", "orientation")
-
     def _open_gamepads(self) -> None:
         pg = self._pg
         self._joysticks = []
         for i in range(pg.joystick.get_count()):
             js = pg.joystick.Joystick(i)
             js.init()
-            try:
-                name = (js.get_name() or "").lower()
-            except Exception:
-                name = ""
-            if any(s in name for s in self._SENSOR_NAMES):
-                print(f"[input] ignoring motion sensor device: {js.get_name()!r}")
-                try:
-                    js.quit()
-                except Exception:
-                    pass
-                continue
             self._joysticks.append(js)
 
     def _read_gamepads(self) -> None:

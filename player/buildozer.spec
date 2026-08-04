@@ -46,36 +46,22 @@ fullscreen = 1
 # launches on device while the same file still opens the editor on desktop.
 android.entrypoint = org.kivy.android.PythonActivity
 
-# --- Toolchain pin (IMPORTANT) ---
-# python-for-android master builds CPython 3.14, but its bundled pygame recipe
-# is still pygame 2.1.0, which cannot compile on Python >= 3.12 (fatal error:
-# 'longintrepr.h' file not found). Pin p4a to the last release that builds
-# CPython 3.10, where pygame 2.1.0 compiles cleanly, and pin the matching NDK.
-p4a.branch = v2023.09.16
-android.ndk = 25b
-
 # --- Android platform ---
-# minapi 24 = Android 7.0; GLES 3.x is universal by then. NOTE: buildozer does
-# NOT strip inline comments from value lines, so keep comments on their own line.
 android.api = 34
-android.minapi = 24
+android.minapi = 24               # Android 7.0 — GLES 3.x is universal by here
 android.ndk_api = 24
 # arm64-v8a covers essentially all modern phones and keeps CI fast. Add
 # armeabi-v7a for older-device reach (roughly doubles build time).
 android.archs = arm64-v8a
 android.allow_backup = 1
 
-# NOTE: android.features (a manifest <uses-feature> hint) is intentionally not
-# set — the pinned p4a v2023.09.16 does not accept p4a's --feature flag. Game
-# controllers still work without advertising the feature; add it back only if
-# you later move to a newer p4a that supports --feature.
+# Controllers + immersive full-screen.
+android.permissions =
+android.features = android.hardware.gamepad
 
-# NOTE: android.manifest_placeholders is intentionally not set. p4a injects its
-# value straight into a Groovy map in build.gradle, and the pinned p4a expects
-# `key:value` (colon), not `key=value` — a stray entry there fails gradle
-# evaluation ("Could not set unknown property"). The GLES 3.x <uses-feature>
-# Play-Store hint isn't referenced by the manifest anyway; add it later via a
-# proper manifest entry if you need Play filtering.
+# GLES 3.x requirement advertised to the Play Store so incompatible devices are
+# filtered out.
+android.manifest_placeholders = glEsVersion=0x00030000
 
 # --- Presentation ---
 presplash.filename = %(source.dir)s/assets/splash.png
