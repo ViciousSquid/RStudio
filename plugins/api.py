@@ -202,7 +202,10 @@ class FioPlugin:
     category: str = "Plugins"
     #: Whether the plugin is active. Toggled from the editor's Plugins menu;
     #: the manager skips a disabled plugin's runtime attach and lifecycle/tick
-    #: dispatch, so it becomes inert without being unloaded.
+    #: dispatch, so it becomes inert without being unloaded. A plugin may set
+    #: this to ``False`` to ship disabled-by-default; the manager then
+    #: auto-enables it when a level referencing its entities is loaded (see
+    #: :meth:`PluginManager.auto_enable_for_map`).
     enabled: bool = True
 
     # -- load-time (editor + engine) ---------------------------------------

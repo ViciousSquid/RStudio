@@ -146,6 +146,13 @@ class PlayerPluginHost:
         """Instantiate the map's plugin entities and start the play session."""
         if not self.active or self.manager is None:
             return
+        # A plugin may ship disabled-by-default; a package built around it still
+        # needs it running here. Enable any plugin this map's entities require
+        # before we build them, so dispatch_play_start below doesn't skip it.
+        try:
+            self.manager.auto_enable_for_map(map_data)
+        except Exception:
+            pass
         things = []
         for t in map_data.get("things", []):
             if not isinstance(t, dict):

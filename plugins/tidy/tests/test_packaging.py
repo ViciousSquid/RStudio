@@ -143,6 +143,12 @@ def test_integration_hooks_installed():
                "PackageExporter patched (plugin bundling on export)")
     except Exception as exc:
         print(f"  skip: package_exporter unavailable ({exc})")
+    try:
+        from editor.editor_state import EditorState
+        _check(getattr(EditorState, "_fio_plugins_patched", False),
+               "EditorState patched (auto-enable plugins on level load)")
+    except Exception as exc:
+        print(f"  skip: editor_state unavailable ({exc})")
 
 
 def main():

@@ -58,7 +58,7 @@ large editor/engine source files are left untouched.
 | File | Role |
 |------|------|
 | `editor/__init__.py` | Bootstrap: `load_plugins()` + `integration.apply()`, run once when the editor package is first imported (before any map loads). |
-| `plugins/integration.py` | Installs the hooks: plugin runtime I/O + play lifecycle + per-tick dispatch onto `engine.logic_thread.LogicThread`; a **Plugins ▸ <plugin>** submenu onto `editor.view_2d.View2D`'s right-click menu; a top-level **Plugins** menu onto `editor.ui.Ui_MainWindow`; and plugin bundling onto `editor.package_exporter.PackageExporter.export`. |
+| `plugins/integration.py` | Installs the hooks: plugin runtime I/O + play lifecycle + per-tick dispatch onto `engine.logic_thread.LogicThread`; auto-enable of a disabled-by-default plugin onto `editor.editor_state.EditorState.load_from_data` (when a loaded level references its entities); a **Plugins ▸ <plugin>** submenu onto `editor.view_2d.View2D`'s right-click menu; a top-level **Plugins** menu onto `editor.ui.Ui_MainWindow`; and plugin bundling onto `editor.package_exporter.PackageExporter.export`. |
 | `plugins/packaging.py` | Bundles the plugins a `.fiopak`'s maps depend on (code + assets + manifest) so exported packages are self-contained. |
 
 Everything else — the property panel, the I/O editor, serialization, and 3D
@@ -211,6 +211,18 @@ APK is uploaded as the `fio-player-debug-apk` artifact.
 
 ## Enabling / disabling plugins
 
+- **Disabled by default + auto-enable on load:** a plugin can set
+  `enabled = False` on its class to ship inert — ordinary maps never pay for
+  gameplay they don't use. When a level whose `things` reference the plugin's
+  entity types is loaded, the manager turns it on automatically
+  (`PluginManager.auto_enable_for_map`, wired into level loading in the editor
+  and the standalone player). The Tidy plugin ships this way: it stays off until
+  you open a map like `maps/Tidy_Test.json`. The flip is symmetric — clearing
+  the scene (**File ▸ New**, or loading a map that doesn't use the plugin)
+  reverts a level-driven auto-enable via `PluginManager.disable_auto_enabled`,
+  so an empty map starts clean. This is a runtime, per-session flip: it never
+  rewrites the persisted `[Plugins] disabled` list, and a plugin you enabled by
+  hand from the menu is never auto-disabled underneath you.
 - **Per plugin, in the editor:** toggle **Enabled** in the Plugins menu. A
   disabled plugin stops its gameplay and greys out placement; the choice is
   saved to `settings.ini` (`[Plugins] disabled`) and restored next launch.

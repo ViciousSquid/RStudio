@@ -27,7 +27,12 @@ class TidyPlugin(FioPlugin):
     version = "1.0.0"
     description = "Pick-up-and-put-away gameplay for large object-tidying games."
     category = "Tidy"
-    enabled = True
+    # Off by default: this plugin only matters for maps built around its
+    # entities, so it stays inert until a level that references its data is
+    # loaded. The manager auto-enables it then (see auto_enable_for_map), so a
+    # tidy map plays without the user hunting through the Plugins menu, while
+    # ordinary maps never pay for gameplay they don't use.
+    enabled = False
 
     # -- load time ----------------------------------------------------------
     def register(self, api):

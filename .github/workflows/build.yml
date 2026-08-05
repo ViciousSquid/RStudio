@@ -29,8 +29,6 @@ jobs:
             --plugin-enable=pyqt5 `
             --include-qt-plugins=sensible,platforms,styles,imageformats `
             --include-package=engine `
-            --include-package=plugins `
-            --include-package-data=plugins `
             --include-package=editor `
             --include-package=PIL `
             --include-data-dir=assets=assets `
@@ -114,8 +112,6 @@ jobs:
             --include-qt-plugins=sensible,platforms,imageformats \
             --include-package=engine \
             --include-package=editor \
-            --include-package=plugins \
-            --include-package-data=plugins \
             --include-package=PIL \
             --include-data-dir=assets=assets \
             --include-data-dir=tools=tools \
@@ -261,8 +257,6 @@ jobs:
             --plugin-enable=pyqt5 \
             --include-qt-plugins=sensible,platforms,imageformats \
             --include-package=engine \
-            --include-package=plugins \
-            --include-package-data=plugins \
             --include-package=editor \
             --include-package=PIL \
             --include-data-dir=assets=assets \

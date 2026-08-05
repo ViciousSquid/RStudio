@@ -76,6 +76,10 @@ class PluginManager:
             for n in os.environ.get("FIO_DISABLED_PLUGINS", "").split(",")
             if n.strip()
         }
+        # Plugins switched on by a loaded level (auto_enable_*), as opposed to
+        # a manual menu toggle. Tracked so an empty/new scene can revert exactly
+        # those without touching a plugin the user enabled by hand.
+        self._auto_enabled: set = set()
 
     # -- logging ------------------------------------------------------------
     def _log(self, message: str):
@@ -180,19 +184,30 @@ class PluginManager:
     def is_enabled(self, plugin) -> bool:
         return bool(getattr(plugin, "enabled", True))
 
-    def set_enabled(self, plugin_or_name, enabled: bool):
+    def set_enabled(self, plugin_or_name, enabled: bool, auto: bool = False):
         """Enable/disable a plugin at runtime.
 
         A disabled plugin stays loaded (its already-registered entity types
         remain known) but is skipped for runtime attach and lifecycle/tick
         dispatch, so its gameplay stops. Placement of its entities is greyed out
         in the editor menus.
+
+        *auto* distinguishes a level-driven enable (see :meth:`auto_enable_for_map`)
+        from a manual menu toggle. Only auto-enables are remembered so that a
+        New/empty scene can revert them; any manual call clears that memory, so
+        a plugin the user turned on by hand is never auto-disabled underneath
+        them.
         """
         plugin = plugin_or_name
         if isinstance(plugin_or_name, str):
             plugin = self.find_plugin(plugin_or_name)
-        if plugin is not None:
-            plugin.enabled = bool(enabled)
+        if plugin is None:
+            return
+        plugin.enabled = bool(enabled)
+        if auto and enabled:
+            self._auto_enabled.add(plugin)
+        else:
+            self._auto_enabled.discard(plugin)
 
     # -- entity ownership / packaging --------------------------------------
     @staticmethod
@@ -227,6 +242,65 @@ class PluginManager:
                 seen.add(id(plugin))
                 out.append(plugin)
         return out
+
+    # -- auto-enable on level load -----------------------------------------
+    def auto_enable_for_types(self, type_names) -> List[FioPlugin]:
+        """Enable any disabled plugin that owns one of *type_names*.
+
+        A plugin can ship disabled-by-default (``enabled = False``) so it stays
+        inert for maps that don't use it. When a level referencing its entities
+        is loaded, call this to switch it on so its gameplay actually runs.
+
+        This is a runtime, per-session flip only: it never touches the persisted
+        Plugins ``disabled`` list, so a plugin the user deliberately turned off
+        stays off next launch unless a level re-triggers it. Returns the plugins
+        that were newly enabled (empty if all were already on).
+        """
+        newly: List[FioPlugin] = []
+        for plugin in self.required_plugins_for_types(type_names):
+            if not self.is_enabled(plugin):
+                self.set_enabled(plugin, True, auto=True)
+                self._debug(
+                    f"Auto-enabled plugin '{plugin.name}' for loaded level")
+                newly.append(plugin)
+        return newly
+
+    def disable_auto_enabled(self) -> List[FioPlugin]:
+        """Turn off any plugin a loaded level auto-enabled.
+
+        Called when the scene is reset to an empty state — File ▸ New, or just
+        before a different level loads — so a disabled-by-default plugin that was
+        switched on only to run a specific map reverts to off and a fresh map
+        starts clean. A following :meth:`auto_enable_for_map` re-enables it if
+        the new level actually uses it. Plugins the user enabled by hand (a
+        manual menu toggle) are never in this set, so they are left untouched.
+        Returns the plugins that were disabled.
+        """
+        disabled: List[FioPlugin] = []
+        for plugin in list(self._auto_enabled):
+            if self.is_enabled(plugin):
+                disabled.append(plugin)
+                self._debug(
+                    f"Auto-disabled plugin '{plugin.name}' for cleared level")
+            self.set_enabled(plugin, False)
+        return disabled
+
+    def auto_enable_for_map(self, map_data) -> List[FioPlugin]:
+        """Enable plugins whose entity types appear in *map_data*.
+
+        *map_data* is a loaded level dict; its ``things`` are scanned for the
+        same ``type`` strings the editor/player use to build entities. A no-op
+        (returns ``[]``) for maps that reference no plugin-owned entities.
+        """
+        types: List[str] = []
+        things = map_data.get("things", []) if isinstance(map_data, dict) else []
+        for t in things:
+            if not isinstance(t, dict):
+                continue
+            typ = t.get("type") or t.get("properties", {}).get("type")
+            if typ:
+                types.append(typ)
+        return self.auto_enable_for_types(types)
 
     def plugin_package_dir(self, plugin: FioPlugin) -> Optional[str]:
         """Absolute filesystem directory of a plugin's package, or None."""

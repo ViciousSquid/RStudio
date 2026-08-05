@@ -9,6 +9,14 @@ Try it: open **`maps/Tidy_Test.json`** and hit Play. Look at a book, press
 **E** to pick it up, face the shelf, press **E** to put it away. The HUD shows
 `Tidied: N / 42`.
 
+This plugin is **disabled by default** — it only matters for maps built around
+its entities, so it stays inert until you load a level (like `Tidy_Test.json`)
+that references its data, at which point the editor and player enable it
+automatically. Starting a fresh map with **File ▸ New** (or loading a map that
+doesn't use it) switches it back off. To place its entities in a new map, tick
+**Enabled** under **Plugins ▸ tidy** in the menu bar first — a manual enable
+sticks and isn't reverted underneath you.
+
 ---
 
 ## Entities
