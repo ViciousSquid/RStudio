@@ -50,22 +50,34 @@ the debug console instead of crashing the editor or a play session.
 
 ### Integration points in the core
 
-The system is **drop-in**: the only edit to the core is a tiny bootstrap in
-`editor/__init__.py` (which is otherwise empty). Everything else is installed at
-startup by `plugins/integration.py` via small, guarded monkey-patches, so the
-large editor/engine source files are left untouched.
+The **engine** play lifecycle is wired **natively**: `engine.logic_thread.LogicThread`
+calls the plugin manager directly — `attach_runtime` in `__init__`,
+`dispatch_play_start`/`dispatch_play_stop` in `set_play_mode`, and the cached,
+early-out `tick()` in `_tick_play_mode`. Each call is guarded, so a build without
+the `plugins/` package runs unchanged. The **editor** integrations stay as small,
+guarded monkey-patches in `plugins/integration.py` (cold paths — menus, load
+hooks, export), so the large editor source files are left untouched. The only
+editor edit is a tiny bootstrap in `editor/__init__.py`.
 
 | File | Role |
 |------|------|
+| `engine/logic_thread.py` | **Native** plugin hooks: `attach_runtime` (`__init__`), play-start/stop (`set_play_mode`), per-tick dispatch (`_tick_play_mode`). All guarded and optional. |
 | `editor/__init__.py` | Bootstrap: `load_plugins()` + `integration.apply()`, run once when the editor package is first imported (before any map loads). |
-| `plugins/integration.py` | Installs the hooks: plugin runtime I/O + play lifecycle + per-tick dispatch onto `engine.logic_thread.LogicThread`; auto-enable of a disabled-by-default plugin onto `editor.editor_state.EditorState.load_from_data` (when a loaded level references its entities); a **Plugins ▸ <plugin>** submenu onto `editor.view_2d.View2D`'s right-click menu; a top-level **Plugins** menu onto `editor.ui.Ui_MainWindow`; and plugin bundling onto `editor.package_exporter.PackageExporter.export`. |
+| `plugins/integration.py` | Installs the editor hooks: auto-enable/disable of a disabled-by-default plugin onto `editor.editor_state.EditorState` (`load_from_data` enables for a level's entities, `clear_scene` reverts on File ▸ New); a **Plugins ▸ <plugin>** submenu onto `editor.view_2d.View2D`'s right-click menu; a top-level **Plugins** menu onto `editor.ui.Ui_MainWindow`; and plugin bundling onto `editor.package_exporter.PackageExporter.export`. |
 | `plugins/packaging.py` | Bundles the plugins a `.fiopak`'s maps depend on (code + assets + manifest) so exported packages are self-contained. |
 
 Everything else — the property panel, the I/O editor, serialization, and 3D
 model rendering — works for plugin entities *for free*, because plugin entities
-are ordinary `Thing` subclasses. (If you'd rather hand-wire the three hooks
-directly into the core files instead of using the shim, `integration.py`'s
-docstring says exactly where each one goes.)
+are ordinary `Thing` subclasses.
+
+**Runtime attach + enable gating.** Every loaded plugin's I/O input handlers are
+registered once when the logic thread is built, but each handler self-gates on
+its plugin's live `enabled` flag — so a plugin enabled *after* startup (e.g. a
+disabled-by-default one auto-enabled when its level loads) has working inputs
+with no re-attach, while a disabled plugin's inputs stay inert. Play-start/tick/stop
+dispatch is likewise gated and, on the hot per-tick path, served from a cache
+that only rebuilds when the enabled set changes — a map whose active plugins
+don't tick pays almost nothing per frame.
 
 ---
 

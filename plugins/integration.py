@@ -1,21 +1,23 @@
 """
-Core integration shim for the Fio plugin system.
+Editor-side integration shim for the Fio plugin system.
 
-This module wires the plugin manager into the editor and engine **without
-editing the large core source files**. It applies a handful of small, guarded
-monkey-patches so the plugin system is effectively drop-in: adding the
-``plugins/`` package plus a one-line hook in ``editor/__init__.py`` is all the
-core needs.
+The **engine** play lifecycle is wired natively: ``engine.logic_thread.LogicThread``
+calls the plugin manager directly (attach at ``__init__``, play-start/stop in
+``set_play_mode``, per-tick dispatch in ``_tick_play_mode``). Nothing in this
+module touches the engine any more.
+
+What remains here are the **editor** integrations, kept as small guarded
+monkey-patches so the large editor source files stay untouched. Adding the
+``plugins/`` package plus a one-line bootstrap in ``editor/__init__.py`` is all
+the editor needs.
 
 ``apply()`` is idempotent and defensive: any patch that cannot be installed
 (e.g. a module that fails to import in a headless/tool context) is skipped with
 a log line rather than breaking startup. It patches:
 
-* ``engine.logic_thread.LogicThread``
-    - ``__init__``            → attach plugin runtime I/O handlers
-    - ``set_play_mode``       → dispatch on_play_start / on_play_stop
-    - ``_handle_triggers``    → dispatch on_tick (runs last in the gameplay
-                                sequence and carries the use-key edge)
+* ``editor.editor_state.EditorState``
+    - ``load_from_data``      → auto-enable plugins a loaded level's entities need
+    - ``clear_scene``         → revert a level-driven auto-enable (File ▸ New)
 * ``editor.view_2d.View2D``
     - ``contextMenuEvent``    → add a "Plugins ▸ <plugin>" placement submenu,
                                 reusing the original menu handler unchanged
@@ -52,7 +54,6 @@ def apply():
     if _applied:
         return
     _applied = True
-    _patch_logic_thread()
     _patch_editor_state()
     _patch_view_2d()
     _patch_editor_menu()
@@ -62,70 +63,11 @@ def apply():
 # ---------------------------------------------------------------------------
 # engine.logic_thread.LogicThread
 # ---------------------------------------------------------------------------
-
-def _patch_logic_thread():
-    try:
-        from engine.logic_thread import LogicThread
-    except Exception as exc:
-        _log(f"logic-thread patch skipped ({exc})")
-        return
-
-    from plugins.manager import get_manager, load_plugins
-
-    if getattr(LogicThread, "_fio_plugins_patched", False):
-        return
-
-    _orig_init = LogicThread.__init__
-    _orig_set_play_mode = LogicThread.set_play_mode
-    _orig_handle_triggers = LogicThread._handle_triggers
-
-    def __init__(self, *args, **kwargs):
-        _orig_init(self, *args, **kwargs)
-        self.plugins = None
-        try:
-            load_plugins()
-            mgr = get_manager()
-            self.plugins = mgr
-            if getattr(self, "io_manager", None) is not None:
-                mgr.attach_runtime(self)
-        except Exception as exc:
-            _log(f"runtime attach failed: {exc}")
-
-    def set_play_mode(self, enabled):
-        _orig_set_play_mode(self, enabled)
-        mgr = getattr(self, "plugins", None)
-        if mgr is None:
-            return
-        try:
-            if enabled:
-                mgr.dispatch_play_start(self)
-            else:
-                mgr.dispatch_play_stop(self)
-        except Exception as exc:
-            _log(f"lifecycle dispatch failed: {exc}")
-
-    def _handle_triggers(self, use_key_pressed):
-        # Run the core trigger handling first, then let plugins tick. This runs
-        # last in the play-tick gameplay sequence, so the use-key edge is intact
-        # and any plugin HUD prompt is the final word for the frame.
-        _orig_handle_triggers(self, use_key_pressed)
-        mgr = getattr(self, "plugins", None)
-        if mgr is None:
-            return
-        try:
-            from plugins.api import TickContext
-            ctx = TickContext(
-                use_pressed=bool(use_key_pressed),
-                interaction_consumed=bool(getattr(self, "current_hud_message", "")),
-            )
-            mgr.dispatch_tick(self, ctx)
-        except Exception:
-            pass
-
-    LogicThread.__init__ = __init__
-    LogicThread.set_play_mode = set_play_mode
-    LogicThread._handle_triggers = _handle_triggers
-    LogicThread._fio_plugins_patched = True
+#
+# The play-lifecycle hooks (runtime attach, play-start/stop, per-tick dispatch)
+# are wired natively inside ``engine.logic_thread.LogicThread`` — see the guarded
+# ``self.plugins`` calls in ``__init__``, ``set_play_mode`` and ``_tick_play_mode``.
+# No monkey-patch is needed here; the engine calls the plugin manager directly.
 
 
 # ---------------------------------------------------------------------------

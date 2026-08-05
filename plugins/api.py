@@ -144,10 +144,24 @@ class RuntimeAPI:
         self.io_manager = getattr(logic, "io_manager", None)
 
     def register_input_handler(self, entity_type: str, input_name: str, handler: Callable):
-        """Register ``handler(entity, parameter, logic)`` for an entity input."""
+        """Register ``handler(entity, parameter, logic)`` for an entity input.
+
+        The handler is registered once, when the logic thread attaches, but is
+        gated by the plugin's *live* ``enabled`` state: it runs only while the
+        plugin is on. That lets the manager attach every loaded plugin up front
+        (so a plugin enabled later — e.g. a disabled-by-default one auto-enabled
+        when its level loads — has working inputs immediately) while a disabled
+        plugin's inputs stay inert without needing to re-attach.
+        """
         if self.io_manager is None:
             return
-        self.io_manager.register_input_handler(entity_type, input_name, handler)
+        plugin = self._plugin
+
+        def gated(entity, parameter, logic):
+            if getattr(plugin, "enabled", True):
+                return handler(entity, parameter, logic)
+
+        self.io_manager.register_input_handler(entity_type, input_name, gated)
 
     def fire_output(self, entity, output_name: str, value: Optional[str] = None):
         """Fire an output from *entity* through the I/O system (if available)."""

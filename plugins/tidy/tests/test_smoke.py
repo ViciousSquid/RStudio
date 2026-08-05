@@ -9,6 +9,7 @@ Run with:  python -m plugins.tidy.tests.test_smoke   (from the project root)
 or under pytest.
 """
 
+import inspect
 import math
 import os
 import sys
@@ -201,16 +202,24 @@ def test_spatial_hash_scale():
 
 
 def test_integration_shim_applies():
-    print("[6] core integration shim installs cleanly")
+    print("[6] core integration installs cleanly")
     # Importing the editor package runs editor/__init__.py, which loads plugins
-    # and applies the integration shim (patching LogicThread + View2D).
+    # and applies the editor integration shim (View2D placement menu, etc.).
     import editor  # noqa: F401
     from plugins import integration
     integration.apply()  # idempotent
 
+    # The engine hooks are native, not monkey-patched: LogicThread calls the
+    # manager directly, so it exposes the call sites rather than a patch flag.
     from engine.logic_thread import LogicThread
-    _check(getattr(LogicThread, "_fio_plugins_patched", False),
-           "LogicThread patched (runtime attach + lifecycle + tick)")
+    from plugins.manager import get_manager
+    mgr = get_manager()
+    for hook in ("attach_runtime", "dispatch_play_start", "dispatch_play_stop", "tick"):
+        _check(hasattr(mgr, hook),
+               f"manager exposes native engine hook: {hook}()")
+    src = inspect.getsource(LogicThread._tick_play_mode)
+    _check("self.plugins.tick(" in src,
+           "LogicThread._tick_play_mode calls the plugin tick natively")
     try:
         from editor.view_2d import View2D
         _check(getattr(View2D, "_fio_plugins_patched", False),

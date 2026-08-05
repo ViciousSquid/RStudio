@@ -186,9 +186,9 @@ class PlayerPluginHost:
         self.bridge.player.update(cam_pos, cam_yaw_deg, cam_pitch_deg)
         self.bridge.current_hud_message = ""
         try:
-            from plugins.api import TickContext
-            ctx = TickContext(delta=dt, use_pressed=bool(use_pressed))
-            self.manager.dispatch_tick(self.bridge, ctx)
+            # Same cached, early-out dispatch the engine uses: builds a context
+            # only when a plugin actually ticks.
+            self.manager.tick(self.bridge, use_pressed=bool(use_pressed), delta=dt)
         except Exception:
             return
         self.hud_message = self.bridge.current_hud_message

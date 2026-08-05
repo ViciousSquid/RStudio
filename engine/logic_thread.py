@@ -58,6 +58,18 @@ except ImportError as e:
     IO_AVAILABLE = False
     IOManager = None
 
+# Plugin system (optional). The logic thread drives the plugin lifecycle
+# natively: attach runtime I/O at construction, dispatch play-start/stop with
+# play mode, and tick active plugins once per play frame. Guarded so a build
+# without the plugins package runs unchanged.
+try:
+    from plugins.manager import get_manager as _get_plugin_manager, load_plugins as _load_plugins
+    PLUGINS_AVAILABLE = True
+except Exception:
+    _get_plugin_manager = None
+    _load_plugins = None
+    PLUGINS_AVAILABLE = False
+
 # Import debug logger
 try:
     from editor.debug_console import debug_log
@@ -180,7 +192,21 @@ class LogicThread(threading.Thread):
             self.io_manager.set_entity_finder_by_id(self._find_entity_by_id)
             self.io_manager.set_game_state(self.game_state)
             register_all_input_handlers(self.io_manager)
-        
+
+        # Plugin runtime: load once and attach this thread's I/O handlers. All
+        # loaded plugins attach (handlers self-gate on the plugin's enabled
+        # state), so a plugin enabled later — e.g. auto-enabled when its level
+        # loads — works without a re-attach. Fully guarded and optional.
+        self.plugins = None
+        if PLUGINS_AVAILABLE and _get_plugin_manager is not None:
+            try:
+                _load_plugins()
+                self.plugins = _get_plugin_manager()
+                if self.io_manager is not None:
+                    self.plugins.attach_runtime(self)
+            except Exception as exc:
+                print(f"[LogicThread] plugin attach skipped: {exc}")
+
         # Trigger state
         self.player_in_triggers: set = set()
         self.fired_once_triggers: set = set()
@@ -899,7 +925,19 @@ class LogicThread(threading.Thread):
 
             # Reset monster AI state
             self._reset_all_monsters(clear_dead=False)
-    
+
+        # Plugin play lifecycle: initialise per-session state on entering play,
+        # tear it down on leaving. Runs after the core reset above so plugins
+        # see a fully-prepared session.
+        if self.plugins is not None:
+            try:
+                if enabled:
+                    self.plugins.dispatch_play_start(self)
+                else:
+                    self.plugins.dispatch_play_stop(self)
+            except Exception as exc:
+                print(f"[LogicThread] plugin lifecycle dispatch failed: {exc}")
+
     def _start_monster_ai(self):
         """Start the monster AI processing thread."""
         self._stop_monster_ai()
@@ -1224,6 +1262,18 @@ class LogicThread(threading.Thread):
         self._handle_interactions(use_key)
         self._check_pickups()
         self._handle_triggers(use_key)
+
+        # Plugin tick: runs last in the gameplay sequence so the use-key edge is
+        # intact and any plugin HUD prompt is the final word for the frame. The
+        # manager early-outs before building a context when no plugin ticks, so
+        # a plugin-free session pays almost nothing here.
+        if self.plugins is not None:
+            self.plugins.tick(
+                self,
+                use_pressed=use_key,
+                interaction_consumed=bool(self.current_hud_message),
+                delta=delta,
+            )
 
         # Portal transit detection — must run AFTER player physics so the
         # post-physics position is the one tested against portal planes.

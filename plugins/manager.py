@@ -80,6 +80,12 @@ class PluginManager:
         # a manual menu toggle. Tracked so an empty/new scene can revert exactly
         # those without touching a plugin the user enabled by hand.
         self._auto_enabled: set = set()
+        # Bumped whenever the set of enabled plugins (or the plugin list) changes,
+        # so the per-hook dispatch caches below can invalidate cheaply. This keeps
+        # the hot per-tick path from re-scanning every plugin each frame.
+        self._enabled_generation = 0
+        self._active_cache: dict = {}       # hook name -> list of active plugins
+        self._active_cache_gen = -1
 
     # -- logging ------------------------------------------------------------
     def _log(self, message: str):
@@ -161,6 +167,7 @@ class PluginManager:
             self._log(f"menu_entries() failed for '{plugin.name}':\n{traceback.format_exc()}")
 
         self.plugins.append(plugin)
+        self._enabled_generation += 1
 
     # -- editor menu --------------------------------------------------------
     def _add_menu_entry(self, plugin: FioPlugin, label: str, cls: type):
@@ -203,7 +210,10 @@ class PluginManager:
             plugin = self.find_plugin(plugin_or_name)
         if plugin is None:
             return
+        was = bool(getattr(plugin, "enabled", True))
         plugin.enabled = bool(enabled)
+        if was != bool(enabled):
+            self._enabled_generation += 1
         if auto and enabled:
             self._auto_enabled.add(plugin)
         else:
@@ -317,38 +327,88 @@ class PluginManager:
 
     # -- runtime attach -----------------------------------------------------
     def attach_runtime(self, logic):
-        """Let every enabled plugin register I/O handlers for this logic thread."""
+        """Register every loaded plugin's I/O handlers for this logic thread.
+
+        All plugins attach, not just the currently-enabled ones: their input
+        handlers are gated by live ``enabled`` state (see
+        :meth:`RuntimeAPI.register_input_handler`), so a plugin enabled later —
+        e.g. a disabled-by-default plugin auto-enabled when its level loads —
+        has working inputs without a re-attach. The logic thread is created
+        once, before any level loads, so this is the only chance to attach.
+        """
         for plugin in self.plugins:
-            if not self.is_enabled(plugin):
-                continue
             try:
                 plugin.register_runtime(RuntimeAPI(self, logic, plugin))
             except Exception:
                 self._log(f"register_runtime() failed for '{plugin.name}':\n{traceback.format_exc()}")
 
     # -- lifecycle dispatch -------------------------------------------------
+    @staticmethod
+    def _overrides(plugin: FioPlugin, hook: str) -> bool:
+        """True if *plugin*'s class actually overrides the *hook* method.
+
+        A plugin that doesn't implement a hook inherits the empty ``FioPlugin``
+        method; skipping those means an idle hook costs nothing, and a map whose
+        active plugins don't tick pays no per-frame dispatch at all.
+        """
+        return getattr(type(plugin), hook, None) is not getattr(FioPlugin, hook, None)
+
+    def _active_for(self, hook: str) -> List[FioPlugin]:
+        """Cached list of enabled plugins that override *hook*.
+
+        Rebuilt only when the enabled set (or plugin list) changes, tracked by
+        ``_enabled_generation``. On the hot per-tick path this is a dict lookup
+        and a generation compare rather than a full scan every frame.
+        """
+        if self._active_cache_gen != self._enabled_generation:
+            self._active_cache = {}
+            self._active_cache_gen = self._enabled_generation
+        cached = self._active_cache.get(hook)
+        if cached is None:
+            cached = [p for p in self.plugins
+                      if self.is_enabled(p) and self._overrides(p, hook)]
+            self._active_cache[hook] = cached
+        return cached
+
     def dispatch_play_start(self, logic):
-        for plugin in self.plugins:
-            if not self.is_enabled(plugin):
-                continue
+        for plugin in self._active_for("on_play_start"):
             try:
                 plugin.on_play_start(logic)
             except Exception:
                 self._log(f"on_play_start() failed for '{plugin.name}':\n{traceback.format_exc()}")
 
     def dispatch_play_stop(self, logic):
-        for plugin in self.plugins:
-            if not self.is_enabled(plugin):
-                continue
+        for plugin in self._active_for("on_play_stop"):
             try:
                 plugin.on_play_stop(logic)
             except Exception:
                 self._log(f"on_play_stop() failed for '{plugin.name}':\n{traceback.format_exc()}")
 
     def dispatch_tick(self, logic, ctx: TickContext):
-        for plugin in self.plugins:
-            if not self.is_enabled(plugin):
-                continue
+        for plugin in self._active_for("on_tick"):
+            try:
+                plugin.on_tick(logic, ctx)
+            except Exception:
+                self._log(f"on_tick() failed for '{plugin.name}':\n{traceback.format_exc()}")
+
+    def tick(self, logic, use_pressed: bool = False,
+             interaction_consumed: bool = False, delta: float = 0.0):
+        """Per-frame entry point: dispatch ``on_tick`` to active plugins.
+
+        Early-outs before building a :class:`TickContext` when nothing is
+        listening, so a play session with no ticking plugin costs almost nothing
+        each frame. Preferred over building a context and calling
+        :meth:`dispatch_tick` at every call site.
+        """
+        tickers = self._active_for("on_tick")
+        if not tickers:
+            return
+        ctx = TickContext(
+            delta=delta,
+            use_pressed=bool(use_pressed),
+            interaction_consumed=bool(interaction_consumed),
+        )
+        for plugin in tickers:
             try:
                 plugin.on_tick(logic, ctx)
             except Exception:
