@@ -9,7 +9,7 @@
 
 ### Unified editor and runtime inspired by Radiant and Hammer.
 
-Fio is an instant-iteration game creation platform built around classic CSG editing, extensible plugins, and portable game packages.<br>
+Fio combines a brush-based editor, real-time engine, plugin platform and portable package format into a single application with no traditional compile pipeline.<br>
 **Designed on low-power ARM hardware with an efficiency-first philosophy.**
 
 **Key Features**
