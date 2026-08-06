@@ -21,7 +21,7 @@ Fio is an instant-iteration game creation platform built around classic CSG edit
 - Extensible plugin API for editor, runtime and gameplay
 - Entity I/O logic system inspired by Source engine
 - Local split-screen multiplayer
-- Export projects as portable, self-contained packages
+- Export self-contained `.fiopak` packages containing maps, assets and plugins
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
 ### [💾 Download Binaries for Windows/macOS/Linux](https://github.com/ViciousSquid/Fio/releases)  
