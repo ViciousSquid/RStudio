@@ -167,7 +167,21 @@ class DebugConsole(QWidget):
         'Info': '#FFFFFF',      # White
         'MonsterAI': '#FF7043', # Deep orange — monster combat / sight / attack
         'Pathfinding': '#26A69A', # Teal — monster patrol / navigation
+        'Plugins': '#42A5F5',   # Blue — plugin debug / init (default; loads/errors recoloured per-message)
     }
+
+    # Per-message colours for the 'Plugins' category. All plugin messages share
+    # one category, so they are recoloured by content: successful loads green,
+    # failures red, and everything else (debug / init chatter) the blue default.
+    PLUGIN_LOAD_COLOR  = '#66BB6A'  # Green — loaded / enabled / bundled
+    PLUGIN_ERROR_COLOR = '#EF5350'  # Red — failures / errors
+    PLUGIN_DEBUG_COLOR = '#42A5F5'  # Blue — debug / init messages
+
+    # Substrings that mark a plugin message as an error (red) or a load (green).
+    # Checked case-insensitively; errors take precedence over loads.
+    _PLUGIN_ERROR_HINTS = ('fail', 'error', 'exception', 'traceback',
+                           'not a fioplugin', 'exposes no', 'skipped')
+    _PLUGIN_LOAD_HINTS  = ('load', 'enabled', 'bundled', 'register')
 
     FONT_SIZE_MIN = 6
     FONT_SIZE_MAX = 24
@@ -445,6 +459,12 @@ class DebugConsole(QWidget):
         self.hide_pathfinding_cb.toggled.connect(self._refresh_console)
         fp_layout.addWidget(self.hide_pathfinding_cb)
 
+        self.hide_plugins_cb = QCheckBox("Plugins")
+        self.hide_plugins_cb.setToolTip("Hide plugin load / error / debug messages")
+        self.hide_plugins_cb.setStyleSheet(cb_style)
+        self.hide_plugins_cb.toggled.connect(self._refresh_console)
+        fp_layout.addWidget(self.hide_plugins_cb)
+
         fp_layout.addStretch()
         splitter.addWidget(filter_panel)
 
@@ -663,6 +683,10 @@ class DebugConsole(QWidget):
         if self.hide_pathfinding_cb.isChecked() and category == 'Pathfinding':
             return
 
+        # 2d. Filter Plugins messages when "Plugins" checkbox is checked
+        if self.hide_plugins_cb.isChecked() and category == 'Plugins':
+            return
+
         # 3. Check "Filter Empty" Logic
         if self.filter_empty_cb.isChecked():
             if "(0 connections)" in message:
@@ -672,6 +696,11 @@ class DebugConsole(QWidget):
 
         # Get color for category
         color = self.CATEGORY_COLORS.get(category, '#FFFFFF')
+
+        # Plugin messages all share one category; recolour by content so
+        # loads read green, errors red, and debug/init stay blue.
+        if category == 'Plugins':
+            color = self._plugin_message_color(message)
 
         # --- HIGHLIGHTING LOGIC ---
 
@@ -752,6 +781,20 @@ class DebugConsole(QWidget):
         # Update count
         self.message_count += 1
         self.count_label.setText(f"{self.message_count} messages")
+
+    def _plugin_message_color(self, message: str) -> str:
+        """Pick a colour for a 'Plugins' message based on its content.
+
+        Failures are red, successful loads green, and anything else (debug /
+        init chatter) falls back to the blue default. Errors win over loads so
+        a message like "register() failed" reads red rather than green.
+        """
+        lowered = message.lower()
+        if any(hint in lowered for hint in self._PLUGIN_ERROR_HINTS):
+            return self.PLUGIN_ERROR_COLOR
+        if any(hint in lowered for hint in self._PLUGIN_LOAD_HINTS):
+            return self.PLUGIN_LOAD_COLOR
+        return self.PLUGIN_DEBUG_COLOR
 
     def _refresh_console(self):
         """Reload console messages from buffer (triggered by filters or font size change)."""
