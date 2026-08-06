@@ -7,21 +7,19 @@
 
 ## Fio — Liminal World Editor & Procedural Engine
 
-### Unified editor and runtime inspired by Radiant and Hammer.
-
-Fio combines a brush-based editor, real-time engine, plugin platform and portable package format into a single application with no traditional compile pipeline.<br>
+Fio combines the immediacy of classic Radiant and Hammer workflows with a modern brush-based editor, real-time engine, plugin platform and portable packages - all in a single application with no import, compile or bake pipeline.<br>
 **Designed on low-power ARM hardware with an efficiency-first philosophy.**
 
 **Key Features**
 - Hit "Play" instantly: no import, compile or bake step
 - Edit and play in the same runtime
+- Extensible plugin API for editor, runtime and gameplay
+- Export self-contained .fiopak packages containing maps, assets and plugins
 - Classic brush-based editing with arbitrary convex polyhedra
 - Non-Euclidean portal connections between any two points in a level
 - Generate fully playable procedural maps with two clicks
-- Extensible plugin API for editor, runtime and gameplay
-- Entity I/O logic system inspired by Source engine
-- Local split-screen multiplayer
-- Export self-contained `.fiopak` packages containing maps, assets and plugins
+- Entity I/O logic system inspired by the Source engine
+• Local split-screen multiplayer
 - Designed to preserve the immediacy and direct manipulation that made Radiant and Hammer legendary.
 
 ### [💾 Download Binaries for Windows/macOS/Linux](https://github.com/ViciousSquid/Fio/releases)  
@@ -71,6 +69,7 @@ Every feature follows from that principle:
 - **Zero Serialization Overhead:** Editor and engine share the same runtime memory state, enabling instant execution with no compile, bake, or scene-deserialization delay.
 - **Modular Multi-Threading:** Subsystems (render pipeline, physics, and world simulation) are strictly decoupled to keep framerates steady during heavy runtime tasks.
 - **Open Architecture:** Fully open-source, modular codebase (MIT License) designed for easy extendability and low-level experimentation.
+- **Plugin Platform:** Editor tools, gameplay systems, renderers and runtime extensions can be added without modifying the engine.
 
 ------------------------------
 
