@@ -87,6 +87,14 @@ should happen when the room is tidy.
 The HUD prompts contextually (`[E] Pick up Book`, `[E] Put away (Shelf)`,
 `[E] Drop`) and shows live progress when idle.
 
+A dropped object **falls to the floor** under gravity instead of hanging where
+you released it. This physics is opt-in and cheap: only objects you've actually
+dropped are simulated, and only until they land — so a map with thousands of
+resting props pays nothing for it (framerate stays the priority). In editor
+play mode the landing height is read from the world geometry under the drop; the
+lighter standalone player has no such query and settles the object at its
+original resting height.
+
 ---
 
 ## Recipes
@@ -110,8 +118,9 @@ Keep `no_collision` on (the default). Give receptacles generous `capacity`.
 ## How it works (for the curious)
 
 - `entities.py` — the three `Thing` subclasses (data only).
-- `runtime.py` — `TidySession`: carry/place logic, a `SpatialHash` over
-  available objects, receptacle slot maths, goal tracking, and the HUD line.
+- `runtime.py` — `TidySession`: carry/place logic, drop-and-fall physics (only
+  in-flight objects are simulated), a `SpatialHash` over available objects,
+  receptacle slot maths, goal tracking, and the HUD line.
 - `plugin.py` — registration, I/O handlers, and the play lifecycle wiring.
 - `assets/book.obj` + `assets/covers/cover_NN.png` — the UV-mapped book model
   and its random covers. Regenerate with `python plugins/tidy/tools/make_books.py`.

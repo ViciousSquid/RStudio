@@ -101,6 +101,7 @@ class TidyPlugin(FioPlugin):
             s = _session(logic)
             if s:
                 s.grid.remove(entity)
+                s._falling.pop(id(entity), None)   # a disabled object stops falling
 
         def recept_reset(entity, param, logic):
             s = _session(logic)

@@ -9,7 +9,17 @@ The core loop, each tick:
     and, on a use-press, place it into the receptacle under the crosshair
     (or drop it);
   * otherwise, if the player is **looking at** a nearby object, pick it up on
-    a use-press.
+    a use-press;
+  * and, whatever the above, advance any object that was just **dropped** so it
+    falls to the floor instead of hanging in mid-air.
+
+Physics is deliberately *opt-in*: only objects the player has actually dropped
+are simulated, and only until they land — at which point they stop costing
+anything. A map with thousands of resting objects therefore pays nothing for
+gravity, keeping framerate the priority. The floor height under a drop comes
+from the engine's spatial grid when it is available (editor play mode) and
+degrades to the object's original resting height otherwise (the dependency-light
+player build), so a dropped book always settles onto the ground.
 
 To stay fast with *thousands* of objects, available (not-yet-stowed) objects
 are indexed in a coarse 2D :class:`SpatialHash` so the per-tick "what am I
@@ -35,6 +45,13 @@ CARRY_DISTANCE = 55.0         # how far in front the held object floats
 CARRY_DROP = -6.0             # slight downward offset so it sits below the eye
 PLACE_AIM_DOT = 0.55          # receptacle aim tolerance (wider — it's a zone)
 GRID_CELL = 160.0             # spatial-hash cell size (world units)
+
+# -- drop physics tuning -----------------------------------------------------
+# Only dropped objects fall, and only until they land, so these govern a
+# handful of in-flight props at most — never the whole map.
+DROP_GRAVITY = -900.0         # world units/s^2 (a touch snappier than a book float)
+DROP_TERMINAL = -1600.0       # clamp fall speed so a long drop stays sane
+MAX_FALL_STEP = 0.05          # clamp dt: a frame spike can't tunnel a drop through the floor
 
 
 # -- tiny vector helpers (plain tuples; no external deps) --------------------
@@ -126,6 +143,10 @@ class TidySession:
         self.goals: List = []
         self.grid = SpatialHash()
         self.held = None
+        # Objects currently falling after being dropped: id(obj) -> {obj, vy}.
+        # Kept tiny — an entry lives only from drop to landing — so the per-tick
+        # physics step scales with drops in flight, not with map size.
+        self._falling: Dict[int, dict] = {}
         # id(receptacle) -> list of stowed object ids (index == slot).
         self._fill: Dict[int, list] = {}
         self._full_fired: set = set()
@@ -156,6 +177,7 @@ class TidySession:
         self.goals = [t for t in things if self._is(t, 'tidygoal')]
 
         self.grid.clear()
+        self._falling.clear()
         self._fill.clear()
         self._full_fired.clear()
         self._goal_done.clear()
@@ -182,26 +204,32 @@ class TidySession:
         for obj in self.objects:
             p = obj.properties
             home = p.pop('_home_pos', None)
+            p.pop('_rest_offset', None)   # play-only cache; keep the map pristine
             if home is not None:
                 obj.pos = list(home)
             p['tidied'] = False
         self.grid.clear()
+        self._falling.clear()
         self.held = None
 
     # -- per-tick -----------------------------------------------------------
     def tick(self, ctx):
         logic = self.logic
+        dt = float(getattr(ctx, 'delta', 0.0) or 0.0) if ctx else 0.0
         player = getattr(logic, 'player', None)
-        if player is None:
-            return
+        if player is not None:
+            eye = _eye(player)
+            fwd = _forward(player)
+            if self.held is not None:
+                self._tick_carrying(ctx, eye, fwd)
+            else:
+                self._tick_looking(ctx, eye, fwd)
 
-        eye = _eye(player)
-        fwd = _forward(player)
-
-        if self.held is not None:
-            self._tick_carrying(ctx, eye, fwd)
-        else:
-            self._tick_looking(ctx, eye, fwd)
+        # Advance only the objects currently in flight (dropped this session).
+        # With nothing falling this is a single empty-dict check, so idle maps —
+        # and thousands of at-rest objects — pay nothing for physics.
+        if self._falling:
+            self._tick_falling(dt)
 
     def _tick_carrying(self, ctx, eye, fwd):
         held = self.held
@@ -301,17 +329,107 @@ class TidySession:
     # -- actions ------------------------------------------------------------
     def _pick_up(self, obj):
         self.grid.remove(obj)
+        self._falling.pop(id(obj), None)   # picking a mid-air drop stops its fall
         self.held = obj
         self._fire(obj, 'OnPickedUp')
 
     def _drop(self, obj):
-        # Release at its current (crosshair) position and make it available.
+        # Release at its current (crosshair) position, make it available again,
+        # and let gravity carry it to the floor rather than leaving it hovering.
         self.held = None
         self.grid.add(obj)
+        self._falling[id(obj)] = {'obj': obj, 'vy': 0.0}
         self._fire(obj, 'OnDropped')
+
+    # -- drop physics -------------------------------------------------------
+    def _tick_falling(self, dt):
+        """Apply gravity to dropped objects until each reaches the floor.
+
+        Runs only for objects mid-fall (see :meth:`_drop`); a landed object is
+        dropped from the set and never simulated again.
+        """
+        if dt <= 0.0:
+            dt = 1.0 / 60.0
+        dt = min(dt, MAX_FALL_STEP)   # clamp so a lag spike can't tunnel the floor
+
+        landed = []
+        for key, st in self._falling.items():
+            obj = st['obj']
+            # A drop that was re-grabbed, stowed, or reset is no longer falling.
+            if obj is self.held or obj.properties.get('tidied'):
+                landed.append(key)
+                continue
+
+            x, y, z = _xyz(obj.pos)
+            rest = self._rest_y(obj, x, z, y + 1.0)
+            if rest is None:
+                # Can't locate a floor (no world query, no home) — stop rather
+                # than fall forever; leave the object where it was released.
+                landed.append(key)
+                continue
+
+            vy = st['vy'] + DROP_GRAVITY * dt
+            if vy < DROP_TERMINAL:
+                vy = DROP_TERMINAL
+            st['vy'] = vy
+            new_y = y + vy * dt
+            if new_y <= rest:
+                new_y = rest
+                landed.append(key)
+            obj.pos = [x, new_y, z]
+
+        for key in landed:
+            self._falling.pop(key, None)
+
+    def _floor_surface(self, x, z, from_y):
+        """Top Y of the nearest solid surface below ``(x, z)``, or ``None``.
+
+        Uses the engine's spatial grid when the host provides one (editor play
+        mode). The dependency-light player build has no such grid, so this
+        returns ``None`` there and the caller falls back to the resting height.
+        """
+        grid = getattr(self.logic, '_spatial_grid', None)
+        raycast = getattr(grid, 'raycast_down', None)
+        if raycast is None:
+            return None
+        try:
+            return raycast(float(x), float(z), float(from_y))
+        except Exception:
+            return None
+
+    def _rest_offset(self, obj):
+        """How far an object's origin sits above the floor when resting.
+
+        Sampled once at the object's home spot and cached, so a dropped object
+        settles at the same natural height above the ground it started at
+        (rather than sinking its origin into the surface).
+        """
+        p = obj.properties
+        off = p.get('_rest_offset')
+        if off is not None:
+            return off
+        off = 0.0
+        home = p.get('_home_pos')
+        if home is not None:
+            surf = self._floor_surface(home[0], home[2], float(home[1]) + 1.0)
+            if surf is not None:
+                off = max(0.0, float(home[1]) - surf)
+        p['_rest_offset'] = off
+        return off
+
+    def _rest_y(self, obj, x, z, from_y):
+        """The Y a dropped object should settle at over ``(x, z)``."""
+        surf = self._floor_surface(x, z, from_y)
+        if surf is not None:
+            return surf + self._rest_offset(obj)
+        # No world query available (player build): assume a flat floor and reuse
+        # the object's original resting height.
+        home = obj.properties.get('_home_pos')
+        return float(home[1]) if home is not None else None
 
     def _place(self, obj, recept):
         idx = self._fill_count(recept)
+        self._falling.pop(id(obj), None)   # stowing ends any fall in progress
         obj.pos = self._slot_world_pos(recept, idx)
         obj.properties['tidied'] = True
         self._fill.setdefault(id(recept), []).append(id(obj))
@@ -337,6 +455,7 @@ class TidySession:
         p = obj.properties
         if self.held is obj:
             self.held = None
+        self._falling.pop(id(obj), None)   # a reset object is no longer falling
         # Remove it from any receptacle fill list.
         for rid, ids in self._fill.items():
             if id(obj) in ids:
