@@ -1399,27 +1399,12 @@ class Portal(Thing):
         return float(self.properties.get('parent_local_yaw', 0.0))
 
     # ── I/O interface ─────────────────────────────────────────────────────────
-
-    def on_input(self, input_name: str, param=None, logic=None):
-        """Handle Enable / Disable / Toggle inputs from the I/O system."""
-        name = (input_name or '').lower().strip()
-        if name == 'enable':
-            self.properties['active'] = True
-            self._fade_target = 1.0          # fade in
-            if logic and logic.io_manager:
-                logic.io_manager.fire_output(self, 'OnActivate')
-        elif name == 'disable':
-            self.properties['active'] = False
-            self._fade_target = 0.0          # fade out
-            if logic and logic.io_manager:
-                logic.io_manager.fire_output(self, 'OnDeactivate')
-        elif name == 'toggle':
-            new_active = not self.is_active()
-            self.properties['active'] = new_active
-            self._fade_target = 1.0 if new_active else 0.0
-            ev = 'OnActivate' if new_active else 'OnDeactivate'
-            if logic and logic.io_manager:
-                logic.io_manager.fire_output(self, ev)
+    # Enable / Disable / Toggle are handled by the registered portal input
+    # handlers (see editor/io_handlers.py: portal_enable / portal_disable /
+    # portal_toggle), which fire the declared OnEnabled / OnDisabled / OnToggled
+    # outputs and drive the fade via _fade_target. No on_input() override is
+    # defined here so the runtime IOManager and the console 'ent_fire' path stay
+    # consistent (both dispatch through those handlers).
 
 
 

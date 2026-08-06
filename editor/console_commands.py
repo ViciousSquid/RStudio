@@ -7,7 +7,7 @@ from editor.debug_console import debug_log
 # Try to import I/O system (available in both editor and play mode)
 try:
     from .io_system import (
-        get_connections,
+        get_connections, set_connections,
         OutputConnection, get_output_names, get_input_names,
         get_entity_type_for_io
     )
@@ -918,6 +918,8 @@ class ConsoleCommandHandler:
 
     def cmd_fire(self, args):
         """ent_fire <entity_name> <input_name> [parameter]
+        Fires an INPUT on an entity through the I/O system (runs the entity's
+        registered input handler, exactly like a runtime connection would).
         Works in both Editor mode and Play Mode."""
         if not args:
             debug_log("Error", "Usage: ent_fire <entity_name> <input_name> [parameter]")
@@ -937,27 +939,47 @@ class ConsoleCommandHandler:
             debug_log("Error", f"Entity '{entity_name}' not found.")
             return
 
-        debug_log("Info", f"[Editor Fire] {entity_name}.{input_name}({parameter})")
+        debug_log("Info", f"[ent_fire] {entity_name}.{input_name}({parameter})")
 
-        # === Handle entities that implement on_input() (LevelChanger, etc.) ===
+        # --- Primary path: dispatch through the play-mode IOManager, which runs
+        #     the registered input handler (or the generic enable/disable/hide/…
+        #     fallback) for this entity type — the same routing runtime
+        #     connections use. ---
+        io = None
+        try:
+            if (hasattr(self.main_window, 'view_3d')
+                    and self.main_window.view_3d.logic_thread):
+                io = self.main_window.view_3d.logic_thread.io_manager
+        except Exception:
+            io = None
+
+        if io is not None:
+            target_id = (entity.properties.get('id', '')
+                         if hasattr(entity, 'properties')
+                         else entity.get('id', ''))
+            try:
+                io._execute_input(entity_name, input_name, parameter,
+                                  "console", target_id=target_id)
+                debug_log("Info", f"✓ Fired input '{input_name}' on '{entity_name}'")
+            except Exception as e:
+                debug_log("Error", f"ent_fire failed: {e}")
+            return
+
+        # --- Editor mode (no active play session): entities implementing
+        #     on_input() can still handle inputs directly (e.g. LevelChanger). ---
         if hasattr(entity, 'on_input') and callable(entity.on_input):
             try:
                 success = entity.on_input(input_name, parameter)
                 if success:
-                    debug_log("Info", f"✓ Input '{input_name}' handled successfully")
+                    debug_log("Info", f"✓ Input '{input_name}' handled (editor mode)")
                 else:
                     debug_log("Warning", f"Input '{input_name}' was not handled")
             except Exception as e:
                 debug_log("Error", f"Exception in {entity.__class__.__name__}.on_input(): {e}")
         else:
-            debug_log("Warning", f"Entity '{entity_name}' does not support inputs (no on_input method)")
-
-        # Optional: forward to IOManager in Play Mode
-        if hasattr(self.main_window, 'iomanager') and self.main_window.iomanager is not None:
-            try:
-                self.main_window.iomanager.fire_output(entity, input_name, parameter)
-            except Exception:
-                pass
+            debug_log("Warning",
+                      f"'{entity_name}' inputs require Play Mode "
+                      f"(no active I/O manager in the editor).")
 
     def cmd_trigger(self, args):
         if not args:
@@ -1134,7 +1156,57 @@ class ConsoleCommandHandler:
         )
 
     def cmd_disconnect_io(self, args):
-        debug_log("Warning", "disconnect command not fully implemented yet (use property editor for now)")
+        """disconnect <source> [output] [target] [input]
+        Removes I/O connections from <source>. With no extra filters it removes
+        every connection on the source; otherwise it removes only the ones that
+        match each filter supplied (all comparisons are case-insensitive)."""
+        if not IO_AVAILABLE:
+            debug_log("Error", "I/O system not available")
+            return
+
+        parts = args.split()
+        if not parts:
+            debug_log("Error", "Usage: disconnect <source> [output] [target] [input]")
+            return
+
+        src = parts[0]
+        f_out = parts[1] if len(parts) > 1 else None
+        f_tgt = parts[2] if len(parts) > 2 else None
+        f_inp = parts[3] if len(parts) > 3 else None
+
+        source_ent = self.editor_state.find_entity_by_name(src)
+        if not source_ent:
+            debug_log("Error", f"Source '{src}' not found")
+            return
+
+        conns = get_connections(source_ent)
+        if not conns:
+            debug_log("Info", f"'{src}' has no I/O connections")
+            return
+
+        def matches(c):
+            if f_out and c.output_name.lower() != f_out.lower():
+                return False
+            if f_tgt and c.target_name.lower() != f_tgt.lower():
+                return False
+            if f_inp and c.input_name.lower() != f_inp.lower():
+                return False
+            return True
+
+        remaining = [c for c in conns if not matches(c)]
+        removed = len(conns) - len(remaining)
+        if removed == 0:
+            debug_log("Warning", f"No matching connections on '{src}'")
+            return
+
+        set_connections(source_ent, remaining)
+
+        try:
+            self.editor_state.save_state()
+        except Exception as e:
+            debug_log("Warning", f"Disconnected but failed to save state: {e}")
+
+        debug_log("Info", f"Removed {removed} connection(s) from '{src}'")
 
     def cmd_spawn(self, args):
         if not args:

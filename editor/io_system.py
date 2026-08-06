@@ -653,6 +653,7 @@ def register_default_io():
         inputs=[],
         outputs=[
             IODef('OnPlayerSpawn', 'Fired when player spawns here'),
+            IODef('OnPlayerDeath', 'Fired when the player dies'),
         ]
     )
     
@@ -726,7 +727,9 @@ def register_default_io():
             IODef('Trigger', 'Trigger level change'),
             IODef('ChangeLevel', 'Change to the target map (optional parameter overrides map name)'),
         ],
-        outputs=[]
+        outputs=[
+            IODef('OnUse', 'Fired when the player uses this level changer'),
+        ]
     )
 
     # === PATH NODE ===
