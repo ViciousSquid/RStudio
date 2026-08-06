@@ -58,6 +58,7 @@ def apply():
     _patch_view_2d()
     _patch_editor_menu()
     _patch_package_exporter()
+    _patch_property_editor()
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +423,208 @@ def _patch_package_exporter():
 
     PackageExporter.export = export
     PackageExporter._fio_plugins_patched = True
+
+
+# ---------------------------------------------------------------------------
+# editor.property_editor.PropertyEditor  — typed widgets from a property schema
+# ---------------------------------------------------------------------------
+
+def _patch_property_editor():
+    """Render plugin-declared property schemas with fitting widgets.
+
+    For a plugin entity whose ``type`` has a registered schema (see
+    ``EditorAPI.register_properties`` / ``FioPlugin.describe_properties``), this
+    wraps ``PropertyEditor._iterate_thing_properties`` to draw enum dropdowns,
+    ranged spin boxes, checkboxes and labelled/tool-tipped fields instead of
+    guessing from the stored value's Python type. Anything without a schema —
+    including every built-in entity — falls through to the original method
+    unchanged, so the patch is additive and safe.
+    """
+    try:
+        from editor.property_editor import PropertyEditor
+    except Exception as exc:
+        _log(f"property-editor patch skipped ({exc})")
+        return
+
+    if getattr(PropertyEditor, "_fio_plugins_patched", False):
+        return
+
+    from plugins.manager import get_manager
+
+    _orig_iterate = PropertyEditor._iterate_thing_properties
+
+    def _iterate_thing_properties(self, form, thing):
+        specs = owner = ttype = mgr = None
+        try:
+            props = getattr(thing, "properties", None)
+            ttype = props.get("type") if isinstance(props, dict) else None
+            if ttype:
+                mgr = get_manager()
+                specs = mgr.property_schema_for(ttype)
+                owner = mgr.plugin_for_type(ttype)
+        except Exception:
+            specs = owner = None
+
+        # Plugin-owned entity with a full schema → typed widgets for the whole
+        # panel. Otherwise the stock rows. Either way, plugin-registered extra
+        # fields are appended afterwards, so they work on built-in entities too.
+        rendered = False
+        if specs and owner is not None:
+            try:
+                _render_schema_rows(self, form, thing, specs)
+                rendered = True
+            except Exception as exc:
+                _log(f"schema render failed for '{getattr(thing, 'name', '?')}', "
+                     f"falling back ({exc})")
+        if not rendered:
+            _orig_iterate(self, form, thing)
+
+        try:
+            extra = mgr.extra_fields_for(ttype) if (mgr and ttype) else []
+            if extra:
+                _append_extra_fields(self, form, thing, extra)
+        except Exception as exc:
+            _log(f"extra-field render failed ({exc})")
+
+    PropertyEditor._iterate_thing_properties = _iterate_thing_properties
+
+    # Custom property tabs: append plugin tabs after the stock ones are built.
+    _orig_populate = PropertyEditor.populate_for_thing
+
+    def populate_for_thing(self, thing):
+        _orig_populate(self, thing)
+        try:
+            props = getattr(thing, "properties", None)
+            ttype = props.get("type") if isinstance(props, dict) else None
+            tabs = get_manager().property_tabs_for(ttype) if ttype else []
+            widget = getattr(self, "tab_widget", None)
+            if tabs and widget is not None:
+                for label, factory in tabs:
+                    try:
+                        widget.addTab(factory(thing), label)
+                    except Exception as exc:
+                        _log(f"custom tab '{label}' failed ({exc})")
+        except Exception:
+            pass
+
+    PropertyEditor.populate_for_thing = populate_for_thing
+    PropertyEditor._fio_plugins_patched = True
+
+
+def _append_extra_fields(editor_self, form, thing, specs):
+    """Append plugin-registered extra fields to *thing*'s property form."""
+    for spec in specs:
+        if spec.name in ("name", "id", "type", "_io_connections"):
+            continue
+        value = thing.properties.get(spec.name, spec.default)
+        label = (spec.label or spec.name.replace("_", " ").title()) + ":"
+        widget = _widget_for_spec(editor_self, thing, spec, value)
+        if getattr(spec, "help", ""):
+            try:
+                widget.setToolTip(spec.help)
+            except Exception:
+                pass
+        form.addRow(label, widget)
+
+
+def _to_float(text):
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _widget_for_spec(editor_self, thing, spec, value):
+    """Build the widget for one ``PropertySpec`` bound to ``update_object_prop``."""
+    from editor.property_editor import _make_combo, _make_spin, _make_checkbox
+    from PyQt5.QtWidgets import QLineEdit
+
+    t = (getattr(spec, "type", "string") or "string").lower()
+    name = spec.name
+
+    if t == "enum" and spec.choices:
+        choices = [str(c) for c in spec.choices]
+        default = spec.default if spec.default is not None else (choices[0] if choices else "")
+        cur = str(value if value is not None else default)
+        if cur not in choices:
+            choices = [cur] + choices
+        return _make_combo(choices, cur,
+                           lambda txt, k=name: editor_self.update_object_prop(k, txt))
+
+    if t == "bool":
+        bv = value if isinstance(value, bool) else str(value).strip().lower() in ("1", "true", "yes", "on")
+        return _make_checkbox("", bv,
+                              lambda c, k=name: editor_self.update_object_prop(k, c))
+
+    if t == "int":
+        lo = int(spec.min) if spec.min is not None else -99999
+        hi = int(spec.max) if spec.max is not None else 99999
+        try:
+            iv = int(float(value))
+        except (TypeError, ValueError):
+            iv = int(spec.default) if isinstance(spec.default, (int, float)) else 0
+        spin = _make_spin(iv, lo, hi)
+        spin.editingFinished.connect(
+            lambda w=spin, k=name: editor_self.update_object_prop(k, w.value()))
+        return spin
+
+    if t == "float":
+        inp = QLineEdit("" if value is None else str(value))
+        inp.editingFinished.connect(
+            lambda le=inp, k=name: editor_self.update_object_prop(k, _to_float(le.text())))
+        return inp
+
+    # string / asset / vec3 and anything else → plain text field.
+    inp = QLineEdit("" if value is None else str(value))
+    inp.editingFinished.connect(
+        lambda le=inp, k=name: editor_self.update_object_prop(k, le.text()))
+    return inp
+
+
+def _render_schema_rows(editor_self, form, thing, specs):
+    """Draw schema-driven rows first, then any remaining properties generically."""
+    from editor.property_editor import _make_spin, _make_checkbox
+    from PyQt5.QtWidgets import QLineEdit
+
+    _HIDDEN = ("name", "id", "type", "_io_connections")
+    covered = set()
+
+    for spec in specs:
+        if spec.name in _HIDDEN:
+            continue
+        covered.add(spec.name)
+        value = thing.properties.get(spec.name, spec.default)
+        label = (spec.label or spec.name.replace("_", " ").title()) + ":"
+        widget = _widget_for_spec(editor_self, thing, spec, value)
+        if getattr(spec, "help", ""):
+            try:
+                widget.setToolTip(spec.help)
+            except Exception:
+                pass
+        form.addRow(label, widget)
+
+    # Anything the schema didn't mention still gets an editor, inferred from its
+    # current value's type — so declaring a partial schema never hides a field.
+    for key, value in sorted(thing.properties.items()):
+        if key in _HIDDEN or key in covered:
+            continue
+        label = key.replace("_", " ").title() + ":"
+        if isinstance(value, bool):
+            widget = _make_checkbox(
+                "", value, lambda c, k=key: editor_self.update_object_prop(k, c))
+        elif isinstance(value, int):
+            widget = _make_spin(value, -99999, 99999)
+            widget.editingFinished.connect(
+                lambda w=widget, k=key: editor_self.update_object_prop(k, w.value()))
+        elif isinstance(value, float):
+            widget = QLineEdit(str(value))
+            widget.editingFinished.connect(
+                lambda le=widget, k=key: editor_self.update_object_prop(k, _to_float(le.text())))
+        else:
+            widget = QLineEdit("" if value is None else str(value))
+            widget.editingFinished.connect(
+                lambda le=widget, k=key: editor_self.update_object_prop(k, le.text()))
+        form.addRow(label, widget)
 
 
 def _is_bundled_missing(error_text, bundled_norm):

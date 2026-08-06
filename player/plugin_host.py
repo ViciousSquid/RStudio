@@ -174,8 +174,20 @@ class PlayerPluginHost:
             return
 
         self.bridge = _BridgeLogic(things)
+        # Bind the host so plugins can reach the session and its event stream in
+        # the player exactly as in the editor. Guarded: older managers without
+        # bind_host simply skip it.
+        try:
+            binder = getattr(self.manager, "bind_host", None)
+            if binder is not None:
+                binder(self.bridge, kind="player")
+        except Exception as exc:
+            print(f"[Fio Player] plugin host bind failed: {exc}")
         try:
             self.manager.dispatch_play_start(self.bridge)
+            emit = getattr(self.manager, "emit", None)
+            if emit is not None:
+                emit("play_start", logic=self.bridge)
         except Exception as exc:
             print(f"[Fio Player] plugin play-start failed: {exc}")
 
@@ -197,5 +209,8 @@ class PlayerPluginHost:
         if self.active and self.bridge is not None and self.manager is not None:
             try:
                 self.manager.dispatch_play_stop(self.bridge)
+                emit = getattr(self.manager, "emit", None)
+                if emit is not None:
+                    emit("play_stop", logic=self.bridge)
             except Exception:
                 pass

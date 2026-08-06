@@ -27,7 +27,9 @@ import pkgutil
 import traceback
 from typing import List, Optional, Tuple
 
-from .api import EditorAPI, FioPlugin, RuntimeAPI, TickContext
+from .api import (API_VERSION, EditorAPI, FioPlugin, GlobalStore, RuntimeAPI,
+                  TickContext, version_tuple)
+from .host import EventBus, PluginHost
 
 
 def _log(message: str):
@@ -69,6 +71,32 @@ class PluginManager:
         # Normalised entity-type name -> entity class. Lets the player host
         # instantiate plugin entities from map data without the editor palette.
         self._entity_classes: dict = {}
+        # Normalised entity-type name -> list[PropertySpec]. Optional typed
+        # schemas plugins declare for their entities' editable properties.
+        self._property_schemas: dict = {}
+        # Cross-level key/value store shared with map LogicKeyValueStores in the
+        # editor, and a process-local dict in the dependency-light player.
+        self.global_store = GlobalStore()
+        # The open-ended extension surface: a process-wide event bus the engine
+        # emits into, a cross-plugin service registry, and the per-plugin host
+        # objects bound to the live session (see bind_host).
+        self.events = EventBus(log=self._log)
+        self.services: dict = {}
+        self._hosts: dict = {}   # plugin -> PluginHost
+        self._host_target = None
+        self._host_kind = "engine"
+        # Cached answer to "does any plugin need the per-frame tick?" so the
+        # engine can gate its per-frame call with one int compare (see
+        # wants_tick). Invalidated by the enabled-generation and the event bus's
+        # subscription generation.
+        self._tick_work = False
+        self._tick_work_gen = -1
+        self._tick_work_sub_gen = -1
+        # Editor-UI extensions plugins register (consumed by integration.py):
+        # extra property fields appended to an entity's panel, and whole custom
+        # property tabs. Both keyed/filtered by normalised entity type.
+        self._extra_fields: dict = {}       # type -> list[PropertySpec]
+        self._property_tabs: list = []      # list[(label, factory, type_or_None)]
         # Disabled plugin names (by directory or plugin.name). Populated from
         # the FIO_DISABLED_PLUGINS env var, comma-separated.
         self._disabled = {
@@ -120,6 +148,8 @@ class PluginManager:
         self._loaded = True
         self._loading = False
 
+        self._verify_requirements()
+
         if self.plugins:
             names = ", ".join(f"{p.name} v{p.version}" for p in self.plugins)
             self._debug(f"Loaded {len(self.plugins)} plugin(s): {names}")
@@ -153,11 +183,29 @@ class PluginManager:
             self._debug(f"Skipping disabled plugin '{plugin.name}'")
             return
 
+        # API-compatibility gate: refuse a plugin that needs a newer API than
+        # this host provides, with a clear message, rather than letting it fail
+        # deep inside a hook later.
+        needs = getattr(plugin, "api_version", "1.0.0")
+        if version_tuple(needs) > version_tuple(API_VERSION):
+            self._log(
+                f"Plugin '{plugin.name}' needs API v{needs} but this host "
+                f"provides v{API_VERSION}; skipping. Update Fio to use it.")
+            return
+
         try:
             plugin.register(EditorAPI(self, plugin))
         except Exception:
             self._log(f"register() failed for '{plugin.name}':\n{traceback.format_exc()}")
             return
+
+        # Collect any property schemas the plugin publishes for its entities.
+        try:
+            schemas = plugin.describe_properties() or {}
+            for entity_type, specs in schemas.items():
+                self._record_property_schema(entity_type, specs)
+        except Exception:
+            self._log(f"describe_properties() failed for '{plugin.name}':\n{traceback.format_exc()}")
 
         # Pick up any bespoke menu entries the plugin declares directly.
         try:
@@ -168,6 +216,37 @@ class PluginManager:
 
         self.plugins.append(plugin)
         self._enabled_generation += 1
+
+    def _verify_requirements(self):
+        """Disable any plugin whose declared ``requires`` aren't all loaded.
+
+        Keeps the plugin loaded (its entities stay known so maps still open) but
+        turns it off with a clear message, instead of letting it half-run
+        against a missing dependency.
+        """
+        available = set()
+        for p in self.plugins:
+            available.add(p.name.lower())
+            available.add(self.plugin_package_name(p).lower())
+        for plugin in self.plugins:
+            reqs = getattr(plugin, "requires", None) or []
+            missing = [r for r in reqs if str(r).lower() not in available]
+            if missing:
+                self._log(
+                    f"Plugin '{plugin.name}' requires missing plugin(s): "
+                    f"{', '.join(missing)}; disabling it.")
+                self.set_enabled(plugin, False)
+
+    # -- property schema ----------------------------------------------------
+    def _record_property_schema(self, entity_type: str, specs):
+        """Store a typed property schema for *entity_type* (normalised key)."""
+        if not specs:
+            return
+        self._property_schemas[self._normalise_type(entity_type)] = list(specs)
+
+    def property_schema_for(self, type_name: str):
+        """Return the list of ``PropertySpec`` for *type_name*, or ``None``."""
+        return self._property_schemas.get(self._normalise_type(type_name))
 
     # -- editor menu --------------------------------------------------------
     def _add_menu_entry(self, plugin: FioPlugin, label: str, cls: type):
@@ -214,6 +293,11 @@ class PluginManager:
         plugin.enabled = bool(enabled)
         if was != bool(enabled):
             self._enabled_generation += 1
+            # Notify the plugin so it can acquire/release resources on toggle.
+            try:
+                plugin.on_enabled_changed(bool(enabled))
+            except Exception:
+                self._log(f"on_enabled_changed() failed for '{plugin.name}':\n{traceback.format_exc()}")
         if auto and enabled:
             self._auto_enabled.add(plugin)
         else:
@@ -342,6 +426,100 @@ class PluginManager:
             except Exception:
                 self._log(f"register_runtime() failed for '{plugin.name}':\n{traceback.format_exc()}")
 
+    # -- host binding + events ---------------------------------------------
+    def bind_host(self, target, kind: str = "engine"):
+        """Bind the plugin :class:`~plugins.host.PluginHost` to a live session.
+
+        Called once, alongside :meth:`attach_runtime`, when the session's logic
+        thread is built. Gives every plugin a host object reaching the whole
+        engine and calls its ``connect(host)`` hook so it can subscribe to
+        events, publish services or install extensions. Every plugin connects
+        (not just enabled ones) because its event subscriptions self-gate on the
+        live ``enabled`` flag — so a plugin enabled later is already wired in.
+        """
+        # Re-binding to a fresh session (e.g. a new play run) must not stack a
+        # second copy of every subscription: drop the previous session's event
+        # handlers before connect() re-registers them.
+        if self._hosts and target is not self._host_target:
+            self.events.clear()
+            self._hosts.clear()
+        self._host_target = target
+        self._host_kind = kind
+        for plugin in self.plugins:
+            host = PluginHost(self, target, plugin, kind=kind)
+            self._hosts[plugin] = host
+            try:
+                plugin.connect(host)
+            except Exception:
+                self._log(f"connect() failed for '{plugin.name}':\n{traceback.format_exc()}")
+
+    def host_for(self, plugin) -> Optional[PluginHost]:
+        """The bound :class:`~plugins.host.PluginHost` for *plugin*, or None."""
+        return self._hosts.get(plugin)
+
+    def emit(self, event: str, **data):
+        """Emit an engine event to subscribed plugins (see :class:`EventBus`).
+
+        A thin, always-safe pass-through: the bus early-outs when *event* has no
+        subscribers, so engine emit points cost almost nothing when unused.
+        """
+        return self.events.emit(event, **data)
+
+    def has_listeners(self, event: str) -> bool:
+        """True if any plugin is subscribed to *event*."""
+        return self.events.has(event)
+
+    def wants_tick(self) -> bool:
+        """Whether anything needs the per-frame :meth:`tick` this session.
+
+        The engine's hot path calls this to decide whether to invoke
+        :meth:`tick` at all — so a session with no ticking plugin and no
+        ``tick`` event listener skips the call (and its argument packing)
+        entirely. O(1) amortised: it recomputes only when the enabled set or the
+        event subscriptions actually change, otherwise it's two int compares.
+        """
+        if (self._tick_work_gen != self._enabled_generation
+                or self._tick_work_sub_gen != self.events.gen):
+            self._tick_work = bool(self._active_for("on_tick")) or self.events.has("tick")
+            self._tick_work_gen = self._enabled_generation
+            self._tick_work_sub_gen = self.events.gen
+        return self._tick_work
+
+    # -- editor-UI extensions (consumed by plugins.integration) -------------
+    def register_extra_fields(self, entity_type: str, specs):
+        """Append extra editable fields to *entity_type*'s property panel.
+
+        Unlike a full property schema (which drives a plugin entity's whole
+        panel), these are *appended* after an entity's stock rows — so a plugin
+        can add fields to any entity, including built-in ones, without
+        disturbing the existing UI.
+        """
+        if not specs:
+            return
+        key = self._normalise_type(entity_type)
+        self._extra_fields.setdefault(key, []).extend(specs)
+
+    def extra_fields_for(self, entity_type: str):
+        """Extra field specs registered for *entity_type* (possibly empty)."""
+        return self._extra_fields.get(self._normalise_type(entity_type), [])
+
+    def register_property_tab(self, label: str, factory, entity_type=None):
+        """Register a custom property-panel tab.
+
+        *factory(thing)* returns a widget; *label* names the tab. If
+        *entity_type* is given the tab shows only for that type, else for every
+        entity. Consumed by the editor integration when it builds a panel.
+        """
+        self._property_tabs.append(
+            (label, factory,
+             self._normalise_type(entity_type) if entity_type else None))
+
+    def property_tabs_for(self, entity_type: str):
+        """List of ``(label, factory)`` custom tabs that apply to *entity_type*."""
+        norm = self._normalise_type(entity_type)
+        return [(label, factory) for (label, factory, t) in self._property_tabs
+                if t is None or t == norm]
+
     # -- lifecycle dispatch -------------------------------------------------
     @staticmethod
     def _overrides(plugin: FioPlugin, hook: str) -> bool:
@@ -385,34 +563,63 @@ class PluginManager:
                 self._log(f"on_play_stop() failed for '{plugin.name}':\n{traceback.format_exc()}")
 
     def dispatch_tick(self, logic, ctx: TickContext):
+        if getattr(ctx, "logic", None) is None:
+            ctx.logic = logic
         for plugin in self._active_for("on_tick"):
             try:
                 plugin.on_tick(logic, ctx)
             except Exception:
                 self._log(f"on_tick() failed for '{plugin.name}':\n{traceback.format_exc()}")
+        try:
+            ctx._finalize_hud()
+        except Exception:
+            pass
 
     def tick(self, logic, use_pressed: bool = False,
-             interaction_consumed: bool = False, delta: float = 0.0):
+             interaction_consumed: bool = False, delta: float = 0.0, keys=None):
         """Per-frame entry point: dispatch ``on_tick`` to active plugins.
 
         Early-outs before building a :class:`TickContext` when nothing is
         listening, so a play session with no ticking plugin costs almost nothing
         each frame. Preferred over building a context and calling
         :meth:`dispatch_tick` at every call site.
+
+        *keys* is the host's set of currently-held keys (Qt key codes on the
+        engine); it populates :attr:`TickContext.keys` so plugins can read held
+        input via :meth:`TickContext.key_down`. It may also be a **callable**
+        returning that set — the manager invokes it only after deciding a
+        context is needed, so a host can defer any per-frame cost (a lock, a
+        copy) to the frames where a plugin is actually listening.
         """
         tickers = self._active_for("on_tick")
-        if not tickers:
+        wants_event = self.events.has("tick")
+        if not tickers and not wants_event:
             return
+        # Resolve keys lazily: only now that we know a plugin will see them.
+        if callable(keys):
+            keys = keys()
         ctx = TickContext(
             delta=delta,
             use_pressed=bool(use_pressed),
             interaction_consumed=bool(interaction_consumed),
+            keys=frozenset(keys) if keys else frozenset(),
+            logic=logic,
         )
         for plugin in tickers:
             try:
                 plugin.on_tick(logic, ctx)
             except Exception:
                 self._log(f"on_tick() failed for '{plugin.name}':\n{traceback.format_exc()}")
+        # Event-bus 'tick' for plugins that hook via host.on('tick', ...) rather
+        # than overriding on_tick. Fires after the hook so both see the same ctx.
+        if wants_event:
+            self.events.emit("tick", logic=logic, ctx=ctx, delta=delta,
+                             use_pressed=bool(use_pressed))
+        # Apply any timed HUD toast a plugin set, if nothing claimed the line.
+        try:
+            ctx._finalize_hud()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
