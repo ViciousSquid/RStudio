@@ -32,6 +32,8 @@ jobs:
             --include-package=editor `
             --include-package=PIL `
             --include-data-dir=assets=assets `
+            --include-package=plugins `
+            --include-package-data=plugins `
             --include-data-dir=tools=tools `
             --include-data-dir=maps=maps `
             --include-data-files=settings.ini=settings.ini `
@@ -114,6 +116,8 @@ jobs:
             --include-package=editor \
             --include-package=PIL \
             --include-data-dir=assets=assets \
+            --include-package=plugins \
+            --include-package-data=plugins \
             --include-data-dir=tools=tools \
             --include-data-dir=maps=maps \
             --include-data-files=settings.ini=settings.ini \
@@ -260,6 +264,8 @@ jobs:
             --include-package=editor \
             --include-package=PIL \
             --include-data-dir=assets=assets \
+            --include-package=plugins \
+            --include-package-data=plugins \
             --include-data-dir=tools=tools \
             --include-data-dir=maps=maps \
             --include-data-files=settings.ini=settings.ini \
