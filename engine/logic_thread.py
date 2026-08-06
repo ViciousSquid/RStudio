@@ -198,12 +198,23 @@ class LogicThread(threading.Thread):
         # state), so a plugin enabled later — e.g. auto-enabled when its level
         # loads — works without a re-attach. Fully guarded and optional.
         self.plugins = None
-        if PLUGINS_AVAILABLE and _get_plugin_manager is not None:
+        # Hard kill-switch: FIO_NO_PLUGINS=1 turns the plugin system off at the
+        # engine level — nothing loads, attaches or binds, and every per-frame
+        # guard below short-circuits on ``self.plugins is None`` for literally
+        # zero plugin overhead. (Distinct from FIO_DISABLED_PLUGINS, which only
+        # skips named plugins.)
+        _plugins_off = os.environ.get("FIO_NO_PLUGINS", "").strip().lower() in ("1", "true", "yes", "on")
+        if _plugins_off:
+            print("[LogicThread] plugins disabled via FIO_NO_PLUGINS")
+        elif PLUGINS_AVAILABLE and _get_plugin_manager is not None:
             try:
                 _load_plugins()
                 self.plugins = _get_plugin_manager()
                 if self.io_manager is not None:
                     self.plugins.attach_runtime(self)
+                # Bind the host so plugins can reach the whole engine and hook
+                # its event stream (the emit points below). One-time, like attach.
+                self.plugins.bind_host(self, kind="engine")
             except Exception as exc:
                 print(f"[LogicThread] plugin attach skipped: {exc}")
 
@@ -337,6 +348,26 @@ class LogicThread(threading.Thread):
     def things(self):
         """Dynamically get current things from editor state."""
         return self.editor_state.things
+
+    # =========================================================================
+    # PLUGIN EVENTS
+    # =========================================================================
+
+    def _plugin_emit(self, event: str, **data):
+        """Emit an engine event to subscribed plugins. Always safe.
+
+        The single choke point for the engine's plugin event stream: fully
+        guarded, and a no-op when the plugin system is absent or nobody is
+        listening. New extension points are added by calling this — no other
+        engine change, and plugins can subscribe to events that don't exist yet.
+        """
+        mgr = self.plugins
+        if mgr is None:
+            return
+        try:
+            mgr.emit(event, logic=self, **data)
+        except Exception:
+            pass
 
     # =========================================================================
     # ENTITY LOOKUP (for I/O system)
@@ -937,6 +968,7 @@ class LogicThread(threading.Thread):
                     self.plugins.dispatch_play_stop(self)
             except Exception as exc:
                 print(f"[LogicThread] plugin lifecycle dispatch failed: {exc}")
+            self._plugin_emit("play_start" if enabled else "play_stop")
 
     def _start_monster_ai(self):
         """Start the monster AI processing thread."""
@@ -979,6 +1011,7 @@ class LogicThread(threading.Thread):
         for thing in self.things:
             if isinstance(thing, PlayerStart):
                 self.io_manager.fire_output(thing, 'OnPlayerSpawn')
+                self._plugin_emit("player_spawn", start=thing)
                 break
     
     def _init_logic_timers(self):
@@ -1102,6 +1135,7 @@ class LogicThread(threading.Thread):
             state['state'] = 'opening'
             if self.io_manager:
                 self.io_manager.fire_output(brush, 'OnOpen')
+            self._plugin_emit("door_open", door=brush, door_idx=door_idx)
 
     # =========================================================================
     # MAIN LOOP
@@ -1267,12 +1301,18 @@ class LogicThread(threading.Thread):
         # intact and any plugin HUD prompt is the final word for the frame. The
         # manager early-outs before building a context when no plugin ticks, so
         # a plugin-free session pays almost nothing here.
-        if self.plugins is not None:
+        # Gate the whole call on a cached O(1) check: with no ticking plugin and
+        # no 'tick' listener, we skip the call and its argument packing entirely.
+        if self.plugins is not None and self.plugins.wants_tick():
             self.plugins.tick(
                 self,
                 use_pressed=use_key,
                 interaction_consumed=bool(self.current_hud_message),
                 delta=delta,
+                # Pass the getter, not the keys: the manager calls it only if a
+                # plugin actually ticks/listens, so an idle session never pays
+                # the lock+copy that reading held keys costs.
+                keys=self.game_state.get_keys,
             )
 
         # Portal transit detection — must run AFTER player physics so the
@@ -1499,6 +1539,8 @@ class LogicThread(threading.Thread):
         if hasattr(self.player, 'pitch'):
             self.player.pitch = math.asin(max(-1.0, min(1.0, mfy)))
 
+        self._plugin_emit("portal_transit", portal_from=portal_a, portal_to=portal_b)
+
     def _transit_projectile_through_portals(self, proj, prev_pos):
         """Teleport a monster projectile through any active portal pair whose
         aperture its movement segment crossed this frame.  Position and
@@ -1657,9 +1699,15 @@ class LogicThread(threading.Thread):
         with self._player_damage_lock:
             if self.god_mode:
                 return
+            was_alive = self.player_health > 0
             self.player_health = max(0, self.player_health - damage)
             if self.buddha_mode and self.player_health < 2:
                 self.player_health = 2
+            became_dead = was_alive and self.player_health <= 0
+        # Emit outside the lock so a handler can't deadlock on the damage path.
+        self._plugin_emit("player_damage", damage=damage, health=self.player_health)
+        if became_dead:
+            self._plugin_emit("player_death")
 
     def _on_trigger_enter(self, brush: dict, trigger_id: int):
         trigger_type = brush.get('trigger_type', 'multiple')
@@ -1692,12 +1740,15 @@ class LogicThread(threading.Thread):
                 self.io_manager.fire_output(brush, 'OnStartTouch')
                 self.io_manager.fire_output(brush, 'OnTrigger')
 
+        self._plugin_emit("trigger_enter", trigger=brush, action=action,
+                          trigger_id=trigger_id)
         if trigger_type == 'once':
             self.fired_once_triggers.add(trigger_id)
-    
+
     def _on_trigger_exit(self, brush: dict, trigger_id: int):
         if self.io_manager:
             self.io_manager.fire_output(brush, 'OnEndTouch')
+        self._plugin_emit("trigger_exit", trigger=brush, trigger_id=trigger_id)
 
     def _process_hurt_trigger(self, brush: dict, trigger_id: int):
         if trigger_id in self.hurt_trigger_timers:
@@ -1862,6 +1913,8 @@ class LogicThread(threading.Thread):
         self.collected_pickups.add(pid)
         if self.io_manager:
             self.io_manager.fire_output(pickup, 'OnPickedUp')
+        self._plugin_emit("pickup_collected", pickup=pickup,
+                          item_type=item_type, value=value)
         if pickup.properties.get('respawns', False):
             respawn_time = pickup.properties.get('respawn_time', 20.0)
             self.respawn_timers[pid] = {
@@ -2258,6 +2311,7 @@ class LogicThread(threading.Thread):
         if self.active_weapon in NON_FIRING_WEAPONS:
             return
         self.muzzle_flash_active = True
+        self._plugin_emit("player_shoot", weapon=self.active_weapon)
         yaw_rad = self.player.angle
         pitch_rad = self.player.pitch
         dir_x = math.sin(yaw_rad) * math.cos(pitch_rad)
@@ -2544,6 +2598,8 @@ class LogicThread(threading.Thread):
             'source': source,
             'loudness': float(loudness),
         })
+        self._plugin_emit("noise", pos=[float(pos[0]), float(pos[1]), float(pos[2])],
+                          source=source, loudness=float(loudness))
 
     def get_recent_noise_events(self, max_age: float = 3.0) -> list:
         current_time = time.perf_counter()

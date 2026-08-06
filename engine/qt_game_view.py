@@ -24,6 +24,25 @@ _RENDERER_CLASSES = {
     'Forward':  Renderer_F,
 }
 
+
+def register_renderer(name, cls):
+    """Register a swappable renderer class under *name* (used by ``switch_renderer``).
+
+    This is the plugin-facing seam for shipping a whole new renderer (e.g. a
+    deferred one) without editing the engine: a plugin calls
+    ``api.register_renderer("Deferred", DeferredRenderer)`` and it becomes an
+    available render mode. *cls* must implement the renderer interface the
+    viewport drives (``render_scene``, ``draw_models``, ``render_shadow_maps``,
+    ``set_sprite_textures``, ``cleanup``, a ``lod_manager``, …). Returns True.
+    """
+    _RENDERER_CLASSES[str(name)] = cls
+    return True
+
+
+def available_renderers():
+    """The names of all registered renderer modes."""
+    return list(_RENDERER_CLASSES.keys())
+
 from engine import shaders
 from engine.threaded_game_state import ThreadedGameState, RenderState
 from engine.logic_thread import LogicThread
@@ -835,6 +854,17 @@ class QtGameView(QOpenGLWidget):
         else:
             self._render_config["all_things"] = self.editor.state.things
         self.update_instance_textures(things_to_render)
+
+        # Plugin render hooks. Guarded by has_listeners so an unhooked frame
+        # pays a single dict lookup and builds no payload — see the render.*
+        # events in the plugin API. The manager handle is fetched once per frame.
+        _pmgr = getattr(self.logic_thread, 'plugins', None) \
+            if getattr(self, 'logic_thread', None) is not None else None
+        if _pmgr is not None and _pmgr.has_listeners("render.pre_scene"):
+            _pmgr.emit("render.pre_scene", viewport=self, renderer=self.renderer,
+                       projection=self.projection_matrix, view=self.view_matrix,
+                       camera_pos=camera_pos, play_mode=self.play_mode)
+
         _splitscreen = (
             self.play_mode
             and getattr(self, 'splitscreen_mode', False)
@@ -971,6 +1001,13 @@ class QtGameView(QOpenGLWidget):
                     culled_brushes=render_state.culled_brushes,
                     total_brushes=total
                 )
+        # 3D world is done; plugins may add their own passes here (still in the
+        # GL context, before the 2D overlay painter opens).
+        if _pmgr is not None and _pmgr.has_listeners("render.post_scene"):
+            _pmgr.emit("render.post_scene", viewport=self, renderer=self.renderer,
+                       projection=self.projection_matrix, view=self.view_matrix,
+                       camera_pos=camera_pos, play_mode=self.play_mode)
+
         painter = QPainter(self)
         if self.play_mode:
             self._draw_underwater_overlay(painter, render_state)
@@ -1012,6 +1049,14 @@ class QtGameView(QOpenGLWidget):
             total_text_h = ht + hb + spacing
             box_w = max(self._face_mode_top_width, self._face_mode_bot_width) + (padding_x * 2)
             box_h = total_text_h + (padding_y * 2)
+
+        # 2D overlay hook: plugins can draw HUD/graphics with the live QPainter
+        # (the last thing before the painter closes for the frame).
+        if _pmgr is not None and _pmgr.has_listeners("render.overlay"):
+            _pmgr.emit("render.overlay", viewport=self, painter=painter,
+                       width=self.width(), height=self.height(),
+                       play_mode=self.play_mode)
+
         painter.end()
         if self._muzzle_flash_counter > 0:
             self._muzzle_flash_counter -= 1
