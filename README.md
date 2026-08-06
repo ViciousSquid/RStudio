@@ -22,7 +22,7 @@ Fio is an instant-iteration game creation platform built around classic CSG edit
 - Entity I/O logic system inspired by Source engine
 - Local split-screen multiplayer
 - Export self-contained `.fiopak` packages containing maps, assets and plugins
-- Designed to preserve the immediacy and direct manipulation that made Radiant, GtkRadiant and Hammer legendary.
+- Designed to preserve the immediacy and direct manipulation that made Radiant and Hammer legendary.
 
 ### [💾 Download Binaries for Windows/macOS/Linux](https://github.com/ViciousSquid/Fio/releases)  
 ### Documentation: [Wiki](https://github.com/ViciousSquid/Fio/wiki/) | [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
