@@ -44,12 +44,30 @@ class FakeIO:
         self.fired.append((name, output, value))
 
 
+class FakeGrid:
+    """Stand-in for engine.physics.SpatialGrid with just raycast_down.
+
+    ``floor_fn(x, z)`` returns the surface Y under a point, so a test can model
+    a stepped floor and prove a dropped object follows the *world* ground rather
+    than its original height.
+    """
+    def __init__(self, floor_fn):
+        self._floor_fn = floor_fn
+
+    def raycast_down(self, x, z, start_y=10000.0):
+        return self._floor_fn(x, z)
+
+
 class FakeLogic:
-    def __init__(self, things):
+    def __init__(self, things, spatial_grid=None):
         self.things = things
         self.player = None
         self.io_manager = FakeIO()
         self.current_hud_message = ""
+        # Present only in editor play mode; the player build omits it and the
+        # runtime falls back to the object's resting height.
+        if spatial_grid is not None:
+            self._spatial_grid = spatial_grid
 
 
 def _check(cond, msg):
@@ -163,6 +181,94 @@ def test_carry_place_runtime():
     _check(list(obj.pos) == [0, 40, 60], "object restored to home on play stop")
 
 
+def _run_until_landed(session, obj, max_ticks=600):
+    from plugins.api import TickContext
+    for _ in range(max_ticks):
+        session.tick(TickContext(delta=1.0 / 60.0, use_pressed=False))
+        if id(obj) not in session._falling:
+            return True
+    return False
+
+
+def test_drop_falls_to_floor_flat():
+    print("[7] a dropped object falls to the floor (flat-floor fallback)")
+    from plugins.tidy.entities import TidyObject
+    from plugins.tidy.runtime import TidySession
+
+    # Object rests on the floor at y=12 (like the demo map's books).
+    obj = TidyObject(pos=[0, 12, 0], properties={'category': 'book', 'name': 'b'})
+    logic = FakeLogic([obj])                 # no spatial grid → flat-floor path
+    logic.player = FakePlayer([0, 0, 0], angle=0.0)
+    session = TidySession(logic)
+    session.start()
+    logic._tidy = session
+
+    # Simulate holding it and releasing it high in the air (where carry floats it).
+    session.held = obj
+    obj.pos = [0, 200, 0]
+    session._drop(obj)
+    _check(session.held is None, "drop releases the object")
+    _check(id(obj) in session._falling, "drop starts a fall (physics engaged)")
+
+    _check(_run_until_landed(session, obj), "object lands within a bounded time")
+    _check(abs(obj.pos[1] - 12.0) < 1e-3,
+           f"object rests on the floor at its home height (y={obj.pos[1]})")
+
+
+def test_drop_follows_world_floor():
+    print("[8] a dropped object follows the world floor under it")
+    from plugins.tidy.entities import TidyObject
+    from plugins.tidy.runtime import TidySession
+
+    # Stepped floor: a ledge at y=12 near the origin, a pit at y=-100 further out.
+    grid = FakeGrid(lambda x, z: 12.0 if x < 50.0 else -100.0)
+    obj = TidyObject(pos=[0, 12, 0], properties={'category': 'book', 'name': 'b'})
+    logic = FakeLogic([obj], spatial_grid=grid)
+    logic.player = FakePlayer([0, 0, 0], angle=0.0)
+    session = TidySession(logic)
+    session.start()
+    logic._tidy = session
+
+    # Carry it out over the pit and drop it there.
+    session.held = obj
+    obj.pos = [200, 300, 0]
+    session._drop(obj)
+
+    _check(_run_until_landed(session, obj), "object lands within a bounded time")
+    _check(abs(obj.pos[1] - (-100.0)) < 1e-3,
+           f"object settles on the pit floor, not its home height (y={obj.pos[1]})")
+
+
+def test_drop_physics_is_opt_in():
+    print("[9] only dropped objects are simulated (framerate stays the priority)")
+    from plugins.tidy.entities import TidyObject
+    from plugins.tidy.runtime import TidySession
+    from plugins.api import TickContext
+
+    # A pile of resting objects, none dropped.
+    things = [TidyObject(pos=[i * 20, 12, 0], properties={'category': 'book',
+                                                          'name': f'b{i}'})
+              for i in range(50)]
+    logic = FakeLogic(things)
+    logic.player = FakePlayer([0, 0, 0], angle=0.0)
+    session = TidySession(logic)
+    session.start()
+    logic._tidy = session
+
+    session.tick(TickContext(delta=1.0 / 60.0, use_pressed=False))
+    _check(not session._falling, "no object is simulated until one is dropped")
+
+    # Picking one up then dropping it is the only way physics engages.
+    target = things[0]
+    session.held = target
+    target.pos = [0, 200, 0]
+    session._drop(target)
+    _check(list(session._falling.keys()) == [id(target)],
+           "exactly the dropped object is under simulation")
+    _run_until_landed(session, target)
+    _check(not session._falling, "the sim empties once it lands (zero idle cost)")
+
+
 def test_spatial_hash_scale():
     print("[4] spatial hash scales to many objects")
     from plugins.tidy.entities import TidyObject
@@ -245,6 +351,9 @@ def main():
     test_plugin_loads_and_registers()
     test_entities_and_serialization()
     test_carry_place_runtime()
+    test_drop_falls_to_floor_flat()
+    test_drop_follows_world_floor()
+    test_drop_physics_is_opt_in()
     test_spatial_hash_scale()
     test_integration_shim_applies()
     test_obj_asset_parses()
