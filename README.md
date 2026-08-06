@@ -9,7 +9,7 @@
 
 ### Unified editor and runtime inspired by Radiant and Hammer.
 
-Fio is a modern, instant-iteration take on classic CSG level editors<br>
+Fio is an instant-iteration game creation platform built around classic CSG editing, extensible plugins, and portable game packages.<br>
 **Designed on low-power ARM hardware with an efficiency-first philosophy.**
 
 **Key Features**
@@ -18,6 +18,7 @@ Fio is a modern, instant-iteration take on classic CSG level editors<br>
 - Classic brush-based editing with arbitrary convex polyhedra
 - Non-Euclidean portal connections between any two points in a level
 - Generate fully playable procedural maps with two clicks
+- Extensible plugin API for editor, runtime and gameplay
 - Entity I/O logic system inspired by Source engine
 - Local split-screen multiplayer
 - Export projects as portable, self-contained packages
@@ -37,15 +38,17 @@ Fio is a modern, instant-iteration take on classic CSG level editors<br>
  
  ## Why Fio exists
 
-An engine built for rapid experimentation.
-Fio explores a unified approach to level editing and runtime simulation:
+Fio is built around one idea:
 
-- Reducing friction between authoring and execution
-- Reintroducing brush/CSG-based workflows in a modern runtime
-- Treating gameplay logic as a visible, editable system
-- Supporting rapid experimental iteration in rendering and world design
-- Enabling native non-Euclidean level design via world portals
-- Persistent global key/value storage allows maps to influence later maps and enables branching narratives.
+The editor and the game should be the same application.
+
+Every feature follows from that principle:
+
+- Edit while the simulation is running
+- No BSP compilation
+- No asset import pipeline
+- No baked runtime state
+- Immediate experimentation
 
   -----------------
 
