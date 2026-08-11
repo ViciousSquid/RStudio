@@ -2403,10 +2403,21 @@ class LogicThread(threading.Thread):
         self.muzzle_flash_active = True
         self._plugin_emit("player_shoot", weapon=self.active_weapon)
         yaw_rad = self.player.angle
-        pitch_rad = self.player.pitch
-        dir_x = math.sin(yaw_rad) * math.cos(pitch_rad)
-        dir_y = math.sin(pitch_rad)
-        dir_z = math.cos(yaw_rad) * math.cos(pitch_rad)
+        if self.is_overhead():
+            # Top-down aiming is planar: the player rotates to face a target and
+            # fires along that ground heading. The overhead camera and sprite
+            # both ignore pitch, so there is no way to aim vertically — folding
+            # pitch into the ray would just tilt shots into the sky or floor and
+            # make monsters (which stand on the ground plane) nearly unhittable.
+            # Keep the ray horizontal at eye height so it can actually connect.
+            dir_x = math.sin(yaw_rad)
+            dir_y = 0.0
+            dir_z = math.cos(yaw_rad)
+        else:
+            pitch_rad = self.player.pitch
+            dir_x = math.sin(yaw_rad) * math.cos(pitch_rad)
+            dir_y = math.sin(pitch_rad)
+            dir_z = math.cos(yaw_rad) * math.cos(pitch_rad)
         ray_origin = glm.vec3(self.player.pos.x,
                               self.player.pos.y + self.player.camera_height,
                               self.player.pos.z)

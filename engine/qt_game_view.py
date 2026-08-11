@@ -1240,7 +1240,11 @@ class QtGameView(QOpenGLWidget):
         painter.setPen(QColor(255, 255, 255))
         painter.drawText(bar_x, bar_y - 5, f"HEALTH: {health}/{max_health}")
         active_weapon = getattr(self, '_cached_active_weapon', None)
-        if active_weapon:
+        # The centre-screen crosshair is a first-person aiming reticle: it marks
+        # where the camera-forward hitscan lands. In overhead (top-down) mode the
+        # shot travels along the player's ground heading, not through screen
+        # centre, so the reticle would be misleading — draw it only first-person.
+        if active_weapon and not overhead:
             cx = viewport_width // 2
             cy = viewport_height // 2
             size = 10
