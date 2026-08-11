@@ -10,6 +10,7 @@ import math
 import os
 
 from .renderer_core import BaseRenderer, normalize_color
+from engine.brush_geometry import brush_has_geometry, geometry_signature
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from editor.things import Thing, Light, PathNode, Portal, Pickup, Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger
 
@@ -17,6 +18,11 @@ from editor.things import Thing, Light, PathNode, Portal, Pickup, Monster, Logic
 # (the aperture just shows its fade/rim). Portals are still discovered for I/O
 # and transit regardless.
 PORTAL_RENDER_DISTANCE = 2048.0
+
+# Cube face order — index maps to the face's 6-vertex run in the cube VAO
+# (face_idx * 6). Kept as a module constant so the per-frame texture batch
+# build doesn't allocate a fresh list for every brush.
+_CUBE_FACE_KEYS = ('south', 'north', 'west', 'east', 'down', 'top')
 
 
 def _light_casts_shadows(light):
@@ -71,6 +77,16 @@ class Renderer_F(BaseRenderer):
         brush['_mat_cache_key'] = key
         brush['_mat_cache']     = mat
         return mat
+
+    def _tex_cache_path(self, tex_name):
+        """Return the ``textures/<name>`` cache key for *tex_name*, memoizing the
+        os.path.join. Called for every drawn face every frame in play mode, so
+        the join is done once per unique texture name and reused thereafter."""
+        path = self._tex_path_cache.get(tex_name)
+        if path is None:
+            path = os.path.join('textures', tex_name)
+            self._tex_path_cache[tex_name] = path
+        return path
 
     def set_sprite_textures(self, textures):
         self.sprite_textures = textures
@@ -233,7 +249,6 @@ class Renderer_F(BaseRenderer):
         # the six cube faces, so they are pulled out of the cube batches and
         # drawn per-face below.  Their geometry signature is part of the key
         # so clipping a brush invalidates the cached batches.
-        from engine.brush_geometry import brush_has_geometry, geometry_signature
         cache_key = None if is_play else tuple(
             (id(b), tuple(sorted(b.get('textures', {}).items())), geometry_signature(b))
             for b in visible
@@ -248,13 +263,14 @@ class Renderer_F(BaseRenderer):
                 if brush_has_geometry(brush):
                     geo_brushes.append(brush)
                     continue
-                for i, face_key in enumerate(['south', 'north', 'west', 'east', 'down', 'top']):
-                    tex_name = brush.get('textures', {}).get(face_key, 'default.png')
+                brush_textures = brush.get('textures', {})
+                for i, face_key in enumerate(_CUBE_FACE_KEYS):
+                    tex_name = brush_textures.get(face_key, 'default.png')
                     if tex_name == 'caulk.jpg':
                         continue
                     if is_play and tex_name == 'nodraw.jpg':
                         continue
-                    tex_id = self.texture_manager.get(os.path.join('textures', tex_name)) or \
+                    tex_id = self.texture_manager.get(self._tex_cache_path(tex_name)) or \
                              self.load_texture_callback(tex_name, 'textures')
                     batches[tex_id].append((brush, i, face_key))
             if not is_play:
@@ -295,7 +311,7 @@ class Renderer_F(BaseRenderer):
                     # --- PRIORITY 2: Fallback to texture_tiling with actual dimensions ---
                     elif brush.get('texture_tiling', False):
                         tex_name = brush.get('textures', {}).get(face_key, 'default.png')
-                        tex_cache_name = os.path.join('textures', tex_name)
+                        tex_cache_name = self._tex_cache_path(tex_name)
                         tex_w, tex_h = getattr(self, '_texture_dimensions', {}).get(tex_cache_name, (128, 128))
                         tex_w = max(tex_w, 1)
                         tex_h = max(tex_h, 1)
@@ -337,7 +353,7 @@ class Renderer_F(BaseRenderer):
                     continue
                 if is_play and tex_name == 'nodraw.jpg':
                     continue
-                tex_id = self.texture_manager.get(os.path.join('textures', tex_name)) or \
+                tex_id = self.texture_manager.get(self._tex_cache_path(tex_name)) or \
                          self.load_texture_callback(tex_name, 'textures')
                 if tex_id != current_tex:
                     gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)

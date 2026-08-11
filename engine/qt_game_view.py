@@ -907,7 +907,6 @@ class QtGameView(QOpenGLWidget):
                 self.camera.pitch = render_state.editor_camera_pitch
                 self.camera.fov = render_state.editor_camera_fov
             else:
-                import math
                 self.camera.pos = glm.vec3(render_state.player_pos)
                 self.camera.yaw = 90.0 - math.degrees(render_state.player_angle)
                 self.camera.pitch = math.degrees(render_state.player_pitch)

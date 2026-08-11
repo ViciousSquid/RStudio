@@ -32,7 +32,10 @@ from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIR
 from engine import brush_geometry
 from engine.shaders import DEFAULT_SHADERS
 from engine.terrain import TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER
-from editor.things import Thing
+from editor.things import (
+    Thing, PathNode, Portal, Pickup, Monster, LogicGate, LogicRelay,
+    LogicTimer, LevelChanger, Light, LogicSpawner, LogicCamera,
+)
 
 # Try to import OBJ and GLB loaders
 try:
@@ -271,6 +274,23 @@ class BaseRenderer:
         # avoids rebuilding the same f-string every frame for every visible
         # monster (draw_sprites runs once per visible monster per frame).
         self._sprite_tex_key_cache = {}
+
+        # PERF: precomputed GLSL uniform names for each light slot. Building
+        # these f-strings on the hot path meant up to MAX_LIGHTS*5 string
+        # allocations per shader per frame inside _upload_lights_once; the
+        # names never change, so build them once here.
+        self._light_uniform_names = [
+            ('lights[%d].position' % i, 'lights[%d].color' % i,
+             'lights[%d].intensity' % i, 'lights[%d].radius' % i,
+             'lights[%d].shadowIndex' % i)
+            for i in range(self.MAX_LIGHTS)
+        ]
+
+        # PERF: cache of texture-name -> "textures/<name>" cache-key path.
+        # draw_textured_brushes_optimized resolves this for every drawn face
+        # every frame in play mode; os.path.join is comparatively expensive,
+        # so memoize the join per unique texture name.
+        self._tex_path_cache = {}
 
         self._proj_ptr = None
         self._view_ptr = None
@@ -939,8 +959,6 @@ class BaseRenderer:
         pos_loc, size_loc = uniforms['sprite_pos_world'], uniforms['sprite_size']
         gl.glBindVertexArray(self.vaos['sprite'])
 
-        from editor.things import Portal, Light, LogicSpawner, LogicCamera, Monster, Pickup, LogicGate, LogicRelay, LogicTimer, LevelChanger
-
         current_tex = None
         for thing in things_to_draw:
             if Portal is not None and isinstance(thing, Portal):
@@ -1274,13 +1292,16 @@ class BaseRenderer:
         for brush in brushes:
             if brush.get('hidden'):
                 continue
+            # Hoist the shader lookup: it was fetched up to three times per
+            # brush per frame for the Fog/Glass/Glow branches below.
+            shader = brush.get('shader')
             if is_water_brush(brush):
                 water.append(brush)
-            elif brush.get('is_fog') or brush.get('shader') == 'Fog':
+            elif brush.get('is_fog') or shader == 'Fog':
                 fog.append(brush)
-            elif brush.get('shader') == 'Glass':
+            elif shader == 'Glass':
                 glass.append(brush)
-            elif brush.get('shader') == 'Glow':
+            elif shader == 'Glow':
                 glow.append(brush)
             elif brush.get('is_trigger'):
                 if not is_play:
@@ -1289,11 +1310,9 @@ class BaseRenderer:
                 opaque.append(brush)
 
         if not is_play:
-            from editor.things import PathNode
             sprites = [t for t in things if (isinstance(t, Thing) or (isinstance(t, dict) and 'monster_type' in t))
                        and not (PathNode is not None and isinstance(t, PathNode))]
         else:
-            from editor.things import PathNode, Portal, Pickup, Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger
             for t in things:
                 if PathNode is not None and isinstance(t, PathNode):
                     continue
@@ -1363,13 +1382,15 @@ class BaseRenderer:
         num_lights = min(len(lights), self.MAX_LIGHTS)
         gl.glUniform1i(uniforms['active_lights'], num_lights)
         shadow_index_map = self._light_shadow_index
+        light_names = self._light_uniform_names
         for i in range(num_lights):
             light = lights[i]
-            gl.glUniform3fv(uniforms[f'lights[{i}].position'], 1, light.pos)
-            gl.glUniform3fv(uniforms[f'lights[{i}].color'], 1, light.get_color())
-            gl.glUniform1f(uniforms[f'lights[{i}].intensity'], light.get_intensity())
-            gl.glUniform1f(uniforms[f'lights[{i}].radius'], light.get_radius())
-            loc = uniforms[f'lights[{i}].shadowIndex']
+            n_pos, n_col, n_int, n_rad, n_shadow = light_names[i]
+            gl.glUniform3fv(uniforms[n_pos], 1, light.pos)
+            gl.glUniform3fv(uniforms[n_col], 1, light.get_color())
+            gl.glUniform1f(uniforms[n_int], light.get_intensity())
+            gl.glUniform1f(uniforms[n_rad], light.get_radius())
+            loc = uniforms[n_shadow]
             if loc != -1:
                 gl.glUniform1i(loc, shadow_index_map.get(id(light), -1))
         # Bind the depth cube-maps so the shadow test can sample them.
@@ -1829,12 +1850,6 @@ class BaseRenderer:
     def draw_path_node_cubes(self, projection, view, things):
         if 'simple' not in self.shaders:
             return
-        try:
-            from editor.things import PathNode
-        except ImportError:
-            PathNode = None
-        if PathNode is None:
-            return
         nodes = [t for t in things if isinstance(t, PathNode)]
         if not nodes:
             return
@@ -1859,11 +1874,7 @@ class BaseRenderer:
         gl.glUseProgram(0)
 
     def draw_portal_wireframes(self, projection, view, things, play_mode=False):
-        try:
-            from editor.things import Portal
-        except ImportError:
-            Portal = None
-        if Portal is None or 'simple' not in self.shaders:
+        if 'simple' not in self.shaders:
             return
 
         portal_things = [t for t in things if isinstance(t, Portal) and t.properties.get('show_rim', True)]

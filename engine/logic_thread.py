@@ -94,6 +94,9 @@ from .monster_constants import (
     WEAPON_DAMAGE,
     WEAPON_SHOOT_SOUND,
     NON_FIRING_WEAPONS,
+    MONSTER_PROJECTILE_SPEED,
+    MONSTER_PROJECTILE_MAX_DIST,
+    MONSTER_PROJECTILE_SPRITE_SIZE,
 )
 
 # Import the extracted MonsterAI class and new thread
@@ -649,7 +652,6 @@ class LogicThread(threading.Thread):
         try:
             # GLBLoader is pure file I/O + JSON parsing — zero OpenGL calls.
             from .glb_loader import GLBLoader
-            import math
 
             loader = GLBLoader()
             loader._filepath_hint = full_path
@@ -2527,13 +2529,6 @@ class LogicThread(threading.Thread):
         """Update all active monster projectiles: move, check collisions, apply damage."""
         if not hasattr(self, '_monster_projectiles'):
             return
-
-        from .monster_constants import (
-            MONSTER_PROJECTILE_SPEED,
-            MONSTER_PROJECTILE_MAX_DIST,
-            MONSTER_PROJECTILE_SPRITE_SIZE,
-        )
-        import math
 
         remaining = []
         if self._monster_projectiles:
