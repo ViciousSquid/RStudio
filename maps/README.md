@@ -30,3 +30,7 @@ Demonstrates dynamic World Portal features
 
 Stand in the blue area to spawn an enemy  - _demonstrates the **Spawner** entity_
 
+### `Tidy_test.json`
+
+Pick up and put away all the books  - _demonstrates the **Tidy** plugin_
+
