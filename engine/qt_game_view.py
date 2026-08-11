@@ -88,6 +88,11 @@ class QtGameView(QOpenGLWidget):
         # Play-mode camera: "First Person" or "Overhead" (native top-down),
         # set from the editor's "Camera" dropdown.
         self.camera_mode = "First Person"
+        # PERF: _is_overhead() is queried several times per rendered frame
+        # (paintGL, sprite draw, HUD). Cache the normalised boolean and only
+        # recompute when camera_mode changes — no per-frame string allocation.
+        self._camera_mode_raw = None
+        self._camera_mode_overhead = False
         # Overhead player sprite (drawn on the ground, facing the heading).
         self.overhead_sprite_enabled = True
         self.overhead_sprite_size = 128.0
@@ -453,8 +458,13 @@ class QtGameView(QOpenGLWidget):
         self.update()
 
     def _is_overhead(self) -> bool:
-        return str(getattr(self, "camera_mode", "")).strip().lower() in (
-            "overhead", "top-down", "topdown")
+        # PERF: cached — recompute only when camera_mode changes.
+        cm = getattr(self, "camera_mode", "")
+        if cm != self._camera_mode_raw:
+            self._camera_mode_raw = cm
+            self._camera_mode_overhead = str(cm).strip().lower() in (
+                "overhead", "top-down", "topdown")
+        return self._camera_mode_overhead
 
     def _draw_overhead_sprite(self, render_state):
         """Draw the player sprite on the ground in overhead play mode.

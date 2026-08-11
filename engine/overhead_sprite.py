@@ -158,6 +158,10 @@ class OverheadSpriteRenderer:
         self._mvp_loc = -1
         self._tex_loc = -1
         self._textures: dict = {}
+        # Cached module handles (bound in _init_gl) so the per-frame draw path
+        # does not re-run `import` on every frame.
+        self._gl = None
+        self._glm = None
 
     # -- angle convention (pure, testable) ----------------------------------
     def facing_theta(self, facing: float) -> float:
@@ -192,8 +196,12 @@ class OverheadSpriteRenderer:
         try:
             import numpy as np
             import OpenGL.GL as gl
+            import glm
         except Exception:
             return False
+        # Cache for the per-frame draw path (see draw()).
+        self._gl = gl
+        self._glm = glm
         try:
             def _compile(src, kind):
                 s = gl.glCreateShader(kind)
@@ -267,8 +275,8 @@ class OverheadSpriteRenderer:
         if not tex:
             return
         try:
-            import glm
-            import OpenGL.GL as gl
+            gl = self._gl
+            glm = self._glm
 
             theta = self.facing_theta(facing)
             m = glm.translate(glm.mat4(1.0),
