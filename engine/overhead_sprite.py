@@ -36,25 +36,42 @@ from typing import Optional
 class SpriteController:
     """Chooses the current animation frame and tracks facing.
 
-    Frame keys: ``"idle"``, ``"walk_a"``, ``"walk_b"``. ``update`` takes the
-    player's ground position ``(x, y, z)``, facing angle (radians, engine
-    convention: forward = ``(sin a, ·, cos a)``) and a monotonic ``now``.
+    Frame keys, unarmed: ``"idle"``, ``"walk_a"``, ``"walk_b"``; the
+    weapon-held ("_g") variants: ``"idle_g"``, ``"walk_a_g"``, ``"walk_b_g"``;
+    and ``"shoot"`` for firing. ``update`` takes the player's ground position
+    ``(x, y, z)``, facing (radians, engine convention: forward =
+    ``(sin a, ·, cos a)``), a monotonic ``now``, and the current
+    ``armed`` / ``shooting`` state.
     """
 
     IDLE = "idle"
     WALK_A = "walk_a"
     WALK_B = "walk_b"
+    IDLE_G = "idle_g"
+    WALK_A_G = "walk_a_g"
+    WALK_B_G = "walk_b_g"
+    SHOOT = "shoot"
 
-    def __init__(self, walk_fps: float = 6.0, move_epsilon: float = 0.75):
+    def __init__(self, walk_fps: float = 6.0, move_epsilon: float = 0.75,
+                 shoot_hold: float = 0.18):
         self.walk_fps = float(walk_fps)
         self.move_epsilon = float(move_epsilon)
+        #: How long (seconds) the shoot pose is held after a shot, so a
+        #: one-frame muzzle flash still reads as a visible firing pose.
+        self.shoot_hold = float(shoot_hold)
         self.facing = 0.0
         self.moving = False
+        self.armed = False
         self._last_pos = None
         self._anim_t = 0.0
+        self._now = 0.0
+        self._shoot_until = -1.0
 
-    def update(self, pos, facing: float, now: float) -> None:
+    def update(self, pos, facing: float, now: float,
+               armed: bool = False, shooting: bool = False) -> None:
         self.facing = float(facing)
+        self._now = float(now)
+        self.armed = bool(armed)
         p = (float(pos[0]), float(pos[1]), float(pos[2]))
         if self._last_pos is not None:
             dx = p[0] - self._last_pos[0]
@@ -64,13 +81,19 @@ class SpriteController:
             self.moving = False
         if self.moving:
             self._anim_t = float(now)
+        if shooting:
+            self._shoot_until = float(now) + self.shoot_hold
         self._last_pos = p
 
     def frame(self) -> str:
+        # Firing (only meaningful while armed) latches the shoot pose briefly.
+        if self.armed and self._now < self._shoot_until:
+            return self.SHOOT
         if not self.moving:
-            return self.IDLE
-        phase = int(self._anim_t * self.walk_fps) % 2
-        return self.WALK_A if phase == 0 else self.WALK_B
+            base = self.IDLE
+        else:
+            base = self.WALK_A if int(self._anim_t * self.walk_fps) % 2 == 0 else self.WALK_B
+        return (base + "_g") if self.armed else base
 
 
 # ---------------------------------------------------------------------------
@@ -112,11 +135,17 @@ class OverheadSpriteRenderer:
 
     def __init__(self, frame_files: Optional[dict] = None, size: float = 128.0,
                  y_offset: float = 2.0, facing_offset_deg: float = 0.0):
-        # Defaults match the supplied art: player1 = idle, player2/3 = walk.
+        # Defaults match the supplied art. Unarmed: player1 = idle, player2/3 =
+        # walk. Weapon-held ("_g"): player1_g/2_g/3_g. Firing: player_shoot_g.
+        _d = os.path.join(_assets_root(), "sprites", "topdown")
         self.frame_files = frame_files or {
-            SpriteController.IDLE: os.path.join(_assets_root(), "sprites", "topdown", "player1.png"),
-            SpriteController.WALK_A: os.path.join(_assets_root(), "sprites", "topdown", "player2.png"),
-            SpriteController.WALK_B: os.path.join(_assets_root(), "sprites", "topdown", "player3.png"),
+            SpriteController.IDLE: os.path.join(_d, "player1.png"),
+            SpriteController.WALK_A: os.path.join(_d, "player2.png"),
+            SpriteController.WALK_B: os.path.join(_d, "player3.png"),
+            SpriteController.IDLE_G: os.path.join(_d, "player1_g.png"),
+            SpriteController.WALK_A_G: os.path.join(_d, "player2_g.png"),
+            SpriteController.WALK_B_G: os.path.join(_d, "player3_g.png"),
+            SpriteController.SHOOT: os.path.join(_d, "player_shoot_g.png"),
         }
         self.size = float(size)
         self.y_offset = float(y_offset)
@@ -138,6 +167,25 @@ class OverheadSpriteRenderer:
         (+ a user trim). Determined empirically against the running game.
         """
         return float(facing) + math.radians(self.facing_offset_deg)
+
+    # Graceful fallback: if a weapon-held or shoot frame is missing, fall back to
+    # the closest available frame so the animation degrades instead of vanishing.
+    _FALLBACKS = {
+        SpriteController.SHOOT: (SpriteController.SHOOT, SpriteController.IDLE_G, SpriteController.IDLE),
+        SpriteController.IDLE_G: (SpriteController.IDLE_G, SpriteController.IDLE),
+        SpriteController.WALK_A_G: (SpriteController.WALK_A_G, SpriteController.WALK_A, SpriteController.IDLE_G, SpriteController.IDLE),
+        SpriteController.WALK_B_G: (SpriteController.WALK_B_G, SpriteController.WALK_B, SpriteController.IDLE_G, SpriteController.IDLE),
+        SpriteController.WALK_A: (SpriteController.WALK_A, SpriteController.IDLE),
+        SpriteController.WALK_B: (SpriteController.WALK_B, SpriteController.IDLE),
+        SpriteController.IDLE: (SpriteController.IDLE,),
+    }
+
+    def _texture_for(self, frame_key):
+        for key in self._FALLBACKS.get(frame_key, (frame_key, SpriteController.IDLE)):
+            tex = self._textures.get(key)
+            if tex:
+                return tex
+        return 0
 
     # -- setup --------------------------------------------------------------
     def _init_gl(self) -> bool:
@@ -215,7 +263,7 @@ class OverheadSpriteRenderer:
             self._ok = self._init_gl()
             if not self._ok:
                 return
-        tex = self._textures.get(frame_key) or self._textures.get(SpriteController.IDLE)
+        tex = self._texture_for(frame_key)
         if not tex:
             return
         try:

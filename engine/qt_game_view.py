@@ -163,6 +163,7 @@ class QtGameView(QOpenGLWidget):
         self.sprite_textures = {}
         self.gun_hud_pixmaps = {}
         self.gun_flash_pixmaps = {}
+        self.weapon_pickup_pixmaps = {}   # item_type -> world/pickup QPixmap
         self.monster_debug_active = False
         self.show_spatial_grid = False
         self.renderer = None
@@ -397,6 +398,7 @@ class QtGameView(QOpenGLWidget):
         self._cached_hud_message = None
         self._cached_hud_message_width = 0
         self._cached_gun_hud = {}
+        self._cached_weapon_pickup = {}   # (item_type, size) -> scaled QPixmap
         self._cached_key_pixmaps = {}
         self._cached_key_size = 100
 
@@ -489,7 +491,10 @@ class QtGameView(QOpenGLWidget):
         except AttributeError:
             gpos = (float(pos[0]), float(pos[1]), float(pos[2]))
         angle = float(getattr(render_state, "player_angle", 0.0))
-        self._overhead_sprite_ctrl.update(gpos, angle, time.perf_counter())
+        armed = bool(getattr(render_state, "active_weapon", None))
+        shooting = bool(getattr(render_state, "muzzle_flash_active", False))
+        self._overhead_sprite_ctrl.update(gpos, angle, time.perf_counter(),
+                                          armed=armed, shooting=shooting)
         self._overhead_sprite_renderer.draw(
             self.projection_matrix, self.view_matrix, gpos,
             self._overhead_sprite_ctrl.facing, self._overhead_sprite_ctrl.frame())
@@ -1195,6 +1200,10 @@ class QtGameView(QOpenGLWidget):
             viewport_width = self.width()
         if viewport_height is None:
             viewport_height = self.height()
+        # In overhead (top-down) mode there is no first-person view, so the gun
+        # HUD sprite makes no sense; the held weapon is shown as a small pickup
+        # icon bottom-right instead (see below), alongside any held keys.
+        overhead = self._is_overhead()
         health = getattr(self, '_cached_health', 0)
         max_health = getattr(self, '_cached_max_health', 100)
         if health is None or max_health is None:
@@ -1258,7 +1267,7 @@ class QtGameView(QOpenGLWidget):
             painter.drawText(cx - tw // 2 + 2, cy + 2, hint)
             painter.setPen(self._hud_grey_pen)
             painter.drawText(cx - tw // 2, cy, hint)
-        if active_weapon:
+        if active_weapon and not overhead:
             hud_pixmap = self._load_gun_hud_pixmap(active_weapon)
             if hud_pixmap and not hud_pixmap.isNull():
                 target_h = int(200 * viewport_height / 600.0)
@@ -1285,9 +1294,28 @@ class QtGameView(QOpenGLWidget):
                         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
                         painter.drawPixmap(x, y, scaled.width(), scaled.height(), flash_pixmap)
                         painter.restore()
+        # Overhead: held weapon shown as a bottom-right pickup icon (like keys).
+        # It takes the rightmost slot; keys shift left so both fit side by side.
+        key_slot_offset = 0
+        if overhead and active_weapon:
+            icon_size = 100
+            wx = viewport_width - hud_margin - icon_size
+            wy = viewport_height - hud_margin - icon_size
+            pm = self._load_weapon_pickup_pixmap(active_weapon)
+            if pm and not pm.isNull():
+                cache_key = (active_weapon, icon_size)
+                scaled = self._cached_weapon_pickup.get(cache_key)
+                if scaled is None or scaled.isNull():
+                    scaled = pm.scaled(icon_size, icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    self._cached_weapon_pickup[cache_key] = scaled
+                painter.drawPixmap(wx + (icon_size - scaled.width()) // 2,
+                                   wy + (icon_size - scaled.height()) // 2, scaled)
+                # Reserve the weapon's slot so keys don't overlap it.
+                key_slot_offset = icon_size + 15
+
         collected_keys = getattr(self, '_cached_collected_keys', set())
         if collected_keys:
-            key_x = viewport_width - hud_margin - 100
+            key_x = viewport_width - hud_margin - 100 - key_slot_offset
             key_y = viewport_height - hud_margin - 100
             key_size = 100
             key_spacing = 40
@@ -2215,6 +2243,27 @@ class QtGameView(QOpenGLWidget):
             self.gun_flash_pixmaps[gun_type] = pixmap
             return pixmap
         return None
+
+    def _load_weapon_pickup_pixmap(self, item_type):
+        """The world/pickup sprite for a weapon (e.g. 'gun1' -> gun1.png).
+
+        Used by the overhead HUD, which shows the small pickup icon bottom-right
+        instead of the first-person gun sprite. Resolved via the Pickup entity's
+        GUN_SPRITES map so it matches what the weapon looks like in the world.
+        """
+        if item_type in self.weapon_pickup_pixmaps:
+            return self.weapon_pickup_pixmaps[item_type]
+        rel = None
+        try:
+            from editor.things import Pickup
+            rel = Pickup.GUN_SPRITES.get(item_type)
+        except Exception:
+            rel = None
+        if not rel:
+            rel = os.path.join('assets', 'sprites', f'{item_type}.png')
+        pixmap = QPixmap(rel) if os.path.exists(rel) else None
+        self.weapon_pickup_pixmaps[item_type] = pixmap
+        return pixmap
 
     def eventFilter(self, obj, event):
         if obj is self._console_input and event.type() == QEvent.KeyPress:
