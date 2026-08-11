@@ -7,20 +7,21 @@
 
 ## Fio — Liminal World Editor & Procedural Engine
 
-Fio combines the immediacy of classic Radiant and Hammer workflows with a modern brush-based editor, real-time engine, plugin platform and portable packages - all in a single application with no import, compile or bake pipeline.<br>
+### Unified editor and runtime inspired by Radiant and Hammer.
+
+Fio is a modern, instant-iteration take on classic CSG level editors<br>
 **Designed on low-power ARM hardware with an efficiency-first philosophy.**
 
 **Key Features**
 - Hit "Play" instantly: no import, compile or bake step
 - Edit and play in the same runtime
-- Extensible plugin API for editor, runtime and gameplay
-- Export self-contained .fiopak packages containing maps, assets and plugins
 - Classic brush-based editing with arbitrary convex polyhedra
 - Non-Euclidean portal connections between any two points in a level
 - Generate fully playable procedural maps with two clicks
-- Entity I/O logic system inspired by the Source engine
-• Local split-screen multiplayer
-- Designed to preserve the immediacy and direct manipulation that made Radiant and Hammer legendary.
+- Entity I/O logic system inspired by Source engine
+- Local split-screen multiplayer
+- Export projects as portable, self-contained packages
+- **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
 ### [💾 Download Binaries for Windows/macOS/Linux](https://github.com/ViciousSquid/Fio/releases)  
 ### Documentation: [Wiki](https://github.com/ViciousSquid/Fio/wiki/) | [Changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
@@ -36,17 +37,15 @@ Fio combines the immediacy of classic Radiant and Hammer workflows with a modern
  
  ## Why Fio exists
 
-Fio is built around one idea:
+An engine built for rapid experimentation.
+Fio explores a unified approach to level editing and runtime simulation:
 
-The editor and the game should be the same application.
-
-Every feature follows from that principle:
-
-- Edit while the simulation is running
-- No BSP compilation
-- No asset import pipeline
-- No baked runtime state
-- Immediate experimentation
+- Reducing friction between authoring and execution
+- Reintroducing brush/CSG-based workflows in a modern runtime
+- Treating gameplay logic as a visible, editable system
+- Supporting rapid experimental iteration in rendering and world design
+- Enabling native non-Euclidean level design via world portals
+- Persistent global key/value storage allows maps to influence later maps and enables branching narratives.
 
   -----------------
 
@@ -69,7 +68,6 @@ Every feature follows from that principle:
 - **Zero Serialization Overhead:** Editor and engine share the same runtime memory state, enabling instant execution with no compile, bake, or scene-deserialization delay.
 - **Modular Multi-Threading:** Subsystems (render pipeline, physics, and world simulation) are strictly decoupled to keep framerates steady during heavy runtime tasks.
 - **Open Architecture:** Fully open-source, modular codebase (MIT License) designed for easy extendability and low-level experimentation.
-- **Plugin Platform:** Editor tools, gameplay systems, renderers and runtime extensions can be added without modifying the engine.
 
 ------------------------------
 
@@ -96,10 +94,9 @@ Contributions, feedback, and experiments are welcome. Check issues or open a dis
 
 
 
+<img src="https://github.com/user-attachments/assets/c6c6b036-2425-4508-a2fe-05816429303f" width="800"><br>
 
-<img src="https://github.com/ViciousSquid/Fio/blob/2.1.0.0_Latest/assets/__portal.gif" width="500">
-
-<img src="https://github.com/user-attachments/assets/c6c6b036-2425-4508-a2fe-05816429303f" width="700"><br>
+<img src="https://github.com/ViciousSquid/Fio/blob/2.0.0.0_Latest/assets/__portal.gif" width="500">
 
 <img src="https://github.com/user-attachments/assets/22283623-21a2-4776-a2ae-71649f5276f0" width="700">
 

@@ -168,7 +168,19 @@ class LogicThread(threading.Thread):
         # Frustum culling settings
         self.culling_enabled = True
         self.frustum_aspect = 16.0 / 9.0
-        
+
+        # Play-mode camera mode: "First Person" (default) or "Overhead" (a
+        # native top-down camera, GTA 1 / Alien Swarm style). Controlled by the
+        # editor's "Camera" dropdown. In overhead mode the view matrix AND the
+        # frustum-culling planes are both derived from the overhead camera, so
+        # culling stays correct; ``overhead_height`` is how far the camera floats
+        # above the player and ``overhead_orientation`` is "north" (fixed map) or
+        # "player" (rotate with facing).
+        self.camera_mode = "First Person"
+        self.overhead_height = 800.0
+        self.overhead_tilt = 0.0
+        self.overhead_orientation = "north"
+
         # Editor camera
         self.editor_camera = Camera()
         self.editor_camera.pos = glm.vec3(0, 150, 400)
@@ -1042,6 +1054,53 @@ class LogicThread(threading.Thread):
 
     def set_frustum_aspect(self, aspect: float):
         self.frustum_aspect = aspect
+
+    def set_camera_mode(self, mode: str):
+        """Select the play-mode camera: 'First Person' or 'Overhead'."""
+        self.camera_mode = str(mode)
+
+    def is_overhead(self) -> bool:
+        return str(self.camera_mode).strip().lower() in ("overhead", "top-down", "topdown")
+
+    def _overhead_camera(self, player_pos, angle):
+        """Compute ``(cam_pos, direction, up)`` for the overhead camera.
+
+        The camera floats ``overhead_height`` above the player looking down (raked
+        by ``overhead_tilt``); the up hint is the ground heading (fixed north or
+        the player's facing) so it is always perpendicular to a straight-down view
+        — never the degenerate world-up that would corrupt the view/frustum.
+        """
+        px, py, pz = float(player_pos.x), float(player_pos.y), float(player_pos.z)
+        if str(self.overhead_orientation).strip().lower() == "player":
+            head_x, head_z = math.sin(angle), math.cos(angle)
+        else:  # fixed north — world -Z at the top of the screen (GTA 1 style)
+            head_x, head_z = 0.0, -1.0
+
+        tilt = math.radians(max(0.0, min(89.0, float(self.overhead_tilt))))
+        sin_t, cos_t = math.sin(tilt), math.cos(tilt)
+        dir_x, dir_y, dir_z = head_x * sin_t, -cos_t, head_z * sin_t
+        dlen = math.sqrt(dir_x * dir_x + dir_y * dir_y + dir_z * dir_z) or 1.0
+        direction = glm.vec3(dir_x / dlen, dir_y / dlen, dir_z / dlen)
+
+        dist = float(self.overhead_height) / max(1e-3, cos_t)
+        cam_pos = glm.vec3(px - direction.x * dist,
+                           py - direction.y * dist,
+                           pz - direction.z * dist)
+        up = self._safe_up(direction, glm.vec3(head_x, 0.0, head_z))
+        return cam_pos, direction, up
+
+    @staticmethod
+    def _safe_up(direction, up):
+        """A non-degenerate up vector for ``glm.lookAt`` (see _overhead_camera)."""
+        d = glm.vec3(direction)
+        if glm.length(d) < 1e-8:
+            return glm.vec3(0, 1, 0)
+        d = glm.normalize(d)
+        u = glm.vec3(up)
+        u = glm.normalize(u) if glm.length(u) > 1e-8 else glm.vec3(0, 1, 0)
+        if abs(glm.dot(d, u)) > 0.999:
+            u = glm.vec3(0, 0, 1) if abs(d.y) > 0.9 else glm.vec3(0, 1, 0)
+        return u
 
     # =========================================================================
     # MOVER/DOOR INITIALIZATION
@@ -2693,13 +2752,21 @@ class LogicThread(threading.Thread):
                 player_angle = self.player.angle
                 player_pitch = self.player.pitch
                 camera_height = self.player.camera_height
-                cam_pos = player_pos + glm.vec3(0, camera_height, 0)
-                direction = glm.vec3(
-                    math.sin(player_angle) * math.cos(player_pitch),
-                    math.sin(player_pitch),
-                    math.cos(player_angle) * math.cos(player_pitch),
-                )
-                view_matrix = glm.lookAt(cam_pos, cam_pos + direction, glm.vec3(0, 1, 0))
+                if self.is_overhead():
+                    # Native top-down camera. The frustum planes below are built
+                    # from this view_matrix, so overhead culling is correct; the
+                    # up hint is horizontal, avoiding the straight-down lookAt
+                    # degeneracy that would corrupt the view and every plane.
+                    cam_pos, direction, up_vec = self._overhead_camera(player_pos, player_angle)
+                    view_matrix = glm.lookAt(cam_pos, cam_pos + direction, up_vec)
+                else:
+                    cam_pos = player_pos + glm.vec3(0, camera_height, 0)
+                    direction = glm.vec3(
+                        math.sin(player_angle) * math.cos(player_pitch),
+                        math.sin(player_pitch),
+                        math.cos(player_angle) * math.cos(player_pitch),
+                    )
+                    view_matrix = glm.lookAt(cam_pos, cam_pos + direction, glm.vec3(0, 1, 0))
                 write_state.player_pos = player_pos
                 write_state.player_angle = player_angle
                 write_state.player_pitch = player_pitch

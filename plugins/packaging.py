@@ -66,6 +66,41 @@ def collect_entity_types(map_data: dict) -> Set[str]:
     return types
 
 
+def collect_required_plugin_names(map_data: dict) -> Set[str]:
+    """Plugin names a map explicitly requires, independent of its entities.
+
+    A *global* plugin (e.g. ``topdown``) changes how a map is viewed/played
+    without placing any entities, so it can't be discovered from ``things``.
+    A map opts in by listing plugin names under ``required_plugins``::
+
+        {"version": …, "brushes": […], "things": […],
+         "required_plugins": ["topdown"],
+         "plugin_config": {"topdown": {"height": 900, "orientation": "player"}}}
+
+    Returns the set of names (empty when the key is absent or malformed).
+    """
+    if not isinstance(map_data, dict):
+        return set()
+    raw = map_data.get("required_plugins", [])
+    if not isinstance(raw, (list, tuple, set)):
+        return set()
+    return {str(n) for n in raw if n}
+
+
+def enabled_global_plugins(mgr) -> List:
+    """Currently-enabled plugins flagged ``global_plugin`` (order-stable).
+
+    These are bundled into a package even when no map uses their entities,
+    because enabling one in the editor is the author's way of saying "ship this
+    view/mode with the game".
+    """
+    out = []
+    for p in getattr(mgr, "plugins", []) or []:
+        if getattr(p, "global_plugin", False) and mgr.is_enabled(p):
+            out.append(p)
+    return out
+
+
 def _iter_package_files(pkg_dir: str) -> Iterable[str]:
     """Yield absolute paths of files under *pkg_dir*, skipping caches/tests junk."""
     for root, dirs, files in os.walk(pkg_dir):
@@ -80,11 +115,14 @@ def _archive_name(abs_path: str) -> str:
     return os.path.relpath(abs_path, _repo_root()).replace("\\", "/")
 
 
-def required_plugin_files(type_names: Iterable[str]) -> Dict[str, str]:
-    """Map archive-path -> source-path for every file needed by *type_names*.
+def required_plugin_files(type_names: Iterable[str],
+                          extra_plugins: Optional[Iterable] = None) -> Dict[str, str]:
+    """Map archive-path -> source-path for every file needed to bundle plugins.
 
-    Returns ``{}`` when the maps use no plugin entities. Includes the plugin
-    core files only when at least one plugin is actually required.
+    Covers the plugins that own the given entity *type_names* plus any
+    *extra_plugins* (plugin objects) passed in — e.g. global plugins a map
+    requires by name. Returns ``{}`` when nothing needs bundling. Includes the
+    plugin-system core files only when at least one plugin is actually bundled.
     """
     try:
         from plugins.manager import get_manager
@@ -92,7 +130,14 @@ def required_plugin_files(type_names: Iterable[str]) -> Dict[str, str]:
         return {}
 
     mgr = get_manager()
-    plugins = mgr.required_plugins_for_types(type_names)
+
+    # De-duplicate plugins from both sources, preserving order.
+    plugins: List = []
+    seen = set()
+    for plugin in list(mgr.required_plugins_for_types(type_names)) + list(extra_plugins or []):
+        if plugin is not None and id(plugin) not in seen:
+            seen.add(id(plugin))
+            plugins.append(plugin)
     if not plugins:
         return {}
 
@@ -105,7 +150,7 @@ def required_plugin_files(type_names: Iterable[str]) -> Dict[str, str]:
         if os.path.isfile(src):
             files[_archive_name(src)] = src
 
-    # Each required plugin package, verbatim.
+    # Each bundled plugin package, verbatim.
     for plugin in plugins:
         pkg_dir = mgr.plugin_package_dir(plugin)
         if not pkg_dir or not os.path.isdir(pkg_dir):
@@ -134,27 +179,82 @@ def augment_fiopak(pak_path: str, log=None) -> dict:
         names = list(zin.namelist())
         entries: Dict[str, bytes] = {n: zin.read(n) for n in names}
 
-    # Collect entity types from all bundled maps.
-    types: Set[str] = set()
-    for name, raw in entries.items():
-        if name.startswith("maps/") and name.endswith(".json"):
-            try:
-                types |= collect_entity_types(json.loads(raw.decode("utf-8")))
-            except Exception:
-                continue
-
-    plugin_files = required_plugin_files(types)
-    if not plugin_files:
-        return {"plugins": [], "added_paths": set()}
-
-    # Resolve the human-readable plugin names for the manifest.
     try:
         from plugins.manager import get_manager
         mgr = get_manager()
-        plugin_names = [mgr.plugin_package_name(p)
-                        for p in mgr.required_plugins_for_types(types)]
     except Exception:
-        plugin_names = []
+        mgr = None
+
+    # Parse every bundled map once: gather entity types, and the global plugins
+    # each map should activate (declared ``required_plugins`` ∪ enabled globals).
+    map_names = [n for n in entries
+                 if n.startswith("maps/") and n.endswith(".json")]
+    maps: Dict[str, dict] = {}
+    types: Set[str] = set()
+    declared_names: Set[str] = set()
+    for name in map_names:
+        try:
+            data = json.loads(entries[name].decode("utf-8"))
+        except Exception:
+            continue
+        maps[name] = data
+        types |= collect_entity_types(data)
+        declared_names |= collect_required_plugin_names(data)
+
+    # Global plugins to ship: any the maps named, plus any enabled global plugin
+    # (enabling one in the editor is the author opting the game into that mode).
+    global_plugins: List = []
+    if mgr is not None:
+        seen = set()
+        for p in enabled_global_plugins(mgr):
+            if id(p) not in seen:
+                seen.add(id(p))
+                global_plugins.append(p)
+        for nm in declared_names:
+            p = mgr.find_plugin(nm)
+            if p is not None and id(p) not in seen:
+                seen.add(id(p))
+                global_plugins.append(p)
+
+    plugin_files = required_plugin_files(types, extra_plugins=global_plugins)
+    if not plugin_files:
+        return {"plugins": [], "added_paths": set()}
+
+    # Names for the manifest, and the global-plugin activation baked into maps.
+    entity_names: List[str] = []
+    global_names: List[str] = []
+    global_config: Dict[str, dict] = {}
+    if mgr is not None:
+        entity_names = [mgr.plugin_package_name(p)
+                        for p in mgr.required_plugins_for_types(types)]
+        for p in global_plugins:
+            nm = mgr.plugin_package_name(p)
+            global_names.append(nm)
+            # Capture the plugin's current settings so the game ships as tuned.
+            getter = getattr(p, "export_config", None)
+            if callable(getter):
+                try:
+                    global_config[nm] = dict(getter())
+                except Exception:
+                    pass
+    plugin_names = list(dict.fromkeys(entity_names + global_names))
+
+    # Bake global activation into every bundled map, so the standalone player
+    # (which only sees map data) enables them without needing entities. Existing
+    # ``required_plugins`` / ``plugin_config`` are preserved and unioned.
+    if global_names:
+        for name, data in maps.items():
+            existing = data.get("required_plugins")
+            existing = list(existing) if isinstance(existing, (list, tuple)) else []
+            merged = list(dict.fromkeys(existing + global_names))
+            data["required_plugins"] = merged
+            cfg = data.get("plugin_config")
+            cfg = dict(cfg) if isinstance(cfg, dict) else {}
+            for nm, c in global_config.items():
+                cfg.setdefault(nm, c)
+            if cfg:
+                data["plugin_config"] = cfg
+            entries[name] = json.dumps(data, indent=2).encode("utf-8")
 
     # Update metadata.
     meta: dict = {}
@@ -165,6 +265,8 @@ def augment_fiopak(pak_path: str, log=None) -> dict:
             meta = {}
     meta["plugins"] = plugin_names
     meta["requires_plugins"] = bool(plugin_names)
+    if global_names:
+        meta["global_plugins"] = global_names
     entries["metadata.json"] = json.dumps(meta, indent=2).encode("utf-8")
 
     # Add plugin files (dict de-dups against anything already present).

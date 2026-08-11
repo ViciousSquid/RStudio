@@ -1934,6 +1934,14 @@ class MainWindow(QMainWindow):
         self.view_3d.brush_display_mode = text
         self.view_3d.update()
 
+    def set_camera_mode(self, text):
+        """Switch the play-mode camera between First Person and Overhead."""
+        if hasattr(self.view_3d, "set_camera_mode"):
+            self.view_3d.set_camera_mode(text)
+        else:
+            self.view_3d.camera_mode = text
+            self.view_3d.update()
+
     def set_cull_distance(self, distance):
         self.view_3d.set_cull_distance(distance)
 

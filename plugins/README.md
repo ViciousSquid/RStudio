@@ -5,9 +5,17 @@ runtime behaviour — **without editing the core editor or engine**. Drop a
 package into this `plugins/` directory and it is discovered automatically at
 startup.
 
-The system ships with one complete plugin, [`tidy`](tidy/), which powers
-"pick up and put everything away" games (books back on the shelf, tidy the
-museum, sort the warehouse).
+The system ships with two plugins:
+
+- [`tidy`](tidy/) — powers "pick up and put everything away" games (books back
+  on the shelf, tidy the museum, sort the warehouse).
+- [`topdown`](topdown/) — forces an overhead **top-down** camera in play mode
+  (GTA 1 / Alien Swarm style). A pure camera mode with no entities: in the editor
+  it uses the plugin host's `wrap` seam to rewrite the play-mode camera and
+  **re-cull the frustum** each frame (an overhead camera otherwise breaks the
+  stock frustum culling), and in the standalone `.fiopak` player it answers the
+  `camera.player_view` event. As a **global plugin** it is bundled into a package
+  and activated in the player without needing any map entities — see its README.
 
 ---
 
@@ -180,7 +188,16 @@ on another machine.
 - Plugin assets keep their repo-relative paths (e.g.
   `plugins/tidy/assets/tidy_object.obj`), so a map's `model_path` resolves
   straight out of the package — no rewriting.
-- Packages that use no plugin entities are unaffected (the step is a no-op).
+- Packages that use no plugin entities are unaffected (the step is a no-op)
+  unless a **global plugin** is in play (below).
+- **Global plugins** (no entities — e.g. [`topdown`](topdown/), which sets
+  `global_plugin = True`) can't be found from a map's `things`. They are bundled
+  when they are *enabled* at export time, or when a map names them under a
+  top-level `"required_plugins": [...]` (with optional
+  `"plugin_config": {name: {...}}`). The exporter bundles them, records them in
+  the manifest, and bakes `required_plugins` / `plugin_config` into each map so
+  the standalone player (which only sees map data) enables and configures them
+  without any entity to trigger auto-enable.
 - The player side exposes the dependency: `FioPackage.required_plugins` reads
   the manifest list, and `plugins.packaging.load_package_plugins(root)` loads
   the bundled plugins from an extracted package.

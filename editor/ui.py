@@ -535,6 +535,18 @@ class Ui_MainWindow(object):
         bottom_layout.addSpacing(20)
         bottom_layout.addWidget(QLabel("Display:"))
         bottom_layout.addWidget(MainWindow.display_mode_combobox)
+
+        # Camera mode (native): First Person vs Overhead (top-down).
+        MainWindow.camera_mode_combobox = QComboBox()
+        MainWindow.camera_mode_combobox.addItems(["First Person", "Overhead"])
+        MainWindow.camera_mode_combobox.setCurrentText("First Person")
+        MainWindow.camera_mode_combobox.setToolTip(
+            "Play-mode camera. 'Overhead' is a top-down view (GTA 1 / Alien Swarm style).")
+        MainWindow.camera_mode_combobox.currentTextChanged.connect(MainWindow.set_camera_mode)
+
+        bottom_layout.addSpacing(20)
+        bottom_layout.addWidget(QLabel("Camera:"))
+        bottom_layout.addWidget(MainWindow.camera_mode_combobox)
  
         # --- EXPANDING NOTIFICATION AREA (FAR RIGHT) ---
         # Add a small buffer spacing before the label

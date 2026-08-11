@@ -85,6 +85,16 @@ class QtGameView(QOpenGLWidget):
         self.editor = editor
 
         self.brush_display_mode = "Solid Lit"
+        # Play-mode camera: "First Person" or "Overhead" (native top-down),
+        # set from the editor's "Camera" dropdown.
+        self.camera_mode = "First Person"
+        # Overhead player sprite (drawn on the ground, facing the heading).
+        self.overhead_sprite_enabled = True
+        self.overhead_sprite_size = 128.0
+        self.overhead_walk_fps = 6.0
+        self.overhead_sprite_facing_offset = 0.0
+        self._overhead_sprite_ctrl = None
+        self._overhead_sprite_renderer = None
         self.show_triggers_as_solid = False
         self.camera = Camera()
         self.camera.pos = glm.vec3(0, 150, 400)
@@ -427,6 +437,63 @@ class QtGameView(QOpenGLWidget):
         self._cached_hint_text = None
         self.update()
 
+    def set_camera_mode(self, mode):
+        """Select the play-mode camera ('First Person' or 'Overhead').
+
+        Stored on the view and pushed to the logic thread, which builds the
+        overhead view matrix and frustum natively (see LogicThread). Takes effect
+        immediately in play mode; otherwise it applies on the next play session.
+        """
+        self.camera_mode = str(mode)
+        lt = getattr(self, "logic_thread", None)
+        if lt is not None and hasattr(lt, "set_camera_mode"):
+            lt.set_camera_mode(self.camera_mode)
+        self.update()
+
+    def _is_overhead(self) -> bool:
+        return str(getattr(self, "camera_mode", "")).strip().lower() in (
+            "overhead", "top-down", "topdown")
+
+    def _draw_overhead_sprite(self, render_state):
+        """Draw the player sprite on the ground in overhead play mode.
+
+        Runs on the render thread inside the live GL context. Fed from the
+        published render state (player ground position + facing); the renderer is
+        created lazily and self-disables on any missing asset or GL error, so a
+        missing sprite never breaks the frame. No-op outside overhead play mode,
+        during a cinematic, or when disabled.
+        """
+        if not (self.play_mode and self.overhead_sprite_enabled and self._is_overhead()):
+            return
+        if render_state is None:
+            return
+        lt = getattr(self, "logic_thread", None)
+        if lt is not None and getattr(lt, "cinematic_state", None):
+            return
+        try:
+            from engine.overhead_sprite import SpriteController, OverheadSpriteRenderer
+        except Exception:
+            return
+        if self._overhead_sprite_ctrl is None:
+            self._overhead_sprite_ctrl = SpriteController(walk_fps=float(self.overhead_walk_fps))
+        if self._overhead_sprite_renderer is None:
+            self._overhead_sprite_renderer = OverheadSpriteRenderer(
+                size=float(self.overhead_sprite_size),
+                facing_offset_deg=float(self.overhead_sprite_facing_offset))
+
+        pos = getattr(render_state, "player_pos", None)
+        if pos is None:
+            return
+        try:
+            gpos = (float(pos.x), float(pos.y), float(pos.z))
+        except AttributeError:
+            gpos = (float(pos[0]), float(pos[1]), float(pos[2]))
+        angle = float(getattr(render_state, "player_angle", 0.0))
+        self._overhead_sprite_ctrl.update(gpos, angle, time.perf_counter())
+        self._overhead_sprite_renderer.draw(
+            self.projection_matrix, self.view_matrix, gpos,
+            self._overhead_sprite_ctrl.facing, self._overhead_sprite_ctrl.frame())
+
 
     def initializeGL(self):
         gl.glClearColor(0.1, 0.1, 0.15, 1.0)
@@ -497,6 +564,8 @@ class QtGameView(QOpenGLWidget):
             return
         self.logic_thread = LogicThread(self.game_state, self.editor.state, self.visibility_system)
         self.logic_thread.set_editor_camera(self.camera.pos, self.camera.yaw, self.camera.pitch, self.camera.fov)
+        if hasattr(self.logic_thread, "set_camera_mode"):
+            self.logic_thread.set_camera_mode(getattr(self, "camera_mode", "First Person"))
         self.logic_thread.set_play_mode(False)
         self.logic_thread.start()
         self._thread_started = True
@@ -832,7 +901,16 @@ class QtGameView(QOpenGLWidget):
             camera_pos = self.camera.pos
             brushes_to_render = self.editor.state.brushes
             things_to_render = self.editor.state.things
-        self.projection_matrix = perspective_projection(self.camera.fov, self._cached_aspect_ratio, 0.1, 10000.0)
+        # In overhead play mode the camera is lifted far above the scene, so a
+        # 0.1 near plane wastes almost all depth precision at ground level and
+        # coplanar surfaces z-fight ("flicker"). Nothing sits within a fraction
+        # of the camera height of the overhead eye, so pull the near plane out to
+        # restore precision. First-person keeps the stock 0.1 near plane.
+        _near = 0.1
+        if self.play_mode and self._is_overhead():
+            _oh = float(getattr(getattr(self, 'logic_thread', None), 'overhead_height', 800.0) or 800.0)
+            _near = max(1.0, _oh * 0.1)
+        self.projection_matrix = perspective_projection(self.camera.fov, self._cached_aspect_ratio, _near, 10000.0)
         self._proj_ptr = glm.value_ptr(self.projection_matrix)
         self._view_ptr = glm.value_ptr(self.view_matrix)
         self._render_config["culling_enabled"] = self.culling_enabled
@@ -943,6 +1021,9 @@ class QtGameView(QOpenGLWidget):
                 brushes_to_render, things_to_render,
                 self.selected_object, self._render_config,
             )
+            # Native overhead player sprite (top-down mode), depth-tested so
+            # walls occlude it correctly.
+            self._draw_overhead_sprite(render_state)
             # Collision visualization
             if getattr(self, '_collision_vis_mode', 'off') != 'off':
                 # Get collision brushes from logic thread

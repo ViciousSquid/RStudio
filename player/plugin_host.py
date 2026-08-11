@@ -142,6 +142,37 @@ class PlayerPluginHost:
         return wrote
 
     # ------------------------------------------------------------------
+    def _activate_required_plugins(self, map_data: dict) -> List:
+        """Enable the *global* plugins a map declares and apply their config.
+
+        Global plugins (e.g. ``topdown``) place no entities, so they can't be
+        auto-enabled from ``things``. A map/package names them under
+        ``required_plugins`` (baked in at export), with optional per-plugin
+        settings under ``plugin_config``. Returns the plugins activated.
+        """
+        names = map_data.get("required_plugins") if isinstance(map_data, dict) else None
+        if not isinstance(names, (list, tuple)):
+            return []
+        cfg = map_data.get("plugin_config")
+        cfg = cfg if isinstance(cfg, dict) else {}
+        activated: List = []
+        for nm in names:
+            plugin = self.manager.find_plugin(str(nm))
+            if plugin is None:
+                continue
+            try:
+                self.manager.set_enabled(plugin, True)
+            except Exception:
+                pass
+            applier = getattr(plugin, "apply_config", None)
+            if callable(applier):
+                try:
+                    applier(cfg.get(str(nm)) or cfg.get(plugin.name) or {})
+                except Exception:
+                    pass
+            activated.append(plugin)
+        return activated
+
     def build_and_start(self, map_data: dict) -> None:
         """Instantiate the map's plugin entities and start the play session."""
         if not self.active or self.manager is None:
@@ -153,6 +184,8 @@ class PlayerPluginHost:
             self.manager.auto_enable_for_map(map_data)
         except Exception:
             pass
+        # Enable entity-less global plugins the map declares (e.g. topdown).
+        required = self._activate_required_plugins(map_data)
         things = []
         for t in map_data.get("things", []):
             if not isinstance(t, dict):
@@ -169,7 +202,7 @@ class PlayerPluginHost:
             except Exception:
                 continue
 
-        if not things:
+        if not things and not required:
             self.active = False   # nothing in this map for plugins to act on
             return
 
@@ -204,6 +237,42 @@ class PlayerPluginHost:
         except Exception:
             return
         self.hud_message = self.bridge.current_hud_message
+
+    def camera_override(self, cam_pos, cam_yaw_deg: float, cam_pitch_deg: float):
+        """Let a plugin replace the render camera (pos, yaw°, pitch°).
+
+        The player draws from a free-look ``pos``/``yaw``/``pitch`` camera; a
+        camera plugin (e.g. ``topdown``) answers the ``camera.player_view`` event
+        to move it overhead. Fully guarded and early-outs when nothing listens,
+        so a package with no camera plugin renders exactly as before. The input
+        camera the caller passes is left untouched — only the returned copy is
+        overridden — so movement still happens on the ground.
+        """
+        default = (cam_pos, cam_yaw_deg, cam_pitch_deg)
+        if not self.active or self.manager is None or self.bridge is None:
+            return default
+        emit = getattr(self.manager, "emit", None)
+        if emit is None:
+            return default
+        has = getattr(self.manager, "has_listeners", None)
+        if has is not None and not has("camera.player_view"):
+            return default
+        try:
+            self.bridge.player.update(cam_pos, cam_yaw_deg, cam_pitch_deg)
+            ev = emit("camera.player_view", logic=self.bridge,
+                      player=self.bridge.player, pos=tuple(cam_pos),
+                      yaw=float(cam_yaw_deg), pitch=float(cam_pitch_deg))
+            if ev is None:
+                return default
+            pos = ev.get("pos", cam_pos)
+            yaw = ev.get("yaw", cam_yaw_deg)
+            pitch = ev.get("pitch", cam_pitch_deg)
+            return ((float(pos[0]), float(pos[1]), float(pos[2])),
+                    float(yaw), float(pitch))
+        except (TypeError, ValueError, IndexError, KeyError):
+            return default
+        except Exception:
+            return default
 
     def stop(self) -> None:
         if self.active and self.bridge is not None and self.manager is not None:

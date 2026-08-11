@@ -183,10 +183,20 @@ class FioPlayerApp:
                     return
 
     def _render_state(self):
+        # A camera plugin (e.g. topdown) may move the *render* camera overhead;
+        # the input-driven camera above is left as-is, so movement still happens
+        # on the ground. Guarded: with no camera plugin this returns the free-look
+        # camera unchanged.
+        cam_pos, cam_yaw, cam_pitch = self.cam_pos, self.cam_yaw, self.cam_pitch
+        try:
+            cam_pos, cam_yaw, cam_pitch = self.plugin_host.camera_override(
+                self.cam_pos, self.cam_yaw, self.cam_pitch)
+        except Exception:
+            cam_pos, cam_yaw, cam_pitch = self.cam_pos, self.cam_yaw, self.cam_pitch
         return {
-            "cam_pos": tuple(self.cam_pos),
-            "cam_yaw": self.cam_yaw,
-            "cam_pitch": self.cam_pitch,
+            "cam_pos": tuple(cam_pos),
+            "cam_yaw": cam_yaw,
+            "cam_pitch": cam_pitch,
             "paused": self._paused,
             "hud": self.hud_message,
         }
