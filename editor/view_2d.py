@@ -74,6 +74,17 @@ class View2D(QWidget):
         self.animation_timer.timeout.connect(self._update_connection_animations)
         self.animation_timer.start(16)
 
+        # ---- Arrow-key nudge undo coalescing ----
+        # A rapid burst of nudges (tapping or holding an arrow key) should be a
+        # single, cheap undo step rather than one full-scene save_state() per
+        # keypress.  We save state once when a burst starts, then let this idle
+        # timer end the burst after a short pause so the next nudge starts fresh.
+        self._nudge_in_progress = False
+        self._nudge_idle_timer = QTimer(self)
+        self._nudge_idle_timer.setSingleShot(True)
+        self._nudge_idle_timer.setInterval(500)  # ms of inactivity ends a burst
+        self._nudge_idle_timer.timeout.connect(self._end_nudge_burst)
+
         # ---- Camera tracking for smooth viewcone updates ----
         # Watches camera position/yaw/pitch and repaints 2D views only when changed
         self._camera_tracking_timer = QTimer(self)
@@ -551,15 +562,15 @@ class View2D(QWidget):
                     delta_y = dy_map[arrow_key] * distance
                     delta_z = dz_map[arrow_key] * distance
 
+                    # Begin (or continue) a nudge burst.  save_state() is a
+                    # full-scene serialization, so we call it only once per
+                    # burst; the idle timer below closes the burst after a pause.
+                    self._begin_nudge_burst()
+
                     # Apply to selected object
                     if isinstance(selected, dict):
                         # It's a brush
                         pos = selected['pos']
-                        # Save state on first arrow key press (we track if we're in a nudge sequence)
-                        if not getattr(self, '_nudge_in_progress', False):
-                            self.main_window.save_state()
-                            self._nudge_in_progress = True
-
                         new_pos = [pos[0] + delta_x, pos[1] + delta_y, pos[2] + delta_z]
                         # Snap to grid if grid is visible
                         if self.grid_visible:
@@ -575,11 +586,6 @@ class View2D(QWidget):
                             pos[0], pos[1], pos[2] = new_pos
                     else:
                         # It's a Thing
-                        # Save state on first arrow key press
-                        if not getattr(self, '_nudge_in_progress', False):
-                            self.main_window.save_state()
-                            self._nudge_in_progress = True
-
                         selected.pos[0] += delta_x
                         selected.pos[1] += delta_y
                         selected.pos[2] += delta_z
@@ -595,18 +601,40 @@ class View2D(QWidget):
                     self.update()
                     self.main_window.view_3d.update()
 
-                    # Update property editor to show new position
-                    if hasattr(self.main_window, 'property_editor'):
-                        self.main_window.property_editor.set_object(selected)
-
+                    # NOTE: We intentionally do NOT rebuild the property editor
+                    # here.  set_object() tears down and recreates the entire
+                    # property panel (scroll area, tabs, dozens of widgets), which
+                    # made repeated nudges very slow.  The panel does not display
+                    # the object's live position, so there is nothing to refresh;
+                    # the 2D/3D repaints above already reflect the new position.
                     return
 
         super().keyPressEvent(event)
 
+    def _begin_nudge_burst(self):
+        """Start a nudge burst if one isn't already running, and keep it alive.
+
+        The first nudge of a burst records a single undo snapshot; subsequent
+        nudges within the idle window reuse it instead of serializing the whole
+        scene again.  Each nudge (re)starts the idle timer so a held key or a
+        rapid tap sequence stays in one burst.
+        """
+        if not self._nudge_in_progress:
+            self.main_window.save_state()
+            self._nudge_in_progress = True
+        # Restart the inactivity countdown; the burst ends only after a pause.
+        self._nudge_idle_timer.start()
+
+    def _end_nudge_burst(self):
+        """Close the current nudge burst so the next nudge starts a new undo step."""
+        self._nudge_in_progress = False
+
     def keyReleaseEvent(self, event):
-        """Reset nudge tracking when any key is released."""
-        if event.key() in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
-            self._nudge_in_progress = False
+        # A key release alone must not end the nudge burst: Qt auto-repeat fires
+        # a release between every repeated press, and tapping an arrow key
+        # releases between taps.  Ending the burst here would force a fresh
+        # full-scene save_state() on the very next nudge, which is exactly the
+        # slowdown we are avoiding.  The idle timer ends the burst after a pause.
         super().keyReleaseEvent(event)
 
     def _smooth_update_tick(self):
