@@ -24,6 +24,16 @@ WALL_DEFAULT_HEIGHT = 256
 ENTITY_Y_OFFSET = 32
 PLAYER_SPAWN_Y_OFFSET = 96       # extra clearance so player doesn't clip through the floor
 
+# --- Steps / multi-floor generation -----------------------------------
+# Steps are built exactly like the hand-made Maze map: a run of solid box
+# brushes that share a common bottom edge and grow taller, so each tread's
+# top climbs by STEP_RISE while advancing STEP_TREAD along the run axis.
+STEP_RISE = 16                   # vertical climb per step (< player step_height of 18)
+STEP_TREAD = 32                  # depth of each step along the run direction
+UPPER_FLOOR_HEIGHT = 128         # default height of an upper floor above the lower one
+MEZZANINE_THICK = 16             # thickness of an upper-floor platform slab
+UPPER_FLOOR_HEADROOM = 224       # clearance kept above an upper floor
+
 # ----------------------------------------------------------------------
 # Grid and map generation
 # ----------------------------------------------------------------------
@@ -332,53 +342,196 @@ def generate_brushes_from_grid(grid_map, wall_tex, floor_tex):
             "id": f"room_ceil_{room.cell_x}_{room.cell_y}"
         })
 
-    corner_info = {}
-    for x in range(grid_map.w):
-        for y in range(grid_map.h):
-            if grid_map.solid[x][y]:
-                continue
-            room = cell_to_room.get((x, y), None)
-            ceil_h = room.ceiling_height if room else WALL_DEFAULT_HEIGHT
-            world_x = x * CELL_SIZE
-            world_z = y * CELL_SIZE
-            corner_cases = [
-                ( 1, 0,  0, 1,  CELL_SIZE, CELL_SIZE, 'west',  'south'),
-                (-1, 0,  0, 1,  0,         CELL_SIZE, 'east',  'south'),
-                ( 1, 0,  0,-1,  CELL_SIZE, 0,         'west',  'north'),
-                (-1, 0,  0,-1,  0,         0,         'east',  'north'),
-            ]
-            for dx1, dy1, dx2, dy2, cx_off, cz_off, face1, face2 in corner_cases:
-                n1x, n1y = x + dx1, y + dy1
-                n2x, n2y = x + dx2, y + dy2
-                s1 = (0 <= n1x < grid_map.w and 0 <= n1y < grid_map.h
-                      and grid_map.solid[n1x][n1y])
-                s2 = (0 <= n2x < grid_map.w and 0 <= n2y < grid_map.h
-                      and grid_map.solid[n2x][n2y])
-                if not (s1 and s2):
-                    continue
-                key = (world_x + cx_off, world_z + cz_off)
-                if key not in corner_info:
-                    corner_info[key] = {'ceil_h': ceil_h, 'faces': set()}
-                else:
-                    corner_info[key]['ceil_h'] = max(corner_info[key]['ceil_h'], ceil_h)
-                corner_info[key]['faces'].add(face1)
-                corner_info[key]['faces'].add(face2)
+    # Corner pillars close the diagonal gaps where perpendicular walls meet, so
+    # no wall's nodraw end face is ever left exposed to the play area. A pillar
+    # sits on a grid vertex (a 64x64 post) and is considered for every vertex by
+    # inspecting the four cells that touch it. It is skipped where no corner
+    # exists — a straight run of wall, or a spot fully open or fully solid — and
+    # each of its four side faces is drawn only when it borders an open cell:
+    # the inside edges that face solid geometry stay nodraw because they are
+    # never seen. This covers convex (outer), concave (inner) and diagonal
+    # pinch corners uniformly.
+    def _cell_open(cx, cy):
+        return (0 <= cx < grid_map.w and 0 <= cy < grid_map.h
+                and not grid_map.solid[cx][cy])
 
-    for idx, ((corner_wx, corner_wz), info) in enumerate(corner_info.items()):
-        h = info['ceil_h']
-        tex = {f: "nodraw.jpg" for f in ["north", "south", "east", "west", "top", "down"]}
-        for face in info['faces']:
-            tex[face] = wall_tex
-        brushes.append({
-            "pos":       [corner_wx, FLOOR_SURFACE + h / 2, corner_wz],
-            "size":      [64, h, 64],
-            "operation": "add",
-            "textures":  tex,
-            "lock":      True,
-            "id":        f"corner_pillar_{idx}"
-        })
+    pillar_idx = 0
+    for vx in range(grid_map.w + 1):
+        for vz in range(grid_map.h + 1):
+            # The four cells around vertex (vx, vz).
+            sw = (vx - 1, vz - 1)
+            se = (vx,     vz - 1)
+            nw = (vx - 1, vz)
+            ne = (vx,     vz)
+            o_sw, o_se, o_nw, o_ne = (_cell_open(*sw), _cell_open(*se),
+                                      _cell_open(*nw), _cell_open(*ne))
+            open_count = o_sw + o_se + o_nw + o_ne
+            if open_count == 0 or open_count == 4:
+                continue  # fully solid (buried) or fully open (no corner)
+            if open_count == 2:
+                # Two open cells sharing an edge is a straight wall — no pillar.
+                # Only a diagonal pair (a pinch) needs one.
+                diagonal = (o_sw and o_ne) or (o_se and o_nw)
+                if not diagonal:
+                    continue
+
+            # Reach the ceiling of the tallest adjacent open cell.
+            heights = []
+            for (cx, cy), is_open in ((sw, o_sw), (se, o_se), (nw, o_nw), (ne, o_ne)):
+                if is_open:
+                    r = cell_to_room.get((cx, cy), None)
+                    heights.append(r.ceiling_height if r else WALL_DEFAULT_HEIGHT)
+            h = max(heights) if heights else WALL_DEFAULT_HEIGHT
+
+            tex = {f: "nodraw.jpg" for f in ["north", "south", "east", "west", "top", "down"]}
+            if o_sw or o_nw:
+                tex['west'] = wall_tex
+            if o_se or o_ne:
+                tex['east'] = wall_tex
+            if o_sw or o_se:
+                tex['south'] = wall_tex
+            if o_nw or o_ne:
+                tex['north'] = wall_tex
+
+            brushes.append({
+                "pos":       [vx * CELL_SIZE, FLOOR_SURFACE + h / 2, vz * CELL_SIZE],
+                "size":      [64, h, 64],
+                "operation": "add",
+                "textures":  tex,
+                "lock":      True,
+                "id":        f"corner_pillar_{pillar_idx}"
+            })
+            pillar_idx += 1
 
     return brushes
+
+# ----------------------------------------------------------------------
+# Steps and upper/lower floors
+# ----------------------------------------------------------------------
+def generate_step_brushes(start_u, v_center, run_axis, width, base_y, total_rise,
+                          wall_tex, floor_tex, id_prefix,
+                          rise=STEP_RISE, tread=STEP_TREAD):
+    """Build a solid staircase out of stacked box brushes.
+
+    Mirrors the pattern used by the hand-built Maze map: every step shares the
+    same bottom edge and grows taller, so its top surface climbs by ``rise`` per
+    step while advancing ``tread`` units along the run axis. Because ``rise`` is
+    below the player's ``step_height`` the player walks straight up.
+
+    start_u    : world coord (on ``run_axis``) of the near edge of the first step
+    v_center   : world coord (on the perpendicular axis) of the run's centre line
+    run_axis   : 'x' or 'z' — horizontal axis the staircase ascends along
+    width      : size of the staircase on the perpendicular axis
+    base_y     : surface height of the lower floor the stairs rise from
+    total_rise : height climbed; the upper floor surface is ``base_y + total_rise``
+
+    Returns ``(brushes, top_y)`` where ``top_y`` is the height of the last tread.
+    """
+    brushes = []
+    n_steps = max(1, int(round(total_rise / float(rise))))
+    base_bottom = base_y - FLOOR_THICK       # sink the treads into the lower floor
+    for i in range(1, n_steps + 1):
+        top = base_y + i * rise
+        height = top - base_bottom
+        center_y = (top + base_bottom) / 2.0
+        u_center = start_u + (i - 0.5) * tread
+        # Everything starts hidden. The tread top is walked on; the two width
+        # sides and the riser facing back down the run are the only visible
+        # faces. The bottom (sunk into the lower floor) and the inner edge —
+        # the face pointing up the run, fully covered by the next taller step —
+        # stay nodraw because they are never seen.
+        tex = {f: "nodraw.jpg" for f in ["north", "south", "east", "west", "top", "down"]}
+        tex["top"] = floor_tex
+        if run_axis == 'x':
+            pos = [u_center, center_y, v_center]
+            size = [tread, height, width]
+            tex["west"] = wall_tex          # visible riser (faces down the run)
+            tex["north"] = wall_tex         # exposed side of the staircase
+            tex["south"] = wall_tex         # exposed side of the staircase
+            # tex["east"] stays nodraw — inside edge buried by the next step
+        else:
+            pos = [v_center, center_y, u_center]
+            size = [width, height, tread]
+            tex["south"] = wall_tex         # visible riser (faces down the run)
+            tex["east"] = wall_tex          # exposed side of the staircase
+            tex["west"] = wall_tex          # exposed side of the staircase
+            # tex["north"] stays nodraw — inside edge buried by the next step
+        brushes.append({
+            "pos": pos,
+            "size": size,
+            "operation": "add",
+            "textures": tex,
+            "lock": True,
+            "id": f"{id_prefix}_step_{i}"
+        })
+    return brushes, base_y + n_steps * rise
+
+
+def generate_mezzanine_for_room(room, floor_height, wall_tex, floor_tex, room_index):
+    """Turn a room into a two-storey space: a staircase rising from the ground
+    (lower floor) to a raised platform (upper floor) covering the far end.
+
+    The staircase and platform sit inside the room's own footprint, so this adds
+    an upper floor without disturbing corridor connectivity or wall generation.
+    Returns ``(brushes, info)`` where ``info`` describes the platform top (or
+    ``None`` if the room is too small to fit a staircase and a landing).
+    """
+    rx, rz = room.world_x, room.world_y
+    rw, rh = room.world_w, room.world_h
+    base_y = FLOOR_SURFACE
+    n_steps = max(1, int(round(floor_height / STEP_RISE)))
+    run_len = n_steps * STEP_TREAD
+
+    # Ascend along the room's longer axis; keep the stairs a touch off the walls.
+    if rw >= rh:
+        run_axis = 'x'
+        length, width = rw, rh
+        start_u = rx
+        v_center = rz + rh / 2.0
+    else:
+        run_axis = 'z'
+        length, width = rh, rw
+        start_u = rz
+        v_center = rx + rw / 2.0
+
+    # Need the staircase plus at least two treads of standing platform.
+    if length < run_len + STEP_TREAD * 2:
+        return [], None
+
+    stair_width = max(STEP_TREAD, width - 2 * STEP_TREAD)
+
+    brushes, top_y = generate_step_brushes(
+        start_u, v_center, run_axis, stair_width, base_y, floor_height,
+        wall_tex, floor_tex, id_prefix=f"mezz{room_index}")
+
+    # Platform slab spanning from the top of the stairs to the far wall.
+    plat_len = length - run_len
+    plat_u_center = start_u + run_len + plat_len / 2.0
+    plat_top = base_y + floor_height
+    plat_center_y = plat_top - MEZZANINE_THICK / 2.0
+    tex = {f: "nodraw.jpg" for f in ["north", "south", "east", "west", "top", "down"]}
+    tex["top"] = floor_tex          # walking surface of the upper floor
+    tex["down"] = floor_tex         # underside seen from the lower floor
+    if run_axis == 'x':
+        pos = [plat_u_center, plat_center_y, v_center]
+        size = [plat_len, MEZZANINE_THICK, width]
+        center_x, center_z = plat_u_center, v_center
+    else:
+        pos = [v_center, plat_center_y, plat_u_center]
+        size = [width, MEZZANINE_THICK, plat_len]
+        center_x, center_z = v_center, plat_u_center
+    brushes.append({
+        "pos": pos,
+        "size": size,
+        "operation": "add",
+        "textures": tex,
+        "lock": True,
+        "id": f"mezz{room_index}_platform"
+    })
+
+    info = {"center_x": center_x, "center_z": center_z, "top_y": plat_top}
+    return brushes, info
+
 
 def random_point_in_room(room, min_dist_from_wall=0):
     # Calculate safe boundaries inside the room
@@ -415,9 +568,46 @@ def create_map_data(params):
         attempts += 1
     grid.connect_rooms()
 
+    # ------------------- UPPER / LOWER FLOOR SELECTION -------------------
+    # Pick a few large rooms to become two-storey (a ground floor plus a raised
+    # upper floor reached by steps). Elevation is baked in before geometry so
+    # the room's walls and ceiling are generated tall enough for headroom.
+    start_room = grid.rooms[0]
+    enable_floors = params.get('enable_floors', True)
+    floor_height = params.get('floor_height', UPPER_FLOOR_HEIGHT)
+    floor_room_count = params.get('floor_room_count', 2)
+    mezzanine_rooms = []
+    if enable_floors and floor_room_count > 0 and len(grid.rooms) > 1:
+        n_steps = max(1, int(round(floor_height / STEP_RISE)))
+        run_len = n_steps * STEP_TREAD
+        eligible = []
+        for idx, room in enumerate(grid.rooms):
+            if room is start_room:
+                continue
+            longer = max(room.world_w, room.world_h)
+            if longer >= run_len + STEP_TREAD * 2:
+                eligible.append(idx)
+        random.shuffle(eligible)
+        for idx in eligible[:floor_room_count]:
+            room = grid.rooms[idx]
+            room.elevation = floor_height
+            # Guarantee standing room above the upper floor.
+            room.ceiling_height = max(room.ceiling_height,
+                                      floor_height + UPPER_FLOOR_HEADROOM)
+            mezzanine_rooms.append(idx)
+
     brushes = generate_brushes_from_grid(grid, params['wall_tex'], params['floor_tex'])
 
-    start_room = grid.rooms[0]
+    # Add the staircases and upper-floor platforms for the chosen rooms.
+    upper_floor_infos = []
+    for idx in mezzanine_rooms:
+        mezz_brushes, info = generate_mezzanine_for_room(
+            grid.rooms[idx], grid.rooms[idx].elevation,
+            params['wall_tex'], params['floor_tex'], idx)
+        brushes.extend(mezz_brushes)
+        if info is not None:
+            upper_floor_infos.append(info)
+
     player_x = start_room.world_x + start_room.world_w / 2
     player_z = start_room.world_y + start_room.world_h / 2
     player_y = FLOOR_SURFACE + PLAYER_SPAWN_Y_OFFSET
@@ -632,6 +822,31 @@ def create_map_data(params):
                 if not placed:
                     print(f"Warning: Could not place health pickup #{i} after {MAX_ATTEMPTS} attempts. Skipping.")
 
+    # ------------------- UPPER FLOOR REWARDS -------------------
+    # Reward the climb: drop a health pickup on top of each generated upper floor.
+    if params.get('spawn_health', False):
+        for j, info in enumerate(upper_floor_infos):
+            things.append({
+                "type": "pickup",
+                "pos": [info["center_x"],
+                        info["top_y"] + ENTITY_Y_OFFSET,
+                        info["center_z"]],
+                "properties": {
+                    "type": "pickup",
+                    "name": f"UpperFloorHealth_{j}",
+                    "item_type": "health",
+                    "value": 25,
+                    "activation": "walk_over",
+                    "respawns": False,
+                    "respawn_time": 20.0,
+                    "collected": False,
+                    "key_name": "",
+                    "custom_sprite": "assets/sprites/health.png",
+                    "id": f"upper_floor_pickup_{j}"
+                },
+                "io_connections": []
+            })
+
     return {
         "version": 3,
         "brushes": brushes,
@@ -757,6 +972,24 @@ class ProceduralMapWidget(QWidget):
         self.health_amount.setValue(6)
         form.addRow(self.spawn_health, self.health_amount)
 
+        # Upper floors (steps + raised platforms)
+        self.enable_floors = QCheckBox("Steps")
+        self.enable_floors.setChecked(True)
+        self.floor_amount = QSpinBox()
+        self.floor_amount.setRange(0, 16)
+        self.floor_amount.setValue(2)
+        form.addRow(self.enable_floors, self.floor_amount)
+
+        self.floor_height = QSpinBox()
+        self.floor_height.setRange(STEP_RISE, 512)
+        self.floor_height.setSingleStep(STEP_RISE)
+        self.floor_height.setValue(UPPER_FLOOR_HEIGHT)
+        self.floor_height.setEnabled(False)
+        form.addRow("Upper Floor Height (world units):", self.floor_height)
+
+        self.floor_height.hide()
+        form.labelForField(self.floor_height).hide()
+
         params_layout.addWidget(group)
         params_layout.addStretch()
 
@@ -799,6 +1032,10 @@ class ProceduralMapWidget(QWidget):
             # --- NEW ---
             'spawn_health': self.spawn_health.isChecked(),
             'health_count': self.health_amount.value(),
+            # --- Upper / lower floors ---
+            'enable_floors': self.enable_floors.isChecked(),
+            'floor_room_count': self.floor_amount.value(),
+            'floor_height': self.floor_height.value(),
         }
         self.current_params = params
         map_data = create_map_data(params)
