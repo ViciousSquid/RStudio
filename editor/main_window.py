@@ -1787,6 +1787,7 @@ class MainWindow(QMainWindow):
         """Exit play mode and return to editor."""
         if hasattr(self.view_3d, 'play_mode') and self.view_3d.play_mode:
             self.view_3d.toggle_play_mode(None, None)
+            self.view_3d.play_mode = False  # Force state change before UI update
 
         self.ui.notification_label.setText("")
         self._restore_properties_tab()
