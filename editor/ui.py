@@ -178,7 +178,8 @@ class Ui_MainWindow(object):
         
         # --- 6. Menus and Toolbars ---
         self.create_menu_bar(MainWindow)
-        self.create_toolbars(MainWindow) # Now includes the browser button
+        self.create_toolbars(MainWindow)  # Creates Play button
+        self.create_tool_toolbar(MainWindow)  # Single top strip: tools + Play last
         self.create_status_bar(MainWindow)
 
     def create_menu_bar(self, MainWindow):
@@ -314,158 +315,18 @@ class Ui_MainWindow(object):
         help_menu.addAction(QAction('About', MainWindow, triggered=MainWindow.show_about))
 
     def create_toolbars(self, MainWindow):
-        top_toolbar = QToolBar("Main Tools")
-        top_toolbar.setObjectName("MainToolbar")
-        # Dockable across the top under the menus (horizontal) or on the far
-        # right (vertical). Qt flips the orientation automatically as it's
-        # dragged between the two areas. Default to the top under the menus.
-        top_toolbar.setMovable(True)
-        top_toolbar.setAllowedAreas(Qt.TopToolBarArea | Qt.RightToolBarArea)
-        MainWindow.addToolBar(Qt.TopToolBarArea, top_toolbar)
-
-        # Determine icon size based on config setting
         big_toolbar_buttons = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
         icon_size_val = 50 if big_toolbar_buttons else 35
-        
-        room_btn = QPushButton()
-        room_btn.setIcon(QIcon("assets/room.png"))
-        room_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        room_btn.setFixedSize(icon_size_val, icon_size_val)
-        room_btn.setToolTip("Create Room (Hollow + Lights)")
-        room_btn.clicked.connect(MainWindow.create_room_from_brush)
-        
-        hollow_btn = QPushButton()
-        hollow_btn.setIcon(QIcon("assets/hollow.png"))
-        hollow_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        hollow_btn.setFixedSize(icon_size_val, icon_size_val)
-        hollow_btn.setToolTip("Hollow out brush")
-        hollow_btn.clicked.connect(MainWindow.hollow_selected_brush)
 
-        clone_btn = QPushButton()
-        clone_btn.setIcon(QIcon("assets/clone.png"))
-        clone_btn.setIconSize(QSize(50, 50))
-        clone_btn.setFixedSize(50, 50)
-        clone_btn.setToolTip("Clone selected brush (Space)")
-        clone_btn.clicked.connect(MainWindow.clone_selected_object)
-        
-        # Free-rotate tool — checkable toggle; drag in a 2D view to spin the
-        # selection about that view's axis (grid snap toggles stepped/free).
-        rotate_btn = QPushButton()
-        rotate_btn.setIcon(QIcon("assets/rotate.png"))
-        rotate_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        rotate_btn.setFixedSize(icon_size_val, icon_size_val)
-        rotate_btn.setToolTip("Free rotate — toggle rotate mode, then drag in a "
-                              "2D view to spin the selection\n"
-                              "(grid snap on = stepped angles, off = free)")
-        rotate_btn.setCheckable(True)
-        rotate_btn.setStyleSheet("""
-            QPushButton:checked {
-                background-color: #F08000;
-                border: 1px solid #FF9020;
-            }
-            QPushButton:checked:hover {
-                background-color: #FF9020;
-            }
-        """)
-        rotate_btn.toggled.connect(MainWindow.toggle_rotate_mode)
-        MainWindow.rotate_btn = rotate_btn  # Store reference for state sync
-        
-        subtract_btn = QPushButton()
-        subtract_btn.setIcon(QIcon("assets/subtract.png"))
-        subtract_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        subtract_btn.setFixedSize(icon_size_val, icon_size_val)
-        subtract_btn.setToolTip("Subtract")
-        subtract_btn.clicked.connect(MainWindow.perform_subtraction)
-
-        tint_btn = QPushButton()
-        tint_btn.setIcon(QIcon("assets/tint.png"))
-        tint_btn.setIconSize(QSize(50, 50))
-        tint_btn.setFixedSize(50, 50)
-        tint_btn.setToolTip("Tint selected brush colour")
-        tint_btn.clicked.connect(MainWindow.tint_selected_brush)
-
-        # Scissor / clip tool — checkable toggle, Radiant-style X shortcut.
-        scissor_btn = QPushButton()
-        scissor_btn.setIcon(QIcon("assets/scissor.png"))
-        scissor_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        scissor_btn.setFixedSize(icon_size_val, icon_size_val)
-        scissor_btn.setToolTip("Scissor — toggle clip/scissor mode (X)\n"
-                               "Click two points in a 2D view, then Enter to cut")
-        scissor_btn.setCheckable(True)
-        scissor_btn.setShortcut("X")
-        scissor_btn.setStyleSheet("""
-            QPushButton:checked {
-                background-color: #F08000;
-                border: 1px solid #FF9020;
-            }
-            QPushButton:checked:hover {
-                background-color: #FF9020;
-            }
-        """)
-        scissor_btn.toggled.connect(MainWindow.toggle_clip_mode)
-        MainWindow.scissor_btn = scissor_btn  # Store reference for state sync
-
-        top_toolbar.addWidget(room_btn)
-        top_toolbar.addWidget(hollow_btn)
-        top_toolbar.addWidget(clone_btn)
-        top_toolbar.addWidget(rotate_btn)
-        top_toolbar.addWidget(subtract_btn)
-        top_toolbar.addWidget(scissor_btn)
-        top_toolbar.addWidget(tint_btn)
-
-        terrain_menu_btn = QPushButton()
-        terrain_menu_btn.setIcon(QIcon("assets/terrain.png"))
-        terrain_menu_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        terrain_menu_btn.setFixedSize(icon_size_val, icon_size_val)
-        terrain_menu_btn.setToolTip("Procedural Tools")
-
-        terrain_menu = QMenu(MainWindow)
-        terrain_menu.addAction(MainWindow.terrain_action)
-        terrain_menu.addAction(MainWindow.procedural_action)
-
-        terrain_menu_btn.clicked.connect(lambda: terrain_menu.exec_(
-            terrain_menu_btn.mapToGlobal(terrain_menu_btn.rect().bottomLeft())
-        ))
-
-        top_toolbar.addWidget(terrain_menu_btn)
-        
-        grid_btn = QPushButton()
-        grid_btn.setIcon(QIcon("assets/b_grid.png"))
-        grid_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        grid_btn.setFixedSize(icon_size_val, icon_size_val)
-        grid_btn.setToolTip("Toggle 3D Grid (G)")
-        grid_btn.setCheckable(True)
-        grid_btn.setChecked(True)  # Grid visible by default
-        grid_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #555;
-                border: 1px solid #666;
-            }
-            QPushButton:checked {
-                background-color: #F08000;
-                border: 1px solid #FF9020;
-            }
-            QPushButton:hover {
-                background-color: #6a6a6a;
-            }
-            QPushButton:checked:hover {
-                background-color: #FF9020;
-            }
-        """)
-        grid_btn.toggled.connect(MainWindow.toggle_grid)
-        top_toolbar.addWidget(grid_btn)
-        MainWindow.grid_btn = grid_btn  # Store reference
-        
-        # === FLOATING PLAY BUTTON ===
         MainWindow.play_button = QPushButton(QIcon("assets/b_test.png"), "Play", MainWindow)
         MainWindow.play_button.setIconSize(QSize(icon_size_val, icon_size_val))
-        MainWindow.play_button.setFixedSize(icon_size_val + 190, icon_size_val)
+        # Remove setFixedSize here — we drive width via stylesheet instead
         MainWindow.play_button.setToolTip("Drop in and play (F5)")
         MainWindow.play_button.setShortcut("f5")
         MainWindow.play_button.clicked.connect(MainWindow.enter_play_mode)
-        
+
         current_font = MainWindow.play_button.font()
-        current_font.setPointSize(current_font.pointSize() + 1)
+        current_font.setPointSizeF(current_font.pointSizeF() * 1.5)
         MainWindow.play_button.setFont(current_font)
         MainWindow.play_button.setStyleSheet("""
             QPushButton {
@@ -474,6 +335,9 @@ class Ui_MainWindow(object):
                 font-weight: bold;
                 border: 1px solid #1a8f3d;
                 border-radius: 4px;
+                padding: 5px 15px;
+                min-width: 250px;
+                max-width: 250px;
             }
             QPushButton:hover {
                 background-color: #28d157;
@@ -483,14 +347,117 @@ class Ui_MainWindow(object):
             }
         """)
 
-        display_mode_widget = QWidget()
-        display_mode_layout = QHBoxLayout(display_mode_widget)
-        display_mode_layout.setContentsMargins(5,0,5,0)
-        
-        right_margin = QWidget()
-        right_margin.setFixedWidth(5)
-        top_toolbar.addWidget(right_margin)
-        
+    def create_tool_toolbar(self, MainWindow):
+        """Single tool strip along the top: all editing tools + Play last."""
+        tool_toolbar = QToolBar("Tools")
+        tool_toolbar.setObjectName("ToolToolbar")
+        tool_toolbar.setMovable(True)
+        tool_toolbar.setAllowedAreas(Qt.TopToolBarArea | Qt.BottomToolBarArea)
+        MainWindow.addToolBar(Qt.TopToolBarArea, tool_toolbar)
+
+        big = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
+        icon_size_val = 50 if big else 35
+
+        toggle_style = """
+            QPushButton {
+                background-color: #555;
+                border: 1px solid #666;
+            }
+            QPushButton:hover {
+                background-color: #6a6a6a;
+            }
+            QPushButton:checked {
+                background-color: #F08000;
+                border: 1px solid #FF9020;
+            }
+            QPushButton:checked:hover {
+                background-color: #FF9020;
+            }
+        """
+
+        def make_btn(icon, tip, on_click=None, checkable=False, checked=False,
+                     shortcut=None, styled=False):
+            b = QPushButton()
+            b.setIcon(QIcon(icon))
+            b.setIconSize(QSize(icon_size_val, icon_size_val))
+            b.setFixedSize(icon_size_val, icon_size_val)
+            b.setToolTip(tip)
+            if checkable:
+                b.setCheckable(True)
+                b.setChecked(checked)
+            if shortcut:
+                b.setShortcut(shortcut)
+            if styled:
+                b.setStyleSheet(toggle_style)
+            if on_click is not None:
+                if checkable:
+                    b.toggled.connect(on_click)
+                else:
+                    b.clicked.connect(on_click)
+            tool_toolbar.addWidget(b)
+            return b
+
+        # --- Base tools: Select + Box (mutually exclusive) ---
+        MainWindow.select_tool_btn = make_btn(
+            "assets/select.png",
+            "Select tool (Shift+S)\n"
+            "Drag a box to marquee-select; click empty space to deselect",
+            on_click=lambda: MainWindow.set_tool_mode('select'),
+            checkable=True, checked=MainWindow.tool_mode == 'select',
+            shortcut="Shift+S", styled=True)
+
+        MainWindow.brush_tool_btn = make_btn(
+            "assets/box.png",
+            "Brush tool (Shift+B)\n"
+            "Drag in a 2D view to create geometry",
+            on_click=lambda: MainWindow.set_tool_mode('brush'),
+            checkable=True, checked=MainWindow.tool_mode == 'brush',
+            shortcut="Shift+B", styled=True)
+
+        tool_toolbar.addSeparator()
+
+        # --- Editing actions ---
+        make_btn("assets/room.png", "Room (Hollow + Lights)",
+                 on_click=MainWindow.create_room_from_brush)
+        make_btn("assets/hollow.png", "Hollow",
+                 on_click=MainWindow.hollow_selected_brush)
+        make_btn("assets/clone.png", "Clone",
+                 on_click=MainWindow.clone_selected_object)
+
+        MainWindow.rotate_btn = make_btn(
+            "assets/rotate.png",
+            "Rotate",
+            on_click=MainWindow.toggle_rotate_mode,
+            checkable=True, styled=True)
+
+        make_btn("assets/subtract.png", "Subtract",
+                 on_click=MainWindow.perform_subtraction)
+
+        MainWindow.scissor_btn = make_btn(
+            "assets/scissor.png",
+            "Scissor",
+            on_click=MainWindow.toggle_clip_mode,
+            checkable=True, shortcut="X", styled=True)
+
+        make_btn("assets/tint.png", "Tint brush",
+                 on_click=MainWindow.tint_selected_brush)
+
+        # Procedural / terrain menu button
+        terrain_menu = QMenu(MainWindow)
+        terrain_menu.addAction(MainWindow.terrain_action)
+        terrain_menu.addAction(MainWindow.procedural_action)
+        terrain_btn = make_btn("assets/terrain.png", "Procedural Tools")
+        terrain_btn.clicked.connect(lambda: terrain_menu.exec_(
+            terrain_btn.mapToGlobal(terrain_btn.rect().bottomLeft())))
+
+        MainWindow.grid_btn = make_btn(
+            "assets/b_grid.png", "Toggle 3D Grid (G)",
+            on_click=MainWindow.toggle_grid,
+            checkable=True, checked=True, styled=True)
+
+        # Play button last in the strip
+        tool_toolbar.addSeparator()
+        tool_toolbar.addWidget(MainWindow.play_button)
 
     def create_status_bar(self, MainWindow):
         status_bar = QStatusBar()

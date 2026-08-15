@@ -71,7 +71,8 @@ editor edit is a tiny bootstrap in `editor/__init__.py`.
 |------|------|
 | `engine/logic_thread.py` | **Native** plugin hooks: `attach_runtime` (`__init__`), play-start/stop (`set_play_mode`), per-tick dispatch (`_tick_play_mode`). All guarded and optional. |
 | `editor/__init__.py` | Bootstrap: `load_plugins()` + `integration.apply()`, run once when the editor package is first imported (before any map loads). |
-| `plugins/integration.py` | Installs the editor hooks: auto-enable/disable of a disabled-by-default plugin onto `editor.editor_state.EditorState` (`load_from_data` enables for a level's entities, `clear_scene` reverts on File ▸ New); a **Plugins ▸ <plugin>** submenu onto `editor.view_2d.View2D`'s right-click menu; a top-level **Plugins** menu onto `editor.ui.Ui_MainWindow`; and plugin bundling onto `editor.package_exporter.PackageExporter.export`. |
+| `plugins/integration.py` | Installs the editor hooks: auto-enable/disable of a disabled-by-default plugin onto `editor.editor_state.EditorState` (`load_from_data` enables for a level's entities, `clear_scene` reverts on File ▸ New); a **Plugins ▸ <plugin>** submenu onto `editor.view_2d.View2D`'s right-click menu; and a top-level **Plugins** menu onto `editor.ui.Ui_MainWindow`. (Plugin bundling on export is **not** here — it's native to `PackageExporter`, below.) |
+| `editor/package_exporter.py` | **Native** plugin bundling: `PackageExporter.export` calls `plugins.packaging.augment_fiopak` as a first-class final step once the base `.fiopak` is written. Guarded, so a build without the plugin system just skips it. |
 | `plugins/packaging.py` | Bundles the plugins a `.fiopak`'s maps depend on (code + assets + manifest) so exported packages are self-contained. |
 
 Everything else — the property panel, the I/O editor, serialization, and 3D
@@ -203,8 +204,10 @@ on another machine.
   the bundled plugins from an extracted package.
 
 The mechanics live in [`plugins/packaging.py`](packaging.py)
-(`augment_fiopak`, `load_package_plugins`) and are wired onto the exporter by
-`integration.py`.
+(`augment_fiopak`, `load_package_plugins`). Bundling is a native step of
+[`editor/package_exporter.py`](../editor/package_exporter.py) —
+`PackageExporter.export` calls `augment_fiopak` itself once the base archive is
+written; it is not monkey-patched on by `integration.py`.
 
 ## Running plugins outside the editor (the `.fiopak` player)
 

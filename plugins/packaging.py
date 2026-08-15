@@ -4,10 +4,11 @@ Making ``.fiopak`` packages plugin-aware.
 A ``.fiopak`` is a zip of maps + referenced assets. When a map uses entities
 that come from a plugin, the package must also carry that plugin's code and
 assets, or it won't load anywhere but the machine that built it. This module
-provides :func:`augment_fiopak`, which the exporter calls after writing the
-base package: it inspects the bundled maps, works out which plugins they need,
-and injects those plugins (plus the plugin-system core) into the archive,
-recording them in ``metadata.json`` under ``"plugins"``.
+provides :func:`augment_fiopak`, which :class:`editor.package_exporter.PackageExporter`
+calls natively as a first-class final step of ``export`` once the base package
+is written: it inspects the bundled maps, works out which plugins they need, and
+injects those plugins (plus the plugin-system core) into the archive, recording
+them in ``metadata.json`` under ``"plugins"``.
 
 Archive layout after augmentation (only the plugin bits shown)::
 

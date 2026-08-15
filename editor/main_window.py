@@ -167,6 +167,10 @@ class MainWindow(QMainWindow):
         self.grid_visible = True
         self.clip_mode = False  # Radiant-style clip/slice tool (toggled with X)
         self.rotate_mode = False  # Free-rotate tool: drag in a 2D view to spin
+        # Base 2D interaction tool (Hammer-style): 'select' drags a rubber-band
+        # marquee, 'brush' drags out new box geometry.  Clip/rotate are separate
+        # drag tools layered on top and take precedence while active.
+        self.tool_mode = 'select'
         self.preview_timer = QTimer(self)  # OPTIMIZATION: Added parent=self for proper cleanup
         self.preview_timer.timeout.connect(self.update_mover_preview)
         self.preview_data = {} 
@@ -176,7 +180,6 @@ class MainWindow(QMainWindow):
         self.setup_package_actions() 
         self.update_title()
         
-        QTimer.singleShot(0, self.reposition_overlays)
         self.ctrl_tab_shortcut = QShortcut(QKeySequence("Ctrl+Tab"), self)
         self.ctrl_tab_shortcut.activated.connect(self.cycle_2d_view)
 
@@ -723,24 +726,6 @@ class MainWindow(QMainWindow):
                 next_index = (self.right_tabs.currentIndex() + 1) % count
                 self.right_tabs.setCurrentIndex(next_index)
 
-    def resizeEvent(self, event):
-        """Reposition floating UI elements on window resize."""
-        super().resizeEvent(event)
-        if hasattr(self, 'play_button'):
-            bx = self.width() // 2 - self.play_button.width() // 2
-            by = 35 
-            self.play_button.move(bx, by)
-            self.play_button.raise_()
-
-    def reposition_overlays(self):
-        """Positions the Play button at the top middle (where the toast used to be)."""
-        if hasattr(self, 'play_button'):
-            # Centered horizontally, 35 pixels from the top
-            px = self.width() // 2 - self.play_button.width() // 2
-            py = 35 
-            self.play_button.move(px, py)
-            self.play_button.raise_()
-
     def eventFilter(self, obj, event):
         """Track right-click state on view_3d for camera movement detection."""
         from PyQt5.QtCore import QEvent
@@ -1101,9 +1086,6 @@ class MainWindow(QMainWindow):
         elif hasattr(self.scene_hierarchy, 'scroll_to_item'):
             self.scene_hierarchy.scroll_to_item(obj)
 
-    # REMOVED: _sync_play_button_state() method and _last_play_mode_state attribute.
-    # The 200ms timer was redundant because ALL code paths that change play_mode
-    # already call update_play_button_color() directly.
 
     def update_play_button_color(self):
         """Update the Play button color based on current mode."""
@@ -1112,12 +1094,14 @@ class MainWindow(QMainWindow):
                 # Red for play mode
                 self.play_button.setStyleSheet("""
                     QPushButton {
-                        background-color: #C62828;  /* Red for play mode */
+                        background-color: #C62828;
                         color: white;
                         border: 1px solid #B71C1C;
                         border-radius: 3px;
                         padding: 5px 15px;
                         font-weight: bold;
+                        min-width: 250px;
+                        max-width: 250px;
                     }
                     QPushButton:hover {
                         background-color: #D32F2F;
@@ -1131,12 +1115,14 @@ class MainWindow(QMainWindow):
                 # Green for editor mode
                 self.play_button.setStyleSheet("""
                     QPushButton {
-                        background-color: #2E7D32;  /* Green for editor mode */
+                        background-color: #2E7D32;
                         color: white;
                         border: 1px solid #1B5E20;
                         border-radius: 3px;
                         padding: 5px 15px;
                         font-weight: bold;
+                        min-width: 250px;
+                        max-width: 250px;
                     }
                     QPushButton:hover {
                         background-color: #388E3C;
@@ -2882,6 +2868,45 @@ class MainWindow(QMainWindow):
         if hasattr(self.view_3d, 'grid_visible'):
             self.view_3d.grid_visible = visible
             self.view_3d.update()
+
+    # ======================================================================
+    # Base 2D tool: Select (marquee) vs Brush (draw geometry), Hammer-style
+    # ======================================================================
+
+    def set_tool_mode(self, mode):
+        """Switch the base 2D interaction tool between 'select' and 'brush'.
+
+        Picking a base tool also exits the Clip/Rotate drag tools (they are
+        mutually exclusive with everything else, Hammer/Radiant style) and syncs
+        the two toolbar buttons + view cursors.
+        """
+        mode = 'brush' if mode == 'brush' else 'select'
+        self.tool_mode = mode
+
+        # Leaving to a base tool cancels the special drag tools.
+        if self.clip_mode:
+            self.set_clip_mode(False)
+        if self.rotate_mode:
+            self.set_rotate_mode(False)
+
+        # Keep both toolbar buttons in sync without re-triggering handlers.
+        for name, wanted in (('select_tool_btn', mode == 'select'),
+                             ('brush_tool_btn', mode == 'brush')):
+            btn = getattr(self, name, None)
+            if btn is not None and btn.isChecked() != wanted:
+                btn.blockSignals(True)
+                btn.setChecked(wanted)
+                btn.blockSignals(False)
+
+        cursor = Qt.ArrowCursor if mode == 'select' else Qt.CrossCursor
+        for view in (self.view_top, self.view_side, self.view_front):
+            view.reset_marquee()
+            view.setCursor(cursor)
+            view.update()
+
+        self.show_toast("Select tool — drag a box to select, click empty to deselect"
+                        if mode == 'select' else
+                        "Brush tool — drag in a 2D view to create geometry")
 
     # ======================================================================
     # Clip / slice tool  (Radiant-style, toggled with X)

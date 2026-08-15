@@ -139,8 +139,9 @@ def test_integration_hooks_installed():
         print(f"  skip: editor.ui unavailable ({exc})")
     try:
         from editor.package_exporter import PackageExporter
-        _check(getattr(PackageExporter, "_fio_plugins_patched", False),
-               "PackageExporter patched (plugin bundling on export)")
+        # Plugin bundling is a native, first-class step of export (no monkey-patch).
+        _check(callable(getattr(PackageExporter, "_bundle_plugins", None)),
+               "PackageExporter bundles plugins natively on export")
     except Exception as exc:
         print(f"  skip: package_exporter unavailable ({exc})")
     try:

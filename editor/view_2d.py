@@ -43,8 +43,34 @@ class View2D(QWidget):
         self.draw_current_pos = QPointF()
         self.drag_start_pos = QPointF()
         self.drag_offset = QPointF()
+        # Objects moved together during a group drag, plus the "grab" object
+        # whose point stays under the cursor.
+        self.drag_group = []
+        self.drag_primary = None
 
-        self.initial_brush_rect = QRectF() 
+        # --- Select tool: rubber-band marquee state ---
+        # marquee_start/current are world-space (axis1, axis2) points; marquee
+        # _hits is the live set of objects the box currently encloses/touches so
+        # they can be highlighted before the selection is committed on release.
+        self.is_marquee_select = False
+        self.marquee_start = QPointF()
+        self.marquee_current = QPointF()
+        self.marquee_hits = []
+        self._maybe_toggle_manip = False
+
+        # --- Tier-2 group manipulation (multi-selection bounding box) ---
+        # manip_mode flips between 'resize' (scale handles) and 'rotate' (spin
+        # handles) each time the user clicks inside an existing selection.
+        self.manip_mode = 'resize'
+        self.is_group_resizing = False
+        self.group_resize_handle = -1
+        self._group_start = None      # snapshot of bounds + per-object state
+        self.is_group_rotating = False
+        self.group_rotate_pivot = None
+        self.group_rotate_start_ang = 0.0
+        self.group_rotate_applied = 0.0
+
+        self.initial_brush_rect = QRectF()
         self.grid_size = 16
         self.world_size = 1024
         self.snap_to_grid_enabled = True
@@ -154,6 +180,13 @@ class View2D(QWidget):
         self.clip_hover = None
         self.rotate_dragging = False
         self.rotate_pivot = None
+        # Select-tool / group-manipulation transient state.
+        self.is_marquee_select = False
+        self.marquee_hits = []
+        self.is_group_resizing = False
+        self.group_resize_handle = -1
+        self._group_start = None
+        self.is_group_rotating = False
         self.update()
 
     # ======================================================================
@@ -204,6 +237,279 @@ class View2D(QWidget):
     def _selected_brush(self):
         obj = self.editor.state.selected_object
         return obj if isinstance(obj, dict) else None
+
+    # ------------------------------------------------------------------
+    # Base tool (Select / Brush) + marquee helpers
+    # ------------------------------------------------------------------
+    def _select_tool_active(self):
+        """True when the Select (marquee) base tool is active and no special
+        drag tool (clip/rotate) is overriding it."""
+        if self._clip_active() or self._rotate_active():
+            return False
+        return getattr(self.main_window, 'tool_mode', 'select') == 'select'
+
+    def _brush_tool_active(self):
+        """True when the Brush/Block (draw geometry) base tool is active."""
+        if self._clip_active() or self._rotate_active():
+            return False
+        return getattr(self.main_window, 'tool_mode', 'select') == 'brush'
+
+    def reset_marquee(self):
+        """Cancel any in-progress rubber-band selection."""
+        self.is_marquee_select = False
+        self.marquee_hits = []
+        self.update()
+
+    def _selected_list(self):
+        """Current multi-selection as a plain list (never None)."""
+        objs = list(getattr(self.editor.state, 'selected_objects', []) or [])
+        sel = self.editor.state.selected_object
+        if sel is not None and sel not in objs:
+            objs.append(sel)
+        return objs
+
+    def _obj_bounds_2d(self, obj, i1, i2):
+        """(min1, min2, max1, max2) footprint of a brush or point of a thing in
+        the current view plane."""
+        if isinstance(obj, dict):
+            pos, size = obj['pos'], obj['size']
+            return (pos[i1] - size[i1] / 2, pos[i2] - size[i2] / 2,
+                    pos[i1] + size[i1] / 2, pos[i2] + size[i2] / 2)
+        p = obj.pos
+        return (p[i1], p[i2], p[i1], p[i2])
+
+    def _objects_in_rect(self, world_rect, enclose=False):
+        """Objects whose footprint intersects (default) or is fully enclosed by
+        ``world_rect`` in the current view plane.  Skips hidden/locked-out ones."""
+        idx = self._axis_indices()
+        if idx is None:
+            return []
+        i1, i2, _ = idx
+        r = world_rect.normalized()
+        locked_out = self.main_window.config.getboolean(
+            'Display', 'locked_not_selectable_2d', fallback=False)
+        hits = []
+
+        for brush in self.editor.state.brushes:
+            if brush.get('hidden', False):
+                continue
+            if locked_out and brush.get('lock', False):
+                continue
+            b1, b2, B1, B2 = self._obj_bounds_2d(brush, i1, i2)
+            brect = QRectF(QPointF(b1, b2), QPointF(B1, B2)).normalized()
+            inside = (r.left() <= brect.left() and r.right() >= brect.right() and
+                      r.top() <= brect.top() and r.bottom() >= brect.bottom()) \
+                if enclose else r.intersects(brect)
+            if inside:
+                hits.append(brush)
+
+        for thing in self.editor.state.things:
+            if thing.properties.get('hidden', False):
+                continue
+            if locked_out and thing.properties.get('lock', False):
+                continue
+            p = thing.pos
+            if r.contains(QPointF(p[i1], p[i2])):
+                hits.append(thing)
+        return hits
+
+    # ------------------------------------------------------------------
+    # Tier-2 group bounding box + scale / rotate manipulation
+    # ------------------------------------------------------------------
+    def _selection_bounds_2d(self):
+        """Combined world-space AABB (QRectF) of the whole selection in the view
+        plane, or None if nothing is selected."""
+        idx = self._axis_indices()
+        if idx is None:
+            return None
+        i1, i2, _ = idx
+        objs = self._selected_list()
+        if not objs:
+            return None
+        mn1 = mn2 = float('inf')
+        mx1 = mx2 = float('-inf')
+        for o in objs:
+            b1, b2, B1, B2 = self._obj_bounds_2d(o, i1, i2)
+            mn1, mn2 = min(mn1, b1), min(mn2, b2)
+            mx1, mx2 = max(mx1, B1), max(mx2, B2)
+        return QRectF(QPointF(mn1, mn2), QPointF(mx1, mx2)).normalized()
+
+    def _group_manip_active(self):
+        """The unified group box (scale/rotate handles) is shown when 2+ objects
+        are selected.  A lone brush keeps its own resize handles; a lone point
+        entity has nothing to scale."""
+        return len(self._selected_list()) >= 2
+
+    def _group_handle_at(self, screen_pos):
+        """Index (0-7) of the group bbox handle under the cursor, or -1."""
+        if not self._group_manip_active():
+            return -1
+        wb = self._selection_bounds_2d()
+        if wb is None:
+            return -1
+        p1 = self.world_to_screen(wb.topLeft())
+        p2 = self.world_to_screen(wb.bottomRight())
+        srect = QRectF(p1, p2).normalized()
+        for i, h in enumerate(self.get_resize_handles(srect)):
+            if (screen_pos - h).manhattanLength() < 10:
+                return i
+        return -1
+
+    def _begin_group_resize(self, handle_ix):
+        """Snapshot the selection so a handle drag can scale it about the
+        opposite edge/corner."""
+        idx = self._axis_indices()
+        wb = self._selection_bounds_2d()
+        if idx is None or wb is None:
+            return
+        i1, i2, _ = idx
+        self.main_window.save_state()
+        objs = self._selected_list()
+        snap = []
+        for o in objs:
+            if isinstance(o, dict):
+                snap.append((o, list(o['pos']), list(o['size'])))
+            else:
+                snap.append((o, list(o.pos), None))
+        self._group_start = {
+            'rect': QRectF(wb),
+            'objs': snap,
+            'i1': i1, 'i2': i2,
+        }
+        self.is_group_resizing = True
+        self.group_resize_handle = handle_ix
+
+    def _update_group_resize(self, world_pos):
+        """Scale every selected object about the anchor edge/corner so the group
+        bbox tracks the dragged handle (snapped to grid)."""
+        gs = self._group_start
+        if not gs:
+            return
+        i1, i2 = gs['i1'], gs['i2']
+        rect0 = gs['rect']
+        snapped = self.snap_to_grid(world_pos)
+        h = self.group_resize_handle
+
+        # Which edges this handle moves.  Handles: 0 TL,1 TR,2 BL,3 BR,
+        # 4 topMid,5 botMid,6 leftMid,7 rightMid.
+        moves_left = h in (0, 2, 6)
+        moves_right = h in (1, 3, 7)
+        moves_top = h in (0, 1, 4)
+        moves_bottom = h in (2, 3, 5)
+
+        left, right = rect0.left(), rect0.right()
+        top, bottom = rect0.top(), rect0.bottom()
+        if moves_left:
+            left = min(snapped.x(), right - self.grid_size)
+        if moves_right:
+            right = max(snapped.x(), left + self.grid_size)
+        if moves_top:
+            top = min(snapped.y(), bottom - self.grid_size)
+        if moves_bottom:
+            bottom = max(snapped.y(), top + self.grid_size)
+
+        ow, oh = rect0.width(), rect0.height()
+        nw, nh = (right - left), (bottom - top)
+        sx = nw / ow if ow > 1e-6 else 1.0
+        sy = nh / oh if oh > 1e-6 else 1.0
+        ox, oy = rect0.left(), rect0.top()   # map old->new: n = new_o + (p-old_o)*s
+
+        for entry in gs['objs']:
+            o, pos0, size0 = entry
+            if isinstance(o, dict):
+                c1 = pos0[i1]                 # brush centre on the two view axes
+                c2 = pos0[i2]
+                n1 = left + (c1 - ox) * sx
+                n2 = top + (c2 - oy) * sy
+                ns1 = max(self.grid_size, size0[i1] * sx)
+                ns2 = max(self.grid_size, size0[i2] * sy)
+                if bg.brush_has_geometry(o):
+                    lo = [pos0[k] - size0[k] / 2 for k in range(3)]
+                    hi = [pos0[k] + size0[k] / 2 for k in range(3)]
+                    lo[i1], hi[i1] = n1 - ns1 / 2, n1 + ns1 / 2
+                    lo[i2], hi[i2] = n2 - ns2 / 2, n2 + ns2 / 2
+                    bg.fit_brush_to_bounds(o, lo, hi)
+                else:
+                    o['pos'][i1] = n1
+                    o['pos'][i2] = n2
+                    o['size'][i1] = ns1
+                    o['size'][i2] = ns2
+            else:
+                # A point entity: scale its position about the anchor, keep size.
+                p1 = pos0[i1]
+                p2 = pos0[i2]
+                newp = list(o.pos)
+                newp[i1] = left + (p1 - ox) * sx
+                newp[i2] = top + (p2 - oy) * sy
+                o.pos = newp
+
+    def _end_group_resize(self):
+        self.is_group_resizing = False
+        self.group_resize_handle = -1
+        self._group_start = None
+
+    def _begin_group_rotate(self, world_pos):
+        """Start a rotate-mode drag spinning the whole selection about the group
+        centre."""
+        wb = self._selection_bounds_2d()
+        if wb is None:
+            return False
+        self.group_rotate_pivot = wb.center()
+        self.group_rotate_start_ang = math.atan2(
+            world_pos.y() - self.group_rotate_pivot.y(),
+            world_pos.x() - self.group_rotate_pivot.x())
+        self.group_rotate_applied = 0.0
+        self.is_group_rotating = True
+        self.main_window.save_state()
+        return True
+
+    def _update_group_rotate(self, world_pos):
+        """Rotate the selection (brush geometry + every object's centre) about
+        the group pivot to follow the cursor."""
+        if not self.is_group_rotating or self.group_rotate_pivot is None:
+            return
+        axis = self._rotate_axis_vec()
+        idx = self._axis_indices()
+        if axis is None or idx is None:
+            return
+        i1, i2, _ = idx
+        piv = self.group_rotate_pivot
+        ang = math.atan2(world_pos.y() - piv.y(), world_pos.x() - piv.x())
+        total = math.degrees(ang - self.group_rotate_start_ang)
+        if self.snap_to_grid_enabled and self.rotate_snap_deg > 0:
+            total = round(total / self.rotate_snap_deg) * self.rotate_snap_deg
+        delta = total - self.group_rotate_applied
+        if abs(delta) < 1e-6:
+            return
+        pivot3 = [0.0, 0.0, 0.0]
+        pivot3[i1] = piv.x()
+        pivot3[i2] = piv.y()
+        # Depth of the pivot is irrelevant for a rotation about the view axis.
+        rad = math.radians(delta)
+        cos_a, sin_a = math.cos(rad), math.sin(rad)
+        for o in self._selected_list():
+            if isinstance(o, dict):
+                bg.rotate_brush(o, delta, axis, pivot=pivot3)
+            else:
+                p = list(o.pos)
+                dx, dy = p[i1] - piv.x(), p[i2] - piv.y()
+                p[i1] = piv.x() + dx * cos_a - dy * sin_a
+                p[i2] = piv.y() + dx * sin_a + dy * cos_a
+                o.pos = p
+        self.group_rotate_applied = total
+        self.editor.update_views()
+        self.main_window.view_3d.update()
+
+    def _end_group_rotate(self):
+        applied = self.group_rotate_applied
+        self.is_group_rotating = False
+        if abs(applied) < 1e-6:
+            if getattr(self.editor.state, 'undo_stack', None):
+                self.editor.state.undo_stack.pop()
+        else:
+            self.main_window.unsaved_changes = True
+            self.main_window.state.mark_lighting_dirty()
+            self.main_window.show_toast(f"Rotated group {applied:+.0f}°")
 
     def begin_rotate(self, world_pos):
         """Start a free-rotate drag around the selected brush's centre."""
@@ -886,7 +1192,14 @@ class View2D(QWidget):
             start_screen = self.world_to_screen(self.draw_start_pos)
             current_screen = self.world_to_screen(self.draw_current_pos)
             painter.drawRect(QRectF(start_screen, current_screen).normalized())
-        
+
+        if self.is_marquee_select:
+            self.draw_marquee(painter)
+
+        # Unified group bounding box + scale/rotate handles for a multi-selection.
+        if self._group_manip_active():
+            self.draw_group_bbox(painter)
+
         if self.is_connecting and self.connection_source:
             self.draw_connection_drag(painter)
 
@@ -1149,7 +1462,11 @@ class View2D(QWidget):
         ax_map = {'x': 0, 'y': 1, 'z': 2}
         axis1_idx = ax_map[ax1]
         axis2_idx = ax_map[ax2]
-        
+
+        # Computed once: when several objects are selected the unified group box
+        # owns the handles, so individual brushes must not draw their own.
+        group_active = self._group_manip_active()
+
         for brush in self.editor.state.brushes:
             # CULL brush if not visible
             if not self.is_brush_visible(brush, visible_bounds, axis1_idx, axis2_idx):
@@ -1268,9 +1585,11 @@ class View2D(QWidget):
                 if not play_mode or show_arrows:
                     self.draw_glow_light_arrow(painter, brush, ax1, ax2, ax_map)
 
-            if is_selected and not is_locked:
+            # A lone selected brush keeps its own resize handles; when several
+            # objects are selected the unified group box owns the handles instead.
+            if is_selected and not is_locked and not group_active:
                 self.draw_resize_handles(painter, screen_rect)
-            
+
             self.draw_brush_color_tag(painter, brush, screen_rect)
 
     def draw_mover_arrow(self, painter, brush, ax1, ax2, ax_map):
@@ -2191,6 +2510,65 @@ class View2D(QWidget):
             handle_rect = QRectF(handle.x() - handle_size/2, handle.y() - handle_size/2, handle_size, handle_size)
             painter.drawRect(handle_rect)
 
+    def draw_marquee(self, painter):
+        """Draw the live rubber-band box and outline the objects it will catch."""
+        idx = self._axis_indices()
+        if idx is None:
+            return
+        i1, i2, _ = idx
+        painter.save()
+
+        # Highlight the caught objects so the selection is previewed live.
+        hi_pen = QPen(QColor(0, 220, 255), 2)
+        painter.setPen(hi_pen)
+        painter.setBrush(Qt.NoBrush)
+        for o in self.marquee_hits:
+            b1, b2, B1, B2 = self._obj_bounds_2d(o, i1, i2)
+            p1 = self.world_to_screen(QPointF(b1, b2))
+            p2 = self.world_to_screen(QPointF(B1, B2))
+            r = QRectF(p1, p2).normalized()
+            if r.width() < 6 and r.height() < 6:      # a point entity
+                r = r.adjusted(-7, -7, 7, 7)
+            painter.drawRect(r)
+
+        # The marquee rectangle itself.
+        start = self.world_to_screen(self.marquee_start)
+        cur = self.world_to_screen(self.marquee_current)
+        rect = QRectF(start, cur).normalized()
+        painter.setPen(QPen(QColor(0, 200, 255), 1, Qt.DashLine))
+        painter.setBrush(QBrush(QColor(0, 180, 255, 30)))
+        painter.drawRect(rect)
+        painter.restore()
+
+    def draw_group_bbox(self, painter):
+        """Draw one bounding box with 8 handles around the whole selection.
+
+        Yellow square handles in scale mode; orange round handles in rotate mode
+        (click the selection again to toggle)."""
+        wb = self._selection_bounds_2d()
+        if wb is None:
+            return
+        p1 = self.world_to_screen(wb.topLeft())
+        p2 = self.world_to_screen(wb.bottomRight())
+        srect = QRectF(p1, p2).normalized()
+
+        painter.save()
+        rotate = (self.manip_mode == 'rotate')
+        box_color = QColor(255, 150, 40) if rotate else QColor(255, 235, 0)
+        painter.setPen(QPen(box_color, 1, Qt.DashLine))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(srect)
+
+        hs = 9
+        painter.setPen(QPen(box_color.darker(160), 1))
+        painter.setBrush(QBrush(box_color))
+        for h in self.get_resize_handles(srect):
+            if rotate:
+                painter.drawEllipse(h, hs / 2, hs / 2)
+            else:
+                painter.drawRect(QRectF(h.x() - hs / 2, h.y() - hs / 2, hs, hs))
+        painter.restore()
+
     def draw_trigger_connections(self, painter, visible_bounds):
         show_connections = self.main_window.config.getboolean('Display', 'show_connections', fallback=True)
         
@@ -2524,7 +2902,21 @@ class View2D(QWidget):
                     self.update()
                     return
             
-            handle_ix = self.get_handle_at(event.pos())
+            # --- Group bounding-box handles (multi-selection) take priority ---
+            g_handle = self._group_handle_at(event.pos())
+            if g_handle != -1:
+                if self.manip_mode == 'rotate':
+                    if self._begin_group_rotate(world_pos):
+                        self.update()
+                        return
+                else:
+                    self._begin_group_resize(g_handle)
+                    self.update()
+                    return
+
+            # Single-brush resize handles only apply to a lone selection; a
+            # multi-selection is handled by the group box above.
+            handle_ix = -1 if self._group_manip_active() else self.get_handle_at(event.pos())
             if handle_ix != -1:
                 self.is_resizing_brush = True
                 self.resize_handle_ix = handle_ix
@@ -2542,8 +2934,14 @@ class View2D(QWidget):
                 self.update()
                 return
 
-            clicked_object = self.get_object_at(event.pos(), highlight_locked=True)
-            
+            # Alt-click cycles through stacked objects; a plain click takes the top.
+            cycle = bool(event.modifiers() & Qt.AltModifier)
+            clicked_object = self.get_object_at(event.pos(), highlight_locked=True, cycle=cycle)
+
+            # A second plain click inside an existing group (without dragging)
+            # flips the group handles between scale and rotate — decided on release.
+            self._maybe_toggle_manip = False
+
             # Handle shift-click for multi-selection
             if event.modifiers() & Qt.ShiftModifier and clicked_object:
                 # Get current selected_objects list
@@ -2564,11 +2962,19 @@ class View2D(QWidget):
                 if selected_objects and hasattr(self.main_window, 'properties_tab_widget'):
                     self._focus_properties_tab()
             else:
-                # Normal click - single selection
-                self.editor.set_selected_object(clicked_object)
-                # Focus Properties tab when selecting an object
-                if clicked_object and hasattr(self.main_window, 'properties_tab_widget'):
-                    self._focus_properties_tab()
+                # If the clicked object is already part of a multi-selection,
+                # keep the whole group so it can be dragged together.  Otherwise
+                # fall back to normal single selection.
+                current_selection = getattr(self.editor.state, 'selected_objects', []) or []
+                if clicked_object and clicked_object in current_selection and len(current_selection) > 1:
+                    # Preserve the group; a click-without-drag toggles handle mode.
+                    self._maybe_toggle_manip = True
+                else:
+                    self.editor.set_selected_object(clicked_object)
+                    self.manip_mode = 'resize'  # fresh selection starts in scale mode
+                    # Focus Properties tab when selecting an object
+                    if clicked_object and hasattr(self.main_window, 'properties_tab_widget'):
+                        self._focus_properties_tab()
 
             if clicked_object and not (event.modifiers() & Qt.ShiftModifier):
                 # Check if object is locked (works for both brushes and things)
@@ -2576,19 +2982,42 @@ class View2D(QWidget):
                     is_locked = clicked_object.get('lock', False)
                 else:
                     is_locked = clicked_object.properties.get('lock', False)
-                    
+
                 if not is_locked:
-                    self.is_dragging_object = True
-                    self.drag_start_pos = world_pos
                     ax1, ax2 = self.get_axes()
                     ax_map = {'x': 0, 'y': 1, 'z': 2}
+                    i1, i2 = ax_map[ax1], ax_map[ax2]
+
+                    # Drag every selected object together (a group drag), moving
+                    # only the unlocked members.  When the click landed on an
+                    # object outside the current selection, just drag that one.
+                    group = getattr(self.editor.state, 'selected_objects', []) or []
+                    if clicked_object not in group:
+                        group = [clicked_object]
+                    self.drag_group = [
+                        o for o in group
+                        if not (o.get('lock', False) if isinstance(o, dict)
+                                else o.properties.get('lock', False))
+                    ]
+                    self.drag_primary = clicked_object
+
+                    self.is_dragging_object = True
+                    self.drag_start_pos = world_pos
                     pos_ref = clicked_object['pos'] if isinstance(clicked_object, dict) else clicked_object.pos
-                    obj_pos_2d = QPointF(pos_ref[ax_map[ax1]], pos_ref[ax_map[ax2]])
+                    obj_pos_2d = QPointF(pos_ref[i1], pos_ref[i2])
                     self.drag_offset = obj_pos_2d - world_pos
             elif not clicked_object:
-                self.is_drawing_brush = True
-                self.draw_start_pos = self.snap_to_grid(world_pos)
-                self.draw_current_pos = self.draw_start_pos
+                # Empty space: the Brush tool draws new geometry, the Select tool
+                # (default) drags a rubber-band marquee instead.
+                if self._brush_tool_active():
+                    self.is_drawing_brush = True
+                    self.draw_start_pos = self.snap_to_grid(world_pos)
+                    self.draw_current_pos = self.draw_start_pos
+                else:
+                    self.is_marquee_select = True
+                    self.marquee_start = world_pos
+                    self.marquee_current = world_pos
+                    self.marquee_hits = []
         self.update()
 
     def mouseMoveEvent(self, event):
@@ -2627,9 +3056,13 @@ class View2D(QWidget):
             return
         
         if not event.buttons():
-            handle_ix = self.get_handle_at(event.pos())
+            g_handle = self._group_handle_at(event.pos())
+            single_handle = -1 if self._group_manip_active() else self.get_handle_at(event.pos())
+            handle_ix = g_handle if g_handle != -1 else single_handle
             if handle_ix != -1:
-                if handle_ix in [0, 3]: self.setCursor(Qt.SizeFDiagCursor)
+                if self._group_manip_active() and self.manip_mode == 'rotate':
+                    self.setCursor(Qt.CrossCursor)   # rotate handles
+                elif handle_ix in [0, 3]: self.setCursor(Qt.SizeFDiagCursor)
                 elif handle_ix in [1, 2]: self.setCursor(Qt.SizeBDiagCursor)
                 elif handle_ix in [4, 5]: self.setCursor(Qt.SizeVerCursor)
                 elif handle_ix in [6, 7]: self.setCursor(Qt.SizeHorCursor)
@@ -2651,41 +3084,48 @@ class View2D(QWidget):
                 else:
                     self.pan_offset -= QPointF(delta.x() / self.zoom_factor, delta.y() / self.zoom_factor)
         
+        elif self.is_marquee_select:
+            # Live rubber-band: track the corner and recompute the caught set so
+            # it can be highlighted before the selection is committed on release.
+            self.marquee_current = world_pos
+            enclose = bool(event.modifiers() & Qt.AltModifier)  # Alt = enclose-only
+            rect = QRectF(self.marquee_start, self.marquee_current)
+            self.marquee_hits = self._objects_in_rect(rect, enclose=enclose)
+
+        elif self.is_group_resizing:
+            self._update_group_resize(world_pos)
+            current_time = time.time()
+            if current_time - self.last_3d_update_time > 0.016:
+                self.main_window.view_3d.update()
+                self.last_3d_update_time = current_time
+
+        elif self.is_group_rotating:
+            self._update_group_rotate(world_pos)
+
         elif self.is_drawing_brush:
             self.draw_current_pos = self.snap_to_grid(world_pos)
 
         elif self.is_dragging_object:
-            obj = self.editor.state.selected_object
-            if obj:
+            # The "grab" object stays under the cursor; every other member of
+            # the drag group follows by the same (snapped) delta so the whole
+            # box-selection moves as one and keeps its relative layout.
+            primary = self.drag_primary or self.editor.state.selected_object
+            group = self.drag_group or ([primary] if primary else [])
+            if primary:
                 ax1, ax2 = self.get_axes()
                 ax_map = {'x': 0, 'y': 1, 'z': 2}
-                new_obj_pos = self.snap_to_grid(world_pos + self.drag_offset)
-                pos_ref = obj['pos'] if isinstance(obj, dict) else obj.pos
+                i1, i2 = ax_map[ax1], ax_map[ax2]
 
-                # Angled brushes carry a world-space plane set; moving only 'pos'
-                # would leave the geometry (silhouette / 3D mesh / collision)
-                # behind.  Translate the whole solid by the same delta instead.
-                if isinstance(obj, dict) and bg.brush_has_geometry(obj):
-                    delta = [0.0, 0.0, 0.0]
-                    delta[ax_map[ax1]] = new_obj_pos.x() - pos_ref[ax_map[ax1]]
-                    delta[ax_map[ax2]] = new_obj_pos.y() - pos_ref[ax_map[ax2]]
-                    bg.translate_brush(obj, delta)
-                # Always store as list to maintain JSON serializability
-                elif isinstance(pos_ref, list):
-                    pos_ref[ax_map[ax1]] = new_obj_pos.x()
-                    pos_ref[ax_map[ax2]] = new_obj_pos.y()
-                else:
-                    # If it's a glm vector, convert to list
-                    if hasattr(pos_ref, 'x'):  # It's a glm vector
-                        new_pos_list = [pos_ref[0], pos_ref[1], pos_ref[2]]
-                        new_pos_list[ax_map[ax1]] = new_obj_pos.x()
-                        new_pos_list[ax_map[ax2]] = new_obj_pos.y()
-                        obj.pos = new_pos_list  # Store as list, not glm vector
-                    else:
-                        # Already a list/tuple from somewhere else
-                        pos_ref[ax_map[ax1]] = new_obj_pos.x()
-                        pos_ref[ax_map[ax2]] = new_obj_pos.y()
-                
+                p_ref = primary['pos'] if isinstance(primary, dict) else primary.pos
+                new_primary_pos = self.snap_to_grid(world_pos + self.drag_offset)
+                d1 = new_primary_pos.x() - p_ref[i1]
+                d2 = new_primary_pos.y() - p_ref[i2]
+
+                if d1 != 0 or d2 != 0:
+                    self._maybe_toggle_manip = False  # a real drag, not a toggle-click
+                    for obj in group:
+                        self._translate_object_2d(obj, d1, d2, i1, i2)
+
                 # THROTTLE FIX: Only update 3D view if enough time has passed (approx 60 FPS)
                 current_time = time.time()
                 if current_time - self.last_3d_update_time > 0.016:
@@ -2716,7 +3156,58 @@ class View2D(QWidget):
                 self.commit_rotate()
                 return
 
-            if self.is_dragging_object: self.is_dragging_object = False
+            # Group bounding-box scale released.
+            if self.is_group_resizing:
+                self._end_group_resize()
+                self.main_window.view_3d.update()
+                self.update()
+                return
+
+            # Group bounding-box rotate released.
+            if self.is_group_rotating:
+                self._end_group_rotate()
+                self.update()
+                return
+
+            # Rubber-band marquee released: commit the caught set, or treat a
+            # tiny box as a plain empty-click and deselect.
+            if self.is_marquee_select:
+                self.is_marquee_select = False
+                rect = QRectF(self.marquee_start, self.marquee_current).normalized()
+                min_world = 3.0 / max(self.zoom_factor, 1e-6)
+                self.marquee_hits = []
+                if rect.width() < min_world and rect.height() < min_world:
+                    self.editor.set_selected_object(None)   # click empty = deselect
+                    self.update()
+                    return
+                enclose = bool(event.modifiers() & Qt.AltModifier)
+                hits = self._objects_in_rect(rect, enclose=enclose)
+                if hits:
+                    self.editor.set_selected_objects(hits)
+                    self.manip_mode = 'resize'
+                    if hasattr(self.main_window, 'properties_tab_widget'):
+                        self._focus_properties_tab()
+                    self.main_window.show_toast(f"Selected {len(hits)} object(s)")
+                else:
+                    self.editor.set_selected_object(None)
+                self.update()
+                return
+
+            if self.is_dragging_object:
+                self.is_dragging_object = False
+                self.drag_group = []
+                self.drag_primary = None
+                # A click (no drag) inside an existing group flips scale/rotate.
+                if getattr(self, '_maybe_toggle_manip', False):
+                    self._maybe_toggle_manip = False
+                    if self._group_manip_active():
+                        self.manip_mode = ('rotate' if self.manip_mode == 'resize'
+                                           else 'resize')
+                        self.main_window.show_toast(
+                            "Group handles: ROTATE (drag a corner to spin)"
+                            if self.manip_mode == 'rotate' else
+                            "Group handles: SCALE (drag a handle to resize)")
+                        action_taken = False   # nothing moved; don't stack an undo
             if self.is_resizing_brush: self.is_resizing_brush = False
 
             # Handle connection completion
@@ -3096,49 +3587,96 @@ class View2D(QWidget):
         
         return best_target, best_screen_pos
 
+    def _translate_object_2d(self, obj, d1, d2, i1, i2):
+        """Move a single brush or entity by (d1, d2) along the two view axes.
+
+        Handles all three storage shapes seen in the scene: angled brushes with
+        a world-space plane set (moved via ``translate_brush`` so geometry keeps
+        up), plain box brushes (dict ``pos``), and Things (whose ``pos`` may be a
+        list or a glm vector — normalised to a list to stay JSON-serialisable).
+        """
+        if isinstance(obj, dict):
+            if bg.brush_has_geometry(obj):
+                delta = [0.0, 0.0, 0.0]
+                delta[i1] = d1
+                delta[i2] = d2
+                bg.translate_brush(obj, delta)
+            else:
+                pos = obj['pos']
+                pos[i1] += d1
+                pos[i2] += d2
+        else:
+            pos = obj.pos
+            if not isinstance(pos, list):
+                # glm vector or tuple — copy to a list so it stays serialisable.
+                pos = [pos[0], pos[1], pos[2]]
+                obj.pos = pos
+            pos[i1] += d1
+            pos[i2] += d2
+
     def select_brushes_inside(self, container_brush):
-        """Select all brushes fully contained within container_brush, then delete it."""
+        """Select every brush and entity enclosed by the drawn box, then delete
+        the box itself.
+
+        Containment is tested in the plane of *this* 2D view (the two visible
+        axes) rather than in full 3D.  The box the user drags out is only a thin
+        slab on the third axis, so a strict 3D test would reject entities that
+        sit at a different depth even though they clearly fall inside the box
+        on screen.  Entities (Things) are point objects, so an entity counts as
+        inside when its centre lies within the box; brushes count as inside
+        when their footprint is fully enclosed.
+        """
         self.main_window.save_state()
-        
-        # Get container bounds in 3D
+
+        ax1, ax2 = self.get_axes()
+        ax_map = {'x': 0, 'y': 1, 'z': 2}
+        i1, i2 = ax_map[ax1], ax_map[ax2]
+
+        # Container bounds in the view plane.
         c_pos = container_brush['pos']
         c_size = container_brush['size']
-        c_min = [c_pos[i] - c_size[i]/2 for i in range(3)]
-        c_max = [c_pos[i] + c_size[i]/2 for i in range(3)]
-        
-        inside_brushes = []
-        
+        c_min1, c_max1 = c_pos[i1] - c_size[i1] / 2, c_pos[i1] + c_size[i1] / 2
+        c_min2, c_max2 = c_pos[i2] - c_size[i2] / 2, c_pos[i2] + c_size[i2] / 2
+
+        inside = []
+
+        # Brushes: fully enclosed footprint.
         for brush in self.editor.state.brushes:
             if brush is container_brush:
                 continue
             if brush.get('hidden', False):
                 continue
-                
-            # Get brush bounds
+
             b_pos = brush['pos']
             b_size = brush['size']
-            b_min = [b_pos[i] - b_size[i]/2 for i in range(3)]
-            b_max = [b_pos[i] + b_size[i]/2 for i in range(3)]
-            
-            # Check if fully contained (all corners inside container)
-            fully_inside = all(
-                b_min[i] >= c_min[i] and b_max[i] <= c_max[i]
-                for i in range(3)
-            )
-            
-            if fully_inside:
-                inside_brushes.append(brush)
-        
-        # Remove the container brush
+            b_min1, b_max1 = b_pos[i1] - b_size[i1] / 2, b_pos[i1] + b_size[i1] / 2
+            b_min2, b_max2 = b_pos[i2] - b_size[i2] / 2, b_pos[i2] + b_size[i2] / 2
+
+            if (b_min1 >= c_min1 and b_max1 <= c_max1 and
+                    b_min2 >= c_min2 and b_max2 <= c_max2):
+                inside.append(brush)
+
+        # Entities (Things): centre inside the box.
+        for thing in self.editor.state.things:
+            if thing.properties.get('hidden', False):
+                continue
+            p = thing.pos
+            if (c_min1 <= p[i1] <= c_max1 and c_min2 <= p[i2] <= c_max2):
+                inside.append(thing)
+
+        # The box was only a lasso — remove it.
         if container_brush in self.editor.state.brushes:
             self.editor.state.brushes.remove(container_brush)
-        
-        # Select the inside brushes
-        if inside_brushes:
-            self.editor.set_selected_objects(inside_brushes)
+
+        if inside:
+            self.editor.set_selected_objects(inside)
+            if hasattr(self.main_window, 'show_toast'):
+                self.main_window.show_toast(f"Selected {len(inside)} object(s) inside box")
         else:
             self.editor.set_selected_object(None)
-        
+            if hasattr(self.main_window, 'show_toast'):
+                self.main_window.show_toast("No objects inside box", is_error=True)
+
         self.update()
         self.main_window.view_3d.update()
 
@@ -3187,11 +3725,12 @@ class View2D(QWidget):
                 event.accept()
                 return
         
-        # Default zoom behavior
-        if delta > 0: self.zoom_in()
-        else: self.zoom_out()
+        # Default zoom behavior — zoom toward the cursor (Radiant/Hammer style)
+        # so the world point under the mouse stays fixed on screen.
+        factor = 1.25 if delta > 0 else 0.8
+        self.zoom_at(event.pos(), factor)
 
-    def get_object_at(self, screen_pos, highlight_locked=False):
+    def get_object_at(self, screen_pos, highlight_locked=False, cycle=False):
         world_pos = self.screen_to_world(screen_pos)
         ax1, ax2 = self.get_axes()
         ax_map = {'x': 0, 'y': 1, 'z': 2}
@@ -3279,15 +3818,17 @@ class View2D(QWidget):
             if hasattr(self.main_window, 'highlight_in_hierarchy'):
                 self.main_window.highlight_in_hierarchy(locked_at_pos[0])
 
-        if not candidates: 
+        if not candidates:
             return None
 
-        current_selection = self.editor.state.selected_object
-        if current_selection in candidates:
-            idx = candidates.index(current_selection)
-            next_idx = (idx + 1) % len(candidates)
-            return candidates[next_idx]
-            
+        # Alt-click walks through stacked objects at the cursor; a plain click
+        # always takes the topmost so selection stays predictable.
+        if cycle:
+            current_selection = self.editor.state.selected_object
+            if current_selection in candidates:
+                idx = candidates.index(current_selection)
+                return candidates[(idx + 1) % len(candidates)]
+
         return candidates[0]
 
     def get_handle_at(self, screen_pos):
@@ -3376,10 +3917,25 @@ class View2D(QWidget):
         brush['size'][ix1] = new_size_x
         brush['size'][ix2] = new_size_y
 
-    def zoom_in(self):
-        self.zoom_factor *= 1.25
+    def zoom_at(self, screen_pos, factor):
+        """Scale the zoom by ``factor`` while keeping the world point currently
+        under ``screen_pos`` pinned to that same pixel (zoom-to-cursor)."""
+        old_zoom = self.zoom_factor
+        new_zoom = max(0.02, min(200.0, old_zoom * factor))
+        if abs(new_zoom - old_zoom) < 1e-9:
+            return
+        before = self.screen_to_world(screen_pos)   # world point under cursor
+        self.zoom_factor = new_zoom
+        after = self.screen_to_world(screen_pos)     # where it landed after zoom
+        # Shift the pan so the point doesn't move on screen.  screen_y is flipped
+        # for front/side views, but screen_to_world already accounts for that, so
+        # the pan correction is a plain difference in world space.
+        self.pan_offset += QPointF(before.x() - after.x(), before.y() - after.y())
         self.update()
 
+    def zoom_in(self):
+        # Zoom toward the view centre (used by buttons/keys without a cursor).
+        self.zoom_at(QPointF(self.width() / 2, self.height() / 2), 1.25)
+
     def zoom_out(self):
-        self.zoom_factor *= 0.8
-        self.update()
+        self.zoom_at(QPointF(self.width() / 2, self.height() / 2), 0.8)

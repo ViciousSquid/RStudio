@@ -23,10 +23,11 @@ a log line rather than breaking startup. It patches:
                                 reusing the original menu handler unchanged
 * ``editor.ui.Ui_MainWindow``
     - ``create_menu_bar``     → add a top-level **Plugins** menu bar entry
-* ``editor.package_exporter.PackageExporter``
-    - ``export``              → after the base ``.fiopak`` is written, bundle
-                                the plugins its maps depend on (code + assets)
-                                so the package is self-contained and portable
+
+Package export is **not** patched here: bundling the plugins a ``.fiopak``'s
+maps depend on is a first-class step of ``PackageExporter.export`` itself
+(``editor/package_exporter.py``), which calls ``plugins.packaging.augment_fiopak``
+natively once the base archive is written.
 
 The equivalent hand-edits (for reference / an alternative to this shim) would
 be small insertions in those files; see ``plugins/README.md``.
@@ -57,7 +58,6 @@ def apply():
     _patch_editor_state()
     _patch_view_2d()
     _patch_editor_menu()
-    _patch_package_exporter()
     _patch_property_editor()
 
 
@@ -385,47 +385,6 @@ def _place_plugin_entity(MainWindow, plugin, cls, label):
 
 
 # ---------------------------------------------------------------------------
-# editor.package_exporter.PackageExporter  — bundle plugins into .fiopak
-# ---------------------------------------------------------------------------
-
-def _patch_package_exporter():
-    try:
-        from editor.package_exporter import PackageExporter
-    except Exception as exc:
-        _log(f"package-exporter patch skipped ({exc})")
-        return
-
-    if getattr(PackageExporter, "_fio_plugins_patched", False):
-        return
-
-    _orig_export = PackageExporter.export
-
-    def export(self, output_path, metadata, current_map_path, parent_widget=None):
-        ok, errors = _orig_export(self, output_path, metadata, current_map_path,
-                                  parent_widget)
-        if ok:
-            try:
-                from plugins.packaging import augment_fiopak
-                summary = augment_fiopak(output_path)
-                added = summary.get("added_paths", set())
-                if added and errors:
-                    # Drop cosmetic "Missing asset" warnings for files that the
-                    # plugin bundle actually supplied (plugin assets live outside
-                    # the assets/ tree the base exporter searches).
-                    norm = {a.lower().lstrip("/") for a in added}
-                    errors = [e for e in errors
-                              if not _is_bundled_missing(e, norm)]
-                if summary.get("plugins"):
-                    _log("bundled plugin(s): " + ", ".join(summary["plugins"]))
-            except Exception as exc:
-                _log(f"plugin packaging failed: {exc}")
-        return ok, errors
-
-    PackageExporter.export = export
-    PackageExporter._fio_plugins_patched = True
-
-
-# ---------------------------------------------------------------------------
 # editor.property_editor.PropertyEditor  — typed widgets from a property schema
 # ---------------------------------------------------------------------------
 
@@ -625,16 +584,3 @@ def _render_schema_rows(editor_self, form, thing, specs):
             widget.editingFinished.connect(
                 lambda le=widget, k=key: editor_self.update_object_prop(k, le.text()))
         form.addRow(label, widget)
-
-
-def _is_bundled_missing(error_text, bundled_norm):
-    """True if *error_text* is a 'Missing asset: <p>' now supplied by a plugin."""
-    marker = "Missing asset:"
-    if marker not in str(error_text):
-        return False
-    asset = str(error_text).split(marker, 1)[1].strip().replace("\\", "/").lower().lstrip("/")
-    if asset in bundled_norm:
-        return True
-    # Also match by basename in case the reference used a bare filename.
-    base = asset.rsplit("/", 1)[-1]
-    return any(b.rsplit("/", 1)[-1] == base for b in bundled_norm)

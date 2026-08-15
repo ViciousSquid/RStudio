@@ -202,8 +202,8 @@ def normalize_color(rgb, default=None):
 
 # ---------- Base Renderer ----------
 class BaseRenderer:
-    MAX_LIGHTS = 16
-    MAX_PORTALS = 8      # maximum portal apertures rendered per frame
+    MAX_LIGHTS = 32
+    MAX_PORTALS = 4      # maximum portal apertures rendered per frame
 
     # How many times a portal may be seen recursively through another portal.
     # 1 = classic single virtual view (default; identical to the original
@@ -219,8 +219,8 @@ class BaseRenderer:
     PORTAL_NEAR_STRADDLE = 24.0
 
     # --- Depth cube-map shadow mapping (omnidirectional point-light shadows) ---
-    MAX_SHADOW_LIGHTS = 4          # number of point lights that can cast shadows at once
-    SHADOW_MAP_SIZE = 1024         # per-face resolution of each depth cube-map
+    MAX_SHADOW_LIGHTS = 8          # number of point lights that can cast shadows at once
+    SHADOW_MAP_SIZE = 384         # per-face resolution of each depth cube-map
     SHADOW_TEXTURE_UNIT_BASE = 4   # shadow cube-maps bind to units 4..(4+MAX_SHADOW_LIGHTS-1)
 
     def __init__(self, texture_loader, initial_grid_size, initial_world_size, config=None):
