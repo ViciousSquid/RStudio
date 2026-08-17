@@ -135,8 +135,42 @@ class ConsoleCommandHandler:
         handler = self.commands.get(cmd)
         if handler:
             handler(args)
+        elif self._dispatch_plugin_command(cmd, args):
+            return
         else:
             debug_log("Error", f"Unknown command: {cmd}. Type 'help' for list.")
+
+    def _dispatch_plugin_command(self, cmd, args):
+        """Offer an unknown command to a plugin that registered it.
+
+        Uses the official plugin-API console-command surface (API 1.4.0): a
+        plugin declares a command with ``EditorAPI.register_console_command`` and
+        the manager dispatches it here. Fully guarded — with no play session, no
+        plugin manager, or no owning plugin this returns False so the console
+        shows its usual "unknown command". This is the single native integration
+        point (like the engine's other plugin hooks); no plugin monkeypatching.
+        """
+        try:
+            mgr = self._plugin_manager()
+            if mgr is None or not mgr.has_console_command(cmd):
+                return False
+            view_3d = getattr(self.main_window, 'view_3d', None)
+            lt = getattr(view_3d, 'logic_thread', None) if view_3d else None
+            play = bool(getattr(view_3d, 'play_mode', False))
+            handled, reply = mgr.dispatch_console_command(cmd, args, lt, play_mode=play)
+            if handled and reply:
+                debug_log("Info", str(reply))
+            return handled
+        except Exception:
+            return False
+
+    def _plugin_manager(self):
+        """The live plugin manager, or None if the plugin system isn't present."""
+        try:
+            from plugins.manager import get_manager
+            return get_manager()
+        except Exception:
+            return None
 
     def cmd_bind(self, args):
         """bind <key> <command>   or   bind (opens dialog)"""
@@ -721,6 +755,17 @@ class ConsoleCommandHandler:
 <b style="color:orange;">noclip</b> — Toggle noclip<br>
 <b style="color:orange;">notarget</b> — Toggle notarget (monsters ignore the player)<br>
 """
+        # Append any console commands plugins registered (API 1.4.0).
+        try:
+            mgr = self._plugin_manager()
+            cmds = mgr.console_commands() if mgr is not None else []
+        except Exception:
+            cmds = []
+        if cmds:
+            help_text += '<b style="color:cyan;">=== Plugin Commands ===</b><br>'
+            for name, chelp in cmds:
+                suffix = f" — {chelp}" if chelp else ""
+                help_text += f'<b style="color:orange;">{name}</b>{suffix}<br>'
         debug_log("Info", help_text)
 
     # ===================================================================

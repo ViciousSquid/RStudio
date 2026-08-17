@@ -358,37 +358,47 @@ class Ui_MainWindow(object):
         big = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
         icon_size_val = 50 if big else 35
 
-        toggle_style = """
-            QPushButton {
-                background-color: #555;
-                border: 1px solid #666;
-            }
-            QPushButton:hover {
-                background-color: #6a6a6a;
-            }
-            QPushButton:checked {
-                background-color: #F08000;
-                border: 1px solid #FF9020;
-            }
-            QPushButton:checked:hover {
-                background-color: #FF9020;
-            }
-        """
-
         def make_btn(icon, tip, on_click=None, checkable=False, checked=False,
-                     shortcut=None, styled=False):
+                     shortcut=None, styled=False, bottom_color=None):
             b = QPushButton()
             b.setIcon(QIcon(icon))
             b.setIconSize(QSize(icon_size_val, icon_size_val))
-            b.setFixedSize(icon_size_val, icon_size_val)
+            
+            # Width: icon + 2px left/right borders + 2px padding
+            # Height: icon + 1px top border + 3px bottom border + 4px bottom padding
+            b.setFixedSize(icon_size_val + 4, icon_size_val + 8)
             b.setToolTip(tip)
+            
             if checkable:
                 b.setCheckable(True)
                 b.setChecked(checked)
             if shortcut:
                 b.setShortcut(shortcut)
-            if styled:
-                b.setStyleSheet(toggle_style)
+                
+            if styled or bottom_color:
+                border_bottom = f"border-bottom: 3px solid {bottom_color};" if bottom_color else "border-bottom: 1px solid #333;"
+                
+                b.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: #111111; 
+                        border: 1px solid #333;
+                        {border_bottom}
+                        padding: 0px;
+                        padding-bottom: 4px;
+                    }}
+                    QPushButton:hover {{
+                        background-color: #3a3a3a;
+                    }}
+                    QPushButton:checked {{
+                        background-color: #2b2b2b;
+                        border: 1px solid #F08000;
+                        {border_bottom}
+                    }}
+                    QPushButton:checked:hover {{
+                        background-color: #4a4a4a;
+                    }}
+                """)
+                
             if on_click is not None:
                 if checkable:
                     b.toggled.connect(on_click)
@@ -397,14 +407,15 @@ class Ui_MainWindow(object):
             tool_toolbar.addWidget(b)
             return b
 
-        # --- Base tools: Select + Box (mutually exclusive) ---
+        # --- Base tools: Select + Box (Orange Strip) ---
+        group_1_color = "#F08000" 
         MainWindow.select_tool_btn = make_btn(
             "assets/select.png",
             "Select tool (Shift+S)\n"
             "Drag a box to marquee-select; click empty space to deselect",
             on_click=lambda: MainWindow.set_tool_mode('select'),
             checkable=True, checked=MainWindow.tool_mode == 'select',
-            shortcut="Shift+S", styled=True)
+            shortcut="Shift+S", bottom_color=group_1_color)
 
         MainWindow.brush_tool_btn = make_btn(
             "assets/box.png",
@@ -412,50 +423,53 @@ class Ui_MainWindow(object):
             "Drag in a 2D view to create geometry",
             on_click=lambda: MainWindow.set_tool_mode('brush'),
             checkable=True, checked=MainWindow.tool_mode == 'brush',
-            shortcut="Shift+B", styled=True)
+            shortcut="Shift+B", bottom_color=group_1_color)
 
         tool_toolbar.addSeparator()
 
-        # --- Editing actions ---
+        # --- Editing actions (Green Strip) ---
+        group_2_color = "#22b14c" 
         make_btn("assets/room.png", "Room (Hollow + Lights)",
-                 on_click=MainWindow.create_room_from_brush)
+                 on_click=MainWindow.create_room_from_brush, bottom_color=group_2_color)
         make_btn("assets/hollow.png", "Hollow",
-                 on_click=MainWindow.hollow_selected_brush)
+                 on_click=MainWindow.hollow_selected_brush, bottom_color=group_2_color)
         make_btn("assets/clone.png", "Clone",
-                 on_click=MainWindow.clone_selected_object)
+                 on_click=MainWindow.clone_selected_object, bottom_color=group_2_color)
 
         MainWindow.rotate_btn = make_btn(
             "assets/rotate.png",
-            "Rotate",
-            on_click=MainWindow.toggle_rotate_mode,
-            checkable=True, styled=True)
+            "Rotate 15°",
+            on_click=MainWindow.rotate_selected_15,
+            bottom_color=group_2_color)
 
         make_btn("assets/subtract.png", "Subtract",
-                 on_click=MainWindow.perform_subtraction)
+                 on_click=MainWindow.perform_subtraction, bottom_color=group_2_color)
 
         MainWindow.scissor_btn = make_btn(
             "assets/scissor.png",
             "Scissor",
             on_click=MainWindow.toggle_clip_mode,
-            checkable=True, shortcut="X", styled=True)
+            checkable=True, shortcut="X", bottom_color=group_2_color)
 
+        # --- Procedural / View actions (Blue Strip) ---
+        group_3_color = "#00A2E8"
         make_btn("assets/tint.png", "Tint brush",
-                 on_click=MainWindow.tint_selected_brush)
+                 on_click=MainWindow.tint_selected_brush, bottom_color=group_2_color)
 
-        # Procedural / terrain menu button
+        tool_toolbar.addSeparator()
+
         terrain_menu = QMenu(MainWindow)
         terrain_menu.addAction(MainWindow.terrain_action)
         terrain_menu.addAction(MainWindow.procedural_action)
-        terrain_btn = make_btn("assets/terrain.png", "Procedural Tools")
+        terrain_btn = make_btn("assets/terrain.png", "Procedural Tools", bottom_color=group_3_color)
         terrain_btn.clicked.connect(lambda: terrain_menu.exec_(
             terrain_btn.mapToGlobal(terrain_btn.rect().bottomLeft())))
 
         MainWindow.grid_btn = make_btn(
             "assets/b_grid.png", "Toggle 3D Grid (G)",
             on_click=MainWindow.toggle_grid,
-            checkable=True, checked=True, styled=True)
+            checkable=True, checked=True, bottom_color=group_3_color)
 
-        # Play button last in the strip
         tool_toolbar.addSeparator()
         tool_toolbar.addWidget(MainWindow.play_button)
 

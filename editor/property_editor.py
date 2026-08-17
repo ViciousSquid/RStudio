@@ -47,6 +47,12 @@ class _Style:
                 "QLineEdit:focus { border: 2px solid #A875D6; background-color: #7B4AB9; }")
     TARGETED = ("QLabel { color: #00FF00; font-weight: bold; padding: 2px; "
                 "background-color: #1a3d1a; border: 1px solid #00AA00; border-radius: 3px; }")
+    ID_BTN = ("QPushButton { background-color: #3a3a5c; color: #b0b0d0; font-weight: bold; padding: 4px 8px; "
+              "border: 1px solid #5a5a8a; border-radius: 3px; font-size: 11px; } "
+              "QPushButton:hover { background-color: #4a4a6c; border-color: #7a7aaa; } "
+              "QPushButton:checked { background-color: #6C3BAA; color: white; border-color: #8B5AC2; }")
+    UUID_LBL = ("QLabel { color: #b0b0d0; font-family: monospace; padding: 4px 8px; "
+                "background-color: #2a2a3c; border: 1px solid #3a3a5c; border-radius: 3px; font-size: 11px; }")
 
     @staticmethod
     def group_box(color: str, title_bg: str = "#2b3d3b") -> str:
@@ -279,18 +285,32 @@ class PropertyEditor(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        # Name row
-        form = QFormLayout()
-        form.setSpacing(4)
+        # Name row with ID toggle
+        name_row = QHBoxLayout()
+        name_row.setSpacing(4)
         name_lbl = QLabel("Name:")
         name_lbl.setStyleSheet(_Style.NAME_LBL)
         name_inp = QLineEdit(brush.get('name', ''))
         name_inp.setStyleSheet(_Style.NAME_INP)
         name_inp.setPlaceholderText("Enter name...")
         name_inp.editingFinished.connect(lambda: self.update_object_prop('name', name_inp.text()))
-        form.addRow(name_lbl, name_inp)
+        id_btn = QPushButton("ID")
+        id_btn.setCheckable(True)
+        id_btn.setStyleSheet(_Style.ID_BTN)
+        id_btn.setFixedWidth(32)
+        name_row.addWidget(name_lbl)
+        name_row.addWidget(name_inp, 1)
+        name_row.addWidget(id_btn)
         self._widgets['name_input'] = name_inp
 
+        uuid_lbl = QLabel(f"UUID: {brush.get('id', '')}")
+        uuid_lbl.setStyleSheet(_Style.UUID_LBL)
+        uuid_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        uuid_lbl.setVisible(False)
+        id_btn.toggled.connect(uuid_lbl.setVisible)
+
+        form = QFormLayout()
+        form.setSpacing(4)
         brush_name = brush.get('name', '')
         if brush_name:
             sources = self._find_targeting_sources(brush_name)
@@ -301,6 +321,8 @@ class PropertyEditor(QWidget):
                 lbl.setWordWrap(True)
                 form.addRow("Targeted by:", lbl)
 
+        layout.addLayout(name_row)
+        layout.addWidget(uuid_lbl)
         layout.addLayout(form)
 
         # Tabs
@@ -896,17 +918,31 @@ class PropertyEditor(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        # Name row (shared with brush layout)
-        name_layout = QFormLayout()
-        name_layout.setSpacing(4)
+        # Name row with ID toggle (shared with brush layout)
+        name_row = QHBoxLayout()
+        name_row.setSpacing(4)
         name_lbl = QLabel("Name:")
         name_lbl.setStyleSheet(_Style.NAME_LBL)
         name_inp = QLineEdit(str(thing.properties.get('name', '')))
         name_inp.setStyleSheet(_Style.NAME_INP)
         name_inp.setPlaceholderText("Enter name...")
         name_inp.editingFinished.connect(lambda: self.update_object_prop('name', name_inp.text()))
-        name_layout.addRow(name_lbl, name_inp)
+        id_btn = QPushButton("ID")
+        id_btn.setCheckable(True)
+        id_btn.setStyleSheet(_Style.ID_BTN)
+        id_btn.setFixedWidth(32)
+        name_row.addWidget(name_lbl)
+        name_row.addWidget(name_inp, 1)
+        name_row.addWidget(id_btn)
 
+        uuid_lbl = QLabel(f"UUID: {thing.properties.get('id', '')}")
+        uuid_lbl.setStyleSheet(_Style.UUID_LBL)
+        uuid_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        uuid_lbl.setVisible(False)
+        id_btn.toggled.connect(uuid_lbl.setVisible)
+
+        targeted_form = QFormLayout()
+        targeted_form.setSpacing(4)
         tname = getattr(thing, 'name', '') or thing.properties.get('name', '')
         sources = self._find_targeting_sources(tname) if tname else []
         if sources:
@@ -914,9 +950,11 @@ class PropertyEditor(QWidget):
             lbl = QLabel(txt)
             lbl.setStyleSheet(_Style.TARGETED)
             lbl.setWordWrap(True)
-            name_layout.addRow("Targeted by:", lbl)
+            targeted_form.addRow("Targeted by:", lbl)
 
-        layout.addLayout(name_layout)
+        layout.addLayout(name_row)
+        layout.addWidget(uuid_lbl)
+        layout.addLayout(targeted_form)
 
         self.tab_widget = QTabWidget()
         self.tab_widget.setStyleSheet(_Style.TAB_BAR)

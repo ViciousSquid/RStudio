@@ -2592,6 +2592,34 @@ class MainWindow(QMainWindow):
         light_count = num_lights_x * num_lights_z
         self.show_toast(f"Created room with {thickness} unit walls and {light_count} light(s)")
 
+    def rotate_selected_15(self):
+        """Rotate the current selection by 15 degrees around the active 2D view axis."""
+        current_view = self.right_tabs.currentWidget()
+
+        if not isinstance(current_view, View2D):
+            self.show_toast("Select a 2D view first", is_error=True)
+            return
+
+        selected = getattr(self.state, 'selected_objects', []) or []
+        if self.state.selected_object is not None and self.state.selected_object not in selected:
+            selected.append(self.state.selected_object)
+
+        if not selected:
+            self.show_toast("Select a brush first", is_error=True)
+            return
+
+        axis = current_view._rotate_axis_vec()
+        if axis is None:
+            return
+
+        self.save_state()
+
+        if self.apply_rotation_to_selection(15.0, axis, undoable=False):
+            self.unsaved_changes = True
+            self.state.mark_lighting_dirty()
+            self.update_all_ui()
+            self.show_toast("Rotated +15°")
+
     def rotate_selected_brush(self):
         if not isinstance(self.state.selected_object, dict):
             QMessageBox.warning(self, "Invalid Selection", "Please select a brush to rotate.")
