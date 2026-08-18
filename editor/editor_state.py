@@ -569,16 +569,25 @@ class EditorState:
 
         return names
 
-    def find_entities_targeting(self, target_name: str):
-        """Find all entities that have I/O connections to the target."""
+    def find_entities_targeting(self, target_name: str, target_id: str = ""):
+        """Find all entities that have I/O connections to the target.
+
+        Matches identity-addressed connections (by stable UUID) as well as
+        name-addressed ones, so the result stays correct across renames.
+        """
         sources = []
 
         if not IO_AVAILABLE:
             return sources
 
+        def _matches(conn):
+            if target_id and getattr(conn, 'target_id', '') == target_id:
+                return True
+            return bool(target_name) and conn.target_name == target_name
+
         for brush in self.brushes:
             for conn in get_connections(brush):
-                if conn.target_name == target_name:
+                if _matches(conn):
                     sources.append({
                         'entity': brush,
                         'connection': conn,
@@ -587,7 +596,7 @@ class EditorState:
 
         for thing in self.things:
             for conn in get_connections(thing):
-                if conn.target_name == target_name:
+                if _matches(conn):
                     sources.append({
                         'entity': thing,
                         'connection': conn,

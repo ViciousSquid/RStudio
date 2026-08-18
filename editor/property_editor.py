@@ -182,25 +182,41 @@ class PropertyEditor(QWidget):
     # ────────────────────────────
     # Internal helpers
     # ────────────────────────────
-    def _find_targeting_sources(self, target_name: str):
-        if not target_name:
+    def _find_targeting_sources(self, target_name: str, target_id: str = ""):
+        """
+        Find entities whose I/O connections point at this entity.
+
+        A connection matches if its stored target_id equals target_id
+        (identity-addressed) OR its target_name equals target_name (legacy /
+        name-addressed). This keeps the "Targeted by" list correct even when
+        the target has been renamed.
+        """
+        if not target_name and not target_id:
             return []
         sources = []
+
+        def _conn_matches(conn):
+            cid = getattr(conn, 'target_id', None)
+            if cid is None and isinstance(conn, dict):
+                cid = conn.get('target_id')
+            if target_id and cid and cid == target_id:
+                return True
+            t = getattr(conn, 'target_name', None) or (conn.get('target') if isinstance(conn, dict) else None)
+            return bool(target_name) and t == target_name
+
         for brush in self.editor.state.brushes:
-            if brush.get('target') == target_name:
+            if target_name and brush.get('target') == target_name:
                 src_type = 'trigger' if brush.get('is_trigger') else 'mover' if brush.get('is_mover') else None
                 if src_type:
                     sources.append((brush.get('name', 'unnamed'), src_type))
             for conn in brush.get('_io_connections', []):
-                t = getattr(conn, 'target_name', None) or (conn.get('target') if isinstance(conn, dict) else None)
                 o = getattr(conn, 'output_name', None) or (conn.get('output', '?') if isinstance(conn, dict) else '?')
-                if t == target_name:
+                if _conn_matches(conn):
                     sources.append((brush.get('name', 'unnamed'), f"I/O: {o}"))
         for thing in self.editor.state.things:
             for conn in thing.properties.get('_io_connections', []):
-                t = getattr(conn, 'target_name', None) or (conn.get('target') if isinstance(conn, dict) else None)
                 o = getattr(conn, 'output_name', None) or (conn.get('output', '?') if isinstance(conn, dict) else '?')
-                if t == target_name:
+                if _conn_matches(conn):
                     sources.append((thing.properties.get('name', 'unnamed'), f"I/O: {o}"))
         return sources
 
@@ -319,8 +335,8 @@ class PropertyEditor(QWidget):
         id_btn.clicked.connect(lambda: uuid_field.setVisible(not uuid_field.isVisible()))
 
         brush_name = brush.get('name', '')
-        if brush_name:
-            sources = self._find_targeting_sources(brush_name)
+        if brush_name or brush.get('id'):
+            sources = self._find_targeting_sources(brush_name, brush.get('id', ''))
             if sources:
                 txt = ", ".join(f"{n} ({t})" for n, t in sources)
                 lbl = QLabel(txt)
@@ -955,7 +971,8 @@ class PropertyEditor(QWidget):
         id_btn.clicked.connect(lambda: uuid_field.setVisible(not uuid_field.isVisible()))
 
         tname = getattr(thing, 'name', '') or thing.properties.get('name', '')
-        sources = self._find_targeting_sources(tname) if tname else []
+        tid = thing.properties.get('id', '')
+        sources = self._find_targeting_sources(tname, tid) if (tname or tid) else []
         if sources:
             txt = ", ".join(f"{n} ({t})" for n, t in sources)
             lbl = QLabel(txt)
