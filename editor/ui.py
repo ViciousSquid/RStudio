@@ -462,7 +462,7 @@ class Ui_MainWindow(object):
         terrain_menu.addAction(MainWindow.terrain_action)
         terrain_menu.addAction(MainWindow.procedural_action)
         terrain_btn = make_btn("assets/terrain.png", "Procedural Tools", bottom_color=group_3_color)
-        terrain_btn.clicked.connect(lambda: terrain_menu.exec_(
+        terrain_btn.clicked.connect(lambda: terrain_menu.popup(
             terrain_btn.mapToGlobal(terrain_btn.rect().bottomLeft())))
 
         MainWindow.grid_btn = make_btn(
