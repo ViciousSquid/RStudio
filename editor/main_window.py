@@ -27,7 +27,7 @@ from editor.ui import Ui_MainWindow
 from engine.constants import TILE_SIZE, WALL_TILE, FLOOR_TILE
 from editor.view_2d import View2D
 from editor.editor_state import EditorState
-from editor.terrain_editor import TerrainEditorWindow
+from editor.terrain_editor import TerrainEditorPanel
 from engine.terrain import Terrain
 from editor.debug_console import DebugConsole, CommandInput, debug_log
 from editor.console_commands import ConsoleCommandHandler
@@ -632,9 +632,10 @@ class MainWindow(QMainWindow):
         if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
             self.view_3d.logic_thread.set_terrain(None)
 
-        # Close the terrain editor window if it is open
-        if self.terrain_editor_window:
-            self.terrain_editor_window.close()
+        # Close the terrain editor panel if it is open in the Properties dock
+        if self.terrain_editor_window is not None:
+            if self._current_overlay is self.terrain_editor_window:
+                self._close_current_overlay()
             self.terrain_editor_window = None
 
         # Force a UI refresh
@@ -913,16 +914,22 @@ class MainWindow(QMainWindow):
             self.state.terrain_data = self.terrain.to_dict()
             self.scene_hierarchy.refresh_list()
         
-        # Create or show editor window
-        if self.terrain_editor_window is None:
-            from editor.terrain_editor import TerrainEditorWindow
-            self.terrain_editor_window = TerrainEditorWindow(self.terrain, self)
-            self.terrain_editor_window.terrain_changed.connect(self.on_terrain_changed)
-        
-        self.terrain_editor_window.show()
-        self.terrain_editor_window.raise_()
-        self.terrain_editor_window.activateWindow()
-    
+        # Show the terrain editor as an overlay in the Properties dock (bottom
+        # left pane), the same way as the procedural map generator — not a
+        # floating window.
+        panel = TerrainEditorPanel(self.terrain, self)
+        panel.terrain_changed.connect(self.on_terrain_changed)
+        # _show_overlay closes any existing overlay first (whose close callback
+        # may null terrain_editor_window), so store the reference afterwards.
+        self._show_overlay(panel, close_callback=self._on_terrain_editor_closed)
+        self.terrain_editor_window = panel
+        self.properties_dock.setVisible(True)
+        self.properties_dock.raise_()
+
+    def _on_terrain_editor_closed(self):
+        """Clear the reference when the terrain editor overlay is closed."""
+        self.terrain_editor_window = None
+
     def on_terrain_changed(self):
         """Handle terrain changes."""
         if self.terrain:

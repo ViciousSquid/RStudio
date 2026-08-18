@@ -46,28 +46,28 @@ class GradientPreview(QWidget):
         painter.drawRect(rect.adjusted(1, 1, -1, -1))
 
 
-class TerrainEditorWindow(QDialog):
-    """Floating window for terrain editing tools."""
-    
+class TerrainEditorPanel(QWidget):
+    """Embeddable terrain editing panel.
+
+    Lives in the Properties dock (bottom-left pane) as an overlay, the same
+    way the procedural map generator does, rather than in a floating window.
+    """
+
     # Signals
     terrain_changed = pyqtSignal()
     terrain_generated = pyqtSignal()
-    
+
     def __init__(self, terrain: Terrain, parent=None):
         super().__init__(parent)
         self.terrain = terrain
         self.editor = parent
-        
-        self.setWindowTitle("Terrain Editor")
-        self.setMinimumSize(900, 850)
-        self.resize(900, 1080)
-        self.setWindowFlags(Qt.Window | Qt.WindowCloseButtonHint)
-        
+
+        self.setObjectName("TerrainEditorPanel")
         self._building_ui = False
-        
+
         # Apply global stylesheet
         self.setStyleSheet("""
-            QDialog {
+            QWidget#TerrainEditorPanel {
                 background-color: #2b2b2b;
                 color: #f0f0f0;
             }
@@ -161,19 +161,50 @@ class TerrainEditorWindow(QDialog):
         main_layout.setSpacing(10)
         main_layout.setContentsMargins(12, 12, 12, 12)
         
-        # Header
-        header = QLabel("🏔️ Low-Poly Terrain Generator")
-        header.setStyleSheet("""
-            QLabel {
+        # Top action row: Regenerate / Reset / Close. Mirrors the procedural
+        # map generator's button row so terrain editing lives in the dock
+        # instead of a floating window, with Regenerate at the top.
+        top_button_layout = QHBoxLayout()
+        top_button_layout.setSpacing(10)
+
+        regenerate_btn = QPushButton("🔄 Regenerate")
+        regenerate_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #F08000;
+                color: white;
                 font-weight: bold;
-                color: #F08000;
-                padding: 12px;
-                background-color: #2a3a38;
-                border-radius: 6px;
-                font-size: 16px;
+                padding: 12px 20px;
+            }
+            QPushButton:hover {
+                background-color: #FF9020;
             }
         """)
-        
+        regenerate_btn.clicked.connect(self.regenerate_terrain)
+        top_button_layout.addWidget(regenerate_btn, 2)
+
+        reset_btn = QPushButton("Reset Defaults")
+        reset_btn.clicked.connect(self.reset_to_defaults)
+        top_button_layout.addWidget(reset_btn, 1)
+
+        close_btn = QPushButton("✕ Close")
+        close_btn.clicked.connect(self.request_close)
+        top_button_layout.addWidget(close_btn, 1)
+
+        main_layout.addLayout(top_button_layout)
+
+        # Everything below the fixed action row lives in a vertical scroll area
+        # so the panel keeps its size in the dock and scrolls instead of forcing
+        # the pane larger when the tabs need more room.
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setSpacing(10)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+
         # Top controls row (Textures, Wireframe, Solid, Flat)
         controls_layout = QHBoxLayout()
         controls_layout.setSpacing(20)
@@ -202,8 +233,8 @@ class TerrainEditorWindow(QDialog):
         controls_layout.addWidget(self.solid_checkbox)
         
         controls_layout.addStretch()
-        main_layout.addLayout(controls_layout)
-        
+        content_layout.addLayout(controls_layout)
+
         # Tab widget
         tabs = QTabWidget()
         
@@ -799,33 +830,8 @@ class TerrainEditorWindow(QDialog):
         sculpt_layout.addStretch()
         tabs.addTab(sculpt_tab, "Sculpt")
         
-        main_layout.addWidget(tabs)
-        
-        # Bottom buttons
-        button_layout = QHBoxLayout()
-        button_layout.setSpacing(10)
-        
-        regenerate_btn = QPushButton("🔄 Regenerate")
-        regenerate_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #F08000;
-                color: white;
-                font-weight: bold;
-                padding: 12px 20px;
-            }
-            QPushButton:hover {
-                background-color: #FF9020;
-            }
-        """)
-        regenerate_btn.clicked.connect(self.regenerate_terrain)
-        button_layout.addWidget(regenerate_btn)
-        
-        reset_btn = QPushButton("Reset Defaults")
-        reset_btn.clicked.connect(self.reset_to_defaults)
-        button_layout.addWidget(reset_btn)
-        
-        main_layout.addLayout(button_layout)
-        
+        content_layout.addWidget(tabs)
+
         # Stats
         self.stats_label = QLabel("Visible: 0 chunks  |  Culled: 0  |  Triangles: 0")
         self.stats_label.setStyleSheet("""
@@ -837,8 +843,11 @@ class TerrainEditorWindow(QDialog):
             }
         """)
         self.stats_label.setAlignment(Qt.AlignCenter)
-        main_layout.addWidget(self.stats_label)
-        
+        content_layout.addWidget(self.stats_label)
+
+        scroll_area.setWidget(content_widget)
+        main_layout.addWidget(scroll_area)
+
         self._building_ui = False
 
     def on_textures_changed(self, enabled):
@@ -1250,6 +1259,13 @@ class TerrainEditorWindow(QDialog):
     def on_sculpt_brush_setting_changed(self, _=None):
         """Called when any sculpt brush setting changes — sync to viewport."""
         self._sync_sculpt_to_viewport()
+
+    def request_close(self):
+        """Close the panel by restoring the Properties dock's original content."""
+        if self.sculpt_paint_btn.isChecked():
+            self.sculpt_paint_btn.setChecked(False)
+        if self.editor and hasattr(self.editor, '_close_current_overlay'):
+            self.editor._close_current_overlay()
 
     def closeEvent(self, event):
         """Disable sculpt painting when the terrain editor is closed."""
