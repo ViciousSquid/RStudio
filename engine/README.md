@@ -1,49 +1,47 @@
-# `Engine/`
+# `editor/`
 
-### `camera.py`
-Camera matrices, movement, projection.
+### `asset_browser.py`		
+"Texture & model browser with live thumbnails, “FIT / TILE / FACE” actions, drag-and-drop support
 
-### `constants.py`
-Shared constants (tile size, etc.).
+### `console_commands.py`
+"Debug console command handler (noclip, map, fps, clear)."
 
-### `logic_thread.py`
-Game logic - runs in separate thread
+### `debug_console.py`
+"Full-featured Quake-style console with category filtering, entity-name hyperlinks, I/O tracing, font sizing, command history, singleton logger."
 
-### `monster_ai.py`
-Monster Behaviour, Movement, Pathfinding
+### `editor_state.py`
+"Central model: stores brushes, things, terrain, undo/redo, serialisation (JSON v2 with I/O), lightmap dirty tracking, legacy migration."
 
-### `physics.py`
-Collision & physics simulation
+### `io_editor_widget.py`
+"“Output Connections” panel (Hammer-style) for adding/editing entity I/O (target, input, delay, fire-once)."
 
-### `player.py`
-Player controller, noclip, strafe movement.
+### `main_window.py`
+"Main editor window – docks all UI components, menu, toolbar, play-mode toggle, toast notifications."
+
+### `package_dialog.py`
+Package export metadata dialog: title, author, version, description, banner image, dependency preview
+
+### `package_exporter.py`
+`.fiopak` assembler: recursive map dependency resolution, asset crawling, ZIP archive generation with manifest
 
 ### `procedural_generator.py`
-Procedural liminal map generator
 
-### `qt_game_view.py`
-Qt OpenGL widget that hosts the Renderer
+Procedurally generates fully-playable liminal maps
 
-### `renderer_core.py`
-BaseRenderer class
+### `property_editor.py`
+"Per-object property panel (position, size, shader, colour, I/O, etc.)."
 
-### `renderer_F.py`
-OpenGL FORWARD renderer
+### `scene_hierarchy.py`
+Tree view of all brushes + entities.
 
-### `resource_manager.py`
-Caches textures, models, shaders.
+### `terrain_editor.py`
+Dedicated terrain parameter editor.
 
-### `shaders.py`
-Shader compilation & uniform binding.
+### things.py
+THINGS: Entity classes (playerstart, light, speaker, pickup, logic entities).
 
-### `terrain.py`
-Chunked terrain mesh generation (perlin noise), texturing, collision
+### `ui.py`
+Shared UI helpers / widgets.
 
-### `textures.py`
-Texture loading & binding.
-
-### `threaded_game_state.py`
-Thread-safe wrapper for game state in Play mode.
-
-### `xxx_loader.py`
-Runtime OBJ and GLB loaders
+### `view_2d.py`
+Orthographic 2D top-down / side editor view.

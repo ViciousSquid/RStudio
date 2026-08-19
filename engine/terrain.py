@@ -430,6 +430,24 @@ class Terrain:
         self.heightmap_strength: float = 100.0
         self.heightmap_blend: str = 'additive'  # 'additive' or 'replace'
         self._update_queue: List[Tuple[int, int]] = []
+        # -- Chunk streaming (Big World "fill world with terrain") -----------
+        # When ``streaming`` is on, only the chunks within ``stream_radius`` of
+        # the camera are kept resident; chunks beyond ``stream_radius +
+        # stream_evict_padding`` are freed. This lets a world-spanning terrain
+        # (bounds widened by ``set_world_extent``) render without tessellating
+        # the whole grid up-front — meshes appear around the camera as it moves.
+        self.streaming: bool = False
+        self.stream_radius: float = 1536.0
+        self.stream_evict_padding: float = 512.0
+        self.streamed_chunks: int = 0
+        # A ``set_bounds(..., prune=False)`` defers its out-of-bounds chunk
+        # deletion (a GL op) to the next render on the GL thread.
+        self._pending_prune: bool = False
+        # Authored chunk bounds / enabled flag stashed while the editor is
+        # previewing a world fill, so the expansion is reversible and never
+        # saved to the map file.
+        self._authored_bounds: Optional[Tuple[int, int, int, int]] = None
+        self._authored_enabled: Optional[bool] = None
         self.grass_tex = 0
         self.rock_tex = 0
         self.sand_tex = 0
@@ -559,12 +577,136 @@ class Terrain:
         self.features = TerrainFeatures(self.noise, seed)
         self.mark_all_dirty()
     
-    def set_bounds(self, min_x: int, max_x: int, min_z: int, max_z: int):
+    def set_bounds(self, min_x: int, max_x: int, min_z: int, max_z: int,
+                   prune: bool = True):
         self.min_chunk_x = min_x
         self.max_chunk_x = max_x
         self.min_chunk_z = min_z
         self.max_chunk_z = max_z
-        self._remove_out_of_bounds_chunks()
+        if prune:
+            self._remove_out_of_bounds_chunks()
+        else:
+            # Defer the GL chunk deletion to the render thread's next frame.
+            self._pending_prune = True
+
+    def set_streaming(self, enabled: bool, radius: Optional[float] = None):
+        """Turn chunk streaming on/off (see :attr:`streaming`).
+
+        ``radius`` (world units) sets how far terrain is kept resident around
+        the camera; ``None``/0 leaves the current radius untouched.
+        """
+        self.streaming = bool(enabled)
+        if radius is not None and radius > 0:
+            self.stream_radius = float(radius)
+
+    def set_world_extent(self, min_wx: float, min_wz: float,
+                         max_wx: float, max_wz: float, prune: bool = True):
+        """Widen (or shrink) the terrain to cover a world-space XZ rectangle.
+
+        Converts world coordinates to chunk indices and calls :meth:`set_bounds`,
+        so the terrain height field — a pure function of world position — spans
+        the whole rectangle. Paired with :meth:`set_streaming` this fills a Big
+        World map's terrain without meshing the entire grid at once.
+        """
+        cs = self.chunk_size
+        self.set_bounds(
+            int(math.floor((min_wx - self.offset_x) / cs)),
+            int(math.floor((max_wx - self.offset_x) / cs)),
+            int(math.floor((min_wz - self.offset_z) / cs)),
+            int(math.floor((max_wz - self.offset_z) / cs)),
+            prune=prune,
+        )
+
+    def _stream_chunks(self, camera_pos):
+        """Keep only the chunks near ``camera_pos`` resident (streaming mode).
+
+        Ensures every in-bounds chunk whose nearest point is within
+        ``stream_radius`` of the camera, and evicts any resident chunk beyond
+        ``stream_radius + stream_evict_padding``. Bounded work per call and
+        bounded residency regardless of how far the camera has travelled, so a
+        world-spanning terrain never tessellates its whole grid. Touches no GL
+        for chunks that were never uploaded (``_delete_chunk`` guards on the
+        chunk's VAO/VBO), so the maths is exercisable headlessly.
+        """
+        cam_x = float(camera_pos.x) - self.offset_x
+        cam_z = float(camera_pos.z) - self.offset_z
+        cs = self.chunk_size
+        radius = self.stream_radius
+        keep = radius + self.stream_evict_padding
+        r2 = radius * radius
+        keep2 = keep * keep
+
+        cam_cx = int(math.floor(cam_x / cs))
+        cam_cz = int(math.floor(cam_z / cs))
+        reach = int(math.ceil(radius / cs)) + 1
+        lo_x = max(self.min_chunk_x, cam_cx - reach)
+        hi_x = min(self.max_chunk_x, cam_cx + reach)
+        lo_z = max(self.min_chunk_z, cam_cz - reach)
+        hi_z = min(self.max_chunk_z, cam_cz + reach)
+
+        def _nearest_dist_sq(cx: int, cz: int) -> float:
+            chunk_min_x = cx * cs
+            chunk_min_z = cz * cs
+            nx = min(max(cam_x, chunk_min_x), chunk_min_x + cs)
+            nz = min(max(cam_z, chunk_min_z), chunk_min_z + cs)
+            dx = nx - cam_x
+            dz = nz - cam_z
+            return dx * dx + dz * dz
+
+        for cx in range(lo_x, hi_x + 1):
+            for cz in range(lo_z, hi_z + 1):
+                if _nearest_dist_sq(cx, cz) <= r2:
+                    self._ensure_chunk(cx, cz)
+
+        to_evict = [key for key, chunk in self.chunks.items()
+                    if _nearest_dist_sq(chunk.chunk_x, chunk.chunk_z) > keep2]
+        for key in to_evict:
+            self._delete_chunk(key)
+        self.streamed_chunks = len(self.chunks)
+
+    # -- Editor "fill world with terrain" preview -------------------------
+    def editor_fill_world(self, min_wx: float, min_wz: float,
+                          max_wx: float, max_wz: float, stream_radius: float):
+        """Expand + stream the terrain in the editor, reversibly.
+
+        Unlike the runtime session (which snapshots/restores across play), the
+        editor preview must not persist the widened bounds: the authored bounds
+        are stashed the first time this runs and re-emitted by :meth:`to_dict`,
+        so saving a filled map writes exactly the terrain the author set up.
+        Idempotent — safe to call every repaint.
+        """
+        cs = self.chunk_size
+        new_bounds = (
+            int(math.floor((min_wx - self.offset_x) / cs)),
+            int(math.floor((max_wx - self.offset_x) / cs)),
+            int(math.floor((min_wz - self.offset_z) / cs)),
+            int(math.floor((max_wz - self.offset_z) / cs)),
+        )
+        if self._authored_bounds is None:
+            self._authored_bounds = (self.min_chunk_x, self.max_chunk_x,
+                                     self.min_chunk_z, self.max_chunk_z)
+            self._authored_enabled = self.enabled
+        cur = (self.min_chunk_x, self.max_chunk_x,
+               self.min_chunk_z, self.max_chunk_z)
+        if new_bounds != cur:
+            self.set_bounds(*new_bounds, prune=False)
+        # The user asked to see terrain — make sure it's drawn during the
+        # preview (the authored enabled flag is restored on unfill / save).
+        self.enabled = True
+        self.set_streaming(True, stream_radius)
+
+    def editor_unfill_world(self):
+        """Undo :meth:`editor_fill_world`, restoring the authored bounds/state."""
+        if self._authored_bounds is None:
+            return
+        mnx, mxx, mnz, mxz = self._authored_bounds
+        authored_enabled = self._authored_enabled
+        self._authored_bounds = None
+        self._authored_enabled = None
+        self.set_bounds(mnx, mxx, mnz, mxz, prune=False)
+        if authored_enabled is not None:
+            self.enabled = authored_enabled
+        self.set_streaming(False)
     
     def mark_all_dirty(self):
         for chunk in self.chunks.values():
@@ -866,10 +1008,20 @@ class Terrain:
         self.visible_chunks = 0
         self.culled_chunks = 0
         self.total_triangles = 0
-        
-        for cz in range(self.min_chunk_z, self.max_chunk_z + 1):
-            for cx in range(self.min_chunk_x, self.max_chunk_x + 1):
-                self._ensure_chunk(cx, cz)
+
+        # Apply any bounds change that deferred its prune to the GL thread.
+        if self._pending_prune:
+            self._remove_out_of_bounds_chunks()
+            self._pending_prune = False
+
+        if self.streaming:
+            # Stream only the chunks around the camera; a world-spanning terrain
+            # never tessellates its whole grid up-front.
+            self._stream_chunks(camera_pos)
+        else:
+            for cz in range(self.min_chunk_z, self.max_chunk_z + 1):
+                for cx in range(self.min_chunk_x, self.max_chunk_x + 1):
+                    self._ensure_chunk(cx, cz)
         
         gl.glUseProgram(self.shader_program)
         gl.glUniformMatrix4fv(self.uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
@@ -1329,8 +1481,18 @@ class Terrain:
         self.chunks.clear()
     
     def to_dict(self) -> dict:
+        # While the editor is previewing a Big World fill the live bounds are
+        # widened to the whole world; persist the *authored* bounds instead so a
+        # save never bakes the preview expansion into the map file.
+        if self._authored_bounds is not None:
+            min_cx, max_cx, min_cz, max_cz = self._authored_bounds
+            enabled_out = self.enabled if self._authored_enabled is None else self._authored_enabled
+        else:
+            min_cx, max_cx = self.min_chunk_x, self.max_chunk_x
+            min_cz, max_cz = self.min_chunk_z, self.max_chunk_z
+            enabled_out = self.enabled
         data = {
-            'enabled': self.enabled,
+            'enabled': enabled_out,
             'solid': self.solid,
             'seed': self.seed,
             'biome': self.biome.name,
@@ -1339,10 +1501,10 @@ class Terrain:
             'offset_x': self.offset_x,
             'offset_z': self.offset_z,
             'offset_y': self.offset_y,
-            'min_chunk_x': self.min_chunk_x,
-            'max_chunk_x': self.max_chunk_x,
-            'min_chunk_z': self.min_chunk_z,
-            'max_chunk_z': self.max_chunk_z,
+            'min_chunk_x': min_cx,
+            'max_chunk_x': max_cx,
+            'min_chunk_z': min_cz,
+            'max_chunk_z': max_cz,
             'use_textures': self.use_textures,
             'flat_mode': self.flat_mode,
             'custom_biome': self.biome.to_dict()
