@@ -608,7 +608,7 @@ class SceneHierarchy(QWidget):
             item_at_pos.setSelected(True)
             self.tree.blockSignals(False)
 
-        menu = QMenu()
+        menu = QMenu(self)
         selected_items = self.tree.selectedItems()
 
         if not selected_items:

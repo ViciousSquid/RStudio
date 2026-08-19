@@ -917,6 +917,22 @@ class MainWindow(QMainWindow):
         # Show the terrain editor as an overlay in the Properties dock (bottom
         # left pane), the same way as the procedural map generator — not a
         # floating window.
+        self._show_terrain_editor_panel()
+
+    def _show_terrain_editor_panel(self):
+        """Open (or re-raise) the Terrain Editor overlay for the current terrain.
+
+        The single place the biome/sculpt/size panel is created, shared by the
+        Terrain menu action and by the Big World fill (which surfaces it so the
+        generated ground can be customised). No-op without a terrain.
+        """
+        if getattr(self, 'terrain', None) is None:
+            return
+        # Already open → just make sure it's visible and on top.
+        if getattr(self, 'terrain_editor_window', None) is not None:
+            self.properties_dock.setVisible(True)
+            self.properties_dock.raise_()
+            return
         panel = TerrainEditorPanel(self.terrain, self)
         panel.terrain_changed.connect(self.on_terrain_changed)
         # _show_overlay closes any existing overlay first (whose close callback
@@ -1074,10 +1090,158 @@ class MainWindow(QMainWindow):
         self.update_views()
 
     def update_views(self):
+        self.sync_bigworld_terrain(allow_create=True)
         self.view_3d.update()
         self.view_top.reset_state()
         self.view_front.reset_state()
         self.view_side.reset_state()
+
+    # ------------------------------------------------------------------
+    # Big World: "fill world with terrain" — editor preview
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _bigworld_truthy(val, default=False):
+        if val is None:
+            return default
+        if isinstance(val, bool):
+            return val
+        return str(val).strip().lower() in ("1", "true", "yes", "on")
+
+    def _find_bigworld_settings(self):
+        """The map's BigWorldSettings entity, or None."""
+        for thing in getattr(self.state, 'things', None) or []:
+            props = getattr(thing, 'properties', None) or {}
+            if getattr(thing, 'TYPE', None) == 'bigworldsettings' \
+                    or props.get('type') == 'bigworldsettings':
+                return thing
+        return None
+
+    def _bigworld_world_extent(self, pad):
+        """World-space (min_x, min_z, max_x, max_z) AABB of all placed content.
+
+        Mirrors the runtime session's notion of "the whole world" (the bounding
+        box of everything the map contains), padded so terrain extends a little
+        past the outermost object. Returns None when the map is empty.
+        """
+        min_x = min_z = float('inf')
+        max_x = max_z = float('-inf')
+        found = False
+        for b in getattr(self.state, 'brushes', None) or []:
+            pos = b.get('pos'); size = b.get('size') or [0, 0, 0]
+            if not pos:
+                continue
+            hx = abs(size[0]) / 2.0; hz = abs(size[2]) / 2.0
+            min_x = min(min_x, pos[0] - hx); max_x = max(max_x, pos[0] + hx)
+            min_z = min(min_z, pos[2] - hz); max_z = max(max_z, pos[2] + hz)
+            found = True
+        for t in getattr(self.state, 'things', None) or []:
+            pos = getattr(t, 'pos', None)
+            if not pos:
+                continue
+            min_x = min(min_x, pos[0]); max_x = max(max_x, pos[0])
+            min_z = min(min_z, pos[2]); max_z = max(max_z, pos[2])
+            found = True
+        if not found:
+            return None
+        return (min_x - pad, min_z - pad, max_x + pad, max_z + pad)
+
+    def _ensure_terrain(self):
+        """Create a procedural Terrain if the map has none, and return it.
+
+        Mirrors the terrain-creation path in :meth:`open_terrain_editor` (minus
+        the modal progress dialog) so "Fill world with terrain" can generate a
+        terrain to fill even on a map that never opened the terrain editor.
+        Must be called on the main thread (GL setup), never from a paint event.
+        """
+        if getattr(self, 'terrain', None) is not None:
+            return self.terrain
+        try:
+            from engine.terrain import Terrain
+            self.terrain = Terrain(seed=42)
+            if hasattr(self.state, 'terrain_data') and self.state.terrain_data:
+                self.terrain.from_dict(self.state.terrain_data)
+            if hasattr(self.view_3d, 'renderer') and self.view_3d.renderer:
+                self.view_3d.renderer.setup_terrain_shader(self.terrain)
+            if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
+                self.view_3d.logic_thread.set_terrain(self.terrain)
+            if hasattr(self.state, 'terrain_data'):
+                self.state.terrain_data = self.terrain.to_dict()
+            if hasattr(self, 'scene_hierarchy'):
+                try:
+                    self.scene_hierarchy.refresh_list()
+                except Exception:
+                    pass
+        except Exception as exc:
+            print(f"[bigworld] could not create terrain for fill: {exc}")
+            return None
+        return self.terrain
+
+    def sync_bigworld_terrain(self, allow_create=False):
+        """Reflect the BigWorldSettings ``terrain_fill`` option in the editor.
+
+        When the map opts in, expand the procedural terrain to cover the whole
+        world and switch it to streaming so the world is visible in the editor
+        straight away while only the chunks around the editor camera are meshed
+        (as the camera moves). Turning the option off — or removing the entity —
+        restores the authored terrain. Cheap and idempotent; called on any edit
+        and on every top-view repaint. Never persists the expansion (see
+        ``Terrain.to_dict``).
+
+        ``allow_create`` lets the fill *generate* a terrain when the map has
+        none yet (the common case when the user has never opened the terrain
+        editor). It does GL setup, so it is only passed from main-thread callers
+        (edits / the property toggle), never from the 2D paint path.
+        """
+        settings = self._find_bigworld_settings()
+        fill = bool(
+            settings is not None
+            and self._bigworld_truthy(settings.properties.get('enabled', True), True)
+            and self._bigworld_truthy(settings.properties.get('terrain_fill', False))
+        )
+        terrain = getattr(self, 'terrain', None)
+        if terrain is None and fill and allow_create:
+            terrain = self._ensure_terrain()
+        if terrain is None or not hasattr(terrain, 'editor_fill_world'):
+            return
+        if not fill:
+            terrain.editor_unfill_world()
+            self._refresh_terrain_editor_size_lock()
+            return
+        try:
+            radius = float(settings.properties.get('terrain_stream_radius', 0.0) or 0.0)
+        except (TypeError, ValueError):
+            radius = 0.0
+        if radius <= 0.0:
+            try:
+                radius = float(settings.properties.get('activation_radius', 2048.0) or 2048.0)
+            except (TypeError, ValueError):
+                radius = 2048.0
+        if self._bigworld_truthy(settings.properties.get('terrain_infinite', False)):
+            # Stream the terrain forever around the camera — no edge to walk off.
+            # Only the ring of chunks near the camera is ever resident, so the
+            # huge extent costs nothing. (Matches BigWorldSession.INFINITE_HALF_EXTENT.)
+            h = 1.0e7
+            extent = (-h, -h, h, h)
+        else:
+            extent = self._bigworld_world_extent(pad=max(512.0, radius))
+        if extent is None:
+            terrain.editor_unfill_world()
+            return
+        min_wx, min_wz, max_wx, max_wz = extent
+        terrain.editor_fill_world(min_wx, min_wz, max_wx, max_wz, radius)
+        self._refresh_terrain_editor_size_lock()
+
+    def _refresh_terrain_editor_size_lock(self):
+        """If the Terrain Editor is open, lock/unlock its Size tab to match
+        whether Big World currently owns the world size."""
+        panel = getattr(self, 'terrain_editor_window', None)
+        terrain = getattr(self, 'terrain', None)
+        if panel is not None and hasattr(panel, 'set_bigworld_managed') and terrain is not None:
+            try:
+                panel.set_bigworld_managed(
+                    getattr(terrain, '_authored_bounds', None) is not None)
+            except Exception:
+                pass
 
     def update_scene_hierarchy(self):
         self.scene_hierarchy.refresh_list(self.state.brushes, self.state.things, self.state.selected_object)

@@ -2664,6 +2664,23 @@ class PropertyEditor(QWidget):
                     getattr(self.editor, v).update()
 
         if not self._populating:
+            # Big World: a change to the settings entity (esp. "Fill world with
+            # terrain") drives the editor terrain preview. Do it here, on the
+            # main thread, so a terrain can be *generated* if the map has none —
+            # the 2D paint path only re-applies an existing fill, never creates
+            # GL state. Runs before the repaint below so the new terrain shows.
+            if key in ('terrain_fill', 'terrain_infinite', 'enabled',
+                       'terrain_stream_radius', 'activation_radius') \
+                    and getattr(self.current_object, 'TYPE', None) == 'bigworldsettings' \
+                    and hasattr(self.editor, 'sync_bigworld_terrain'):
+                self.editor.sync_bigworld_terrain(allow_create=True)
+                # When fill (or infinite) is switched on, surface the Terrain
+                # Editor so the generated ground can be sculpted / re-biomed.
+                if key in ('terrain_fill', 'terrain_infinite') and bool(value) \
+                        and getattr(self.editor, 'terrain', None) is not None \
+                        and hasattr(self.editor, '_show_terrain_editor_panel'):
+                    self.editor._show_terrain_editor_panel()
+
             # Only repaint viewports — do NOT call update_all_ui() here.
             # update_all_ui() rebuilds the entire property editor via set_object(),
             # which destroys and recreates every widget (including whichever combo/spin

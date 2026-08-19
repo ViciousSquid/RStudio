@@ -2284,9 +2284,14 @@ class View2D(QWidget):
         if not hasattr(self.editor, 'terrain') or not self.editor.terrain:
             return
         terrain = self.editor.terrain
+        # Keep the Big World "fill world with terrain" preview live as the view
+        # pans (the top view is the world map). Cheap + idempotent; expands the
+        # terrain to the world and streams it around the editor camera.
+        if self.view_type == 'top' and hasattr(self.editor, 'sync_bigworld_terrain'):
+            self.editor.sync_bigworld_terrain()
         if not terrain.enabled:
             return
-        
+
         ax1, ax2 = self.get_axes()
         if not ax1 or not ax2:
             return
@@ -2314,32 +2319,58 @@ class View2D(QWidget):
         t_min_z, t_max_z = t_bounds[1]
         
         if ax1 == 'x' and ax2 == 'z':
-            # TOP VIEW - Draw terrain boundary rectangle
-            p1 = self.world_to_screen(QPointF(t_min_x, t_min_z))
-            p2 = self.world_to_screen(QPointF(t_max_x, t_max_z))
+            # TOP VIEW - Draw terrain boundary rectangle. Clamp to the visible
+            # viewport: an infinite/world-filled terrain has bounds millions of
+            # units across, and handing Qt an astronomically large rectangle is
+            # slow and precision-glitchy — the on-screen part is all that shows.
+            fill_min_x = max(t_min_x, min1); fill_max_x = min(t_max_x, max1)
+            fill_min_z = max(t_min_z, min2); fill_max_z = min(t_max_z, max2)
+            p1 = self.world_to_screen(QPointF(fill_min_x, fill_min_z))
+            p2 = self.world_to_screen(QPointF(fill_max_x, fill_max_z))
             rect = QRectF(p1, p2).normalized()
-            
+
             painter.setBrush(QBrush(terrain_fill))
             painter.drawRect(rect)
             
-            # Draw a grid pattern to indicate terrain
-            painter.setPen(QPen(QColor(139, 90, 43, 60), 1))
+            # Draw a chunk grid to indicate terrain. Clip to the visible
+            # viewport (a world-filled terrain spans thousands of chunks — only
+            # the on-screen lines are worth drawing) and skip it entirely when
+            # chunks would be sub-pixel at the current zoom.
             chunk_size = terrain.chunk_size
-            for cx in range(terrain.min_chunk_x, terrain.max_chunk_x + 2):
-                x = cx * chunk_size + terrain.offset_x
-                p1 = self.world_to_screen(QPointF(x, t_min_z))
-                p2 = self.world_to_screen(QPointF(x, t_max_z))
-                painter.drawLine(p1, p2)
-            for cz in range(terrain.min_chunk_z, terrain.max_chunk_z + 2):
-                z = cz * chunk_size + terrain.offset_z
-                p1 = self.world_to_screen(QPointF(t_min_x, z))
-                p2 = self.world_to_screen(QPointF(t_max_x, z))
-                painter.drawLine(p1, p2)
+            if chunk_size * self.zoom_factor >= 4:
+                painter.setPen(QPen(QColor(139, 90, 43, 60), 1))
+                cx_start = max(terrain.min_chunk_x,
+                               int(math.floor((min1 - terrain.offset_x) / chunk_size)))
+                cx_end = min(terrain.max_chunk_x + 1,
+                             int(math.ceil((max1 - terrain.offset_x) / chunk_size)))
+                z0 = max(t_min_z, min2); z1 = min(t_max_z, max2)
+                for cx in range(cx_start, cx_end + 1):
+                    x = cx * chunk_size + terrain.offset_x
+                    if x < t_min_x or x > t_max_x:
+                        continue
+                    p1 = self.world_to_screen(QPointF(x, z0))
+                    p2 = self.world_to_screen(QPointF(x, z1))
+                    painter.drawLine(p1, p2)
+                cz_start = max(terrain.min_chunk_z,
+                               int(math.floor((min2 - terrain.offset_z) / chunk_size)))
+                cz_end = min(terrain.max_chunk_z + 1,
+                             int(math.ceil((max2 - terrain.offset_z) / chunk_size)))
+                x0 = max(t_min_x, min1); x1 = min(t_max_x, max1)
+                for cz in range(cz_start, cz_end + 1):
+                    z = cz * chunk_size + terrain.offset_z
+                    if z < t_min_z or z > t_max_z:
+                        continue
+                    p1 = self.world_to_screen(QPointF(x0, z))
+                    p2 = self.world_to_screen(QPointF(x1, z))
+                    painter.drawLine(p1, p2)
             
-            # Label
+            # Label — anchored to the visible top-left of the terrain so it
+            # stays on screen even when the terrain is effectively infinite.
             painter.setPen(QPen(terrain_color, 1))
-            label_pos = self.world_to_screen(QPointF(t_min_x + 10, t_min_z + 10))
-            painter.drawText(label_pos, "TERRAIN")
+            label_world = QPointF(max(t_min_x, min1) + 10, max(t_min_z, min2) + 10)
+            infinite = (terrain.max_chunk_x - terrain.min_chunk_x) > 100000
+            painter.drawText(self.world_to_screen(label_world),
+                             "TERRAIN (∞)" if infinite else "TERRAIN")
             
         elif ax1 == 'x' and ax2 == 'y':
             # FRONT VIEW - Draw height profile

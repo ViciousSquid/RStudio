@@ -521,13 +521,28 @@ class TerrainEditorPanel(QWidget):
             ("Huge (11×11)", (-5, 5)),
         ]
         
+        self._size_preset_btns = []
         for i, (label, bounds) in enumerate(size_presets):
             btn = QPushButton(label)
             btn.clicked.connect(lambda checked, b=bounds: self.apply_size_preset(b))
             preset_layout.addWidget(btn, i // 3, i % 3)
-        
+            self._size_preset_btns.append(btn)
+
         preset_group.setLayout(preset_layout)
         size_layout.addWidget(preset_group)
+
+        # Shown only while Big World "Fill world with terrain" owns the world
+        # size; the manual bounds/presets above are disabled to avoid a conflict.
+        self._bigworld_size_note = QLabel(
+            "🌍 Size is managed by Big World “Fill world with terrain”.\n"
+            "Turn that option off on the Big World Settings entity to set bounds "
+            "manually. Biome, sculpting, seed and height stay fully editable.")
+        self._bigworld_size_note.setWordWrap(True)
+        self._bigworld_size_note.setStyleSheet(
+            "QLabel { background-color: #2a2340; color: #cbb8f0; padding: 10px;"
+            " border: 1px solid #6a5aa0; border-radius: 6px; }")
+        self._bigworld_size_note.setVisible(False)
+        size_layout.addWidget(self._bigworld_size_note)
         
         # Size info
         self.size_info_label = QLabel()
@@ -907,6 +922,10 @@ class TerrainEditorPanel(QWidget):
         self.max_x_spin.setValue(self.terrain.max_chunk_x)
         self.min_z_spin.setValue(self.terrain.min_chunk_z)
         self.max_z_spin.setValue(self.terrain.max_chunk_z)
+
+        # If Big World is filling the world, lock the manual size controls.
+        self.set_bigworld_managed(
+            getattr(self.terrain, '_authored_bounds', None) is not None)
         
         # Position
         self.x_offset_spin.setValue(self.terrain.offset_x)
@@ -1086,6 +1105,10 @@ class TerrainEditorPanel(QWidget):
     def on_bounds_changed(self, value):
         if self._building_ui:
             return
+        if getattr(self.terrain, '_authored_bounds', None) is not None:
+            # The world size is owned by Big World "Fill world with terrain";
+            # ignore manual bounds edits so they can't fight / desync the fill.
+            return
         self.show_progress("Updating terrain bounds...")
         self.terrain.set_bounds(
             self.min_x_spin.value(),
@@ -1144,7 +1167,27 @@ class TerrainEditorPanel(QWidget):
         import random
         self.seed_spin.setValue(random.randint(0, 999999))
     
+    def set_bigworld_managed(self, managed: bool):
+        """Reflect Big World fill ownership of the world size in the Size tab.
+
+        When *managed*, the manual bounds spin-boxes and size presets are
+        disabled and an explanatory note is shown — everything else (biome,
+        sculpt, seed, height, offsets) stays fully editable so the generated
+        terrain can still be customised.
+        """
+        for w in (getattr(self, 'min_x_spin', None), getattr(self, 'max_x_spin', None),
+                  getattr(self, 'min_z_spin', None), getattr(self, 'max_z_spin', None)):
+            if w is not None:
+                w.setEnabled(not managed)
+        for b in getattr(self, '_size_preset_btns', None) or []:
+            b.setEnabled(not managed)
+        note = getattr(self, '_bigworld_size_note', None)
+        if note is not None:
+            note.setVisible(bool(managed))
+
     def apply_size_preset(self, bounds):
+        if getattr(self.terrain, '_authored_bounds', None) is not None:
+            return  # size owned by Big World fill (see on_bounds_changed)
         self._building_ui = True
         self.min_x_spin.setValue(bounds[0])
         self.max_x_spin.setValue(bounds[1])
