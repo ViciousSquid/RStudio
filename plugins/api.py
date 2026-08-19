@@ -2,9 +2,30 @@
 Public API surface for Fio plugins.
 
 Everything a plugin author needs is here: the :class:`FioPlugin` base class to
-subclass, and the two "API" objects the manager hands to a plugin at the right
-moments (:class:`EditorAPI` at load time, :class:`RuntimeAPI` when a play
-session's logic thread spins up).
+subclass, and the "API" objects the manager hands to a plugin at defined moments
+(:class:`EditorAPI` at load time, :class:`RuntimeAPI` when a play session's logic
+thread spins up). The open-ended engine seam — :class:`~plugins.host.PluginHost`
+and the event bus — lives alongside in :mod:`plugins.host`.
+
+For the flat, human-readable reference (every class, method and signature with
+examples) see ``plugins/API.md``; for the narrative introduction see
+``plugins/README.md``. This module is the annotated source those docs mirror.
+
+The surface at a glance
+-----------------------
+==========================  ========================================================
+Object / helper             Purpose
+==========================  ========================================================
+:class:`FioPlugin`          Base class you subclass; expose an instance as ``PLUGIN``.
+:class:`EditorAPI`          Load-time: register entities, I/O, schemas, UI, renderers.
+:class:`RuntimeAPI`         Per-session: I/O handlers, scene queries, spawn, raycast.
+:class:`TickContext`        Per-tick: read input, drive the HUD.
+:class:`PropertySpec`       Declare a typed, self-documenting entity property.
+:class:`GlobalStore`        Cross-level key/value storage (shared with map KV stores).
+:func:`io_def`              Build an I/O port definition without importing io_system.
+:func:`prop`                Terse :class:`PropertySpec` constructor.
+:func:`key_code`            Resolve a key name/code to a Qt key code.
+==========================  ========================================================
 
 Design goals
 ------------
@@ -16,6 +37,9 @@ Design goals
 * **Fail safe.** A plugin that raises during registration or a hook must never
   crash the host. The manager wraps every call; this module keeps the surface
   small and defensive.
+* **Host-agnostic.** The same plugin loads in the editor, the desktop player and
+  the Android APK. The runtime path pulls in neither PyGLM nor PyQt; entities
+  fall back to :mod:`plugins.entitybase` when the editor package is absent.
 
 API versioning
 --------------
@@ -752,6 +776,23 @@ class FioPlugin:
     methods you need. Expose an instance as the module-level ``PLUGIN`` of your
     package's ``__init__`` (or a ``get_plugin()`` factory) so the manager can
     find it.
+
+    Lifecycle (each method is called by the manager and fully guarded)::
+
+        register(EditorAPI)          once, at load — editor *and* engine, UI-free
+        describe_properties()        once, right after register (optional schemas)
+          … a play session starts …
+        register_runtime(RuntimeAPI) once per session — I/O handlers, services
+        connect(PluginHost)          once per session — events, services, wraps
+        on_play_start(logic)         entering play mode
+        on_tick(logic, TickContext)  every tick, after core gameplay
+        on_play_stop(logic)          leaving play mode — restore what you mutated
+
+    ``register_runtime`` and ``connect`` run for *every* loaded plugin, so a
+    plugin enabled mid-session already has working inputs and event hooks; those
+    hooks self-gate on the live :attr:`enabled` flag. A disabled-by-default
+    plugin (``enabled = False``) is auto-enabled by the manager when a level
+    referencing its entities loads. See ``plugins/API.md`` for full signatures.
     """
 
     #: Short unique identifier (used in logs and the menu).

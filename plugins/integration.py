@@ -165,13 +165,35 @@ def _patch_view_2d():
         from PyQt5.QtWidgets import QMenu
 
         click_pos = event.pos()
-        orig_exec = QMenu.exec_
+        # We temporarily swap QMenu.exec_ on the *class* so the plugin submenu
+        # can be injected into the menu the original handler builds internally.
+        # Two different references are needed, and they are NOT interchangeable:
+        #
+        #   * orig_exec_call -- `QMenu.exec_` via attribute access. This is an
+        #     unbound-method wrapper; it is callable with an explicit self
+        #     (`orig_exec_call(menu, pos)`) but, if reassigned back onto the
+        #     class, it stops binding self -- so every later `menu.exec_(pos)`
+        #     in the app would pass the point as self and crash with
+        #     "first argument of unbound method must have type 'QMenu'".
+        #
+        #   * orig_exec_desc -- the raw descriptor from the class __dict__. It
+        #     re-binds self correctly when reassigned onto the class (so it is
+        #     the safe thing to *restore*), but a sip.methoddescriptor is NOT
+        #     directly callable, so it cannot be used to invoke exec_ here.
+        #
+        # Restore with the descriptor, call with the wrapper.
+        orig_exec_call = QMenu.exec_
+        orig_exec_desc = orig_exec_call
+        for _klass in QMenu.__mro__:
+            if "exec_" in _klass.__dict__:
+                orig_exec_desc = _klass.__dict__["exec_"]
+                break
         captured = {}
 
         def exec_hook(menu_self, *args, **kwargs):
             # Restore the real exec_ immediately so this only fires for the top
             # menu and never re-enters.
-            QMenu.exec_ = orig_exec
+            QMenu.exec_ = orig_exec_desc
             action_map = {}
             try:
                 menu_self.addSeparator()
@@ -180,7 +202,7 @@ def _patch_view_2d():
                     action_map[sub.addAction(f"{plug.name} ▸ {label}")] = cls
             except Exception:
                 action_map = {}
-            chosen = orig_exec(menu_self, *args, **kwargs)
+            chosen = orig_exec_call(menu_self, *args, **kwargs)
             if chosen in action_map:
                 captured["cls"] = action_map[chosen]
                 # Hide the choice from the original handler so it does nothing.
@@ -191,7 +213,7 @@ def _patch_view_2d():
         try:
             _orig_context_menu(self, event)
         finally:
-            QMenu.exec_ = orig_exec
+            QMenu.exec_ = orig_exec_desc
 
         cls = captured.get("cls")
         if cls is None:
