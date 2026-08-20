@@ -194,20 +194,34 @@ jobs:
           chmod +x build/main.app/Contents/MacOS/Fio
           echo "Executable permissions set"
 
+      - name: Ad-hoc code sign the app bundle
+        run: |
+          # Remove any quarantine attributes from the build
+          xattr -cr build/main.app
+
+          # Ad-hoc sign all binaries and the bundle itself
+          # This prevents macOS Gatekeeper from reporting the app as "damaged"
+          find build/main.app -type f \( -name "*.dylib" -o -name "*.so" \) -exec codesign --force --sign - {} \;
+          codesign --force --deep --sign - build/main.app
+
+          # Verify the signature
+          codesign --verify --verbose build/main.app
+          echo "Ad-hoc code signing complete"
+
       - name: Prepare app bundle for distribution
         run: |
           cd build
-          
+
           # Rename to final app name
           mv main.app Fio.app
-          
-          # Create a dmg for better distribution (optional)
-          # Create a zip file (preserves bundle structure better than dmg for artifacts)
-          zip -r -y Fio-macOS.zip Fio.app
-          
+
+          # Use ditto to create the zip — it preserves macOS metadata and
+          # resource forks that plain zip strips, avoiding Gatekeeper issues
+          ditto -c -k --sequesterRsrc --keepParent Fio.app Fio-macOS.zip
+
           # Verify zip contents
           unzip -l Fio-macOS.zip | head -20
-          
+
           cd ..
 
       - name: Verify icon in final bundle
