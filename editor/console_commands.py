@@ -82,6 +82,18 @@ class ConsoleCommandHandler:
             'fps': self.cmd_fps,
             'map': self.cmd_map,
 
+            # Save / load a play session
+            'save': self.cmd_save,
+            'savegame': self.cmd_save,
+            'load': self.cmd_load,
+            'loadgame': self.cmd_load,
+            'quicksave': self.cmd_quicksave,
+            'qs': self.cmd_quicksave,
+            'quickload': self.cmd_quickload,
+            'ql': self.cmd_quickload,
+            'saves': self.cmd_list_saves,
+            'listsaves': self.cmd_list_saves,
+
             'r_list': self.cmd_render_list,
             'r_wireframe': self.cmd_render_wireframe,
             'r_shadows': self.cmd_render_shadows,
@@ -706,6 +718,12 @@ class ConsoleCommandHandler:
 <b style="color:orange;">help</b> — Show this help<br>
 <b style="color:orange;">fps</b> — Toggle FPS display<br>
 <b style="color:orange;">map</b> &lt;name&gt; — Load a different map<br>
+<b style="color:cyan;">=== Save / Load (Play Session) ===</b><br>
+<b style="color:orange;">save</b> [name] — Save the current play session (Play Mode only)<br>
+<b style="color:orange;">load</b> [name] — Load a saved play session<br>
+<b style="color:orange;">quicksave</b>{sep}<b style="color:orange;">qs</b> — Save to the quicksave slot<br>
+<b style="color:orange;">quickload</b>{sep}<b style="color:orange;">ql</b> — Load the quicksave slot<br>
+<b style="color:orange;">saves</b> — List available save files<br>
 <b style="color:cyan;">=== Entity / I/O Commands ===</b><br>
 <b style="color:orange;">list</b>{sep}<b style="color:orange;">ents</b>{sep}<b style="color:orange;">ls</b>{sep}<b style="color:orange;">entities</b> — List all entities<br>
 <b style="color:orange;">ent</b>{sep}<b style="color:orange;">info</b> &lt;name&gt; — Show entity details<br>
@@ -1533,3 +1551,169 @@ class ConsoleCommandHandler:
             debug_log("Info", f"Loaded map {map_name}")
         else:
             debug_log("Error", f"Map not found: {map_name}")
+
+    # ===================================================================
+    # SAVE / LOAD  (play-session serialization)
+    # ===================================================================
+
+    QUICKSAVE_NAME = "quicksave"
+    SAVE_EXT = ".fiosave"
+
+    def _saves_dir(self):
+        """Absolute path to the saves directory (created on demand)."""
+        root = getattr(self.main_window, 'root_dir', os.getcwd())
+        path = os.path.join(root, 'saves')
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError:
+            pass
+        return path
+
+    def _resolve_save_path(self, name):
+        """Turn a user-supplied save name into a safe absolute .fiosave path.
+
+        Only the basename is honoured (no path traversal), and the .fiosave
+        extension is added if missing.
+        """
+        name = (name or "").strip() or self.QUICKSAVE_NAME
+        name = os.path.basename(name)
+        if not name.lower().endswith(self.SAVE_EXT):
+            name += self.SAVE_EXT
+        return os.path.join(self._saves_dir(), name)
+
+    def _logic_thread(self):
+        view_3d = getattr(self.main_window, 'view_3d', None)
+        return getattr(view_3d, 'logic_thread', None) if view_3d else None
+
+    def _in_play_mode(self):
+        view_3d = getattr(self.main_window, 'view_3d', None)
+        return bool(getattr(view_3d, 'play_mode', False)) if view_3d else False
+
+    def _current_map_name(self):
+        """Basename of the currently loaded map file, or '' if untitled."""
+        fp = getattr(self.main_window, 'file_path', None)
+        return os.path.basename(fp) if fp else ""
+
+    def cmd_save(self, args):
+        """save [name] — Serialize the current play session to saves/<name>.fiosave.
+
+        Requires Play Mode (there is no live session to capture in the editor).
+        Defaults to the quicksave slot when no name is given.
+        """
+        if not self._in_play_mode():
+            debug_log("Error", "save: enter Play Mode first (nothing to save in the editor).")
+            return
+        lt = self._logic_thread()
+        if lt is None:
+            debug_log("Error", "save: no active play session.")
+            return
+        path = self._resolve_save_path(args)
+        ok, msg = lt.save_session(path, map_name=self._current_map_name())
+        debug_log("Info" if ok else "Error", msg)
+        if ok:
+            self.main_window.show_toast(f"Saved: {os.path.basename(path)}")
+
+    def cmd_quicksave(self, args):
+        """quicksave — Save to the quicksave slot (saves/quicksave.fiosave)."""
+        self.cmd_save(self.QUICKSAVE_NAME)
+
+    def cmd_load(self, args):
+        """load [name] — Restore a saved play session from saves/<name>.fiosave.
+
+        In Play Mode the save is applied directly to the running session (a true
+        quickload). From the editor it loads the save's map, enters Play Mode,
+        then applies the saved state. Defaults to the quicksave slot.
+        """
+        path = self._resolve_save_path(args)
+        if not os.path.exists(path):
+            debug_log("Error", f"load: save not found: {os.path.basename(path)}")
+            return
+
+        # Already playing → overlay straight onto the live session.
+        if self._in_play_mode():
+            lt = self._logic_thread()
+            if lt is None:
+                debug_log("Error", "load: no active play session.")
+                return
+            ok, msg = lt.load_session(path)
+            debug_log("Info" if ok else "Error", msg)
+            if ok:
+                self.main_window.show_toast(f"Loaded: {os.path.basename(path)}")
+                self.main_window.update_all_ui()
+            return
+
+        # In the editor → load the save's map, enter play, then apply.
+        self._load_from_editor(path)
+
+    def _load_from_editor(self, path):
+        """Load a save while in editor mode: reload map, enter play, overlay."""
+        try:
+            from engine import savegame
+            data = savegame.read(path)
+        except Exception as exc:
+            debug_log("Error", f"load failed: {exc}")
+            return
+
+        map_name = data.get('map', '')
+        if map_name:
+            map_path = map_name
+            if not os.path.exists(map_path):
+                map_path = os.path.join(self.main_window.root_dir, 'maps',
+                                        os.path.basename(map_name))
+            if os.path.exists(map_path):
+                self.main_window.load_level_file(map_path)
+            else:
+                debug_log("Warning",
+                          f"load: map '{map_name}' not found; applying to the "
+                          f"currently loaded level instead.")
+        else:
+            debug_log("Warning", "load: save has no map reference; using the "
+                                 "currently loaded level.")
+
+        # Enter play mode (needs a PlayerStart in the scene).
+        try:
+            self.main_window.enter_play_mode()
+        except Exception as exc:
+            debug_log("Error", f"load: could not enter play mode: {exc}")
+            return
+        if not self._in_play_mode():
+            debug_log("Error", "load: failed to enter play mode (is there a "
+                               "Player Start in the level?).")
+            return
+
+        lt = self._logic_thread()
+        if lt is None:
+            debug_log("Error", "load: no active play session after entering play.")
+            return
+        ok, msg = lt.load_session(path)
+        debug_log("Info" if ok else "Error", msg)
+        if ok:
+            self.main_window.show_toast(f"Loaded: {os.path.basename(path)}")
+            self.main_window.update_all_ui()
+
+    def cmd_quickload(self, args):
+        """quickload — Load from the quicksave slot (saves/quicksave.fiosave)."""
+        self.cmd_load(self.QUICKSAVE_NAME)
+
+    def cmd_list_saves(self, args):
+        """saves — List available save files in the saves directory."""
+        saves_dir = self._saves_dir()
+        try:
+            files = sorted(f for f in os.listdir(saves_dir)
+                           if f.lower().endswith(self.SAVE_EXT))
+        except OSError:
+            files = []
+        if not files:
+            debug_log("Info", "No saved games found.")
+            return
+        debug_log("Info", f"=== SAVES ({len(files)}) ===")
+        for f in files:
+            full = os.path.join(saves_dir, f)
+            info = ""
+            try:
+                with open(full, 'r', encoding='utf-8') as fh:
+                    d = json.load(fh)
+                info = f"  [map: {d.get('map', '?')}, saved: {d.get('saved_at', '?')}]"
+            except Exception:
+                pass
+            debug_log("Info", f"  {f}{info}")

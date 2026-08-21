@@ -7,7 +7,7 @@ Package initialiser. Bootstraps the plugin system before any map is loaded or th
 Texture and model browser with live-rendered thumbnails (OBJ wireframe and GLB previews), FIT / TILE / FACE texture actions, and drag-and-drop support.
 
 ### `console_commands.py`
-Debug console command handler. Implements built-in commands (noclip, map, fps, clear, `cam`, etc.) dispatched by the debug console. `cam [overhead|fp] [seconds]` smoothly tweens the play-mode camera between overhead and first person (default 1s; `cam 2` for 2s, `cam 0` for instant). Console commands can also be driven from map logic via the `LogicCommand` entity's `RunCommand` input.
+Debug console command handler. Implements built-in commands (noclip, map, fps, clear, `cam`, etc.) dispatched by the debug console. `cam [overhead|fp] [seconds]` smoothly tweens the play-mode camera between overhead and first person (default 1s; `cam 2` for 2s, `cam 0` for instant). `save`/`load` (with `quicksave`/`qs` and `quickload`/`ql` for the quicksave slot, and `saves` to list them) serialize and restore a play session to `saves/*.fiosave` via the engine's native `savegame` module — `save` requires Play Mode, while `load` from the editor reloads the save's map and enters Play Mode before applying the saved state. Console commands can also be driven from map logic via the `LogicCommand` entity's `RunCommand` input.
 
 ### `debug_console.py`
 Quake-style drop-down debug console with category filtering, entity-name hyperlinks, I/O event tracing, adjustable font size, command history, and a singleton logger (`debug_log`) used throughout the codebase.
