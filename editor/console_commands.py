@@ -72,6 +72,9 @@ class ConsoleCommandHandler:
             'teleport': self.cmd_setpos,
             'ss': self.cmd_split_screen,
 
+            'cam': self.cmd_cam,
+            'camera': self.cmd_cam,
+
             'noclip': self.cmd_noclip,
             'god': self.cmd_god,
             'buddha': self.cmd_buddha,
@@ -740,6 +743,7 @@ class ConsoleCommandHandler:
 <b style="color:cyan;">=== Movement & Physics ===</b><br>
 <b style="color:orange;">physics</b> on/off/toggle<br>
 <b style="color:orange;">setpos</b>{sep}<b style="color:orange;">teleport</b> x y z<br>
+<b style="color:orange;">cam</b>{sep}<b style="color:orange;">camera</b> [overhead|fp] [seconds] — Tween between overhead &amp; first person (e.g. 'cam 2')<br>
 <b style="color:cyan;">=== Portals ===</b><br>
 <b style="color:orange;">portal_list</b> — List all portals and their links<br>
 <b style="color:orange;">portal_create</b> &lt;name1&gt; &lt;name2&gt; [x y z] — Create a linked portal pair<br>
@@ -1341,6 +1345,64 @@ class ConsoleCommandHandler:
                 count += 1
 
         debug_log("Info", f"Total connections: {count}")
+
+    def cmd_cam(self, args):
+        """cam [mode] [seconds]
+
+        Toggle the play-mode camera between top-down (overhead) and first person,
+        blending smoothly with a fast tween instead of switching instantly.
+
+          cam            → toggle, 1 second tween (default)
+          cam 2          → toggle, 2 second tween
+          cam overhead   → go to overhead (aliases: top, topdown, td)
+          cam fp 0.5     → go to first person over 0.5s (aliases: first, fps)
+          cam 0          → switch instantly (no tween)
+
+        Also triggerable from the I/O system via a logic_command entity, so a
+        trigger brush can run e.g. "cam 2".
+        """
+        if not self._require_play_mode("cam"):
+            return
+
+        lt = getattr(self.main_window.view_3d, 'logic_thread', None)
+        if lt is None or not hasattr(lt, 'start_camera_transition'):
+            debug_log("Error", "Camera control unavailable (no active play session).")
+            return
+
+        target_mode = None
+        duration = 1.0
+        for tok in (args or "").split():
+            low = tok.strip().lower()
+            if not low:
+                continue
+            try:
+                duration = float(low)
+                continue  # numeric token = tween duration in seconds
+            except ValueError:
+                pass
+            if low in ("overhead", "top", "topdown", "top-down", "td", "down"):
+                target_mode = "overhead"
+            elif low in ("fp", "first", "firstperson", "first-person", "fps", "person"):
+                target_mode = "First Person"
+            else:
+                debug_log("Warning", f"cam: ignoring unknown argument '{tok}'")
+
+        duration = max(0.0, duration)
+        new_mode = lt.start_camera_transition(target_mode=target_mode, duration=duration)
+
+        # Keep the view's cached camera_mode in step so its own _is_overhead()
+        # (sprite/gameplay helpers) matches the target immediately.
+        try:
+            self.main_window.view_3d.camera_mode = new_mode
+        except Exception:
+            pass
+
+        if duration > 0.0:
+            self.main_window.show_toast(f"Camera → {new_mode} ({duration:g}s)")
+            debug_log("Info", f"Camera tweening to {new_mode} over {duration:g}s")
+        else:
+            self.main_window.show_toast(f"Camera → {new_mode}")
+            debug_log("Info", f"Camera switched to {new_mode}")
 
     def cmd_noclip(self, args):
         if not self._require_play_mode("noclip"):

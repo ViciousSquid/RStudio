@@ -7,7 +7,7 @@ Package initialiser. Bootstraps the plugin system before any map is loaded or th
 Texture and model browser with live-rendered thumbnails (OBJ wireframe and GLB previews), FIT / TILE / FACE texture actions, and drag-and-drop support.
 
 ### `console_commands.py`
-Debug console command handler. Implements built-in commands (noclip, map, fps, clear, etc.) dispatched by the debug console.
+Debug console command handler. Implements built-in commands (noclip, map, fps, clear, `cam`, etc.) dispatched by the debug console. `cam [overhead|fp] [seconds]` smoothly tweens the play-mode camera between overhead and first person (default 1s; `cam 2` for 2s, `cam 0` for instant). Console commands can also be driven from map logic via the `LogicCommand` entity's `RunCommand` input.
 
 ### `debug_console.py`
 Quake-style drop-down debug console with category filtering, entity-name hyperlinks, I/O event tracing, adjustable font size, command history, and a singleton logger (`debug_log`) used throughout the codebase.
@@ -64,7 +64,7 @@ Radiant-style floating Surface Inspector for tuning per-face texture mapping in 
 Dedicated terrain parameter editor panel for configuring terrain chunk settings (noise seed, scale, amplitude, texturing).
 
 ### `things.py`
-Entity class definitions for all placeable Things: `PlayerStart`, `Light`, `Model`, `Speaker`, `Pickup`, `Monster`, `PathNode`, `Portal`, `LevelChanger`, `LogicGate`, `LogicRelay`, `LogicTimer`, `LogicSpawner`, `LogicCamera`, and the `TriggerBrush` mixin. Each class defines default properties and I/O registrations.
+Entity class definitions for all placeable Things: `PlayerStart`, `Light`, `Model`, `Speaker`, `Pickup`, `Monster`, `PathNode`, `Portal`, `LevelChanger`, `LogicGate`, `LogicRelay`, `LogicTimer`, `LogicCommand`, `LogicSpawner`, `LogicCamera`, and the `TriggerBrush` mixin. Each class defines default properties and I/O registrations. `LogicCommand` runs a console command (from its connection parameter or `command` property) when its `RunCommand` input fires — e.g. a trigger brush wired to run `cam 2`.
 
 ### `ui.py`
 Shared UI helper widgets and utilities used across the editor (common dialogs, styled components, layout helpers).

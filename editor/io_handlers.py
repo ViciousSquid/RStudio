@@ -859,6 +859,44 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('logic_camera', 'setspeed', camera_set_speed)
 
     # ==========================================================================
+    # LOGIC COMMAND INPUTS
+    # ==========================================================================
+
+    def command_run(entity, param, logic):
+        """Queue a console command for execution on the UI thread.
+
+        The command comes from the connection parameter, or falls back to the
+        entity's 'command' property. Execution is marshalled through the game
+        state's console-command queue so it runs on the main thread (see
+        QtGameView._process_console_command_queue) — never touching Qt from the
+        logic thread.
+        """
+        if entity.properties.get('disabled', False):
+            return
+        cmd = (param or entity.properties.get('command', '') or '').strip()
+        if not cmd:
+            debug_log("IO", f"LogicCommand '{entity.name}': no command to run.")
+            return
+        gs = getattr(logic, 'game_state', None)
+        if gs is not None and hasattr(gs, 'queue_console_command'):
+            gs.queue_console_command(cmd)
+            debug_log("IO", f"LogicCommand '{entity.name}': queued '{cmd}'")
+            if logic.io_manager:
+                logic.io_manager.fire_output(entity, 'OnCommand', cmd)
+        else:
+            debug_log("Error", f"LogicCommand '{entity.name}': no console queue available.")
+
+    def command_set(entity, param, logic):
+        """Set the default command string this entity will run."""
+        entity.properties['command'] = (param or '').strip()
+
+    io_manager.register_input_handler('logic_command', 'runcommand', command_run)
+    io_manager.register_input_handler('logic_command', 'trigger',    command_run)
+    io_manager.register_input_handler('logic_command', 'setcommand', command_set)
+    io_manager.register_input_handler('logic_command', 'enable',     relay_enable)
+    io_manager.register_input_handler('logic_command', 'disable',    relay_disable)
+
+    # ==========================================================================
     # LOGIC SPAWNER INPUTS
     # ==========================================================================
 

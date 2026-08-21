@@ -842,6 +842,29 @@ class LogicTimer(Thing):
         return LogicGate.get_pixmap()
 
 
+class LogicCommand(Thing):
+    """Runs a console command when its RunCommand input fires.
+
+    Lets map logic drive the console via the I/O system: wire a trigger brush's
+    OnTrigger (or any output) to this entity's RunCommand input. The command
+    string comes from the connection's parameter, or falls back to the entity's
+    'command' property when the parameter is blank. Example command: "cam 2".
+    """
+    pixmap_path = "assets/sprites/logic_command.png"
+
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties['type'] = 'logic_command'
+        self.properties.setdefault('command', 'cam')
+        self.properties.setdefault('disabled', False)
+
+    def get_instance_pixmap(self):
+        pix = super().get_instance_pixmap()
+        if pix:
+            return pix
+        return LogicGate.get_pixmap()
+
+
 class LevelChanger(Thing):
     """Entity that loads a new level when triggered."""
     pixmap_path = "assets/sprites/levelchanger.png"
@@ -1599,6 +1622,7 @@ ENTITY_TYPES = {
     'LogicRelay': LogicRelay,
     'LogicGate': LogicGate,
     'LogicTimer': LogicTimer,
+    'LogicCommand': LogicCommand,
     'LevelChanger': LevelChanger,
     'PathNode': PathNode,
     'LogicCamera': LogicCamera,
@@ -1611,6 +1635,6 @@ ENTITY_TYPES = {
 ENTITY_CATEGORIES = {
     'Gameplay': ['PlayerStart', 'Monster', 'Pickup', 'LevelChanger'],
     'Environment': ['Light', 'Speaker', 'Model', 'Portal'],
-    'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCamera', 'LogicSpawner', 'LogicKeyValueStore'],
+    'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCommand', 'LogicCamera', 'LogicSpawner', 'LogicKeyValueStore'],
     'AI': ['PathNode'],
 }

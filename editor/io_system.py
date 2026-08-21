@@ -766,6 +766,21 @@ def register_default_io():
         ]
     )
 
+    # === LOGIC COMMAND ===
+    # Runs a console command when fired (e.g. a trigger brush -> "cam 2").
+    register_io('logic_command',
+        inputs=[
+            IODef('RunCommand', 'Run a console command (param: the command line, '
+                                'e.g. "cam 2"); blank uses the command property', 'string'),
+            IODef('SetCommand', 'Set the default command string', 'string'),
+            IODef('Enable',     'Allow this entity to run commands'),
+            IODef('Disable',    'Prevent this entity from running commands'),
+        ],
+        outputs=[
+            IODef('OnCommand', 'Fired after a command is queued (param: the command line)'),
+        ]
+    )
+
     # === PORTAL ===
     # Prey 2006-style portal that links two named portal entities.
     register_io('portal',

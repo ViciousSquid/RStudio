@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
 from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Monster,
-                          LogicGate, LogicRelay, LogicTimer, LevelChanger, PathNode,
+                          LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
                           LogicCamera, LogicSpawner, Portal, LogicKeyValueStore)
 from editor.scene_hierarchy import SceneHierarchy
 from engine import brush_geometry as bg  # convex/angled-brush geometry
@@ -3357,6 +3357,7 @@ class View2D(QWidget):
         add_logic_relay_action = logic_menu.addAction("LogicRelay")
         add_logic_timer_action = logic_menu.addAction("LogicTimer")
         add_logic_gate_action = logic_menu.addAction("LogicGate")
+        add_logic_command_action = logic_menu.addAction("LogicCommand")
         add_logic_keyvalue_action = logic_menu.addAction("KeyValue Store")
 
         # Node / Special submenu
@@ -3411,6 +3412,7 @@ class View2D(QWidget):
         # Logic Entities
         elif action == add_logic_relay_action: new_thing = LogicRelay(pos=pos_3d)
         elif action == add_logic_timer_action: new_thing = LogicTimer(pos=pos_3d)
+        elif action == add_logic_command_action: new_thing = LogicCommand(pos=pos_3d)
         elif action == add_monster_action:
             new_thing = Monster(pos=pos_3d)
         elif action == add_logic_gate_action:
