@@ -1012,6 +1012,51 @@ class LogicThread(threading.Thread):
                 print(f"[LogicThread] plugin lifecycle dispatch failed: {exc}")
             self._plugin_emit("play_start" if enabled else "play_stop")
 
+    # =========================================================================
+    # SAVE / LOAD  (native play-session serialization)
+    # =========================================================================
+
+    def save_session(self, path: str, *, map_name: str = ""):
+        """Serialize the live play session to *path*. Returns ``(ok, message)``.
+
+        Native counterpart to the editor's ``save`` / ``quicksave`` console
+        commands. Requires an active play session — there is no live state to
+        capture in editor mode. Builds a snapshot with :mod:`engine.savegame`
+        (the whole level plus player transform, stats, cheat flags, collected
+        keys and door/mover/monster state) and writes it as JSON.
+        """
+        if not self.play_mode:
+            return False, "Nothing to save — not in play mode."
+        try:
+            from engine import savegame
+            snapshot = savegame.build_snapshot(self, map_name=map_name)
+            savegame.write(path, snapshot)
+            return True, f"Saved play session to '{os.path.basename(path)}'"
+        except Exception as exc:
+            return False, f"Save failed: {exc}"
+
+    def load_session(self, path: str):
+        """Restore a saved play session from *path* as an overlay on the live
+        session. Returns ``(ok, message)``.
+
+        Native counterpart to the editor's ``load`` / ``quickload`` console
+        commands *when already in play mode*. The scene is not rebuilt — entity
+        state is matched back by stable id — so this must run against the same
+        map the save was taken on (the caller loads the map and enters play mode
+        first when starting from the editor).
+        """
+        if not self.play_mode:
+            return False, "Enter play mode before loading a session."
+        try:
+            from engine import savegame
+            data = savegame.read(path)
+            savegame.restore_snapshot(self, data)
+            return True, f"Loaded play session from '{os.path.basename(path)}'"
+        except FileNotFoundError:
+            return False, f"Save file not found: {path}"
+        except Exception as exc:
+            return False, f"Load failed: {exc}"
+
     def _start_monster_ai(self):
         """Start the monster AI processing thread."""
         self._stop_monster_ai()

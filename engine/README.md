@@ -45,6 +45,9 @@ Qt `QOpenGLWidget` that hosts the renderer and drives the game loop. Manages the
 ### `renderer_F.py`
 Forward renderer (`Renderer_F`), inheriting from `BaseRenderer`. Implements the forward lighting pass with per-face texture batching, omnidirectional point-light shadow mapping (depth cube-maps), portal virtual-view rendering with distance culling, and render-mode switching (lit, unlit, wireframe, vertex).
 
+### `savegame.py`
+Native play-session save/load. The editor already serializes a *level* (`EditorState.get_level_data`); this builds a *saved game* on top of it — the serialized level (so entity health/dead/collected/hidden state and positions come along for free) plus a `runtime` block for what the level format never stores: the player transform and stats, cheat flags (`god`/`buddha`/`notarget`), collected keys, and door/mover/monster animation state. `build_snapshot`/`restore_snapshot` capture and re-apply a session; `write`/`read` handle the JSON `.fiosave` files. Restore is an *overlay* onto a live, already-playing session (entities matched back by stable UUID) so it never rebuilds the scene mid-flight. Exposed through `LogicThread.save_session`/`load_session` and the editor console's `save`/`load`/`quicksave`/`quickload` commands — no plugin, and the plugin API stays at v1.3.0.
+
 ### `resource_manager.py`
 Singleton asset provider that transparently serves files from either a standard directory tree or a mounted `.fiopak` ZIP archive. Handles path resolution, byte/text asset loading, stream access for audio, asset caching, and manifest reading in package mode.
 
