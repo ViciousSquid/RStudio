@@ -16,7 +16,7 @@ Shared engine constants: window defaults, tile/wall dimensions, render mode enum
 GLB/glTF 2.0 binary model loader. Parses the GLB container, extracts mesh geometry (vertices, normals, UVs, indices), PBR materials, embedded textures, and node hierarchies. The `GLB` class provides an OpenGL-ready interface (VAO, VBO, vertex count, material groups) matching the `OBJ` class for renderer compatibility.
 
 ### `logic_thread.py`
-Game logic thread running at a fixed 60 Hz timestep. Handles player movement and physics, entity interactions and trigger evaluation, I/O event dispatching, mover/door animations, pickup collection, player death, portal transit, and monster AI ticking.
+Game logic thread running at a fixed 60 Hz timestep. Handles player movement and physics, entity interactions and trigger evaluation, I/O event dispatching, mover/door animations, pickup collection, player death, portal transit, and monster AI ticking. Also drives the play-mode camera, including `start_camera_transition` — a smoothstep-eased tween that blends the view matrix between First Person and Overhead (triggered by the `cam` console command or a `LogicCommand` entity) so switching modes swoops instead of snapping.
 
 ### `monster_ai.py`
 Monster behaviour, movement, and pathfinding. Implements sight-range detection, pursuit, attack cooldowns, shoot animations, projectile spawning, death handling, and pathfinding using the spatial grid.

@@ -188,6 +188,10 @@ class LogicThread(threading.Thread):
         # changes, so the hot path never re-does str().strip().lower().
         self._camera_mode_raw = None
         self._camera_mode_overhead = False
+        # Active camera transition (First Person <-> Overhead tween), or None.
+        # Set by start_camera_transition, advanced by _update_camera_transition,
+        # and consumed in _prepare_render_state to blend the view matrix.
+        self.camera_transition = None
 
         # PERF: persistent frustum-cull buffers for play mode. The brush *set*
         # is fixed for a play session, so AABB centers/half-sizes and the
@@ -893,6 +897,7 @@ class LogicThread(threading.Thread):
 
             # Reset cinematic state (mover_path_states already reset by _init_movers)
             self.cinematic_state = None
+            self.camera_transition = None
 
             # Reset portal transit state
             self._portal_cooldowns.clear()
@@ -968,6 +973,7 @@ class LogicThread(threading.Thread):
             # Reset mover path / cinematic state
             self.mover_path_states = {}
             self.cinematic_state = None
+            self.camera_transition = None
 
             # Reset portal transit state
             self._portal_cooldowns.clear()
@@ -1132,6 +1138,92 @@ class LogicThread(threading.Thread):
         if abs(glm.dot(d, u)) > 0.999:
             u = glm.vec3(0, 0, 1) if abs(d.y) > 0.9 else glm.vec3(0, 1, 0)
         return u
+
+    def _camera_for_mode(self, overhead, player_pos, player_angle,
+                         player_pitch, camera_height):
+        """Return ``(cam_pos, direction, up, fov)`` for one camera mode.
+
+        Both endpoints of a camera tween are computed from the *current* player
+        position/facing each frame, so the blend tracks the player as they move.
+        """
+        if overhead:
+            cam_pos, direction, up = self._overhead_camera(player_pos, player_angle)
+            return cam_pos, direction, up, 90.0
+        cam_pos = player_pos + glm.vec3(0, camera_height, 0)
+        direction = glm.vec3(
+            math.sin(player_angle) * math.cos(player_pitch),
+            math.sin(player_pitch),
+            math.cos(player_angle) * math.cos(player_pitch),
+        )
+        return cam_pos, direction, glm.vec3(0, 1, 0), 90.0
+
+    def start_camera_transition(self, target_mode=None, duration=1.0):
+        """Begin a smooth tween between First Person and Overhead cameras.
+
+        ``target_mode`` may be ``None`` (toggle to the opposite of the current
+        mode) or a string ("overhead"/"top-down"/"topdown" → overhead, anything
+        else → first person). ``duration`` is the tween length in seconds; <= 0
+        switches instantly. ``camera_mode`` is updated to the target immediately
+        so gameplay (aiming, the overhead sprite) uses the new mode, while the
+        view matrix blends over ``duration``. Returns the new mode string.
+        """
+        current_overhead = self.is_overhead()
+        if target_mode is None:
+            to_overhead = not current_overhead
+        else:
+            to_overhead = str(target_mode).strip().lower() in (
+                "overhead", "top-down", "topdown", "top", "td")
+        new_mode = "Overhead" if to_overhead else "First Person"
+
+        try:
+            duration = float(duration)
+        except (TypeError, ValueError):
+            duration = 1.0
+
+        ct = self.camera_transition
+
+        # No-op when already in the requested mode and not mid-tween.
+        if to_overhead == current_overhead and not ct:
+            self.camera_mode = new_mode
+            return new_mode
+
+        if duration <= 0.0:
+            self.camera_transition = None
+            self.camera_mode = new_mode
+            return new_mode
+
+        # Reversing an in-flight tween back toward its origin: mirror the current
+        # progress so the camera continues smoothly from where it is rather than
+        # snapping to an endpoint.
+        if ct and to_overhead == ct['from_overhead']:
+            progressed = min(ct['elapsed'], ct['duration'])
+            remaining_frac = 1.0 - (progressed / ct['duration'] if ct['duration'] > 0 else 1.0)
+            self.camera_transition = {
+                'from_overhead': ct['to_overhead'],
+                'to_overhead':   to_overhead,
+                'elapsed':       remaining_frac * duration,
+                'duration':      duration,
+            }
+            self.camera_mode = new_mode
+            return new_mode
+
+        self.camera_transition = {
+            'from_overhead': current_overhead,
+            'to_overhead':   to_overhead,
+            'elapsed':       0.0,
+            'duration':      duration,
+        }
+        self.camera_mode = new_mode
+        return new_mode
+
+    def _update_camera_transition(self, delta):
+        """Advance the active camera tween; clear it when complete."""
+        ct = self.camera_transition
+        if not ct:
+            return
+        ct['elapsed'] += delta
+        if ct['elapsed'] >= ct['duration']:
+            self.camera_transition = None
 
     # =========================================================================
     # MOVER/DOOR INITIALIZATION
@@ -1326,6 +1418,11 @@ class LogicThread(threading.Thread):
 
         # Update light FadeIn/FadeOut transitions
         self._update_light_fades(delta)
+
+        # ---- Camera transition (First Person <-> Overhead tween) ----
+        # Advances even while a cinematic runs so a queued toggle resolves; it
+        # only affects the view matrix when no cinematic is overriding it.
+        self._update_camera_transition(delta)
 
         # ---- Cinematic camera: suppress player input while active ----
         self._update_cinematic_camera(delta)
@@ -2834,13 +2931,36 @@ class LogicThread(threading.Thread):
                 player_angle = self.player.angle
                 player_pitch = self.player.pitch
                 camera_height = self.player.camera_height
-                if self.is_overhead():
+                ct = self.camera_transition
+                if ct:
+                    # Tween between First Person and Overhead. Both endpoints are
+                    # rebuilt from the live player pose each frame, so the swoop
+                    # tracks movement; smoothstep easing gives a soft in/out. The
+                    # frustum planes below derive from this blended view_matrix,
+                    # so culling stays correct throughout the transition.
+                    dur = ct['duration']
+                    t = 1.0 if dur <= 0.0 else max(0.0, min(1.0, ct['elapsed'] / dur))
+                    t = t * t * (3.0 - 2.0 * t)  # smoothstep
+                    a = self._camera_for_mode(ct['from_overhead'], player_pos,
+                                              player_angle, player_pitch, camera_height)
+                    b = self._camera_for_mode(ct['to_overhead'], player_pos,
+                                              player_angle, player_pitch, camera_height)
+                    cam_pos = a[0] + (b[0] - a[0]) * t
+                    direction = a[1] + (b[1] - a[1]) * t
+                    if glm.length(direction) < 1e-8:
+                        direction = b[1]
+                    direction = glm.normalize(direction)
+                    up_vec = self._safe_up(direction, a[2] + (b[2] - a[2]) * t)
+                    view_matrix = glm.lookAt(cam_pos, cam_pos + direction, up_vec)
+                    fov = a[3] + (b[3] - a[3]) * t
+                elif self.is_overhead():
                     # Native top-down camera. The frustum planes below are built
                     # from this view_matrix, so overhead culling is correct; the
                     # up hint is horizontal, avoiding the straight-down lookAt
                     # degeneracy that would corrupt the view and every plane.
                     cam_pos, direction, up_vec = self._overhead_camera(player_pos, player_angle)
                     view_matrix = glm.lookAt(cam_pos, cam_pos + direction, up_vec)
+                    fov = 90.0
                 else:
                     cam_pos = player_pos + glm.vec3(0, camera_height, 0)
                     direction = glm.vec3(
@@ -2849,10 +2969,10 @@ class LogicThread(threading.Thread):
                         math.cos(player_angle) * math.cos(player_pitch),
                     )
                     view_matrix = glm.lookAt(cam_pos, cam_pos + direction, glm.vec3(0, 1, 0))
+                    fov = 90.0
                 write_state.player_pos = player_pos
                 write_state.player_angle = player_angle
                 write_state.player_pitch = player_pitch
-                fov = 90.0
         else:
             write_state.editor_camera_pos = glm.vec3(self.editor_camera.pos)
             write_state.editor_camera_yaw = self.editor_camera.yaw
@@ -2874,6 +2994,7 @@ class LogicThread(threading.Thread):
         write_state.hud_message = self.current_hud_message
         write_state.active_weapon = self.active_weapon
         write_state.muzzle_flash_active = self.muzzle_flash_active
+        write_state.camera_transition_active = bool(self.camera_transition)
 
         write_state.monster_debug_active = self.monster_ai.monster_debug_active
         write_state.monster_debug_rays = list(self.monster_ai._debug_rays)

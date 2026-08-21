@@ -66,6 +66,12 @@ class RenderState:
         # Muzzle flash — True for one frame after the player fires
         self.muzzle_flash_active = False
 
+        # Camera transition — True while the play-mode camera is tweening between
+        # First Person and Overhead (see LogicThread.start_camera_transition).
+        # The overhead ground sprite is suppressed during the blend so it does
+        # not pop in/out mid-swoop.
+        self.camera_transition_active = False
+
         # Monster debug visualisation (F7 toggle)
         self.monster_debug_active = False
         # List of {'start': [x,y,z], 'end': [x,y,z], 'color': str}
@@ -112,6 +118,7 @@ class RenderState:
         self.bullet_marks = []
         self.projectiles = []
         self.muzzle_flash_active = False
+        self.camera_transition_active = False
         self.monster_debug_active = False
         self.monster_debug_rays = []
         self.total_brushes = 0
@@ -156,6 +163,14 @@ class ThreadedGameState:
         # Sound queue — thread-safe, accessed from logic and render threads
         self._sound_lock = threading.Lock()
         self.sound_queue = deque()
+
+        # Console command queue — thread-safe. The I/O system (logic thread)
+        # enqueues command strings (e.g. from a logic_command entity fired by a
+        # trigger brush); the render/UI thread drains and executes them on the
+        # main thread, where the console handler and its Qt widgets are safe to
+        # touch. Mirrors the sound queue pattern.
+        self._console_cmd_lock = threading.Lock()
+        self.console_command_queue = deque()
 
     def get_render_state(self) -> RenderState:
         """Called by RenderThread (Qt) to get the latest frame data."""
@@ -277,4 +292,27 @@ class ThreadedGameState:
                 return []
             result = list(self.sound_queue)
             self.sound_queue.clear()
+            return result
+
+    # --- Console Command Queue ---
+
+    def queue_console_command(self, command: str) -> None:
+        """Thread-safe: enqueue a console command string from any thread.
+
+        The command is executed later on the UI/main thread (see
+        QtGameView._process_console_command_queue), so I/O handlers running on
+        the logic thread can safely trigger console commands.
+        """
+        if not command:
+            return
+        with self._console_cmd_lock:
+            self.console_command_queue.append(str(command))
+
+    def consume_console_commands(self) -> list:
+        """Thread-safe: drain all pending console commands (called from UI thread)."""
+        with self._console_cmd_lock:
+            if not self.console_command_queue:
+                return []
+            result = list(self.console_command_queue)
+            self.console_command_queue.clear()
             return result
