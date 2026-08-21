@@ -482,6 +482,10 @@ class QtGameView(QOpenGLWidget):
         lt = getattr(self, "logic_thread", None)
         if lt is not None and getattr(lt, "cinematic_state", None):
             return
+        # Suppress the ground sprite mid-tween so it doesn't pop in/out while the
+        # camera swoops between first-person and overhead.
+        if getattr(render_state, "camera_transition_active", False):
+            return
         try:
             from engine.overhead_sprite import SpriteController, OverheadSpriteRenderer
         except Exception:
@@ -627,6 +631,7 @@ class QtGameView(QOpenGLWidget):
             self.last_fps_time = current_time
         self.sysmon.record_frame_time(delta * 1000.0)
         self._process_sound_queue()
+        self._process_console_command_queue()
         if self.use_threading and self.logic_thread:
             keys = set() if self.console_overlay_active else self.editor.keys_pressed
             self.game_state.set_keys(keys)
@@ -653,6 +658,25 @@ class QtGameView(QOpenGLWidget):
                 channel = sound.play()
                 if channel:
                     channel.set_volume(volume)
+
+    def _process_console_command_queue(self):
+        """Run any console commands queued by the I/O system on the UI thread.
+
+        The logic thread enqueues command strings (e.g. a trigger brush firing a
+        logic_command entity's RunCommand input). They must execute here, on the
+        main thread, because console commands touch Qt widgets and editor state.
+        """
+        commands = self.game_state.consume_console_commands()
+        if not commands:
+            return
+        handler = getattr(self.editor, 'console_handler', None)
+        if handler is None:
+            return
+        for cmd in commands:
+            try:
+                handler.handle_command(cmd)
+            except Exception as exc:
+                print(f"[QtGameView] console command '{cmd}' failed: {exc}")
 
     def _gather_io_connections(self):
         COLOR_LOGIC   = (1.0, 1.0, 0.0)
@@ -1556,6 +1580,7 @@ class QtGameView(QOpenGLWidget):
             'Speaker': 'speaker.png',
             'LevelChanger': 'levelchanger.png',
             'Portal': 'portal.png',
+            'LogicCommand': 'logic_command.png',
         }
         for weapon in ['gun1', 'gun2', 'cig']:
             tid = self.load_texture(f'{weapon}HUD.png', 'sprites')

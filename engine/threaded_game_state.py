@@ -4,6 +4,11 @@ import time
 from typing import List, Any, Dict, Optional
 from collections import deque
 
+# Shared immutable "nothing to drain" result for the per-frame consumer methods
+# (consume_sounds / consume_console_commands). Returning this singleton on the
+# common empty path avoids allocating a throwaway list on every rendered frame.
+_EMPTY_DRAIN: tuple = ()
+
 class RenderState:
     """
     A snapshot of the game state specifically for the renderer.
@@ -66,6 +71,12 @@ class RenderState:
         # Muzzle flash — True for one frame after the player fires
         self.muzzle_flash_active = False
 
+        # Camera transition — True while the play-mode camera is tweening between
+        # First Person and Overhead (see LogicThread.start_camera_transition).
+        # The overhead ground sprite is suppressed during the blend so it does
+        # not pop in/out mid-swoop.
+        self.camera_transition_active = False
+
         # Monster debug visualisation (F7 toggle)
         self.monster_debug_active = False
         # List of {'start': [x,y,z], 'end': [x,y,z], 'color': str}
@@ -112,6 +123,7 @@ class RenderState:
         self.bullet_marks = []
         self.projectiles = []
         self.muzzle_flash_active = False
+        self.camera_transition_active = False
         self.monster_debug_active = False
         self.monster_debug_rays = []
         self.total_brushes = 0
@@ -156,6 +168,14 @@ class ThreadedGameState:
         # Sound queue — thread-safe, accessed from logic and render threads
         self._sound_lock = threading.Lock()
         self.sound_queue = deque()
+
+        # Console command queue — thread-safe. The I/O system (logic thread)
+        # enqueues command strings (e.g. from a logic_command entity fired by a
+        # trigger brush); the render/UI thread drains and executes them on the
+        # main thread, where the console handler and its Qt widgets are safe to
+        # touch. Mirrors the sound queue pattern.
+        self._console_cmd_lock = threading.Lock()
+        self.console_command_queue = deque()
 
     def get_render_state(self) -> RenderState:
         """Called by RenderThread (Qt) to get the latest frame data."""
@@ -236,6 +256,12 @@ class ThreadedGameState:
             self._shot_queue.append(True)
 
     def consume_shot(self):
+        # Called every logic tick; a shot is queued only on the rare tick the
+        # player fires. Skip the lock on the empty fast path — the deque's
+        # truthiness read is atomic under the GIL, and a shot queued
+        # concurrently is consumed on the next tick.
+        if not self._shot_queue:
+            return False
         with self._shot_lock:
             if self._shot_queue:
                 self._shot_queue.popleft()
@@ -271,10 +297,53 @@ class ThreadedGameState:
             return self._p2_input.copy()
 
     def consume_sounds(self) -> list:
-        """Thread-safe: drain all pending sound requests (called from render thread)."""
+        """Thread-safe: drain all pending sound requests (called from render thread).
+
+        Runs once per rendered frame. The empty case is by far the most common,
+        so it is handled with a lock-free fast path: reading a deque's truthiness
+        is atomic under the GIL, and a request appended concurrently is simply
+        drained on the next frame (harmless for an async sound queue). This
+        avoids a lock acquisition and an empty-list allocation on idle frames.
+        """
+        if not self.sound_queue:
+            return _EMPTY_DRAIN
         with self._sound_lock:
             if not self.sound_queue:
-                return []
+                return _EMPTY_DRAIN
             result = list(self.sound_queue)
             self.sound_queue.clear()
+            return result
+
+    # --- Console Command Queue ---
+
+    def queue_console_command(self, command: str) -> None:
+        """Thread-safe: enqueue a console command string from any thread.
+
+        The command is executed later on the UI/main thread (see
+        QtGameView._process_console_command_queue), so I/O handlers running on
+        the logic thread can safely trigger console commands.
+        """
+        if not command:
+            return
+        with self._console_cmd_lock:
+            self.console_command_queue.append(str(command))
+
+    def consume_console_commands(self) -> list:
+        """Thread-safe: drain all pending console commands (called from UI thread).
+
+        Called every rendered frame from QtGameView.update_loop, but the queue is
+        empty on virtually all frames (commands only arrive when a trigger fires a
+        logic_command entity). The empty case uses a lock-free fast path: reading
+        a deque's truthiness is atomic under the GIL, and a command enqueued
+        concurrently is drained on the next frame. This keeps the per-frame cost
+        at a single pointer check instead of a lock acquisition plus a list
+        allocation.
+        """
+        if not self.console_command_queue:
+            return _EMPTY_DRAIN
+        with self._console_cmd_lock:
+            if not self.console_command_queue:
+                return _EMPTY_DRAIN
+            result = list(self.console_command_queue)
+            self.console_command_queue.clear()
             return result
