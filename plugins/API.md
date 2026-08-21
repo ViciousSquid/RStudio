@@ -22,6 +22,7 @@ open while writing code.
 - [`GlobalStore` — cross-level storage](#globalstore--cross-level-storage)
 - [Helpers: `io_def`, `key_code`, `prop`](#helpers-io_def-key_code-prop)
 - [The manager entry points](#the-manager-entry-points)
+- [Play-session save / load (native)](#play-session-save--load-native)
 - [Threading and safety contract](#threading-and-safety-contract)
 
 ---
@@ -695,6 +696,78 @@ The engine wires `attach_runtime`, the play-start/stop dispatch and the cached
 per-tick dispatch **natively** from `engine.logic_thread.LogicThread`; the editor
 hooks are installed as small guarded monkey-patches in
 [`integration.py`](integration.py). See [`README.md`](README.md#integration-points-in-the-core).
+
+---
+
+## Play-session save / load (native)
+
+Saving and loading a **play session** is an engine-native capability, not part
+of the plugin API surface — adding it did **not** bump `API_VERSION` (still
+`1.3.0`). It is documented here because it builds directly on the same
+serialization a plugin already relies on, and because a plugin can drive it
+through the [`PluginHost`](#pluginhost--the-open-ended-engine-seam).
+
+The editor already serializes a *level* (`EditorState.get_level_data` — brushes,
+things with their live properties, terrain). [`engine/savegame.py`](../engine/savegame.py)
+builds a *saved game* on top of that: the serialized level **plus** a `runtime`
+block for the state the level format never stores — the player transform and
+stats, the cheat flags (`god` / `buddha` / `notarget`), the collected-key set,
+and the door / mover / monster animation state. Save files are JSON with a
+`.fiosave` extension, written under a `saves/` directory.
+
+Restore is applied as an **overlay** onto a live, already-playing session:
+entities are matched back by the stable UUID every brush and thing carries, so
+the scene is never rebuilt mid-flight (object identities, caches and the spatial
+grid all stay valid). Cached, underscore-prefixed runtime fields (e.g. a mover's
+`_direction_np`) are never persisted — the engine recomputes them on the next
+tick.
+
+### The native surface
+
+`engine.logic_thread.LogicThread` exposes two methods, each returning
+`(ok: bool, message: str)` and requiring an active play session:
+
+```python
+logic.save_session(path, map_name="")   # capture the live session → path
+logic.load_session(path)                 # overlay a save onto the running session
+```
+
+Lower level, in [`engine/savegame.py`](../engine/savegame.py):
+
+```python
+build_snapshot(logic, map_name="") -> dict   # capture
+restore_snapshot(logic, data) -> None        # apply overlay onto a live session
+write(path, snapshot) -> None                # JSON dump (.fiosave), NumPy/glm-safe
+read(path) -> dict                           # read + validate a Fio save
+```
+
+### Console commands
+
+Driven from the editor's debug console (see
+[`editor/console_commands.py`](../editor/console_commands.py)):
+
+| Command | Effect |
+|---------|--------|
+| `save [name]` | Save the current session to `saves/<name>.fiosave` (Play Mode only). |
+| `quicksave` / `qs` | Save to the quicksave slot. |
+| `load [name]` | Load a save. In Play Mode it overlays the running session; from the editor it loads the save's map, enters Play Mode, then applies. |
+| `quickload` / `ql` | Load the quicksave slot. |
+| `saves` | List available save files. |
+
+### Reaching it from a plugin
+
+The `PluginHost` exposes the live logic object, so a plugin can save or load
+without any new API:
+
+```python
+def connect(self, host):
+    self._host = host
+
+def on_tick(self, logic, ctx):
+    if ctx.key_down("f5"):
+        ok, msg = self._host.logic.save_session("saves/plugin_quick.fiosave")
+        ctx.toast(msg)
+```
 
 ---
 
