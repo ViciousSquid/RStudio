@@ -295,9 +295,32 @@ class SettingsWindow(QDialog):
         
         self.show_hud_checkbox = QCheckBox("Show HUD (health, etc.)")
         gameplay_layout.addWidget(self.show_hud_checkbox)
-        
+
         gameplay_group.setLayout(gameplay_layout)
         layout.addWidget(gameplay_group)
+
+        save_group = QGroupBox("Play-session Save Mode")
+        save_form = QFormLayout()
+        self.save_mode_combo = QComboBox()
+        # userData carries the value persisted to settings.ini.
+        self.save_mode_combo.addItem("Full", "full")
+        self.save_mode_combo.addItem("Delta", "delta")
+        self.save_mode_combo.addItem("Both", "both")
+        self.save_mode_combo.setToolTip(
+            "How save / quicksave writes a play session:\n"
+            "• Full — Complete, self-contained save. Largest file size.\n"
+            "• Delta — Saves only changes from the original level. Smallest file\n"
+            "   size but requires the base map to load.\n"
+            "• Both — Saves a compact delta plus a complete fallback snapshot."
+        )
+        save_form.addRow("Default save mode:", self.save_mode_combo)
+        self.save_mode_desc = QLabel()
+        self.save_mode_desc.setWordWrap(True)
+        self.save_mode_desc.setStyleSheet("color: #9fb7b5;")
+        save_form.addRow(self.save_mode_desc)
+        self.save_mode_combo.currentIndexChanged.connect(self._update_save_mode_desc)
+        save_group.setLayout(save_form)
+        layout.addWidget(save_group)
         
         mode_group = QGroupBox("Window Mode (Fullscreen Mode F12)")
         mode_layout = QFormLayout()
@@ -329,6 +352,17 @@ class SettingsWindow(QDialog):
         self._toggle_resolution_visibility()
 
         layout.addStretch()
+
+    _SAVE_MODE_DESCS = {
+        "full": "Complete, self-contained save. Largest file size.",
+        "delta": ("Saves only changes from the original level. Smallest file "
+                  "size but requires the base map."),
+        "both": "Saves a compact delta plus a complete fallback snapshot.",
+    }
+
+    def _update_save_mode_desc(self):
+        mode = self.save_mode_combo.currentData() or "full"
+        self.save_mode_desc.setText(self._SAVE_MODE_DESCS.get(mode, ""))
 
     def _toggle_resolution_visibility(self):
         mode = self.kiosk_mode_combo.currentText()
@@ -542,6 +576,11 @@ class SettingsWindow(QDialog):
         self.physics_checkbox.setChecked(self.config.getboolean('Settings', 'physics', fallback=True))
         self.show_hud_checkbox.setChecked(self.config.getboolean('Display', 'show_hud', fallback=True))
 
+        save_mode = str(self.config.get('Settings', 'save_mode', fallback='full')).strip().lower()
+        idx = self.save_mode_combo.findData(save_mode)
+        self.save_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._update_save_mode_desc()
+
         self.invert_mouse_checkbox.setChecked(self.config.getboolean('Controls', 'invert_mouse', fallback=False))
         self.middle_click_drag_checkbox.setChecked(self.config.getboolean('Controls', 'middle_click_drag', fallback=False))
 
@@ -644,9 +683,11 @@ class SettingsWindow(QDialog):
         
         self.config.set('Display', 'show_hud', str(self.show_hud_checkbox.isChecked()))
         
-        if not self.config.has_section('Settings'): 
+        if not self.config.has_section('Settings'):
             self.config.add_section('Settings')
         self.config.set('Settings', 'physics', str(self.physics_checkbox.isChecked()))
+        self.config.set('Settings', 'save_mode',
+                        self.save_mode_combo.currentData() or 'full')
 
         if not self.config.has_section('Controls'): 
             self.config.add_section('Controls')

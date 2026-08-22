@@ -1594,6 +1594,52 @@ class ConsoleCommandHandler:
         fp = getattr(self.main_window, 'file_path', None)
         return os.path.basename(fp) if fp else ""
 
+    def _save_mode(self):
+        """Configured default play-session save strategy (full/delta/both)."""
+        try:
+            from engine import savegame
+            mode = self.main_window.config.get('Settings', 'save_mode',
+                                               fallback=savegame.SAVE_MODE_FULL)
+            mode = str(mode).strip().lower()
+            if mode in savegame.VALID_SAVE_MODES:
+                return mode
+        except Exception:
+            pass
+        return 'full'
+
+    def _base_level(self):
+        """The normalized *original* map document, for delta diffing.
+
+        Reads the currently-loaded map file straight from disk (or the active
+        resource package) and re-serializes it through the editor's own pipeline
+        so it compares like-for-like with the live level. Returns ``None`` when
+        the base map can't be resolved — the saver then degrades to a full save.
+        """
+        fp = getattr(self.main_window, 'file_path', None)
+        if not fp:
+            return None
+        try:
+            from engine.resource_manager import ResourceManager
+            rm = ResourceManager()
+            if rm.is_package_mode():
+                raw = rm.get_text_asset(fp)
+                if raw is None:
+                    return None
+                raw_level = json.loads(raw)
+            else:
+                if not os.path.exists(fp):
+                    return None
+                with open(fp, 'r') as f:
+                    raw_level = json.load(f)
+        except Exception as exc:
+            debug_log("Warning", f"save: could not read base map for delta: {exc}")
+            return None
+        try:
+            from engine import savegame
+            return savegame.normalize_base_level(raw_level)
+        except Exception:
+            return raw_level
+
     def cmd_save(self, args):
         """save [name] — Serialize the current play session to saves/<name>.fiosave.
 
@@ -1608,7 +1654,10 @@ class ConsoleCommandHandler:
             debug_log("Error", "save: no active play session.")
             return
         path = self._resolve_save_path(args)
-        ok, msg = lt.save_session(path, map_name=self._current_map_name())
+        save_mode = self._save_mode()
+        base_level = self._base_level() if save_mode != 'full' else None
+        ok, msg = lt.save_session(path, map_name=self._current_map_name(),
+                                  save_mode=save_mode, base_level=base_level)
         debug_log("Info" if ok else "Error", msg)
         if ok:
             self.main_window.show_toast(f"Saved: {os.path.basename(path)}")
@@ -1635,7 +1684,7 @@ class ConsoleCommandHandler:
             if lt is None:
                 debug_log("Error", "load: no active play session.")
                 return
-            ok, msg = lt.load_session(path)
+            ok, msg = lt.load_session(path, map_name=self._current_map_name())
             debug_log("Info" if ok else "Error", msg)
             if ok:
                 self.main_window.show_toast(f"Loaded: {os.path.basename(path)}")
@@ -1685,11 +1734,45 @@ class ConsoleCommandHandler:
         if lt is None:
             debug_log("Error", "load: no active play session after entering play.")
             return
-        ok, msg = lt.load_session(path)
+        ok, msg = lt.load_session(path, map_name=self._current_map_name())
+        if not ok and 'different base map' in (msg or ''):
+            # Genuinely ambiguous: a delta whose base map we couldn't reconcile.
+            # This is the one case where automatic recovery isn't safe — ask.
+            if self._confirm_force_delta(path):
+                from engine import savegame
+                try:
+                    data = savegame.read(path)
+                    savegame.restore_delta(lt, data)
+                    ok, msg = True, (f"Loaded play session from "
+                                     f"'{os.path.basename(path)}' — forced delta "
+                                     f"onto the current map (missing entities skipped)")
+                except Exception as exc:
+                    ok, msg = False, f"Load failed: {exc}"
         debug_log("Info" if ok else "Error", msg)
         if ok:
             self.main_window.show_toast(f"Loaded: {os.path.basename(path)}")
             self.main_window.update_all_ui()
+
+    def _confirm_force_delta(self, path):
+        """Ask whether to force-apply a delta whose base map doesn't match.
+
+        The only place ordinary loading prompts: the automatic path has already
+        decided it can't safely reconcile the base map, so we let the user choose
+        to overlay by UUID anyway (skipping entities that don't exist) or cancel.
+        """
+        try:
+            reply = QMessageBox.question(
+                self.main_window,
+                "Base map mismatch",
+                (f"'{os.path.basename(path)}' is a delta save made on a different "
+                 "base map.\n\nApply its changes to the current map anyway? "
+                 "Entities that don't exist here will be skipped."),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            return reply == QMessageBox.Yes
+        except Exception:
+            return False
 
     def cmd_quickload(self, args):
         """quickload — Load from the quicksave slot (saves/quicksave.fiosave)."""
