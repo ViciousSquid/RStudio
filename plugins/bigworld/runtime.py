@@ -40,6 +40,8 @@ from typing import Optional
 from .cell import cell_of_point
 from .manager import (BigWorldManager, DEFAULT_ACTIVATION_RADIUS,
                       DEFAULT_DEACTIVATION_RADIUS)
+from .persistence import (build_cell_delta_registry, flatten_cell_delta_registry,
+                          normalize_streaming_state)
 
 # Marker keys the session writes onto objects it parks, so it can restore the
 # exact prior value and never clobber a user's own hidden/disabled state.
@@ -96,6 +98,16 @@ class BigWorldSession:
         self._parked_things = {}
         self._parked_lights = {}
 
+        # ---- persistent cell delta registry -----------------------------
+        # The world-level record of gameplay changes, bucketed by cell id and
+        # independent of which cells are currently streamed in. Survives cell
+        # unload: a cell's changes are committed here before it is parked, and
+        # stay here for the save even once the cell is inactive.
+        self.registry: dict = {}
+        #: The pristine world serialized at start() (pre-gameplay, pre-parking),
+        #: the base each cell's delta is measured against.
+        self._base_level: Optional[dict] = None
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -110,6 +122,10 @@ class BigWorldSession:
         brushes = list(getattr(self.logic, "brushes", None) or [])
         things = list(getattr(self.logic, "things", None) or [])
         self.manager.index_world(brushes, things)
+
+        # Snapshot the pristine world *before* parking/gameplay mutates anything —
+        # this is the base every cell delta is measured against.
+        self._capture_base()
 
         # Fit the procedural terrain to the world and switch it to streaming so
         # it covers every cell without tessellating the whole grid up-front.
@@ -174,6 +190,11 @@ class BigWorldSession:
         delta = self.manager.update(pos)
         if not delta.changed:
             return False
+        # Commit the persistent state of every cell that is about to leave the
+        # active set into the registry *before* it is parked, so its changes
+        # outlive the unload (the core invariant of a Big World save).
+        for coord in delta.leaving_cells:
+            self.commit_cell(coord)
         for brush in delta.brushes_leaving:
             self._set_brush_active(brush, False)
         for brush in delta.brushes_entering:
@@ -349,6 +370,111 @@ class BigWorldSession:
         if _DIS_MARK in props:
             props["disabled"] = props.pop(_DIS_MARK)
         props["bw_active"] = True
+
+    # ------------------------------------------------------------------
+    # Persistent cell delta registry
+    # ------------------------------------------------------------------
+
+    def _capture_base(self) -> None:
+        """Snapshot the pristine world as the base for all cell deltas."""
+        self._base_level = normalize_streaming_state(self._live_level())
+        self.registry = {}
+
+    def _live_level(self) -> dict:
+        """Serialize the whole resident world (all cells, loaded or not).
+
+        Uses the editor state's serializer so the level is in the exact shape the
+        core delta code expects. Because streaming never frees objects, this
+        includes cells that are currently parked/inactive.
+        """
+        try:
+            return self.logic.editor_state.get_level_data()
+        except Exception:
+            return {"things": [], "brushes": []}
+
+    def _cell_live_level(self, cell) -> dict:
+        """Serialize just one cell's resident objects into a partial level."""
+        things = []
+        for t in getattr(cell, "things", []) or []:
+            to_dict = getattr(t, "to_dict", None)
+            if callable(to_dict):
+                try:
+                    things.append(to_dict())
+                    continue
+                except Exception:
+                    pass
+        brushes = [dict(b) for b in (getattr(cell, "brushes", []) or [])
+                   if isinstance(b, dict)]
+        return {"things": things, "brushes": brushes}
+
+    def commit_cell(self, coord) -> None:
+        """Merge one cell's current persistent delta into the registry.
+
+        Recomputes the cell's changes relative to the base and *replaces* its
+        stored entry, so a value that has returned to its base state drops out
+        (the registry converges on ``current − base``, it does not accumulate an
+        event history). Called before a cell is unloaded and by :meth:`commit_all`.
+        """
+        if self._base_level is None:
+            return
+        coord = (int(coord[0]), int(coord[1]))
+        cell = self.manager.cells.get(coord)
+        key = f"{coord[0]},{coord[1]}"
+        self.registry.pop(key, None)
+        if cell is None:
+            return
+        live = normalize_streaming_state(self._cell_live_level(cell))
+        sub = build_cell_delta_registry(self._base_level, live, self.manager.cell_size)
+        for k, entry in sub.items():
+            if entry.get("things") or entry.get("brushes"):
+                self.registry[k] = entry
+
+    def commit_all(self) -> dict:
+        """Flush every cell's current state into the registry and return it.
+
+        Called at save time. Rebuilds the whole registry from the resident world
+        in one authoritative pass, so no pending change is omitted — including
+        cells that were modified earlier and have since unloaded (their objects
+        are still resident in the in-RAM streaming model). Unchanged cells are
+        not emitted.
+        """
+        if self._base_level is None:
+            self._capture_base()
+        live = normalize_streaming_state(self._live_level())
+        self.registry = build_cell_delta_registry(
+            self._base_level, live, self.manager.cell_size)
+        return self.registry
+
+    def serialize_registry(self) -> dict:
+        """The persistent cell delta registry as a JSON-serialisable dict."""
+        return self.registry
+
+    def base_identity(self, map_name: str = "") -> dict:
+        """Base-world identity to guard the delta against the wrong world."""
+        from engine import savegame
+        ident = savegame._base_map_identity(self._base_level or {}, map_name)
+        ident["world_mode"] = "bigworld"
+        return ident
+
+    def apply_registry(self, registry: dict) -> None:
+        """Adopt a saved registry and overlay its changes onto the resident world.
+
+        Stores the registry (so future streaming can re-apply per cell) and, since
+        the whole world is resident, overlays every cell's UUID-keyed changes now
+        via the core overlay — the same path a normal delta restore uses.
+        """
+        from engine import savegame
+        self.registry = registry or {}
+        level = flatten_cell_delta_registry(self.registry)
+        savegame._overlay_entities(self.logic, level)
+
+    def registry_stats(self) -> dict:
+        """Counts for the debug overlay / tests: changed cells and records."""
+        cells = len(self.registry)
+        things = sum(len(c.get("things", []) or []) for c in self.registry.values())
+        brushes = sum(len(c.get("brushes", []) or []) for c in self.registry.values())
+        return {"changed_cells": cells, "changed_things": things,
+                "changed_brushes": brushes}
 
     # ------------------------------------------------------------------
     # Helpers / queries

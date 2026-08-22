@@ -197,6 +197,48 @@ Almost nothing new needs saving, by design:
   `BigWorldSettings` entity, so it round-trips through Fio's normal save/load with
   no core change. Transient runtime markers are stripped before a save.
 
+#### Play-session saves are forced deltas
+
+A **play-session save** of a Big World map (the native `save`/`quicksave`) is
+always a **delta**, never a full world snapshot — chosen automatically:
+
+```
+Standard Fio map  → Full save
+Big World map      → Forced delta save (world_mode = "bigworld")
+```
+
+The live `BigWorldSession` keeps a **persistent cell delta registry** —
+`{"cx,cz": {"things": [...], "brushes": [...]}}` — that records each cell's
+gameplay changes *relative to that cell's base state*, keyed by the same
+`(cell_x, cell_z)` cell id the streaming manager uses, and by stable **UUID**
+within a cell. It is independent of which cells are currently streamed in:
+
+```
+Cell loads → base instantiated → stored cell delta applied → gameplay mutates
+→ commit_cell() merges the change into the registry → cell unloads
+→ the change stays in the registry
+```
+
+Because the in-RAM streaming model never frees objects (parking only toggles
+`hidden`/`disabled`/`bw_active`), a cell modified earlier and since unloaded is
+still resident, so its changes are captured too. On save, `commit_all()` flushes
+every cell in one authoritative pass (nothing pending is omitted); the registry
+converges on *current − base*, dropping a change that has returned to base rather
+than accumulating history. Streaming state is normalised away before diffing
+(`normalize_streaming_state`) so a currently-parked-but-unmodified cell never
+appears as a change. The save carries base-world identity (name + a UUID
+fingerprint) to fail safe against the wrong world.
+
+On load the save is auto-detected as a Big World delta, the base world is
+validated, player/runtime state is restored, and every cell's UUID-keyed changes
+are overlaid onto the freshly-loaded world (and the registry handed back to the
+live session, so a cell streamed in later still carries its saved changes). This
+reuses the core delta machinery in
+[`engine/savegame.py`](../../engine/savegame.py) — Big World only adds the
+per-cell bucketing (`build_cell_delta_registry`) and streaming normalisation, so
+there is no second persistence subsystem and **no plugin-API bump**. Ordinary
+maps are untouched and keep their full-snapshot saves.
+
 ---
 
 ## Editor vs. runtime

@@ -722,21 +722,49 @@ grid all stay valid). Cached, underscore-prefixed runtime fields (e.g. a mover's
 `_direction_np`) are never persisted — the engine recomputes them on the next
 tick.
 
+**Save modes (`save_version` 2, still no `API_VERSION` bump).** A `save_mode`
+metadata key selects one of three strategies, set by the *Play-session Save
+Mode* editor setting (`[Settings] save_mode`, default `full`):
+
+- **`full`** — the self-contained snapshot above. Needs no base map.
+- **`delta`** — only the entities/brushes that differ from the base map,
+  matched by UUID, plus player/runtime state and a `base_map` identity block.
+  Smallest, but the base map must be present to load; it restores by overlaying
+  just the changed records through the very same UUID overlay.
+- **`both`** — the compact delta *and* a full fallback snapshot in one file.
+
+Loading is automatic — `restore_auto` reads `save_mode` (a legacy v1 file with
+no `save_mode` loads as `full`) and, for delta/both, grades the current map
+against the stored identity (exact → apply; related → apply by UUID skipping
+missing entities; incompatible → a `both` save uses its full fallback, a
+delta-only save reports it can't). Only a delta-only save on a clearly
+incompatible map ever prompts. `save_version` remains independent of the app
+and plugin versions; a save newer than the build understands is rejected by
+`read`.
+
 ### The native surface
 
 `engine.logic_thread.LogicThread` exposes two methods, each returning
 `(ok: bool, message: str)` and requiring an active play session:
 
 ```python
-logic.save_session(path, map_name="")   # capture the live session → path
-logic.load_session(path)                 # overlay a save onto the running session
+# capture the live session → path (save_mode: "full" | "delta" | "both";
+# delta/both also want base_level, the normalized original map to diff against)
+logic.save_session(path, map_name="", save_mode="full", base_level=None)
+# auto-detect the save's mode and overlay it onto the running session
+logic.load_session(path, map_name="")
 ```
 
 Lower level, in [`engine/savegame.py`](../engine/savegame.py):
 
 ```python
-build_snapshot(logic, map_name="") -> dict   # capture
-restore_snapshot(logic, data) -> None        # apply overlay onto a live session
+build_snapshot(logic, map_name="", save_mode="full", base_level=None) -> dict
+compute_delta_level(base_level, live_level) -> dict   # changed-only partial level
+normalize_base_level(raw_level) -> dict               # re-serialize an on-disk map
+restore_snapshot(logic, data) -> None                 # apply a full snapshot
+restore_delta(logic, data) -> None                    # overlay a delta onto a fresh base
+classify_base_map(data, current_level, name="") -> str  # exact | related | incompatible
+restore_auto(logic, data, current_map_name="") -> dict  # pick the path automatically
 write(path, snapshot) -> None                # JSON dump (.fiosave), NumPy/glm-safe
 read(path) -> dict                           # read + validate a Fio save
 ```
