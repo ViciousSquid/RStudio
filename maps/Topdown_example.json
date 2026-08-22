@@ -380,9 +380,9 @@
         {
             "type": "monster",
             "pos": [
-                183.74554443359375,
+                176.0,
                 210.9107666015625,
-                102.91154479980469
+                352.0
             ],
             "properties": {
                 "type": "monster",
@@ -390,7 +390,7 @@
                 "id": "fceb4d67-27ad-4e8a-b1c6-3870110172b7",
                 "monster_type": "human",
                 "monster_id": -3,
-                "health": -125,
+                "health": -200,
                 "damage": 10,
                 "triggered": false,
                 "wake_on_sight": true,
@@ -409,7 +409,7 @@
                 "custom_shoot": "assets/sprites/monsters/monster_flesh_eye.png",
                 "custom_dead": "assets/sprites/monsters/flying/dead.png",
                 "sprite_2d": "assets/sprites/monsters/monster_flesh_eye.png",
-                "dead": true
+                "dead": false
             },
             "io_connections": []
         },
@@ -454,9 +454,9 @@
         {
             "type": "monster",
             "pos": [
-                -976,
-                192,
-                1104
+                -480.0,
+                169.32176208496094,
+                1136.0
             ],
             "properties": {
                 "type": "monster",
@@ -464,7 +464,7 @@
                 "id": "36a85425-01c8-48d6-96ec-4510671bd69a",
                 "monster_type": "flying",
                 "monster_id": 0,
-                "health": 100,
+                "health": -50,
                 "damage": 10,
                 "triggered": false,
                 "wake_on_sight": true,
@@ -477,12 +477,12 @@
                 "sprite_height": 160,
                 "sight": 512,
                 "can_hear": false,
-                "dead": false,
                 "non_hostile": false,
                 "team": "",
                 "custom_idle": "assets/sprites/monsters/monster_flesh_eye.png",
                 "custom_shoot": "assets/sprites/monsters/monster_flesh_eye.png",
-                "custom_dead": "assets/sprites/monsters/flying/dead.png"
+                "custom_dead": "assets/sprites/monsters/flying/dead.png",
+                "dead": false
             },
             "io_connections": []
         }
