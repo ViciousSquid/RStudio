@@ -1,380 +1,433 @@
-# The Fio Plugin System
+# Big World — cell streaming for very large Fio maps
 
-Plugins add new gameplay to Fio — new placeable entity types, their I/O, and
-runtime behaviour — **without editing the core editor or engine**. Drop a Python
-package into this `plugins/` directory and it is discovered automatically at
-startup, wired into the editor's menus, property panel, I/O editor, serializer
-and 3D renderer, and dispatched through the play lifecycle in both the editor and
-the standalone `.fiopak` player.
+Big World lets a single Fio map hold **hundreds of thousands of brushes and
+entities** while keeping only the area around the player active. The world is
+divided into streamable **cells**; only the cells intersecting the player's
+activation radius (default **2048 units**) take part in runtime rendering,
+collision, entity processing and lighting. Distant cells stay stored in the map
+but inactive — costing nothing per frame.
 
-> **New here?** Skip to [Writing a plugin](#writing-a-plugin) for the 30-line
-> version, then keep [`API.md`](API.md) open as the flat reference.
+Crucially, Big World is a **runtime scalability layer, not a new world format**.
+It builds on the systems Fio already has instead of replacing them: no BVH,
+octree, BSP, ECS, or renderer rewrite. Objects keep their existing UUIDs and
+positions; the plugin only decides, each frame, which of them are *live*.
 
 **Contents**
 
-- [What ships](#what-ships)
-- [The idea in one picture](#the-idea-in-one-picture)
-- [How discovery and dispatch work](#how-discovery-and-dispatch-work)
-- [Integration points in the core](#integration-points-in-the-core)
-- [Writing a plugin](#writing-a-plugin)
-- [The four API objects](#the-four-api-objects)
-- [Rules of thumb](#rules-of-thumb)
-- [Finding and toggling plugins in the editor](#finding-and-toggling-plugins-in-the-editor)
-- [Enabling / disabling plugins](#enabling--disabling-plugins)
-- [Packaging plugins into a `.fiopak`](#packaging-plugins-into-a-fiopak)
-- [Running plugins outside the editor](#running-plugins-outside-the-editor)
-- [Android APK](#android-apk)
-- [Debugging and tests](#debugging-and-tests)
-- [Reference map](#reference-map)
+- [The idea](#the-idea)
+- [Quick start](#quick-start)
+- [Architecture](#architecture)
+  - [Cells](#cells-cellpy)
+  - [Manager](#manager-managerpy)
+  - [Runtime](#runtime-runtimepy)
+  - [Terrain fill](#terrain-fill)
+  - [Persistence](#persistence-persistencepy)
+- [Editor vs. runtime](#editor-vs-runtime)
+- [Configuration](#configuration-the-bigworldsettings-entity)
+- [Measured performance](#measured-performance)
+- [How it uses the plugin API](#how-it-uses-the-plugin-api)
+- [Isolation & compatibility](#isolation--compatibility)
+- [Generating and benchmarking worlds](#generating-and-benchmarking-worlds)
+- [Files](#files)
+- [Roadmap](#roadmap)
 
 ---
 
-## What ships
-
-Two example plugins live in this directory, and they are deliberately different
-in kind:
-
-| Plugin | Kind | What it demonstrates |
-|--------|------|----------------------|
-| [`tidy`](tidy/) | **Gameplay** | Pick-up-and-put-away games (books back on the shelf, tidy the museum, sort the warehouse). Entities, I/O ports, a carry/place runtime, a HUD goal. |
-| [`bigworld`](bigworld/) | **Runtime layer** | Cell streaming that keeps only the area around the player active in maps of hundreds of thousands of brushes. Uses the event bus, cross-plugin services, and host wrapping rather than adding entities to place. See its own [README](bigworld/README.md). |
-
-Between them they exercise nearly the whole API: entity registration and I/O
-(`tidy`), and the open-ended [`PluginHost`](API.md#pluginhost--the-open-ended-engine-seam)
-extension seam (`bigworld`).
-
----
-
-## The idea in one picture
-
-The core editor and engine call *into* a manager; plugins register *with* it and
-never import editor internals except through the API helpers. That inversion is
-the whole design — it keeps large editor/engine source files untouched and lets a
-build with no `plugins/` directory run completely unchanged.
+## The idea
 
 ```
-      Core editor / engine                 Plugin package (yours)
-      ───────────────────                  ──────────────────────
-         load_plugins()  ───────────────▶  register(EditorAPI)
-                                              entity types, I/O, schemas, menus
-         enter play mode ───────────────▶  register_runtime(RuntimeAPI)
-                                              I/O input handlers, scene services
-                          ───────────────▶  connect(PluginHost)
-                                              engine events, services, wraps
-         every tick      ───────────────▶  on_tick(logic, TickContext)
-         leave play mode ───────────────▶  on_play_stop(logic)
+                Fio World
+                    │
+          ┌─────────┴─────────┐
+          │ Existing 512 Grid │   (engine/physics.py SpatialGrid — reused, not replaced)
+          └─────────┬─────────┘
+                    │
+              Big World Plugin
+                    │
+          ┌─────────┴─────────┐
+          │   Cell Manager    │
+          └─────────┬─────────┘
+                    │
+             2048-unit radius
+                    │
+          ┌─────────┴─────────┐
+      ACTIVE CELLS       INACTIVE CELLS
+          ▼                   ▼
+   Render / Physics      Stored only
+   Entities / Lights
 ```
 
-Everything else — the property panel, the I/O editor, serialization, 3D model
-rendering — works for plugin entities **for free**, because plugin entities are
-ordinary `Thing` subclasses.
+The cell coordinates, the 512-unit cell size, and the multi-cell "spanning" rule
+are all borrowed directly from Fio's existing `engine.physics.SpatialGrid`. Big
+World adds one thing on top: a per-frame decision about which cells are active,
+and a reversible way to apply that decision to the live engine.
+
+Work each frame is proportional to **active cells + objects in active cells** —
+*not* to the total size of the world. That is the entire point.
 
 ---
 
-## How discovery and dispatch work
+## Quick start
 
-A plugin is a Python **sub-package of `plugins/`** that exposes a module-level
-`PLUGIN` instance (a `FioPlugin` subclass) — or a `get_plugin()` factory — from
-its `__init__.py`.
+1. Open a map in Fio and place a **Big World Settings** entity
+   (**Plugins ▸ Big World**). Its mere presence turns streaming on for that map;
+   its properties set the radii. A map *without* one loads and plays exactly as
+   before — see [Isolation & compatibility](#isolation--compatibility).
+2. Enter play mode. Only cells within the activation radius of the player are
+   active; walking moves the active set with you.
+3. The debug overlay (top-left) shows live cell/brush/entity counts and a minimap
+   of active cells.
 
-At startup the editor (and any process that imports the engine) calls
-`plugins.manager.load_plugins()`. The `PluginManager` then:
-
-1. **Discovers** every sub-package of `plugins/`.
-2. **Loads** each one and calls `register(EditorAPI)` — where the plugin declares
-   entity types, I/O definitions, property schemas and editor palette entries.
-   This runs in the editor *and* the engine, so it must be **UI-free**.
-3. **Attaches** to each play session's logic thread via
-   `register_runtime(RuntimeAPI)` and `connect(PluginHost)` — I/O input handlers,
-   scene services, engine-event subscriptions.
-4. **Dispatches** the play lifecycle: `on_play_start`, `on_tick`, `on_play_stop`.
-
-Every call into plugin code is wrapped: a plugin that raises logs an error to the
-debug console instead of crashing the editor or a play session.
-
-**Runtime attach + enable gating.** Every loaded plugin's I/O handlers and event
-hooks are registered once, when the logic thread is built, but each one
-**self-gates on its plugin's live `enabled` flag**. So a plugin enabled *after*
-startup (e.g. a disabled-by-default one auto-enabled when its level loads) has
-working inputs and hooks with no re-attach, while a disabled plugin's inputs stay
-inert. Play-start/tick/stop dispatch is likewise gated and, on the hot per-tick
-path, served from a cache that only rebuilds when the enabled set changes — a map
-whose active plugins don't tick pays almost nothing per frame.
-
-**Kill switch.** Set `FIO_NO_PLUGINS=1` to disable the entire plugin system for a
-launch (nothing is discovered or loaded).
-
----
-
-## Integration points in the core
-
-The **engine** play lifecycle is wired **natively**:
-`engine.logic_thread.LogicThread` calls the plugin manager directly —
-`attach_runtime` in `__init__`, `dispatch_play_start`/`dispatch_play_stop` in
-`set_play_mode`, and the cached, early-out `tick()` in `_tick_play_mode`. Each
-call is guarded, so a build without the `plugins/` package runs unchanged.
-
-The **editor** integrations stay as small, guarded monkey-patches in
-[`integration.py`](integration.py) (cold paths only — menus, load hooks, export),
-so the large editor source files are left untouched. The only editor edit is a
-tiny bootstrap in `editor/__init__.py`.
-
-| File | Role |
-|------|------|
-| `engine/logic_thread.py` | **Native** plugin hooks: `attach_runtime` (`__init__`), play-start/stop (`set_play_mode`), per-tick dispatch (`_tick_play_mode`). All guarded and optional. |
-| `editor/__init__.py` | Bootstrap: `load_plugins()` + `integration.apply()`, run once when the editor package is first imported (before any map loads). |
-| [`integration.py`](integration.py) | Installs the editor hooks: auto-enable/disable of disabled-by-default plugins onto `EditorState` (`load_from_data` enables for a level's entities, `clear_scene` reverts on File ▸ New); a **Plugins ▸ &lt;plugin&gt;** submenu onto `View2D`'s right-click menu; and a top-level **Plugins** menu onto `Ui_MainWindow`. |
-| `editor/package_exporter.py` | **Native** plugin bundling: `PackageExporter.export` calls `plugins.packaging.augment_fiopak` as a first-class final step once the base `.fiopak` is written. Guarded, so a build without the plugin system just skips it. |
-| [`packaging.py`](packaging.py) | Bundles the plugins a `.fiopak`'s maps depend on (code + assets + manifest) so exported packages are self-contained. |
-
-> The right-click **Plugins ▸ &lt;plugin&gt;** submenu is injected by temporarily
-> swapping `QMenu.exec_` on the class while the 2D view builds its menu. That
-> swap must be reversed precisely — using the class's raw `exec_` **descriptor**,
-> not the unbound-method wrapper — or every later `menu.exec_(pos)` in the app
-> breaks. See the comments in [`integration.py`](integration.py) if you touch it.
-
----
-
-## Writing a plugin
-
-Create `plugins/myplugin/plugin.py` and `plugins/myplugin/__init__.py`:
-
-```python
-# plugins/myplugin/plugin.py
-from plugins.api import FioPlugin, io_def
-from editor.things import Thing
-
-class Coin(Thing):
-    pixmap_path = "assets/sprites/pickup.png"
-    def __init__(self, pos=None, properties=None):
-        super().__init__(pos, properties)
-        self.properties['type'] = 'coin'          # the I/O + serialization key
-        self.properties.setdefault('value', 1)
-
-class MyPlugin(FioPlugin):
-    name = "myplugin"
-    version = "1.0.0"
-    category = "My Stuff"
-
-    def register(self, api):
-        api.register_entity(Coin, menu_label="Coin")
-        api.register_io('coin',
-            inputs=[io_def('Collect', "Force-collect this coin")],
-            outputs=[io_def('OnCollected', "Fired when collected")])
-
-    def register_runtime(self, api):
-        def collect(entity, param, logic):
-            entity.properties['collected'] = True
-        api.register_input_handler('coin', 'collect', collect)
-
-    def on_tick(self, logic, ctx):
-        ...   # your per-tick gameplay
-```
-
-```python
-# plugins/myplugin/__init__.py
-from .plugin import MyPlugin
-PLUGIN = MyPlugin()
-```
-
-That's it. Restart the editor and **Coin** appears under **Plugins ▸ myplugin**
-in the 2D view's right-click menu, with a Properties panel and an I/O tab, and
-the `LogicSpawner` can spawn it at runtime.
-
----
-
-## The four API objects
-
-The manager hands your plugin four objects at defined moments. Full signatures
-are in [`API.md`](API.md); here is what each is *for*:
-
-| Object | Handed to | Use it for |
-|--------|-----------|------------|
-| [`EditorAPI`](API.md#editorapi--load-time-registration) | `register(api)` | declare entity types, I/O, property schemas, extra property fields/tabs, renderers |
-| [`RuntimeAPI`](API.md#runtimeapi--per-session-services) | `register_runtime(api)` | register I/O input handlers; query the scene (`entities_of_type`, `things_near`, `raycast_from_crosshair`); `spawn`/`despawn` |
-| [`PluginHost`](API.md#pluginhost--the-open-ended-engine-seam) | `connect(host)` | subscribe to engine events (`host.on(...)`); reach any subsystem (`host.get(...)`); publish/consume services; guarded `host.wrap(...)` |
-| [`TickContext`](API.md#tickcontext--the-per-tick-object) | `on_tick(logic, ctx)` | read input (`ctx.use_pressed`, `ctx.key_down('e')`); drive the HUD (`ctx.set_prompt`, `ctx.toast`) |
-
-Entity properties can be made self-documenting with
-[`PropertySpec`/`prop()`](API.md#propertyspec-and-prop), and plugins share
-cross-level state through the [`GlobalStore`](API.md#globalstore--cross-level-storage).
-
----
-
-## Rules of thumb
-
-- **The entity `type` string is the contract.** `properties['type']` must match
-  the keys you pass to `register_io` and `register_input_handler`. If you
-  subclass `Thing` directly, the base defaults `type` to the lowercased class
-  name; set it explicitly to be safe.
-- **Want 3D geometry in play mode?** Subclass the engine's `Model` (as `tidy`'s
-  `TidyObject` does) or set a `model_path` property — any `Thing` with a
-  `model_path` is rendered by the existing model pipeline. Things without one are
-  editor-only sprites.
-- **Keep `register()` UI-free.** It runs in headless/engine contexts too — no Qt,
-  no OpenGL.
-- **Do per-tick work in `on_tick`, and keep it cheap.** `ctx.use_pressed` is the
-  edge-triggered interact key for that tick; `ctx.interaction_consumed` tells you
-  whether the core already claimed the HUD/use this tick.
-- **Use the HUD helpers, not `logic.current_hud_message`.** `ctx.set_prompt`
-  respects priority and won't clobber the core's prompt; `ctx.toast` shows a
-  timed message.
-- **Restore what you mutate.** If you move, hide or disable entities during play,
-  put them back in `on_play_stop` so the edited map is unchanged (see
-  `TidySession.stop`).
-- **Reach the wider engine through the host, not imports.** `host.on(...)`,
-  `host.get(...)`, `host.provide(...)` keep you decoupled and fail-safe.
-
----
-
-## Finding and toggling plugins in the editor
-
-Loaded plugins appear two ways:
-
-- **Menu bar → Plugins** — a submenu per plugin with an **Enabled** checkbox to
-  toggle it on/off, its placeable entities (click one to drop it at the origin,
-  then drag it into place), and an *About* entry. The base of the menu has an
-  *About the plugin system* summary.
-- **2D view right-click → Plugins ▸ &lt;plugin&gt;** — place an entity exactly
-  where you click (only shown for enabled plugins).
-
-Plugin entities also get a Properties panel and an I/O tab automatically.
-
-Loading is **silent** by default — nothing about plugins appears in the console.
-Set `FIO_PLUGIN_DEBUG=1` to see informational load/registration messages (errors
-are always shown).
-
----
-
-## Enabling / disabling plugins
-
-- **Disabled by default + auto-enable on load.** A plugin can set
-  `enabled = False` on its class to ship inert — ordinary maps never pay for
-  gameplay they don't use. When a level whose `things` reference the plugin's
-  entity types is loaded, the manager turns it on automatically
-  (`PluginManager.auto_enable_for_map`, wired into level loading in the editor
-  and the standalone player). Both example plugins ship this way: `tidy` stays
-  off until you open a map like `maps/Tidy_Test.json`, and `bigworld` until a map
-  contains a `BigWorldSettings` entity. The flip is symmetric — clearing the
-  scene (**File ▸ New**, or loading a map that doesn't use the plugin) reverts a
-  level-driven auto-enable via `PluginManager.disable_auto_enabled`, so an empty
-  map starts clean. This is a runtime, per-session flip: it never rewrites the
-  persisted `[Plugins] disabled` list, and a plugin you enabled by hand from the
-  menu is never auto-disabled underneath you.
-- **Per plugin, in the editor.** Toggle **Enabled** in the Plugins menu. A
-  disabled plugin stops its gameplay and greys out placement; the choice is saved
-  to `settings.ini` (`[Plugins] disabled`) and restored next launch. (Entity
-  *registration* isn't undone live, so a re-enable is instant while a full unload
-  happens on restart.)
-- **At startup, globally.** Set `FIO_DISABLED_PLUGINS` to a comma-separated list
-  of plugin/package names so they never load, or `FIO_NO_PLUGINS=1` to disable
-  the whole system:
-
-  ```bash
-  FIO_DISABLED_PLUGINS=tidy python main.py
-  FIO_NO_PLUGINS=1 python main.py
-  ```
-
----
-
-## Packaging plugins into a `.fiopak`
-
-`.fiopak` exports are **plugin-aware**. When you export a package (File →
-Export…), the exporter scans the maps it bundles, works out which plugins their
-entities come from, and injects those plugins — **code and assets** — plus the
-plugin-system core into the archive, recording them in `metadata.json` under
-`"plugins"`. The package is then self-contained and loads on another machine.
-
-- Plugin assets keep their repo-relative paths (e.g.
-  `plugins/tidy/assets/tidy_object.obj`), so a map's `model_path` resolves
-  straight out of the package — no rewriting.
-- Packages that use no plugin entities are unaffected (the step is a no-op)
-  unless a **global plugin** is in play (below).
-- **Global plugins** (no placeable entities — which sets `global_plugin = True`)
-  can't be found from a map's `things`. They are bundled when they are *enabled*
-  at export time, or when a map names them under a top-level
-  `"required_plugins": [...]` (with optional `"plugin_config": {name: {...}}`).
-  The exporter bundles them, records them in the manifest, and bakes
-  `required_plugins` / `plugin_config` into each map so the standalone player
-  (which only sees map data) enables and configures them without any entity to
-  trigger auto-enable.
-- The player side exposes the dependency: `FioPackage.required_plugins` reads the
-  manifest list, and `plugins.packaging.load_package_plugins(root)` loads the
-  bundled plugins from an extracted package.
-
-The mechanics live in [`packaging.py`](packaging.py) (`augment_fiopak`,
-`load_package_plugins`). Bundling is a native step of
-[`editor/package_exporter.py`](../editor/package_exporter.py) —
-`PackageExporter.export` calls `augment_fiopak` itself once the base archive is
-written; it is **not** monkey-patched on by `integration.py`.
-
----
-
-## Running plugins outside the editor
-
-Plugin gameplay runs in **both** hosts:
-
-- **Editor Play mode** — the logic thread dispatches the plugin lifecycle/tick
-  (via `plugins.integration`).
-- **Standalone `.fiopak` player** (`player/`, incl. the Android build) — the
-  `player.plugin_host.PlayerPluginHost` loads the package's plugins, builds
-  entity instances from the map, and drives the same lifecycle/tick from the
-  player's frame loop against a camera→player bridge (USE = interact).
-
-To make this work everywhere, the plugin runtime is **dependency-free**: no
-PyGLM (plain-Python vector math) and no PyQt. Plugin entities normally subclass
-the editor's `Thing`/`Model`, but when the editor package is absent (the player)
-they fall back to [`entitybase.py`](entitybase.py), a tiny PyQt-free base. So the
-same plugin loads in the editor, the desktop player, and the APK.
-
-> **Renderer note.** The player's renderer is still bringing up map-model
-> drawing, so plugin gameplay *runs* (state, HUD text via `render_state["hud"]`)
-> ahead of the models being visible on screen. The host exposes `things` and
-> `hud_message` for the renderer to consume once it draws dynamic models.
-
----
-
-## Android APK
-
-`player/buildozer.spec` includes `plugins/*`, so the plugin system + bundled
-plugins (code and `.obj`/`.mtl` assets) ship inside the APK. The **Android Player
-Build** workflow (`.github/workflows/android-build.yml`) bundles
-`maps/Tidy_Test.json` as the sample `game.fiopak` (self-contained — the plugin
-travels with it), so the on-device build exercises the plugin loader and runtime.
-Trigger it from **Actions → Android Player Build → Run workflow**; the APK is
-uploaded as the `fio-player-debug-apk` artifact.
-
----
-
-## Debugging and tests
-
-Set `FIO_PLUGIN_DEBUG=1` for informational load/registration logging (errors are
-always shown regardless).
-
-The tests are headless — no display / OpenGL required:
+`maps/bigworld_demo.json` is a small, hand-sized example: brushes across a 6×6
+cell block, a spanning floor, NPCs, a light, a persistent world-manager and a
+settings entity.
 
 ```bash
-# Tidy plugin (gameplay)
-QT_QPA_PLATFORM=offscreen python plugins/tidy/tests/test_smoke.py       # runtime + integration
-QT_QPA_PLATFORM=offscreen python plugins/tidy/tests/test_packaging.py   # .fiopak bundling
-python plugins/tidy/tests/test_player.py                                # player path (editor/PyQt/glm blocked)
-
-# Big World plugin (runtime scalability)
+# run the headless test suite
 python -m plugins.bigworld.tests.test_bigworld
 ```
 
+Generating and benchmarking large synthetic worlds is covered
+[below](#generating-and-benchmarking-worlds).
+
 ---
 
-## Reference map
+## Architecture
 
-| Want to… | Read |
-|----------|------|
-| Understand the whole system | this file |
-| Look up a class/method/signature | [`API.md`](API.md) |
-| See the annotated API source | [`api.py`](api.py) |
-| Use the open-ended engine seam | [`host.py`](host.py) / [API §PluginHost](API.md#pluginhost--the-open-ended-engine-seam) |
-| Read a complete gameplay plugin | [`tidy/`](tidy/) |
-| Read a runtime-layer plugin | [`bigworld/README.md`](bigworld/README.md) |
-| Understand editor wiring | [`integration.py`](integration.py) |
-| Understand `.fiopak` bundling | [`packaging.py`](packaging.py) |
-| Write for the PyQt-free player | [`entitybase.py`](entitybase.py) |
+### Cells (`cell.py`)
+
+A cell is addressed by **integer** coordinates `(cell_x, cell_z)` — never floats
+— and covers a fixed `512 × 512` column in X/Z, using `floor(coord / 512)`,
+*identical* to `SpatialGrid`. Objects are **referenced** by a cell, never copied
+into it, so a brush's data and UUID live in exactly one place regardless of how
+many cells its footprint touches.
+
+Each cell moves through a streaming lifecycle:
+
+```
+UNLOADED → LOADING → INACTIVE → ACTIVE → UNLOADING
+```
+
+For this milestone the whole map is resident in RAM, so a cell is only ever
+`INACTIVE` or `ACTIVE`. The `LOADING`/`UNLOADING` states and the
+`load_cell`/`unload_cell` API exist so true asynchronous disk streaming can be
+layered on later **without reshaping the runtime above it** (see
+[Roadmap](#roadmap)). `BigWorldCell` exposes `key()`, `is_active()`,
+`is_loaded()`, `object_count()`, `bounds()` and `clear()`; `CELL_SIZE` and the
+`CellState` enum are the shared constants.
+
+### Manager (`manager.py`)
+
+`BigWorldManager` owns the index and the active-set calculation.
+
+- `index_world(brushes, things)` builds a UUID-addressed index and groups objects
+  into cells: brushes into **every** cell their footprint overlaps (spanning
+  handled exactly like `SpatialGrid.populate`), point entities into one cell,
+  lights into every cell their influence *radius* reaches. `add_brush` /
+  `add_thing` incrementally index a single object.
+- `update(player_pos, force=False)` is the per-frame entry point. It **early-outs
+  until the player crosses a cell boundary**, then:
+  - obtains candidate cells from the **square** bounding the radius (cheap integer
+    ranges over the grid), then keeps only those whose nearest edge is within the
+    **circular** radius — never measuring distance to individual brushes;
+  - applies **hysteresis** — a cell is added within `activation_radius` but not
+    dropped until beyond `deactivation_radius` — so loitering on a boundary does
+    not thrash cells on and off;
+  - returns an `ActivationDelta`: the **net** cells entering and leaving,
+    reference-counted so a brush shared by several cells is switched off only when
+    its **last** active cell leaves.
+- `activate_cell` / `deactivate_cell` return the `(brushes, things, lights)` that
+  changed state; `active_brushes()`, `active_things()`, `active_lights()`,
+  `is_brush_active()`, `is_thing_active()` and `stats()` expose the live set.
+
+### Runtime (`runtime.py`)
+
+`BigWorldSession` applies the manager's active set to the live engine by
+cooperating with existing machinery — every change is tracked and **fully
+reversed on play-stop**:
+
+| Concern | Integration (no subsystem replaced) |
+|---------|-------------------------------------|
+| Rendering | Inactive brushes get Fio's `hidden` flag; the per-frame cull already drops hidden brushes before the draw path, so only active geometry is submitted. |
+| Physics | The player already collides via `SpatialGrid.get_potential_colliders`, which only returns brushes in the player's *local* cells — distant inactive geometry is never queried. Nothing to duplicate. |
+| Entities | Inactive entities get `disabled` (and `hidden`), which the monster AI and pickup handlers already treat as "skip me". |
+| Lights | Inactive lights are hidden, keeping the lights the renderer considers local to active cells — no global increase in light count. |
+
+`start(player_pos)` snapshots what it is about to change and streams in the region
+around the player; `tick(player_pos)` advances streaming (cheap — the manager
+early-outs unless a boundary was crossed); `stop()` restores everything;
+`player_cell()` and `stats()` feed the debug overlay.
+
+### Terrain fill
+
+Fio's procedural terrain is generated from noise as a pure function of world
+position, so any point's height is the same however the mesh around it is built.
+Big World uses that to fill a massive world with ground **without tessellating
+the entire grid up-front**:
+
+- With `terrain_fill` on, the session expands the terrain's chunk bounds to the
+  bounding box of every indexed cell — so terrain covers the whole streamed world
+  seamlessly — and switches the terrain into **streaming mode**.
+- In streaming mode the terrain keeps resident only the chunks within
+  `terrain_stream_radius` of the camera and frees chunks beyond it (with a
+  hysteresis band, exactly like the cell manager). Because heights are
+  position-deterministic, a chunk streamed back in is byte-for-byte identical: the
+  world **stays the same shape**, it is simply built around the player as it moves
+  rather than all at once.
+- The terrain change is snapshotted on play-start and **restored verbatim on
+  play-stop**, so the authored terrain (bounds, streaming flag, radius) is
+  returned untouched — the editor is unaffected. The session never enables or
+  disables the terrain itself, and never makes an OpenGL call off the render
+  thread: a bounds change defers its chunk prune to the next render frame.
+
+Terrain streaming is a plain `engine.terrain.Terrain` feature (off by default,
+`set_streaming` / `set_world_extent`) that works with or without this plugin; Big
+World just drives it from the same player position it already tracks.
+
+### Persistence (`persistence.py`)
+
+Almost nothing new needs saving, by design:
+
+- **UUIDs** are Fio's existing identity (`brush['id']` /
+  `thing.properties['id']`). Big World only *reads* them — an object keeps the
+  same UUID across load → activate → deactivate → save → reload → stream.
+- **Cell assignment** is derived from position + the shared grid, so it is
+  recomputed on load and can never be "lost".
+- The only new datum — the map's streaming config — rides on the ordinary
+  `BigWorldSettings` entity, so it round-trips through Fio's normal save/load with
+  no core change. Transient runtime markers are stripped before a save.
+
+#### Play-session saves are forced deltas
+
+A **play-session save** of a Big World map (the native `save`/`quicksave`) is
+always a **delta**, never a full world snapshot — chosen automatically:
+
+```
+Standard Fio map  → Full save
+Big World map      → Forced delta save (world_mode = "bigworld")
+```
+
+The live `BigWorldSession` keeps a **persistent cell delta registry** —
+`{"cx,cz": {"things": [...], "brushes": [...]}}` — that records each cell's
+gameplay changes *relative to that cell's base state*, keyed by the same
+`(cell_x, cell_z)` cell id the streaming manager uses, and by stable **UUID**
+within a cell. It is independent of which cells are currently streamed in:
+
+```
+Cell loads → base instantiated → stored cell delta applied → gameplay mutates
+→ commit_cell() merges the change into the registry → cell unloads
+→ the change stays in the registry
+```
+
+Because the in-RAM streaming model never frees objects (parking only toggles
+`hidden`/`disabled`/`bw_active`), a cell modified earlier and since unloaded is
+still resident, so its changes are captured too. On save, `commit_all()` flushes
+every cell in one authoritative pass (nothing pending is omitted); the registry
+converges on *current − base*, dropping a change that has returned to base rather
+than accumulating history. Streaming state is normalised away before diffing
+(`normalize_streaming_state`) so a currently-parked-but-unmodified cell never
+appears as a change. The save carries base-world identity (name + a UUID
+fingerprint) to fail safe against the wrong world.
+
+On load the save is auto-detected as a Big World delta, the base world is
+validated, player/runtime state is restored, and every cell's UUID-keyed changes
+are overlaid onto the freshly-loaded world (and the registry handed back to the
+live session, so a cell streamed in later still carries its saved changes). This
+reuses the core delta machinery in
+[`engine/savegame.py`](../../engine/savegame.py) — Big World only adds the
+per-cell bucketing (`build_cell_delta_registry`) and streaming normalisation, so
+there is no second persistence subsystem and **no plugin-API bump**. Ordinary
+maps are untouched and keep their full-snapshot saves.
+
+#### Disk streaming — actually freeing unloaded cells (opt-in)
+
+The default session keeps every object resident and only toggles flags, so an
+unloaded cell's changes are trivially still in memory. The **disk-streaming**
+milestone ([`streaming.py`](streaming.py), enabled by the
+`disk_streaming` setting) is the real thing: an unloaded cell's objects are
+**removed from the live scene and freed**, and re-instantiated from a *cell
+source* (its "disk") when the cell streams back in.
+
+```
+Cell streams in   → base instantiated from the source (a fresh copy)
+                  → its base is CAPTURED here, the first time it is resident
+                  → its saved delta is re-applied by UUID → cell active
+gameplay mutates the cell
+Cell streams out  → its delta is COMMITTED to the registry  ← before the free
+                  → its objects are removed from the scene and freed
+Cell streams in again → base re-instantiated + delta re-applied → change is back
+```
+
+Two things the in-RAM path got for free are earned here, and they are the point:
+
+- **Each cell's base is captured the first time it streams in**, per UUID, from
+  the pristine `CellSource` — because the whole world is never resident at once,
+  a base can't be snapshotted up-front.
+- **A cell's changes are committed before it is freed**, so the world-level
+  registry (kept per UUID, bucketed by cell only when serialised) is the single
+  source of truth for the save — most of the world isn't loaded to serialize.
+  Freed UUIDs drop their retained base (re-captured on reload), so memory stays
+  proportional to *loaded* cells, not world size.
+
+`MemoryCellSource.from_logic(logic)` makes this usable over any ordinary map with
+no new on-disk format (it deep-copies the map once as the pristine "disk image",
+then the session empties the scene and streams cells in/out); `DirectoryCellSource`
+reads `cell_<cx>_<cz>.json` files for a real on-disk world. Save/load reuse the
+**same** Big World save format and the same `compute_delta_level` delta maths, so
+a disk-streamed save is byte-compatible with an in-RAM one. `DiskStreamingSession`
+exposes the same `commit_all` / `serialize_registry` / `base_identity` surface the
+engine's save branch already calls, and loading routes through
+`restore_saved` (the world can't be overlaid wholesale — cells apply their delta
+as they stream). Spanning objects are reference-counted, so a brush straddling
+two cells is freed only when its **last** loaded cell leaves. The base world is
+fingerprinted to fail a load safely against the wrong world.
+
+> Scope: the streaming/free/base-capture/registry/save-load logic is complete and
+> covered by [`tests/test_bigworld_disk.py`](tests/test_bigworld_disk.py). The
+> remaining engine-side work is live integration — mutating the scene's
+> `things`/`brushes` lists mid-frame and invalidating the renderer/physics caches
+> for freed objects — so the setting ships **experimental** and off by default,
+> falling back to the in-RAM session if anything goes wrong.
+
+---
+
+## Editor vs. runtime
+
+Big World is primarily a **runtime** system. In the editor the full map stays
+available — select, move, duplicate, delete, edit properties, read UUIDs — and
+the session only parks geometry inside **play mode**, restoring everything exactly
+on stop. Distant geometry is never made permanently inaccessible.
+
+---
+
+## Configuration (the `BigWorldSettings` entity)
+
+One optional entity per map holds all config. Placing it is the opt-in; its
+properties tune the behaviour:
+
+| Property | Default | Meaning |
+|----------|---------|---------|
+| `enabled` | `true` | Master switch for streaming on this map. |
+| `activation_radius` | `2048` | Cells within this distance of the player activate. |
+| `deactivation_radius` | `2304` | Active cells drop only beyond this (hysteresis; clamped ≥ `activation_radius`). |
+| `show_cell_debug` | `true` | Draw the stats panel + active-cell minimap in play mode. |
+| `terrain_fill` | `false` | If the map has a procedural terrain, expand it to cover every cell of the world and **stream its chunks** around the player instead of building the whole grid up-front. Off by default — terrain is left exactly as authored. |
+| `terrain_stream_radius` | `0` | World units of terrain kept resident around the player. `0` derives it from the activation radius. |
+
+The schema is declared with typed
+[`prop()`](../API.md#propertyspec-and-prop) specs (ranged floats, checkboxes,
+tooltips), so the editor renders proper widgets for each field.
+
+**Persistent (never-streamed) entities.** Mark any single entity persistent with
+a truthy `bw_persistent` property; entity `type`s like `worldmanager` /
+`globalscript` / `questcontroller` are persistent by default. Use this for world
+managers, global game state, and quest/script controllers that must keep running
+no matter where the player stands.
+
+---
+
+## Measured performance
+
+`python -m plugins.bigworld.tools.generate_world benchmark` on the reference
+machine:
+
+```
+  brushes  startup  still/frame  per-cross   active/total brushes    save    load  idx-mem
+   10,000     155m       3.44us     0.77ms       501/10,000        327m   153m    2.5M
+   50,000    1030m       3.89us     1.01ms       501/49,729       1789m  1360m   14.4M
+  100,000    1471m       3.67us     0.97ms       501/99,856       3268m  2709m   28.7M
+  250,000    4127m       3.60us     1.09ms       501/250,000      9757m  8137m   65.8M
+  500,000    7497m       3.68us     1.00ms       501/499,849     18941m 15768m  131.6M
+```
+
+The point of the table: **active brushes stay ~constant (≈500)** while the world
+grows to 500k, and the **per-frame stationary cost (~3.7 µs)** and
+**per-cell-crossing cost (~1 ms)** stay **flat regardless of world size**. Work is
+proportional to `active cells + objects in active cells`, not to total world
+objects.
+
+Startup and save/load *do* scale with the total (a one-off whole-map pass —
+acceptable while the map is resident in RAM). Removing even that is the future
+milestone: async disk streaming, discussed in the [Roadmap](#roadmap).
+
+---
+
+## How it uses the plugin API
+
+Big World is a good tour of the open-ended half of the
+[plugin API](../API.md) — it adds almost nothing to place, and instead hooks the
+engine:
+
+- **`register`** declares the single `BigWorldSettings` entity and its typed
+  property schema. That entity's presence is the map's opt-in.
+- **`on_play_start` / `on_tick` / `on_play_stop`** build, advance and tear down a
+  `BigWorldSession`, restoring the world exactly.
+- **`connect(host)`** subscribes to the **`render.overlay`** event to draw the
+  debug panel + minimap with the live `QPainter`, and publishes the live session
+  as a **`bigworld` service** (`host.provide("bigworld", session)`) that the
+  renderer, other plugins, or tools can look up via `host.service("bigworld")`.
+- It declares **`api_version = "1.2.0"`** because it needs the
+  [`PluginHost`](../API.md#pluginhost--the-open-ended-engine-seam) / event-bus
+  surface, and ships **`enabled = False`** so the manager only auto-enables it for
+  maps that actually contain a `BigWorldSettings` entity.
+
+No core engine file is edited: it hooks the play lifecycle, listens on the
+`render.overlay` event, and cooperates with existing flags (`hidden` /
+`disabled`).
+
+---
+
+## Isolation & compatibility
+
+- **Zero cost when unused.** Ships **disabled by default**, auto-enabled only for
+  maps that contain a `BigWorldSettings` entity, so ordinary small maps incur no
+  overhead and behave exactly as before.
+- **Fails safe.** Every host call is guarded; a failure never takes down a frame —
+  including the debug overlay, which draws nothing rather than raising.
+- **Non-invasive.** Touches no core engine file. It cooperates with machinery Fio
+  already has rather than duplicating it.
+
+---
+
+## Generating and benchmarking worlds
+
+The `generate_world` tool produces synthetic streaming maps and runs the scaling
+benchmark headlessly:
+
+```bash
+# scaling report across 10k / 50k / 100k / 250k / 500k brushes
+python -m plugins.bigworld.tools.generate_world benchmark
+
+# write a streaming-enabled map file
+python -m plugins.bigworld.tools.generate_world generate --brushes 100000 \
+    --out maps/bigworld_100k.json
+```
+
+The generated maps include a `BigWorldSettings` entity, so they auto-enable the
+plugin on load.
+
+---
+
+## Files
+
+| File | Role |
+|------|------|
+| `cell.py` | `BigWorldCell`, the `CellState` streaming states, shared 512-grid coordinate maths. |
+| `manager.py` | `BigWorldManager` — UUID index, active-cell calc, hysteresis, streaming API, stats. |
+| `runtime.py` | `BigWorldSession` — applies the active set to the live engine (reversible); persistent cell delta registry. |
+| `streaming.py` | `DiskStreamingSession` + `CellSource`/`MemoryCellSource`/`DirectoryCellSource` — disk streaming that frees unloaded cells, captures each cell's base on first stream-in. |
+| `entities.py` | `BigWorldSettings` — the map-level opt-in / config entity. |
+| `persistence.py` | Config extraction, save hygiene, UUID-stability verification, cell delta registry + streaming normalisation. |
+| `plugin.py` | `FioPlugin` wiring + the debug overlay. |
+| `tools/generate_world.py` | Synthetic map generator + benchmark harness. |
+| `tests/test_bigworld.py` | Headless test suite. |
+
+---
+
+## Roadmap
+
+The API is deliberately shaped so **asynchronous disk streaming** slots in behind
+`load_cell` / `unload_cell` (reading/writing cell bytes) **without changing** the
+`activate_cell` / `deactivate_cell` runtime above it. Profile first: the current
+bottleneck is startup indexing + whole-map save — both one-off, both removed by
+real disk streaming — not the per-frame path, which is already flat.
