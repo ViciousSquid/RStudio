@@ -20,6 +20,7 @@ Fio is a modern, instant-iteration take on classic CSG level editors<br>
 - Local split-screen multiplayer
 - Export projects as portable, self-contained packages
 - A continuous camera system with first-person and top-down presets.
+- Fully extendable via plugin API (example plugins included)
 - **Designed to bring back the immediacy of classic Radiant/Worldcraft workflows**
 
 ### [💾 Download Binaries for Windows/macOS/Linux](https://github.com/ViciousSquid/Fio/releases)  
