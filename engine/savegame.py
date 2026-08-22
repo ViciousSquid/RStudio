@@ -787,6 +787,13 @@ def _restore_bigworld(logic, data: dict, current_map_name: str = "") -> dict:
     handed to the live Big World session so cells that stream in later carry the
     saved changes.
     """
+    # Disk-streaming session: the world isn't fully resident, so it can't be
+    # overlaid wholesale — hand off to the session, which streams cells in and
+    # re-applies each cell's delta as it loads.
+    session = getattr(logic, "_bigworld", None)
+    if session is not None and getattr(session, "is_disk_streaming", False):
+        return session.restore_saved(data, current_map_name=current_map_name)
+
     try:
         current_level = logic.editor_state.get_level_data()
     except Exception:
