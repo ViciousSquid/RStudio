@@ -1822,6 +1822,14 @@ class QtGameView(QOpenGLWidget):
     def _exit_play_mode(self):
         if not self.play_mode:
             return
+        # Prefer the editor's full teardown so the Play button colour, mode
+        # label, properties tab and focus are all restored to editor state.
+        # Reached e.g. when ESC is pressed after the player dies; without this
+        # the Play button would stay red after returning to the editor.
+        editor = getattr(self, 'editor', None)
+        if editor is not None and hasattr(editor, '_exit_play_mode'):
+            editor._exit_play_mode()
+            return
         pos = getattr(self, '_last_player_start_pos', [0, 0, 0])
         angle = getattr(self, '_last_player_start_angle', 0)
         self.toggle_play_mode(pos, angle)
