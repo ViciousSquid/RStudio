@@ -393,14 +393,21 @@ class BigWorldSession:
             return {"things": [], "brushes": []}
 
     def _cell_live_level(self, cell) -> dict:
-        """Serialize just one cell's resident objects into a partial level."""
+        """Serialize just one cell's resident objects into a partial level.
+
+        Covers both the cell's entities *and* its lights — the manager files
+        lights in a separate ``cell.lights`` list, but a light is just a
+        gameplay entity (a switched-off light is a real change), so both are
+        serialized as ``things`` and diffed the same way. Without the lights a
+        light change would only be captured by the save-time ``commit_all``, not
+        by the commit that runs as the cell unloads.
+        """
         things = []
-        for t in getattr(cell, "things", []) or []:
+        for t in list(getattr(cell, "things", []) or []) + list(getattr(cell, "lights", []) or []):
             to_dict = getattr(t, "to_dict", None)
             if callable(to_dict):
                 try:
                     things.append(to_dict())
-                    continue
                 except Exception:
                     pass
         brushes = [dict(b) for b in (getattr(cell, "brushes", []) or [])

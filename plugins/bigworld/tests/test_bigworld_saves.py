@@ -167,6 +167,41 @@ def test_unloaded_cell_change_survives_in_registry():
     assert b_changed == {"B-mon"}
 
 
+def test_light_change_committed_on_unload():
+    """A light lives in the manager's separate cell.lights list; a change to it
+    must still enter the registry when its cell unloads (not only at save)."""
+    things, brushes = make_world()
+    logic = FakeLogic(things, brushes, A_POS)
+    s = new_session(logic)
+    s.start(player_pos=A_POS)
+
+    # A-light is in Cell A. Change it (a "switched off" light is a real change).
+    a_light = {t.properties["id"]: t for t in things}["A-light"]
+    a_light.properties["on"] = False
+
+    # Walk to B so Cell A unloads. Assert *before* any commit_all().
+    s.tick(player_pos=B_POS)
+    assert "0,0" in s.registry
+    committed = {t["properties"]["id"] for t in s.registry["0,0"]["things"]}
+    assert "A-light" in committed, "light change lost when its cell unloaded"
+
+
+def test_registry_populated_on_unload_without_save():
+    """The invariant, isolated: after a cell unloads, its changes are in the
+    persistent registry with no save/commit_all having been called."""
+    things, brushes = make_world()
+    logic = FakeLogic(things, brushes, A_POS)
+    s = new_session(logic)
+    s.start(player_pos=A_POS)
+    things[0].properties["dead"] = True     # kill A-mon while in Cell A
+
+    assert s.registry == {}                   # nothing committed yet
+    s.tick(player_pos=B_POS)                   # cross into B → Cell A unloads
+    # No commit_all() here — purely the on-unload commit.
+    assert "0,0" in s.registry
+    assert {t["properties"]["id"] for t in s.registry["0,0"]["things"]} == {"A-mon"}
+
+
 def test_forced_delta_save_structure():
     things, brushes = make_world()
     logic = FakeLogic(things, brushes, A_POS)
