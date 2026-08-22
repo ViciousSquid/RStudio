@@ -39,7 +39,6 @@ Fio is a modern, instant-iteration take on classic CSG level editors<br>
 
 An engine built for rapid experimentation.
 Fio explores a unified approach to level editing and runtime simulation:
-
 - Reducing friction between authoring and execution
 - Reintroducing brush/CSG-based workflows in a modern runtime
 - Treating gameplay logic as a visible, editable system
