@@ -1016,7 +1016,8 @@ class LogicThread(threading.Thread):
     # SAVE / LOAD  (native play-session serialization)
     # =========================================================================
 
-    def save_session(self, path: str, *, map_name: str = ""):
+    def save_session(self, path: str, *, map_name: str = "",
+                     save_mode: str = "full", base_level: dict = None):
         """Serialize the live play session to *path*. Returns ``(ok, message)``.
 
         Native counterpart to the editor's ``save`` / ``quicksave`` console
@@ -1024,18 +1025,40 @@ class LogicThread(threading.Thread):
         capture in editor mode. Builds a snapshot with :mod:`engine.savegame`
         (the whole level plus player transform, stats, cheat flags, collected
         keys and door/mover/monster state) and writes it as JSON.
+
+        *save_mode* selects ``full`` / ``delta`` / ``both`` (see
+        :mod:`engine.savegame`); ``delta``/``both`` also want *base_level*, the
+        normalized original map to diff against. Both degrade to ``full`` when no
+        base level is available, so a save is never lost.
         """
         if not self.play_mode:
             return False, "Nothing to save — not in play mode."
         try:
             from engine import savegame
-            snapshot = savegame.build_snapshot(self, map_name=map_name)
+            # Big World maps force a delta save: never a full world snapshot.
+            # The live streaming session owns the persistent per-cell registry.
+            session = getattr(self, "_bigworld", None)
+            if session is not None and getattr(session, "streaming", False):
+                session.commit_all()   # flush every cell, loaded or unloaded
+                snapshot = savegame.build_snapshot(
+                    self, map_name=map_name,
+                    world_mode=savegame.WORLD_MODE_BIGWORLD,
+                    cell_deltas=session.serialize_registry(),
+                    base_world=session.base_identity(map_name))
+            else:
+                snapshot = savegame.build_snapshot(
+                    self, map_name=map_name, save_mode=save_mode,
+                    base_level=base_level)
             savegame.write(path, snapshot)
-            return True, f"Saved play session to '{os.path.basename(path)}'"
+            mode_used = snapshot.get("save_mode", "full")
+            world = snapshot.get("world_mode")
+            label = f"{mode_used}/{world}" if world else mode_used
+            return True, (f"Saved play session to '{os.path.basename(path)}' "
+                          f"({label})")
         except Exception as exc:
             return False, f"Save failed: {exc}"
 
-    def load_session(self, path: str):
+    def load_session(self, path: str, *, map_name: str = ""):
         """Restore a saved play session from *path* as an overlay on the live
         session. Returns ``(ok, message)``.
 
@@ -1044,14 +1067,22 @@ class LogicThread(threading.Thread):
         state is matched back by stable id — so this must run against the same
         map the save was taken on (the caller loads the map and enters play mode
         first when starting from the editor).
+
+        The save mode (full / delta / both / legacy) is auto-detected from the
+        file's metadata; *map_name* is the currently-loaded map, used to validate
+        a delta's base map. Loading never prompts unless recovery is impossible.
         """
         if not self.play_mode:
             return False, "Enter play mode before loading a session."
         try:
             from engine import savegame
             data = savegame.read(path)
-            savegame.restore_snapshot(self, data)
-            return True, f"Loaded play session from '{os.path.basename(path)}'"
+            report = savegame.restore_auto(self, data, current_map_name=map_name)
+            msg = f"Loaded play session from '{os.path.basename(path)}'"
+            warning = report.get("warning")
+            if warning:
+                msg += f" — {warning}"
+            return True, msg
         except FileNotFoundError:
             return False, f"Save file not found: {path}"
         except Exception as exc:

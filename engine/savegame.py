@@ -26,7 +26,8 @@ Snapshot shape::
 
     {
       "fio_savegame": true,
-      "save_version": 1,
+      "save_version": 2,
+      "save_mode": "full",
       "saved_at": "2026-08-21T18:44:00",
       "map": "Simple_Map_Test.json",
       "level": { ... EditorState.get_level_data() ... },
@@ -50,21 +51,57 @@ Restore is applied as an *overlay* onto a live, already-playing session, so it
 never rebuilds the scene mid-flight (which would invalidate the logic thread's
 caches, spatial grid and object identities). Entity live state is matched back
 by the stable UUID every brush and thing carries.
+
+Save modes (``save_version`` 2)
+-------------------------------
+The same machinery serves three strategies, chosen by the ``save_mode`` metadata
+key and reused rather than duplicated:
+
+* ``full`` — the original behaviour: embed the whole level plus player/runtime
+  state. Self-contained, largest, needs no base map to restore.
+* ``delta`` — embed only the entities/brushes that *differ* from the base map
+  (matched by UUID), plus player/runtime state. Smallest, but the base map must
+  be present at load. A delta restores by overlaying just those changes onto a
+  freshly-loaded base map — the exact same UUID overlay ``full`` uses, fed a
+  partial level.
+* ``both`` — store the compact delta *and* a complete fallback snapshot. The
+  loader prefers the delta and silently falls back to the full snapshot when the
+  base map is missing or incompatible.
+
+Loading is automatic (:func:`restore_auto`): the mode is read from metadata, a
+legacy save with no ``save_mode`` is treated as ``full``, and the base map is
+validated by :func:`classify_base_map` (exact / related / incompatible) so the
+loader only prompts when no safe automatic decision exists.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 #: Bump only when the snapshot layout changes incompatibly. This is the *save
-#: file* format version and is unrelated to the plugin API version.
-SAVE_VERSION = 1
+#: file* format version and is unrelated to the plugin API version. v2 adds the
+#: explicit ``save_mode`` metadata and delta/both support; v1 saves (no
+#: ``save_mode``) still load, treated as legacy ``full``.
+SAVE_VERSION = 2
 
 #: Marker key so a stray JSON file is never mistaken for a Fio save.
 _MAGIC = "fio_savegame"
+
+#: The three save strategies. ``full`` is the default so behaviour is unchanged
+#: for anyone who never touches the setting.
+SAVE_MODE_FULL = "full"
+SAVE_MODE_DELTA = "delta"
+SAVE_MODE_BOTH = "both"
+VALID_SAVE_MODES = frozenset({SAVE_MODE_FULL, SAVE_MODE_DELTA, SAVE_MODE_BOTH})
+
+#: Optional ``world_mode`` metadata. ``"bigworld"`` marks a save whose delta is a
+#: per-cell registry produced by a streaming (Big World) map, which forces delta
+#: mode. Absent ⇒ an ordinary single-scene Fio map.
+WORLD_MODE_BIGWORLD = "bigworld"
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +196,7 @@ def _apply_player(player, data: Optional[dict]) -> None:
 # snapshot build / restore
 # ---------------------------------------------------------------------------
 
-def build_snapshot(logic, *, map_name: str = "") -> dict:
+def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
     """Capture the live play session on *logic* (a ``LogicThread``) as a dict.
 
     Call while a play session is active. The returned dict is JSON-serialisable
@@ -214,6 +251,7 @@ def build_snapshot(logic, *, map_name: str = "") -> dict:
     return {
         _MAGIC: True,
         "save_version": SAVE_VERSION,
+        "save_mode": SAVE_MODE_FULL,
         "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "map": map_name or "",
         "level": level,
@@ -221,6 +259,214 @@ def build_snapshot(logic, *, map_name: str = "") -> dict:
         "player2": _capture_player(getattr(logic, "player2", None)),
         "runtime": runtime,
     }
+
+
+# ---------------------------------------------------------------------------
+# delta build  (only what differs from the base map, matched by UUID)
+# ---------------------------------------------------------------------------
+
+def _jsonify(value):
+    """Round-trip *value* through JSON so two representations compare equal.
+
+    NumPy arrays/scalars, glm vectors, tuples and sets all become the plain
+    lists/numbers they serialize to, so a live (typed) value and a base value
+    loaded from disk don't register a false difference purely from their runtime
+    type. Used only for *comparison*; the stored data is the original value.
+    """
+    return json.loads(json.dumps(value, default=_json_default))
+
+
+def _thing_state(t_data: dict) -> dict:
+    """The gameplay-comparable part of a serialized thing.
+
+    Just position and the public (non underscore-prefixed) properties, minus the
+    I/O connections the overlay never writes back. This is exactly the surface
+    :func:`_overlay_entities` restores, so comparing it is what decides whether a
+    thing belongs in the delta.
+    """
+    props = {
+        k: v for k, v in (t_data.get("properties") or {}).items()
+        if not str(k).startswith("_") and k != "_io_connections"
+    }
+    return {"pos": _jsonify(t_data.get("pos")), "properties": _jsonify(props)}
+
+
+def _brush_overlay(b_data: dict) -> dict:
+    """The gameplay-mutable overlay slice of a serialized brush (by value)."""
+    return {k: b_data[k] for k in _BRUSH_OVERLAY_KEYS if k in b_data}
+
+
+def _brushes_by_id(brushes) -> dict:
+    out = {}
+    for b in brushes or []:
+        bid = b.get("id") if isinstance(b, dict) else None
+        if bid:
+            out[bid] = b
+    return out
+
+
+def _things_by_id(things) -> dict:
+    out = {}
+    for t in things or []:
+        tid = (t.get("properties") or {}).get("id")
+        if tid:
+            out[tid] = t
+    return out
+
+
+def compute_delta_level(base_level: dict, live_level: dict) -> dict:
+    """A partial level holding only entities/brushes that changed from *base*.
+
+    Both arguments are level documents in :meth:`EditorState.get_level_data`
+    shape (see :func:`normalize_base_level`). The result is fed straight to
+    :func:`_overlay_entities` on restore — a *partial* level of just the changed
+    records — so delta restore reuses the full-save UUID overlay unchanged.
+
+    Only meaningful gameplay differences survive: positions and public
+    properties for things (dead/collected/hidden/health/… all live there), and
+    the gameplay-mutable overlay keys for brushes. Unchanged world data is not
+    duplicated. Entities that exist live but not in the base (e.g. spawned at
+    runtime) are recorded best-effort; the UUID overlay simply skips them if the
+    base map can't supply a match on restore.
+    """
+    base_things = _things_by_id((base_level or {}).get("things", []))
+    delta_things: List[dict] = []
+    for t in (live_level or {}).get("things", []):
+        tid = (t.get("properties") or {}).get("id")
+        if not tid:
+            continue
+        base_t = base_things.get(tid)
+        if base_t is None or _thing_state(base_t) != _thing_state(t):
+            delta_things.append(t)
+
+    base_brushes = _brushes_by_id((base_level or {}).get("brushes", []))
+    delta_brushes: List[dict] = []
+    for b in (live_level or {}).get("brushes", []):
+        bid = b.get("id")
+        if not bid:
+            continue
+        base_b = base_brushes.get(bid)
+        live_ov = _brush_overlay(b)
+        base_ov = _brush_overlay(base_b) if base_b is not None else {}
+        if base_b is None or _jsonify(live_ov) != _jsonify(base_ov):
+            entry = {"id": bid}
+            entry.update(live_ov)
+            delta_brushes.append(entry)
+
+    return {"things": delta_things, "brushes": delta_brushes}
+
+
+def _base_map_identity(base_level: dict, map_name: str) -> dict:
+    """Stable identity of the base map a delta was taken from.
+
+    Records the map name/path plus a structural fingerprint (a hash over the
+    sorted set of thing and brush UUIDs) and entity counts. The fingerprint is
+    tiny and independent of order or of any gameplay mutation, so it stays valid
+    for BigWorld maps and survives a reload. It is what :func:`classify_base_map`
+    checks the current map against.
+    """
+    thing_ids = sorted(
+        (t.get("properties") or {}).get("id", "")
+        for t in (base_level or {}).get("things", [])
+    )
+    brush_ids = sorted(
+        b.get("id", "") for b in (base_level or {}).get("brushes", [])
+    )
+    thing_ids = [i for i in thing_ids if i]
+    brush_ids = [i for i in brush_ids if i]
+    raw = ("\n".join(thing_ids) + "\x00" + "\n".join(brush_ids)).encode("utf-8")
+    return {
+        "name": os.path.basename(map_name or ""),
+        "fingerprint": hashlib.sha1(raw).hexdigest()[:16],
+        "thing_count": len(thing_ids),
+        "brush_count": len(brush_ids),
+    }
+
+
+def normalize_base_level(raw_level: dict) -> dict:
+    """Re-serialize an on-disk map document through the editor's own pipeline.
+
+    Loading a raw map file and running it back out through
+    :meth:`EditorState.get_level_data` reproduces exactly the normalization the
+    live level went through (type coercion in ``Thing.to_dict``, brush-id
+    backfill, I/O handling), so a delta diff compares like with like and doesn't
+    invent changes from mere on-disk formatting. Falls back to the raw document
+    if the editor state can't be constructed head-less.
+    """
+    try:
+        from editor.editor_state import EditorState
+        st = EditorState()
+        st.load_from_data(raw_level or {})
+        return st.get_level_data()
+    except Exception:
+        return raw_level or {}
+
+
+def build_snapshot(logic, *, map_name: str = "",
+                   save_mode: str = SAVE_MODE_FULL,
+                   base_level: Optional[dict] = None,
+                   world_mode: Optional[str] = None,
+                   cell_deltas: Optional[dict] = None,
+                   base_world: Optional[dict] = None) -> dict:
+    """Build a save dict for the live play session in the requested *save_mode*.
+
+    * ``full`` (default) — the self-contained snapshot; identical to v1 plus the
+      explicit ``save_mode`` marker. Needs no *base_level*.
+    * ``delta`` — metadata, base-map identity, the changed-only delta level, and
+      player/runtime state. Requires *base_level* (the normalized base map).
+    * ``both`` — the delta *and* the complete snapshot as a fallback.
+
+    ``delta``/``both`` silently degrade to ``full`` when no *base_level* is
+    available, so a save is never lost just because the base map couldn't be
+    resolved.
+
+    When *world_mode* is ``"bigworld"`` a Big World save is forced: the strategy
+    is always ``delta`` (a full world snapshot is never written), the changes are
+    stored as the per-cell *cell_deltas* registry keyed by cell id, and
+    *base_world* carries the base-world identity. This is selected automatically
+    for streaming maps; ordinary maps never reach it.
+    """
+    full = _build_full_snapshot(logic, map_name=map_name)
+
+    if world_mode == WORLD_MODE_BIGWORLD:
+        base_map = base_world or _base_map_identity(base_level or {}, map_name)
+        return {
+            _MAGIC: True,
+            "save_version": SAVE_VERSION,
+            "save_mode": SAVE_MODE_DELTA,   # forced: Big World never full-saves
+            "world_mode": WORLD_MODE_BIGWORLD,
+            "saved_at": full.get("saved_at"),
+            "map": map_name or "",
+            "base_map": base_map,
+            "cell_deltas": cell_deltas or {},
+            "player": full.get("player"),
+            "player2": full.get("player2"),
+            "runtime": full.get("runtime"),
+        }
+
+    if save_mode == SAVE_MODE_FULL or not base_level:
+        return full
+
+    delta_level = compute_delta_level(base_level, full.get("level", {}) or {})
+    base_map = _base_map_identity(base_level, map_name)
+    common = {
+        _MAGIC: True,
+        "save_version": SAVE_VERSION,
+        "saved_at": full.get("saved_at"),
+        "map": map_name or "",
+        "base_map": base_map,
+        "delta": {"level": delta_level},
+        "player": full.get("player"),
+        "player2": full.get("player2"),
+        "runtime": full.get("runtime"),
+    }
+    if save_mode == SAVE_MODE_BOTH:
+        common["save_mode"] = SAVE_MODE_BOTH
+        # The complete snapshot rides along as a recovery/fallback path.
+        common["level"] = full.get("level", {})
+    else:
+        common["save_mode"] = SAVE_MODE_DELTA
+    return common
 
 
 def _overlay_entities(logic, level: dict) -> None:
@@ -270,20 +516,14 @@ def _overlay_entities(logic, level: dict) -> None:
                 live.pop(k, None)
 
 
-def restore_snapshot(logic, data: dict) -> None:
-    """Apply a snapshot from :func:`build_snapshot` onto a live play session.
+def _restore_runtime_and_players(logic, data: dict) -> None:
+    """Apply the player/runtime half of a save (shared by full and delta).
 
-    *logic* must be an active (play-mode) ``LogicThread`` whose loaded map
-    matches the save. Restore is an overlay — the scene is not rebuilt — so
-    object identities, caches and the spatial grid stay valid.
+    The ``runtime``/``player``/``player2`` blocks are laid out identically in
+    every mode, so full and delta restore both call this after their respective
+    entity overlay. Caller is responsible for having overlaid entity state first.
     """
-    if not isinstance(data, dict) or not data.get(_MAGIC):
-        raise ValueError("not a Fio save file")
-
     runtime = data.get("runtime", {}) or {}
-
-    # Live entity state first, so anything derived from it below is consistent.
-    _overlay_entities(logic, data.get("level", {}) or {})
 
     # Player(s)
     _apply_player(getattr(logic, "player", None), data.get("player"))
@@ -360,6 +600,225 @@ def restore_snapshot(logic, data: dict) -> None:
         Monster.clear_sprite_cache()
     except Exception:
         pass
+
+
+def restore_snapshot(logic, data: dict) -> None:
+    """Apply a full snapshot from :func:`build_snapshot` onto a live session.
+
+    *logic* must be an active (play-mode) ``LogicThread`` whose loaded map
+    matches the save. Restore is an overlay — the scene is not rebuilt — so
+    object identities, caches and the spatial grid stay valid.
+    """
+    if not isinstance(data, dict) or not data.get(_MAGIC):
+        raise ValueError("not a Fio save file")
+    # Live entity state first, so anything derived from it below is consistent.
+    _overlay_entities(logic, data.get("level", {}) or {})
+    _restore_runtime_and_players(logic, data)
+
+
+def restore_delta(logic, data: dict) -> None:
+    """Apply a delta save onto a *freshly-loaded base map* live session.
+
+    The delta's partial level (only the changed entities/brushes) is fed to the
+    very same UUID overlay a full restore uses; entities the base map doesn't
+    have are skipped safely. Player/runtime state is then restored as usual.
+    """
+    if not isinstance(data, dict) or not data.get(_MAGIC):
+        raise ValueError("not a Fio save file")
+    delta_level = ((data.get("delta") or {}).get("level")) or {}
+    _overlay_entities(logic, delta_level)
+    _restore_runtime_and_players(logic, data)
+
+
+# ---------------------------------------------------------------------------
+# base-map validation & automatic loading
+# ---------------------------------------------------------------------------
+
+#: How the current map relates to the base map a delta was taken from.
+BASE_EXACT = "exact"            # identical fingerprint → apply the delta as-is
+BASE_RELATED = "related"        # same map, minor edits → UUID overlay, warn
+BASE_INCOMPATIBLE = "incompatible"  # different map → do not blindly apply
+
+
+def classify_base_map(data: dict, current_level: dict,
+                      current_map_name: str = "") -> str:
+    """Decide how safely a delta save applies to the currently-loaded map.
+
+    Compares the ``base_map`` identity stored in *data* against the live map
+    (its normalized level document and name):
+
+    * :data:`BASE_EXACT` — same structural fingerprint. Apply automatically.
+    * :data:`BASE_RELATED` — same map name (or a large UUID overlap) but the
+      fingerprint drifted from minor edits. Apply via UUID overlay, warn.
+    * :data:`BASE_INCOMPATIBLE` — different map and little/no UUID overlap. Do
+      not blindly apply.
+
+    A save with no ``base_map`` block (shouldn't happen for delta/both) is
+    treated as :data:`BASE_RELATED` so the safe overlay still runs.
+    """
+    base = data.get("base_map") or {}
+    if not base:
+        return BASE_RELATED
+
+    current = _base_map_identity(current_level or {}, current_map_name)
+    if base.get("fingerprint") and base.get("fingerprint") == current.get("fingerprint"):
+        return BASE_EXACT
+
+    same_name = (
+        base.get("name")
+        and base.get("name") == current.get("name")
+    )
+    # Measure UUID overlap so a renamed-but-same map is still recognised, and a
+    # genuinely different map of coincidentally equal name is not over-trusted.
+    base_ids = {
+        (t.get("properties") or {}).get("id")
+        for t in ((data.get("level") or {}).get("things", []))
+    }
+    base_ids.discard(None)
+    if not base_ids:
+        # Delta-only saves don't carry the full base thing set; fall back to the
+        # cheaper name signal, treating a same-name map as related.
+        return BASE_RELATED if same_name else BASE_INCOMPATIBLE
+
+    live_ids = {
+        (t.get("properties") or {}).get("id")
+        for t in (current_level or {}).get("things", [])
+    }
+    live_ids.discard(None)
+    if not base_ids:
+        overlap = 0.0
+    else:
+        overlap = len(base_ids & live_ids) / float(len(base_ids))
+
+    if same_name or overlap >= 0.5:
+        return BASE_RELATED
+    return BASE_INCOMPATIBLE
+
+
+def restore_auto(logic, data: dict, *, current_map_name: str = "") -> dict:
+    """Restore *data* automatically, choosing the path from its ``save_mode``.
+
+    Returns a small report ``{"mode": <mode actually used>, "warning": str}``.
+    Raises ``ValueError`` when no safe automatic restore is possible (e.g. a
+    delta-only save against a clearly incompatible map, with no full fallback).
+    The caller may surface a prompt in that ambiguous/blocked case; ordinary
+    loads never prompt.
+    """
+    if not isinstance(data, dict) or not data.get(_MAGIC):
+        raise ValueError("not a Fio save file")
+
+    # Big World delta save: a per-cell registry rather than a flat delta level.
+    if data.get("world_mode") == WORLD_MODE_BIGWORLD:
+        return _restore_bigworld(logic, data, current_map_name)
+
+    mode = data.get("save_mode")
+    if mode is None:
+        # Legacy v1 (or any) save without an explicit mode → full snapshot.
+        mode = SAVE_MODE_FULL
+
+    if mode == SAVE_MODE_FULL:
+        restore_snapshot(logic, data)
+        return {"mode": SAVE_MODE_FULL, "warning": ""}
+
+    # delta / both both need the current map assessed against the base identity.
+    try:
+        current_level = logic.editor_state.get_level_data()
+    except Exception:
+        current_level = {}
+    cls = classify_base_map(data, current_level, current_map_name)
+
+    if mode == SAVE_MODE_DELTA:
+        if cls == BASE_INCOMPATIBLE:
+            raise ValueError(
+                "this delta save was made on a different base map "
+                f"('{(data.get('base_map') or {}).get('name', '?')}'); "
+                "load that map first, or use a full/both save"
+            )
+        restore_delta(logic, data)
+        warning = ""
+        if cls == BASE_RELATED:
+            warning = ("base map has changed since this delta was saved; "
+                       "applied by UUID, entities that no longer exist were skipped")
+        return {"mode": SAVE_MODE_DELTA, "warning": warning}
+
+    if mode == SAVE_MODE_BOTH:
+        if cls in (BASE_EXACT, BASE_RELATED):
+            try:
+                restore_delta(logic, data)
+                warning = ("" if cls == BASE_EXACT else
+                           "base map changed; applied delta by UUID, missing "
+                           "entities skipped")
+                return {"mode": SAVE_MODE_DELTA, "warning": warning}
+            except Exception:
+                pass  # fall through to the full fallback below
+        # Incompatible base map (or the delta path failed) → the fallback.
+        restore_snapshot(logic, data)
+        return {
+            "mode": SAVE_MODE_FULL,
+            "warning": "base map incompatible; restored from the full fallback snapshot",
+        }
+
+    raise ValueError(f"unknown save_mode '{mode}'")
+
+
+def _flatten_cell_deltas(cell_deltas: dict) -> dict:
+    """Recombine a Big World per-cell registry into one partial level.
+
+    Restoration matches by UUID, not by cell, so every cell's changed records are
+    merged back into a single delta level for the standard overlay. Engine-side
+    and Big-World-agnostic (mirrors ``persistence.flatten_cell_delta_registry``).
+    """
+    things: list = []
+    brushes: list = []
+    for cell in (cell_deltas or {}).values():
+        if not isinstance(cell, dict):
+            continue
+        things.extend(cell.get("things", []) or [])
+        brushes.extend(cell.get("brushes", []) or [])
+    return {"things": things, "brushes": brushes}
+
+
+def _restore_bigworld(logic, data: dict, current_map_name: str = "") -> dict:
+    """Restore a Big World delta save: validate the world, overlay all cells.
+
+    Validates the base-world identity (fail safe on a clearly different world),
+    flattens the per-cell registry and overlays it onto the resident world by
+    UUID via the same overlay a normal delta restore uses. The registry is also
+    handed to the live Big World session so cells that stream in later carry the
+    saved changes.
+    """
+    try:
+        current_level = logic.editor_state.get_level_data()
+    except Exception:
+        current_level = {}
+    cls = classify_base_map(data, current_level, current_map_name)
+    if cls == BASE_INCOMPATIBLE:
+        raise ValueError(
+            "this Big World save was made on a different world "
+            f"('{(data.get('base_map') or {}).get('name', '?')}'); "
+            "load that world first"
+        )
+
+    cell_deltas = data.get("cell_deltas", {}) or {}
+    _overlay_entities(logic, _flatten_cell_deltas(cell_deltas))
+    _restore_runtime_and_players(logic, data)
+
+    # Hand the registry to the live streaming session so a cell streamed in later
+    # re-applies its saved changes (belt-and-braces for a disk-streamed future;
+    # in the in-RAM model the overlay above already reached every resident cell).
+    session = getattr(logic, "_bigworld", None)
+    if session is not None:
+        try:
+            session.registry = cell_deltas
+        except Exception:
+            pass
+
+    warning = ""
+    if cls == BASE_RELATED:
+        warning = ("base world changed since this save; applied by UUID, "
+                   "missing entities skipped")
+    return {"mode": SAVE_MODE_DELTA, "world_mode": WORLD_MODE_BIGWORLD,
+            "warning": warning}
 
 
 # ---------------------------------------------------------------------------
