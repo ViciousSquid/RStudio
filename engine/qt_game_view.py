@@ -44,6 +44,7 @@ def available_renderers():
     return list(_RENDERER_CLASSES.keys())
 
 from engine import shaders
+from engine import brush_geometry
 from engine.threaded_game_state import ThreadedGameState, RenderState
 from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
@@ -2052,9 +2053,22 @@ class QtGameView(QOpenGLWidget):
         ray_o, ray_d = self.get_ray_from_mouse(mx, my)
         best_t = float('inf')
         best_hit = None
+        ray_o_t = (float(ray_o.x), float(ray_o.y), float(ray_o.z))
+        ray_d_t = (float(ray_d.x), float(ray_d.y), float(ray_d.z))
         for brush in self.editor.state.brushes:
             if brush.get('hidden', False):
                 continue
+            # Angled (clipped) brushes: pick against their real convex faces so
+            # the sloped cut face is selectable, not just the six sides of the
+            # bounding box.  Plain box brushes stay on the fast AABB path below.
+            if brush_geometry.brush_has_geometry(brush):
+                convex = brush_geometry.get_convex(brush)
+                if convex is not None and convex.is_valid:
+                    hit = brush_geometry.ray_convex_face(convex, ray_o_t, ray_d_t)
+                    if hit is not None and hit[0] < best_t:
+                        best_t = hit[0]
+                        best_hit = (brush, brush_geometry.face_key(hit[1]))
+                    continue
             pos = glm.vec3(brush.get('pos', [0, 0, 0]))
             size = glm.vec3(brush.get('size', [64, 64, 64]))
             bmin, bmax = pos - size/2, pos + size/2

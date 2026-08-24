@@ -932,6 +932,100 @@ def is_axis_aligned_box(brush, eps=1e-3):
 
 
 # --------------------------------------------------------------------------
+# Face addressing & ray picking (editor Face tool)
+# --------------------------------------------------------------------------
+
+def face_key(face):
+    """Stable identifier for one derived surface face of a geometry brush.
+
+    Faces that kept a box tag (``top``/``north``/...) are keyed by that tag so
+    editor code that already speaks in box faces keeps working.  A *cut* face
+    produced by the clip tool carries no tag, so it is keyed by the index of the
+    plane that generated it, as ``"#<i>"`` — giving the Face tool a way to
+    address the angled surface individually.
+    """
+    tag = face.get('face')
+    return tag if tag else '#%d' % face['plane']
+
+
+def iter_surface_faces(brush):
+    """Yield ``(key, face)`` for every real surface face of an angled brush.
+
+    Yields nothing for plain box brushes (no ``geometry``) or degenerate plane
+    sets — callers then fall back to their axis-aligned box handling.
+    """
+    convex = get_convex(brush)
+    if convex is None:
+        return
+    for face in convex.faces:
+        yield face_key(face), face
+
+
+def find_surface_face(brush, key):
+    """Return the surface ``face`` dict whose :func:`face_key` matches, else
+    ``None``."""
+    for k, face in iter_surface_faces(brush):
+        if k == key:
+            return face
+    return None
+
+
+def face_plane_index(brush, key):
+    """Index (into ``brush['geometry']['planes']``) of the plane backing the
+    surface face named ``key``, or ``None`` when it can't be resolved."""
+    face = find_surface_face(brush, key)
+    return None if face is None else face['plane']
+
+
+def _ray_triangle(o, d, a, b, c, eps=1e-9):
+    """Möller-Trumbore ray/triangle test; returns the ray parameter ``t`` of the
+    hit (``o + t*d``) or ``None`` on a miss.  Two-sided so a face is pickable
+    from either side."""
+    e1 = b - a
+    e2 = c - a
+    p = _cross(d, e2)
+    det = float(e1 @ p)
+    if -eps < det < eps:
+        return None                      # ray parallel to the triangle
+    inv = 1.0 / det
+    tvec = o - a
+    u = float(tvec @ p) * inv
+    if u < -eps or u > 1.0 + eps:
+        return None
+    q = _cross(tvec, e1)
+    v = float(d @ q) * inv
+    if v < -eps or u + v > 1.0 + eps:
+        return None
+    return float(e2 @ q) * inv
+
+
+def ray_convex_face(convex, ray_o, ray_d, eps=1e-9):
+    """Nearest surface face of ``convex`` hit by a world-space ray.
+
+    Returns ``(t, face)`` for the closest forward intersection (``t > 0``) with
+    any triangle of any face, or ``None`` when the ray misses the solid.  Lets
+    the Face tool pick the true sloped face of a clipped brush instead of the
+    six sides of its bounding box.
+    """
+    o = _v(ray_o)
+    d = _v(ray_d)
+    best_t = math.inf
+    best_face = None
+    for face in convex.faces:
+        idx = face['indices']
+        ring = convex.verts[idx]
+        v0 = ring[0]
+        for k in range(1, len(idx) - 1):
+            t = _ray_triangle(o, d, v0, ring[k], ring[k + 1], eps)
+            if t is not None and eps < t < best_t:
+                best_t = t
+                best_face = face
+    if best_face is None:
+        return None
+    return best_t, best_face
+
+
+# --------------------------------------------------------------------------
 # JSON (de)serialisation of a single plane
 # --------------------------------------------------------------------------
 

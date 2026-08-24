@@ -1693,11 +1693,29 @@ class MainWindow(QMainWindow):
 
         texture_name = os.path.basename(texture_path)
         self.save_state()
-        
+
         if 'textures' not in brush:
             brush['textures'] = {}
 
-        brush['textures'][face_name] = texture_name
+        from engine import brush_geometry
+        if brush_geometry.brush_has_geometry(brush):
+            # Angled brush: write straight to the plane that backs this face so
+            # the sloped cut face (which has no box tag) gets textured. Faces
+            # that kept a box tag also update brush['textures'] so the box-face
+            # render path stays in sync.
+            pidx = brush_geometry.face_plane_index(brush, face_name)
+            if pidx is not None:
+                planes = brush['geometry']['planes']
+                planes[pidx]['texture'] = texture_name
+                tag = planes[pidx].get('face')
+                if tag:
+                    brush['textures'][tag] = texture_name
+            else:
+                # Couldn't resolve (stale hover) — fall back to the tag path.
+                brush['textures'][face_name] = texture_name
+        else:
+            brush['textures'][face_name] = texture_name
+
         # Remember the last-textured face so the rotate-texture button / Page
         # Up-Down keys know which face to act on when nothing is hovered.
         self.face_texture_target = (brush, face_name)

@@ -1789,6 +1789,18 @@ class BaseRenderer:
         gl.glUniform3f(uniforms['color'], 0.8, 0.2, 0.9)
         gl.glUniform1f(uniforms['alpha'], 0.4)
 
+        # Angled (clipped) brushes: highlight the real convex face polygon so
+        # the sloped cut face lights up under the cursor, not an AABB side.
+        if brush_geometry.brush_has_geometry(brush):
+            verts = self._geo_face_highlight_verts(brush, face_name)
+            if not verts:
+                gl.glUseProgram(0)
+                return
+            self._draw_face_highlight_verts(verts, uniforms)
+            gl.glDisable(gl.GL_BLEND)
+            gl.glUseProgram(0)
+            return
+
         pos, size = brush['pos'], brush['size']
         hx, hy, hz = size[0]/2, size[1]/2, size[2]/2
         cx, cy, cz = pos[0], pos[1], pos[2]
@@ -1821,31 +1833,58 @@ class BaseRenderer:
         if not verts:
             return
 
-        v_data = np.array(verts, dtype=np.float32)
+        self._draw_face_highlight_verts(verts, uniforms)
+        gl.glDisable(gl.GL_BLEND)
+        gl.glUseProgram(0)
+
+    @staticmethod
+    def _geo_face_highlight_verts(brush, face_name):
+        """Triangle-fan positions (world space, nudged outward) for one convex
+        face of an angled brush, or ``None`` when the face can't be resolved."""
+        convex = brush_geometry.get_convex(brush)
+        if convex is None or not convex.is_valid:
+            return None
+        face = None
+        for f in convex.faces:
+            if brush_geometry.face_key(f) == face_name:
+                face = f
+                break
+        if face is None:
+            return None
+        idx = face['indices']
+        if len(idx) < 3:
+            return None
+        ring = convex.verts[idx] + np.array(face['normal']) * 0.5   # bias off surface
+        out = []
+        v0 = ring[0]
+        for k in range(1, len(idx) - 1):
+            for p in (v0, ring[k], ring[k + 1]):
+                out.extend((float(p[0]), float(p[1]), float(p[2])))
+        return out
+
+    def _draw_face_highlight_verts(self, verts, uniforms):
+        """Upload and draw a fill+wire face highlight for arbitrary geometry."""
+        v_data = np.asarray(verts, dtype=np.float32)
+        n = len(v_data) // 3
         if self.face_highlight_vao is None:
             self.face_highlight_vao = gl.glGenVertexArrays(1)
             self.face_highlight_vbo = gl.glGenBuffers(1)
             gl.glBindVertexArray(self.face_highlight_vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.face_highlight_vbo)
-            gl.glBufferData(gl.GL_ARRAY_BUFFER, 6*3*4, None, gl.GL_DYNAMIC_DRAW)
             gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
             gl.glEnableVertexAttribArray(0)
             gl.glBindVertexArray(0)
-
         gl.glBindVertexArray(self.face_highlight_vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.face_highlight_vbo)
-        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, v_data.nbytes, v_data)
-        gl.glDrawArrays(gl.GL_TRIANGLES, 0, 6)
-
+        # Orphan-and-refill so the buffer resizes for any face vertex count.
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, v_data.nbytes, v_data, gl.GL_DYNAMIC_DRAW)
+        gl.glDrawArrays(gl.GL_TRIANGLES, 0, n)
         gl.glUniform3f(uniforms['color'], 1.0, 1.0, 1.0)
         gl.glUniform1f(uniforms['alpha'], 1.0)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
-        gl.glDrawArrays(gl.GL_TRIANGLES, 0, 6)
+        gl.glDrawArrays(gl.GL_TRIANGLES, 0, n)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-
         gl.glBindVertexArray(0)
-        gl.glDisable(gl.GL_BLEND)
-        gl.glUseProgram(0)
 
     def draw_path_node_cubes(self, projection, view, things):
         if 'simple' not in self.shaders:
@@ -2685,7 +2724,7 @@ class BaseRenderer:
                                  (us[j] - u0) / eu, (vs[j] - v0) / ev))
             vert_count += (len(idx) - 2) * 3
             runs.append({'face': face.get('face'), 'texture': face.get('texture'),
-                         'uv_scale': face.get('uv_scale'),
+                         'uv_scale': face.get('uv_scale'), 'plane': face.get('plane'),
                          'first': first, 'count': vert_count - first,
                          'extent': (eu, ev)})
             if top:
@@ -2744,17 +2783,35 @@ class BaseRenderer:
         return mesh
 
     @staticmethod
+    def _geo_run_plane(brush, run):
+        """Live plane dict backing this run, or ``None``.
+
+        Reading the plane live (rather than the value baked into the mesh at
+        build time) lets the Face tool's texture / scale edits on a cut face
+        show immediately — the mesh signature ignores texture, so it isn't
+        rebuilt on a texture change.
+        """
+        pidx = run.get('plane')
+        if pidx is None:
+            return None
+        planes = brush.get('geometry', {}).get('planes')
+        if planes and 0 <= pidx < len(planes):
+            return planes[pidx]
+        return None
+
+    @staticmethod
     def _geo_run_texture(brush, run):
         """Texture name for one face of an angled brush.
 
         The brush's live ``textures`` dict wins for faces that kept their box
-        face tag (so editor texture changes apply immediately); cut faces fall
-        back to the texture stored on their plane, then to any brush texture.
+        face tag (so editor texture changes apply immediately); cut faces read
+        the texture stored live on their plane, then any brush texture.
         """
         tag = run['face']
         if tag:
             return brush.get('textures', {}).get(tag) or run['texture'] or 'default.png'
-        tex = run['texture']
+        plane = BaseRenderer._geo_run_plane(brush, run)
+        tex = (plane.get('texture') if plane else None) or run['texture']
         if not tex:
             # Untagged cut face with no stored texture: borrow any brush
             # texture rather than showing the default checkerboard.
@@ -2770,6 +2827,12 @@ class BaseRenderer:
         texture_tiling (1px = 1 world unit over the face's extent), then FIT."""
         tag = run['face']
         uv = brush.get('uv_scale', {}).get(tag) if tag else None
+        if uv is None and not tag:
+            # Cut face: read its plane's uv_scale live so Surface Inspector
+            # edits apply without a mesh rebuild.
+            plane = BaseRenderer._geo_run_plane(brush, run)
+            if plane is not None:
+                uv = plane.get('uv_scale')
         if uv is None:
             uv = run['uv_scale']
         if uv is not None:

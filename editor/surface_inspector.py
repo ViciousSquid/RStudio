@@ -127,6 +127,24 @@ class SurfaceInspector(QDialog):
         self.raise_()
         self.activateWindow()
 
+    def _cut_plane(self, brush, face):
+        """Plane dict for an *untagged* (angled cut) face, else ``None``.
+
+        Cut faces have no box tag, so their texture / scale live on the plane —
+        not in the brush's per-tag dicts — and must be read & written there.
+        """
+        from engine import brush_geometry
+        if not brush_geometry.brush_has_geometry(brush):
+            return None
+        pidx = brush_geometry.face_plane_index(brush, face)
+        if pidx is None:
+            return None
+        planes = brush.get('geometry', {}).get('planes', [])
+        if not (0 <= pidx < len(planes)):
+            return None
+        plane = planes[pidx]
+        return plane if not plane.get('face') else None
+
     def refresh_from_face(self):
         """Reload every field from the bound face's stored transform."""
         if not self.target:
@@ -134,6 +152,18 @@ class SurfaceInspector(QDialog):
         brush, face = self.target
         self._loading = True
         try:
+            plane = self._cut_plane(brush, face)
+            if plane is not None:
+                self.tex_label.setText(plane.get('texture') or '(none)')
+                shift = brush.get('uv_shift', {}).get(face, [0.0, 0.0])
+                scale = plane.get('uv_scale') or [1.0, 1.0]
+                angle = brush.get('uv_angle', {}).get(face, 0.0)
+                self.hshift.setValue(float(shift[0]))
+                self.vshift.setValue(float(shift[1]))
+                self.hstretch.setValue(float(scale[0]))
+                self.vstretch.setValue(float(scale[1]))
+                self.rotate.setValue(float(angle))
+                return
             self.tex_label.setText(brush.get('textures', {}).get(face, '(none)'))
             shift = brush.get('uv_shift', {}).get(face, [0.0, 0.0])
             scale = brush.get('uv_scale', {}).get(face, [1.0, 1.0])
@@ -154,6 +184,16 @@ class SurfaceInspector(QDialog):
             return
         brush, face = self.target
         self.editor.save_state()
+        plane = self._cut_plane(brush, face)
+        if plane is not None:
+            # Cut face: stretch lives on the plane so the angled surface picks
+            # it up. Shift / rotate aren't applied to angled faces by the
+            # renderer yet, but are still recorded for when they are.
+            plane['uv_scale'] = [self.hstretch.value(), self.vstretch.value()]
+            brush.setdefault('uv_shift', {})[face] = [self.hshift.value(), self.vshift.value()]
+            brush.setdefault('uv_angle', {})[face] = self.rotate.value()
+            self.editor.update_views()
+            return
         brush.setdefault('uv_shift', {})[face] = [self.hshift.value(), self.vshift.value()]
         brush.setdefault('uv_scale', {})[face] = [self.hstretch.value(), self.vstretch.value()]
         brush.setdefault('uv_angle', {})[face] = self.rotate.value()
