@@ -144,6 +144,18 @@ def _make_spin(value, range0, range1, suffix="", decimals=0, step=1, callback=No
         s = QSpinBox()
         s.setSingleStep(step)
     s.setRange(range0, range1)
+    # Qt spin boxes are backed by a C int/double; a property that somehow holds a
+    # value outside the widget's range (e.g. a hand-edited or imported int beyond
+    # 2**31) would raise OverflowError from setValue. Clamp defensively so a stray
+    # value can never crash the property panel — the stored data is untouched
+    # unless the user actually commits an edit.
+    try:
+        if value < range0:
+            value = range0
+        elif value > range1:
+            value = range1
+    except TypeError:
+        value = range0
     s.setValue(value)
     if suffix:
         s.setSuffix(suffix)
@@ -1259,7 +1271,10 @@ class PropertyEditor(QWidget):
                 cb = _make_checkbox("", value, lambda c, k=key: self.update_object_prop(k, c), _Style.CHECKBOX)
                 form.addRow(label_text, cb)
             elif isinstance(value, int):
-                spin = _make_spin(value, -99999, 99999)
+                # Full 32-bit range so large-but-valid ints (gold, radii, health
+                # caps) show their real value instead of being pinned at 99999;
+                # _make_spin still clamps anything beyond it so nothing overflows.
+                spin = _make_spin(value, -2147483648, 2147483647)
                 spin.editingFinished.connect(lambda w=spin, k=key: self.update_object_prop(k, w.value()))
                 form.addRow(label_text, spin)
             elif isinstance(value, float):
