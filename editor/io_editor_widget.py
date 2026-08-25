@@ -512,6 +512,25 @@ class IOEditorWidget(QWidget):
             }
         """)
         layout.addWidget(header)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(4)
+        
+        self.add_btn = QPushButton("Add")
+        self.add_btn.clicked.connect(self._add_connection)
+        btn_layout.addWidget(self.add_btn)
+        
+        self.edit_btn = QPushButton("Edit")
+        self.edit_btn.clicked.connect(self._edit_selected)
+        btn_layout.addWidget(self.edit_btn)
+        
+        self.remove_btn = QPushButton("Remove")
+        self.remove_btn.clicked.connect(self._remove_selected)
+        btn_layout.addWidget(self.remove_btn)
+        
+        self.copy_btn = QPushButton("Copy")
+        self.copy_btn.clicked.connect(self._copy_selected)
+        btn_layout.addWidget(self.copy_btn)
         
         self.table = QTableWidget()
         self.table.setColumnCount(5)
@@ -563,25 +582,6 @@ class IOEditorWidget(QWidget):
         self.table.customContextMenuRequested.connect(self._show_context_menu)
         
         layout.addWidget(self.table)
-        
-        btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(4)
-        
-        self.add_btn = QPushButton("Add")
-        self.add_btn.clicked.connect(self._add_connection)
-        btn_layout.addWidget(self.add_btn)
-        
-        self.edit_btn = QPushButton("Edit")
-        self.edit_btn.clicked.connect(self._edit_selected)
-        btn_layout.addWidget(self.edit_btn)
-        
-        self.remove_btn = QPushButton("Remove")
-        self.remove_btn.clicked.connect(self._remove_selected)
-        btn_layout.addWidget(self.remove_btn)
-        
-        self.copy_btn = QPushButton("Copy")
-        self.copy_btn.clicked.connect(self._copy_selected)
-        btn_layout.addWidget(self.copy_btn)
 
         # Spacer to push console button to the right
         btn_layout.addStretch()
