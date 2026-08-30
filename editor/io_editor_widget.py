@@ -547,9 +547,11 @@ class IOEditorWidget(QWidget):
 
         # Compact, non-expanding table: fixed row height, height recalculated
         # after every refresh so it hugs exactly the visible connections.
+        # Height is derived from the table's actual font metrics (plus cell
+        # padding) rather than a guessed constant, so rows aren't clipped.
         self.table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._row_height = 24
+        self._row_height = self.table.fontMetrics().height() + 12
         self.table.verticalHeader().setDefaultSectionSize(self._row_height)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
         
@@ -565,6 +567,7 @@ class IOEditorWidget(QWidget):
             QTableWidget::item {
                 background-color: #2A2A2A;
                 color: #E6E6E6;
+                padding: 4px 6px;
             }
             QTableWidget::item:alternate {
                 background-color: #252525;
