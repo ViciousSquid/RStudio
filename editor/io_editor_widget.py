@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QComboBox, QLineEdit,
     QDoubleSpinBox, QCheckBox, QHeaderView, QAbstractItemView,
     QDialog, QDialogButtonBox, QFormLayout, QCompleter, QGroupBox,
-    QMessageBox, QMenu, QAction
+    QMessageBox, QMenu, QAction, QSizePolicy
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont
@@ -544,6 +544,14 @@ class IOEditorWidget(QWidget):
         self.table.setShowGrid(True)
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+
+        # Compact, non-expanding table: fixed row height, height recalculated
+        # after every refresh so it hugs exactly the visible connections.
+        self.table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._row_height = 24
+        self.table.verticalHeader().setDefaultSectionSize(self._row_height)
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
         
         # === FIX: enforce readable header contrast ===
         self.table.setStyleSheet("""
@@ -594,9 +602,11 @@ class IOEditorWidget(QWidget):
         btn_layout.addWidget(self.console_btn)
         
         layout.addLayout(btn_layout)
+        layout.addStretch()
         
         self.table.itemSelectionChanged.connect(self._update_button_states)
         self._update_button_states()
+        self._update_table_height()
     
     def set_entity(self, entity):
         self.current_entity = entity
@@ -606,6 +616,7 @@ class IOEditorWidget(QWidget):
         self.table.setRowCount(0)
         
         if not self.current_entity:
+            self._update_table_height()
             return
         
         connections = get_connections(self.current_entity)
@@ -645,6 +656,19 @@ class IOEditorWidget(QWidget):
             self.table.setItem(row, 4, QTableWidgetItem(delay_text))
         
         self._update_button_states()
+        self._update_table_height()
+
+    def _update_table_height(self):
+        """
+        Size the table to exactly fit its current rows (plus header/frame)
+        so it never expands beyond its content, leaving the action row
+        directly beneath it instead of pushed to the bottom of the tab.
+        """
+        row_count = self.table.rowCount()
+        header_height = self.table.horizontalHeader().height()
+        frame = 2 * self.table.frameWidth()
+        total_height = header_height + (row_count * self._row_height) + frame
+        self.table.setFixedHeight(total_height)
     
     @staticmethod
     def _entity_display_name(entity):
