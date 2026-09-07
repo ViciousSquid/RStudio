@@ -386,50 +386,56 @@ def register_all_input_handlers(io_manager: IOManager):
     # SPEAKER INPUTS
     # ==========================================================================
     
+    def _speaker_game_state(logic):
+        """Resolve the game_state a speaker request must be queued on.
+
+        Tries the logic thread directly, then the I/O manager, mirroring the
+        original two-path lookup. Returns None when neither is available.
+        """
+        if getattr(logic, 'game_state', None) is not None:
+            return logic.game_state
+        if hasattr(logic, 'io_manager'):
+            gs = logic.io_manager.get_game_state()
+            if gs is not None:
+                return gs
+        return None
+
     def speaker_play(entity, param, logic):
         """Start playing sound - queues to main thread via game_state."""
         entity_name = entity.properties.get('name', 'unnamed')
         sound_file = entity.properties.get('sound_file', '')
         volume = float(entity.properties.get('volume', 1.0))
-        
+        looping = bool(entity.properties.get('looping', False))
+
         debug_log('Speaker', f"PlaySound called on '{entity_name}'")
-        debug_log('Speaker', f"  sound_file='{sound_file}', volume={volume}")
-        
+        debug_log('Speaker', f"  sound_file='{sound_file}', volume={volume}, looping={looping}")
+
         entity.properties['state'] = 'on'
         speaker_id = id(entity)
         logic.active_speakers.add(speaker_id)
-        
+
         if not sound_file:
             debug_log('Error', f"No sound file configured for speaker '{entity_name}'!")
             return
-        
-        # Get game_state - try multiple paths for robustness
-        game_state = None
-        
-        # Path 1: From logic thread directly
-        if hasattr(logic, 'game_state') and logic.game_state is not None:
-            game_state = logic.game_state
-            debug_log('Speaker', f"  Found game_state via logic.game_state")
-        
-        # Path 2: From io_manager
-        if game_state is None and hasattr(logic, 'io_manager'):
-            gs = logic.io_manager.get_game_state()
-            if gs is not None:
-                game_state = gs
-                debug_log('Speaker', f"  Found game_state via io_manager")
-        
+
+        game_state = _speaker_game_state(logic)
+
         if game_state is None:
             debug_log('Error', f"Could not find game_state for speaker '{entity_name}'!")
             return
-        
-        # Queue the sound for the main thread to play (thread-safe)
+
+        # Queue the sound for the main thread to play (thread-safe). ``looping``
+        # asks the mixer to repeat it until an explicit StopSound; ``entity_id``
+        # lets that stop find and silence this speaker's channel.
         game_state.queue_sound({
+            'action': 'play',
             'file': sound_file,
             'volume': volume,
-            'entity_id': speaker_id
+            'looping': looping,
+            'entity_id': speaker_id,
         })
-        debug_log('Speaker', f"  Queued '{sound_file}'")
-        
+        debug_log('Speaker', f"  Queued '{sound_file}'" + (" (looping)" if looping else ""))
+
         # Fire output event
         logic.io_manager.fire_output(entity, 'OnSoundStarted')
     
@@ -437,6 +443,11 @@ def register_all_input_handlers(io_manager: IOManager):
         entity.properties['state'] = 'off'
         speaker_id = id(entity)
         logic.active_speakers.discard(speaker_id)
+        # Actually silence the channel on the audio thread -- a looping sound
+        # would otherwise play forever (StopSound could not reach the mixer).
+        game_state = _speaker_game_state(logic)
+        if game_state is not None:
+            game_state.queue_sound({'action': 'stop', 'entity_id': speaker_id})
         debug_log('Speaker', f"Stopped speaker '{entity.properties.get('name', 'unnamed')}'")
         logic.io_manager.fire_output(entity, 'OnSoundFinished')
     

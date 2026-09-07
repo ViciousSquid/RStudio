@@ -3,13 +3,20 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFormLayout, QCheckBox, QComboBox, QPushButton,
                              QHBoxLayout, QColorDialog, QFileDialog, QGridLayout,
                              QToolButton, QSlider, QTabWidget, QGroupBox, QScrollArea,
-                             QFrame, QDoubleSpinBox, QSizePolicy)
+                             QFrame, QDoubleSpinBox, QSizePolicy,
+                             QTableWidget, QTableWidgetItem)
 from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QFont
 from editor.things import (Thing, Light, Pickup, Monster, Model, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
                            LogicKeyValueStore)
 from engine.monster_constants import MONSTER_VARIANTS
+
+try:
+    from editor.debug_console import debug_log
+except Exception:  # pragma: no cover - console unavailable (headless/import cycle)
+    def debug_log(category, message):
+        print(f"[{category}] {message}")
 
 # I/O System imports
 try:
@@ -174,6 +181,50 @@ class ClickableLineEdit(QLineEdit):
             self.clicked_while_empty.emit()
         super().mousePressEvent(event)
 
+class CollapsibleSection(QWidget):
+    """A titled, click-to-collapse container — keeps the property panel from
+    being one long flat list. Add rows via :meth:`addLayout` / :meth:`addWidget`."""
+
+    # Palette matches the application-wide dark theme (main.dark_stylesheet:
+    # #3c3f41 controls, #555 borders, #e0e0e0 text) so the panel reads as one.
+    HEADER = ("QToolButton { background:#3c3f41; color:#e0e0e0; font-weight:bold; "
+              "border:1px solid #555; border-radius:4px; padding:6px 8px; text-align:left; }"
+              "QToolButton:hover { background:#4b4d4d; }")
+
+    def __init__(self, title, expanded=True, count=0, parent=None):
+        super().__init__(parent)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 4, 0, 0)
+        v.setSpacing(0)
+        self.toggle = QToolButton()
+        label = f"{title}" + (f"  ({count})" if count else "")
+        self.toggle.setText(label)
+        self.toggle.setCheckable(True)
+        self.toggle.setChecked(expanded)
+        self.toggle.setStyleSheet(self.HEADER)
+        self.toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        self.toggle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.content = QWidget()
+        self.content_layout = QVBoxLayout(self.content)
+        self.content_layout.setContentsMargins(8, 6, 4, 4)
+        self.content_layout.setSpacing(4)
+        self.content.setVisible(expanded)
+        self.toggle.toggled.connect(self._on_toggled)
+        v.addWidget(self.toggle)
+        v.addWidget(self.content)
+
+    def _on_toggled(self, checked):
+        self.content.setVisible(checked)
+        self.toggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+
+    def addLayout(self, lay):
+        self.content_layout.addLayout(lay)
+
+    def addWidget(self, w):
+        self.content_layout.addWidget(w)
+
+
 class PropertyEditor(QWidget):
     def __init__(self, editor):
         super().__init__()
@@ -275,17 +326,27 @@ class PropertyEditor(QWidget):
 
         self._populating = True
         self.current_object = obj
-        self.clear_layout()
 
-        if obj is None:
-            self.main_layout.addWidget(QLabel("Nothing selected."))
-            self._populating = False
-            return
+        # Tearing down and rebuilding the whole panel triggers a relayout/repaint
+        # for every widget removed and added; freezing updates across the rebuild
+        # collapses that into a single repaint, which is the bulk of the
+        # per-selection cost on entities with many fields/tabs.
+        self.setUpdatesEnabled(False)
+        try:
+            self.clear_layout()
 
-        if isinstance(obj, dict):
-            self.populate_for_brush(obj)
-        elif isinstance(obj, Thing):
-            self.populate_for_thing(obj)
+            if obj is None:
+                self.main_layout.addWidget(QLabel("Nothing selected."))
+                return
+
+            if isinstance(obj, dict):
+                self.populate_for_brush(obj)
+            elif isinstance(obj, Thing):
+                self.populate_for_thing(obj)
+        finally:
+            self.setUpdatesEnabled(True)
+            if obj is None:
+                self._populating = False
 
         if saved_tab_index is not None and self.tab_widget is not None:
             if saved_tab_index < self.tab_widget.count():
@@ -1000,6 +1061,10 @@ class PropertyEditor(QWidget):
         props_tab = self._create_thing_properties_tab(thing)
         self.tab_widget.addTab(props_tab, "Properties")
 
+        advanced_tab = self._create_thing_advanced_tab(thing)
+        if advanced_tab is not None:
+            self.tab_widget.addTab(advanced_tab, "Advanced")
+
         if IO_AVAILABLE:
             etype = get_entity_type_for_io(thing)
             if etype and etype in IO_REGISTRY:
@@ -1060,11 +1125,12 @@ class PropertyEditor(QWidget):
         if isinstance(thing, Pickup):
             self._build_pickup_ui(form, thing)
 
-        # Dynamic property iteration (excludes keys handled above)
-        self._iterate_thing_properties(form, thing)
+        # Primary/type-specific fields sit at the top, always visible. The
+        # generic leftover properties now live on the Advanced tab instead.
+        if form.rowCount() > 0:
+            tab_layout.addLayout(form)
 
-        tab_layout.addLayout(form)
-
+        # Type-specific grouped editors (already visually grouped).
         if isinstance(thing, PathNode):
             self._build_pathnode_group(tab_layout, thing)
         if isinstance(thing, LogicCamera):
@@ -1076,6 +1142,30 @@ class PropertyEditor(QWidget):
         if isinstance(thing, Monster):
             self._build_monster_groups(tab_layout, thing)
 
+        tab_layout.addStretch()
+        return w
+
+    def _create_thing_advanced_tab(self, thing):
+        """Build the dedicated tab for generic and less frequently used fields.
+
+        Returns None when the entity has no leftover properties, so simple
+        entities keep exactly the tab set they had before.
+        """
+        adv_form = QFormLayout()
+        adv_form.setSpacing(4)
+        self._iterate_thing_properties(adv_form, thing)
+        n = adv_form.rowCount()
+        if n == 0:
+            return None
+
+        w = QWidget()
+        tab_layout = QVBoxLayout(w)
+        tab_layout.setContentsMargins(8, 8, 8, 8)
+        tab_layout.setSpacing(4)
+
+        section = CollapsibleSection("Other Properties", expanded=True, count=n)
+        section.addLayout(adv_form)
+        tab_layout.addWidget(section)
         tab_layout.addStretch()
         return w
 
@@ -1711,21 +1801,21 @@ class PropertyEditor(QWidget):
 
 
     def _build_keyvalue_group(self, tab_layout, thing):
-        """Display LogicKeyValueStore runtime data and persistent registry info."""
+        """Editable LogicKeyValueStore designer defaults + live runtime display.
+
+        The store name and the initial key/value pairs are edited directly here
+        (they were previously read-only, so a designer had to hand-edit the map
+        file to seed a store). The live runtime/persistent values remain shown
+        read-only below.
+        """
         group = QGroupBox("Key/Value Store")
         group.setStyleSheet(_Style.group_box("#26A69A", "#1a2f2d"))
         layout = QVBoxLayout(group)
         layout.setSpacing(6)
         layout.setContentsMargins(8, 8, 8, 8)
 
-        # Store name (read-only display)
-        store_name = thing.properties.get('store_name', thing.properties.get('name', ''))
-        name_lbl = QLabel(f"<b>Store Name:</b> {store_name}")
-        name_lbl.setStyleSheet("QLabel { color: #88FF88; }")
-        layout.addWidget(name_lbl)
-
-        # Refresh button
-        refresh_btn = QPushButton("🔄 Refresh Values")
+        # Refresh button — pinned to the very top (reloads live runtime values).
+        refresh_btn = QPushButton("🔄 Refresh Live Values")
         refresh_btn.setStyleSheet("""
             QPushButton { background-color: #2a5a5a; color: white; border: 1px solid #26A69A;
                           border-radius: 3px; padding: 4px 8px; }
@@ -1735,29 +1825,125 @@ class PropertyEditor(QWidget):
         refresh_btn.clicked.connect(lambda: self._refresh_keyvalue_group(thing))
         layout.addWidget(refresh_btn)
 
+        # Store name (editable — stores sharing a name sync across levels)
+        store_name = thing.properties.get('store_name', thing.properties.get('name', ''))
+        name_row = QHBoxLayout()
+        name_row.setSpacing(4)
+        name_row.addWidget(QLabel("<b>Store Name:</b>"))
+        name_edit = QLineEdit(str(store_name))
+        name_edit.setToolTip("Stores that share a name sync their values across "
+                             "level transitions.")
+        name_edit.setStyleSheet("QLineEdit { color: #88FF88; }")
 
-        # Initial data (designer defaults)
+        def _on_name():
+            thing.properties['store_name'] = name_edit.text().strip()
+        name_edit.editingFinished.connect(_on_name)
+        name_row.addWidget(name_edit)
+        layout.addLayout(name_row)
+
+        # --- Initial data (designer defaults) — an EDITABLE table ---
+        layout.addWidget(QLabel("<b>Initial Data (Designer Defaults):</b>"))
         initial_data = thing.properties.get('initial_data', {})
-        if initial_data:
-            layout.addWidget(QLabel("<b>Initial Data (Designer Defaults):</b>"))
-            for k, v in sorted(initial_data.items()):
-                row = QHBoxLayout()
-                row.setSpacing(4)
-                key_lbl = QLabel(f"  {k}:")
-                key_lbl.setStyleSheet("QLabel { color: #AAAAAA; min-width: 100px; }")
-                val_lbl = QLabel(str(v))
-                val_lbl.setStyleSheet("QLabel { color: #FFFFFF; }")
-                row.addWidget(key_lbl)
-                row.addWidget(val_lbl)
-                row.addStretch()
-                layout.addLayout(row)
+        if not isinstance(initial_data, dict):
+            initial_data = {}
+            thing.properties['initial_data'] = initial_data
 
-        # Separator
-        if initial_data:
-            line = QFrame()
-            line.setFrameShape(QFrame.HLine)
-            line.setStyleSheet("QFrame { color: #555; }")
-            layout.addWidget(line)
+        kv_table = QTableWidget(0, 2)
+        kv_table.setHorizontalHeaderLabels(["Key", "Value"])
+        kv_table.horizontalHeader().setStretchLastSection(True)
+        kv_table.verticalHeader().setVisible(False)
+        kv_table.setMaximumHeight(180)
+        # Dark theming so an empty table reads as a panel, not a glaring white bar.
+        kv_table.setStyleSheet("""
+            QTableWidget { background-color: #1e2b2a; alternate-background-color: #24322f;
+                           color: #e0e0e0; gridline-color: #3a4a48; border: 1px solid #2f4340;
+                           selection-background-color: #2a5a5a; selection-color: white; }
+            QHeaderView::section { background-color: #223330; color: #9fded6;
+                                   border: 0px; border-right: 1px solid #3a4a48; padding: 3px 6px; }
+            QTableCornerButton::section { background-color: #223330; border: 0px; }
+        """)
+        kv_table.setAlternatingRowColors(True)
+        kv_table.setShowGrid(True)
+        self._kv_loading = True
+        for r, (k, v) in enumerate(sorted(initial_data.items())):
+            kv_table.insertRow(r)
+            kv_table.setItem(r, 0, QTableWidgetItem(str(k)))
+            kv_table.setItem(r, 1, QTableWidgetItem(str(v)))
+        self._kv_loading = False
+
+        def _write_back_kv(*_):
+            if getattr(self, '_kv_loading', False):
+                return
+            data = {}
+            for r in range(kv_table.rowCount()):
+                kcell = kv_table.item(r, 0)
+                vcell = kv_table.item(r, 1)
+                key = kcell.text().strip() if kcell else ""
+                if not key:
+                    continue
+                data[key] = vcell.text() if vcell else ""
+            # Respect the store's capacity (MAX_PAIRS) — trim extras, warn once.
+            cap = getattr(thing, 'MAX_PAIRS', 25)
+            if len(data) > cap:
+                for extra in list(data.keys())[cap:]:
+                    del data[extra]
+                debug_log("Warning", f"Key/Value store is full ({cap} pairs); extra keys dropped.")
+            thing.properties['initial_data'] = data
+            self._update_kv_count(data, cap)
+
+        kv_table.itemChanged.connect(_write_back_kv)
+        layout.addWidget(kv_table)
+        self._widgets['kv_table'] = kv_table
+
+        # Add / remove row
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(4)
+        add_btn = QPushButton("➕ Add Pair")
+        rem_btn = QPushButton("➖ Remove Selected")
+        for b in (add_btn, rem_btn):
+            b.setStyleSheet("""
+                QPushButton { background-color: #2a5a5a; color: white; border: 1px solid #26A69A;
+                              border-radius: 3px; padding: 3px 8px; }
+                QPushButton:hover { background-color: #3a7a7a; }
+            """)
+
+        def _add_pair(key="new_key", value="value"):
+            cap = getattr(thing, 'MAX_PAIRS', 25)
+            if kv_table.rowCount() >= cap:
+                debug_log("Warning", f"Key/Value store is full ({cap} pairs).")
+                return
+            self._kv_loading = True
+            r = kv_table.rowCount()
+            kv_table.insertRow(r)
+            kv_table.setItem(r, 0, QTableWidgetItem(str(key)))
+            kv_table.setItem(r, 1, QTableWidgetItem(str(value)))
+            self._kv_loading = False
+            kv_table.setCurrentCell(r, 0)
+            _write_back_kv()
+
+        def _remove_selected():
+            row = kv_table.currentRow()
+            if row >= 0:
+                kv_table.removeRow(row)
+                _write_back_kv()
+
+        add_btn.clicked.connect(lambda: _add_pair())
+        rem_btn.clicked.connect(_remove_selected)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(rem_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        self._kv_count_lbl = QLabel("")
+        self._kv_count_lbl.setStyleSheet("QLabel { color: #888; font-size: 10px; }")
+        layout.addWidget(self._kv_count_lbl)
+        self._update_kv_count(initial_data, getattr(thing, 'MAX_PAIRS', 25))
+
+        # Separator before the live/runtime view
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setStyleSheet("QFrame { color: #555; }")
+        layout.addWidget(line)
 
         # Runtime data (live values)
         runtime_data = getattr(thing, '_runtime_data', {})
@@ -1810,6 +1996,12 @@ class PropertyEditor(QWidget):
 
         tab_layout.addWidget(group)
         self._widgets['keyvalue_group'] = group
+
+    def _update_kv_count(self, data, cap):
+        """Update the '<n> / <cap> designer pairs' hint under the KeyValue table."""
+        lbl = getattr(self, '_kv_count_lbl', None)
+        if lbl is not None:
+            lbl.setText(f"<i>{len(data)} / {cap} designer pairs</i>")
 
     def _refresh_keyvalue_group(self, thing):
         """Refresh the keyvalue display by rebuilding the property editor."""

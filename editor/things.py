@@ -214,7 +214,11 @@ class Thing:
 
         thing = None
         for cls in find_subclasses(Thing):
-            if cls.__name__.lower() == thing_type.replace('_', ''):
+            # A subclass may declare `map_type` when its serialised type token
+            # differs from its class name; otherwise the class name is used, so
+            # every existing entity resolves exactly as before.
+            class_type = getattr(cls, 'map_type', cls.__name__.lower())
+            if class_type == thing_type.replace('_', ''):
                 thing = cls(pos=data.get('pos'), properties=properties)
                 break
         

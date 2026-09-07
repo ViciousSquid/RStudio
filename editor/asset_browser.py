@@ -541,8 +541,14 @@ class AssetBrowserTab(QWidget):
                 ext = os.path.splitext(f)[1].lower()
                 if ext in self.extensions:
                     full_path = os.path.join(path, f)
-                    item = AssetItem(f, full_path, self, is_model=self.is_model_tab)
-                    self.items.append(item)
+                    # Per-item guard: a single unreadable asset (bad model, odd
+                    # image) must not abort loading the rest of the folder. The
+                    # skipped file is named so the failure stays diagnosable.
+                    try:
+                        item = AssetItem(f, full_path, self, is_model=self.is_model_tab)
+                        self.items.append(item)
+                    except Exception as e:
+                        print(f"[AssetBrowser] Skipped '{f}': {e}")
             # After loading, layout the grid dynamically (force initial layout)
             self.relayout_grid(force=True)
         except Exception as e:

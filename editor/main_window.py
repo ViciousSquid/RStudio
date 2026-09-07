@@ -2841,6 +2841,19 @@ class MainWindow(QMainWindow):
         # PLAY MODE HANDLING (hardcoded shortcuts first)
         # ------------------------------------------------------------------
         if self.view_3d.play_mode:
+            # Autorepeat: holding a key down makes the OS/Qt resend keyPress
+            # (and, on some platforms, interleaved keyRelease) events for as
+            # long as it's held. The play-mode actions below are edge-triggered
+            # and must not re-fire on every repeat tick, so the synthetic
+            # repeats are dropped here. Real physical presses are never flagged
+            # as autorepeat, so nothing genuine is lost.
+            #
+            # Scoped to play mode ONLY: editor-mode handling below relies on
+            # autorepeat for held-key actions (nudging, etc.), so those events
+            # must keep flowing to the editor branch and to
+            # super().keyPressEvent().
+            if event.isAutoRepeat():
+                return
             # If the play console overlay is open, swallow all keys except
             # tilde (close it) and Escape (also close it).
             if self._is_play_console_visible():
@@ -3064,6 +3077,11 @@ class MainWindow(QMainWindow):
 
     def keyReleaseEvent(self, event):
         if self.view_3d.play_mode:
+            # See keyPressEvent: drop synthetic autorepeat releases so a held
+            # key is not seen as released and re-pressed on every repeat tick.
+            # Play mode only -- editor-mode releases below are untouched.
+            if event.isAutoRepeat():
+                return
             if event.key() in self.keys_pressed:
                 self.keys_pressed.remove(event.key())
             return # Consume the event completely in play mode

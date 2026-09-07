@@ -36,11 +36,15 @@ from engine.brush_geometry import (
 # before any serialisation path: undo stack, file save, or deepcopy-for-JSON.
 # GEO_RUNTIME_KEYS covers the convex-geometry cache and mesh-collision data
 # attached to angled brushes during play.
+# Runtime-only AABB cache keys written by the physics/AI hot paths (see
+# engine.constants.brush_aabb_bounds). Stripped on save/undo like the rest.
+from engine.constants import AABB_RUNTIME_KEYS
+
 _RENDERER_PRIVATE_KEYS = frozenset({
     '_mat_cache_key', '_mat_cache',      # model matrix cache (renderer_F)
     '_nmat_cache_key', '_nmat_cache',    # normal matrix cache (renderer_F)
     '_render_mesh', '_render_sig',       # angled-brush GPU mesh cache (renderer_F)
-}) | GEO_RUNTIME_KEYS
+}) | GEO_RUNTIME_KEYS | frozenset(AABB_RUNTIME_KEYS)
 
 # Import lightmap bake state
 try:
