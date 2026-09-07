@@ -646,19 +646,55 @@ class QtGameView(QOpenGLWidget):
             self.repaint()
 
     def _process_sound_queue(self):
-        """Drain the logic thread's sound queue and play via pygame mixer."""
+        """Drain the logic thread's sound queue and play via pygame mixer.
+
+        Speaker requests carry an ``action`` ('play'/'stop'), a ``looping`` flag
+        and an ``entity_id``. Looping speakers play with ``loops=-1`` and their
+        channel is remembered under the entity id so a later StopSound can
+        actually silence them; plain one-shot sounds (no entity id) just play.
+        Requests without an 'action' default to 'play', so any existing caller
+        that queues a bare {'file', 'volume'} dict is unaffected.
+        """
+        speaker_channels = getattr(self, "_speaker_channels", None)
+        if speaker_channels is None:
+            speaker_channels = self._speaker_channels = {}
         for request in self.game_state.consume_sounds():
+            action = request.get('action', 'play')
+            entity_id = request.get('entity_id')
+
+            if action == 'stop':
+                channel = speaker_channels.pop(entity_id, None)
+                if channel is not None:
+                    try:
+                        channel.stop()
+                    except Exception as exc:
+                        print(f"[QtGameView] speaker stop failed: {exc}")
+                continue
+
             sound_file = request.get('file')
             volume = request.get('volume', 1.0)
             if not sound_file:
                 continue
-            
+
             sound = self._get_sound_instance(sound_file)
-            if sound:
-                # pygame mixer channels auto-manage, but we can set volume per-play
-                channel = sound.play()
-                if channel:
-                    channel.set_volume(volume)
+            if not sound:
+                continue
+            # -1 loops = repeat until stopped; 0 = play once.
+            loops = -1 if request.get('looping') else 0
+            # If this speaker is already looping, stop the old channel first so
+            # a re-trigger doesn't stack a second copy on top of itself.
+            if entity_id is not None:
+                prev = speaker_channels.pop(entity_id, None)
+                if prev is not None:
+                    try:
+                        prev.stop()
+                    except Exception as exc:
+                        print(f"[QtGameView] speaker restart stop failed: {exc}")
+            channel = sound.play(loops=loops)
+            if channel:
+                channel.set_volume(volume)
+                if entity_id is not None and loops != 0:
+                    speaker_channels[entity_id] = channel
 
     def _process_console_command_queue(self):
         """Run any console commands queued by the I/O system on the UI thread.

@@ -22,7 +22,7 @@ import os
 from .threaded_game_state import ThreadedGameState, RenderState
 from .player import Player
 from .camera import Camera
-from .constants import is_water_brush
+from .constants import is_water_brush, brush_aabb_bounds
 from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
 
 # Import Thing subclasses for type checking
@@ -1370,7 +1370,12 @@ class LogicThread(threading.Thread):
                     'speed': speed,
                     'distance': distance,
                     'direction': direction,
-                    '_direction_np': np.array(direction, dtype=float),
+                    # Scalar unit-direction tuple (DOOR_DIRECTION_MAP entries are
+                    # already unit vectors). Kept as plain Python floats -- not a
+                    # NumPy array -- so the per-tick offset maths below produces
+                    # ordinary floats and brush['pos'] stays JSON-serialisable.
+                    '_direction_np': (float(direction[0]), float(direction[1]),
+                                      float(direction[2])),
                 }
         # PERF: cache the brush-only view of self.doors — was rebuilt via a
         # list comprehension every tick in _tick_play_mode.
@@ -1415,7 +1420,17 @@ class LogicThread(threading.Thread):
             accumulator += frame_time
             
             while accumulator >= self.TICK_DURATION:
-                self._tick(self.TICK_DURATION)
+                try:
+                    self._tick(self.TICK_DURATION)
+                except Exception:
+                    # A single bad tick (e.g. a broken entity handler) must not
+                    # silently kill the whole logic thread -- that freezes the
+                    # game and stops every other system with no visible error.
+                    # The full traceback is logged, so this isolates the failure
+                    # without hiding it; it is never a bare pass.
+                    import traceback
+                    debug_log("LogicThread",
+                              "Unhandled exception in _tick:\n" + traceback.format_exc())
                 accumulator -= self.TICK_DURATION
                 self._update_tps_counter()
                 
@@ -1905,19 +1920,20 @@ class LogicThread(threading.Thread):
             
         player_pos = self.player.pos
         currently_in = set()
-        
+
+        # PERF: hoist player position to scalars and use the cached float32 AABB
+        # bounds (bit-identical to glm.vec3(pos) +/- size/2) so the per-trigger
+        # containment test allocates no throwaway glm.vec3 every tick.
+        px, py, pz = player_pos.x, player_pos.y, player_pos.z
+
         for bid, brush in self._trigger_brushes:
             if brush.get('disabled', False):
                 continue
-            pos = glm.vec3(brush['pos'])
-            size = glm.vec3(brush['size'])
-            half_size = size / 2.0
-            min_b = pos - half_size
-            max_b = pos + half_size
+            b0, b1, b2, b3, b4, b5 = brush_aabb_bounds(brush)
 
-            inside = (min_b.x <= player_pos.x <= max_b.x and
-                     min_b.y <= player_pos.y <= max_b.y and
-                     min_b.z <= player_pos.z <= max_b.z)
+            inside = (b0 <= px <= b3 and
+                      b1 <= py <= b4 and
+                      b2 <= pz <= b5)
 
             activation = brush.get('trigger_activation', 'touch').lower()
 
@@ -2232,13 +2248,16 @@ class LogicThread(threading.Thread):
             speed = brush.get('speed', 64.0)
             distance = brush.get('distance', 128.0)
             # PERF: mover direction is static during play — normalize once
-            # and cache on the state dict instead of every tick.
+            # (via NumPy, for identical rounding) and cache as a plain scalar
+            # tuple so the per-tick offset maths below is pure Python and never
+            # rebuilds a small NumPy array each frame.
             direction = state.get('_direction_np')
             if direction is None:
-                direction = np.array(brush.get('direction', [0, 1, 0]), dtype=float)
-                dir_length = np.linalg.norm(direction)
+                d = np.array(brush.get('direction', [0, 1, 0]), dtype=float)
+                dir_length = np.linalg.norm(d)
                 if dir_length > 0:
-                    direction = direction / dir_length
+                    d = d / dir_length
+                direction = (float(d[0]), float(d[1]), float(d[2]))
                 state['_direction_np'] = direction
             progress_delta = (speed * delta) / distance if distance > 0 else 0
             was_at_end = state['progress'] >= 1.0
@@ -2259,13 +2278,17 @@ class LogicThread(threading.Thread):
                         self.io_manager.fire_output(brush, 'OnFullyClosed')
             t = state['progress']
             eased = 4 * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 3) / 2
-            original = np.array(brush['original_pos'])
-            offset = direction * distance * eased
-            new_pos = original + offset
-            move_delta = new_pos - np.array(brush['pos'])
-            brush['pos'] = new_pos.tolist()
+            # PERF: scalar offset — bit-identical to the old NumPy expression
+            # (original + direction*distance*eased, which associates as
+            # (direction*distance)*eased), with no per-tick array allocation.
+            original = brush['original_pos']
+            cur = brush['pos']
+            nx = original[0] + (direction[0] * distance) * eased
+            ny = original[1] + (direction[1] * distance) * eased
+            nz = original[2] + (direction[2] * distance) * eased
+            brush['pos'] = [nx, ny, nz]
             if self.player and self.player.ground_object == brush:
-                self.player.pos += glm.vec3(move_delta[0], move_delta[1], move_delta[2])
+                self.player.pos += glm.vec3(nx - cur[0], ny - cur[1], nz - cur[2])
 
     def _update_cinematic_camera(self, delta: float):
         cs = self.cinematic_state
@@ -2415,13 +2438,15 @@ class LogicThread(threading.Thread):
             distance = state.get('distance', 128.0)
             open_time = brush.get('open_time', 3.0)
             # PERF: direction is precomputed (already unit-length) in
-            # _init_doors — no need to renormalize every tick.
+            # _init_doors — no need to renormalize every tick. Cached as a
+            # scalar tuple so the offset maths below allocates no NumPy arrays.
             direction = state.get('_direction_np')
             if direction is None:
-                direction = np.array(state.get('direction', [0, 1, 0]), dtype=float)
-                dir_length = np.linalg.norm(direction)
+                d = np.array(state.get('direction', [0, 1, 0]), dtype=float)
+                dir_length = np.linalg.norm(d)
                 if dir_length > 0:
-                    direction = direction / dir_length
+                    d = d / dir_length
+                direction = (float(d[0]), float(d[1]), float(d[2]))
                 state['_direction_np'] = direction
             progress_delta = (speed * delta) / distance if distance > 0 else 0
             if state['state'] == 'opening':
@@ -2445,13 +2470,17 @@ class LogicThread(threading.Thread):
                     state['state'] = 'closed'
                     if self.io_manager:
                         self.io_manager.fire_output(brush, 'OnFullyClosed')
-            original = np.array(brush['original_pos'])
-            offset = direction * distance * state['progress']
-            new_pos = original + offset
-            move_delta = new_pos - np.array(brush['pos'])
-            brush['pos'] = new_pos.tolist()
+            # PERF: scalar offset — bit-identical to the old NumPy expression
+            # (original + direction*distance*progress), no per-tick array alloc.
+            original = brush['original_pos']
+            cur = brush['pos']
+            progress = state['progress']
+            nx = original[0] + (direction[0] * distance) * progress
+            ny = original[1] + (direction[1] * distance) * progress
+            nz = original[2] + (direction[2] * distance) * progress
+            brush['pos'] = [nx, ny, nz]
             if self.player and self.player.ground_object == brush:
-                self.player.pos += glm.vec3(move_delta[0], move_delta[1], move_delta[2])
+                self.player.pos += glm.vec3(nx - cur[0], ny - cur[1], nz - cur[2])
 
     # =========================================================================
     # PARENTED LIGHTS

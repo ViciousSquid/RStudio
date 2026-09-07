@@ -469,6 +469,16 @@ class Terrain:
                 self.shader_program = 0
                 return
         except Exception as e:
+            msg = str(e)
+            # The Terrain can be constructed before the view's GL context is
+            # current (e.g. during map load), so glCreateShader isn't bound yet.
+            # That's harmless -- update_and_render() recompiles the shader on the
+            # GL thread at first draw -- so stay quiet instead of printing a
+            # scary ERROR. Only a genuine compile failure is worth reporting.
+            if ("glCreateShader" in msg or "undefined alternate function" in msg
+                    or "context" in msg.lower()):
+                self.shader_program = 0
+                return
             print(f"ERROR: Exception during terrain shader compilation: {e}")
             self.shader_program = 0
             return
@@ -1039,6 +1049,25 @@ class Terrain:
         use_tex = 0 if self.flat_mode or not textures_loaded else (1 if getattr(self, 'use_textures', True) else 0)
         gl.glUniform1i(self.uniforms['use_textures'], use_tex)
         
+        # The terrain fragment shader declares `uniform Light lights[8]`, while
+        # the main renderer's MAX_LIGHTS is larger. Without this clamp a scene
+        # with more than 8 lights indexes uniforms that were never declared, so
+        # the surplus writes are silently dropped (or KeyError on the lookup).
+        # Send the 8 nearest the camera instead, which is what the terrain
+        # actually needs -- distant lights contribute nothing at this range.
+        MAX_TERRAIN_LIGHTS = 8
+        if active_lights_count > MAX_TERRAIN_LIGHTS:
+            cx, cy, cz = float(camera_pos[0]), float(camera_pos[1]), float(camera_pos[2])
+            lights = sorted(
+                lights[:active_lights_count],
+                key=lambda l: (
+                    (float(l.pos[0]) - cx) ** 2 +
+                    (float(l.pos[1]) - cy) ** 2 +
+                    (float(l.pos[2]) - cz) ** 2
+                )
+            )
+            active_lights_count = MAX_TERRAIN_LIGHTS
+
         gl.glUniform1i(self.uniforms['active_lights'], active_lights_count)
         shadow_index_map = shadow_index_map or {}
         for i in range(active_lights_count):

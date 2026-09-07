@@ -14,6 +14,15 @@ from engine.brush_geometry import brush_has_geometry, geometry_signature
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from editor.things import Thing, Light, PathNode, Portal, Pickup, Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger
 
+# Camera render-distance cull. The threshold and the pure per-object geometry
+# live in engine.render_cull (GL-free, so it is unit-testable without a GL
+# context); this module applies it to the MAIN camera pass only -- never to the
+# shadow or portal passes, which keep using the full scene. See
+# _camera_distance_cull below.
+from engine.render_cull import (
+    CAMERA_RENDER_CULL_DISTANCE, CAMERA_RENDER_CULL_DISTANCE_SQ,
+    camera_xz as _cull_camera_xz, cull_by_distance as _cull_by_distance)
+
 # Beyond this distance from the camera a portal's virtual view is not rendered
 # (the aperture just shows its fade/rim). Portals are still discovered for I/O
 # and transit regardless.
@@ -283,6 +292,15 @@ class Renderer_F(BaseRenderer):
         self._portal_begin_cull(is_geo=False)
 
         current_tex = None
+        # PERF: a brush appears in this loop once per textured face (up to six
+        # times), and each visit re-derived the same two uniform pointers. The
+        # matrices themselves are already memoised on the brush dict by
+        # _brush_model_matrix / _compute_normal_matrix, so only the glm.value_ptr
+        # calls remained; cache those per brush for the duration of this draw.
+        # Holding the pointers is safe precisely because the brush dict keeps the
+        # backing matrix objects alive (_mat_cache / _nmat_cache) -- do not reuse
+        # this pattern anywhere the matrix is a temporary.
+        brush_uniform_ptrs = {}
         for tex_id, items in batches.items():
             if tex_id != current_tex:
                 gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
@@ -290,11 +308,20 @@ class Renderer_F(BaseRenderer):
                 self.render_stats.batched_draws += 1
             for brush, face_idx, face_key in items:
                 self.render_stats.visible_tris += 2
-                model_matrix = self._brush_model_matrix(brush)
-                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+                brush_id = id(brush)
+                uniform_ptrs = brush_uniform_ptrs.get(brush_id)
+                if uniform_ptrs is None:
+                    model_matrix = self._brush_model_matrix(brush)
+                    model_ptr = glm.value_ptr(model_matrix)
+                    normal_ptr = None
+                    if normal_mat_loc > 0:
+                        normal_ptr = glm.value_ptr(
+                            self._compute_normal_matrix(model_matrix, brush))
+                    uniform_ptrs = (model_ptr, normal_ptr)
+                    brush_uniform_ptrs[brush_id] = uniform_ptrs
+                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, uniform_ptrs[0])
                 if normal_mat_loc > 0:
-                    nmat = self._compute_normal_matrix(model_matrix, brush)
-                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(nmat))
+                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, uniform_ptrs[1])
                 # Per-face surface-inspector transform: free rotation + shift.
                 if tex_angle_loc != -1:
                     angle = brush.get('uv_angle', {}).get(face_key, 0.0)
@@ -415,6 +442,38 @@ class Renderer_F(BaseRenderer):
             self.render_stats.draw_calls += 1
         gl.glBindVertexArray(0)
 
+    @staticmethod
+    def _cull_keep_thing(t):
+        """Things exempt from the distance cull: lights and portals are always
+        kept so lighting, shadow and portal rendering are wholly unaffected."""
+        return isinstance(t, Light) or (Portal is not None and isinstance(t, Portal))
+
+    def _camera_distance_cull(self, brushes, things, camera_pos):
+        """Broad-phase distance cull for the MAIN camera pass (see
+        :data:`engine.render_cull.CAMERA_RENDER_CULL_DISTANCE`).
+
+        Returns ``(brushes, things)`` filtered to those within the cull radius on
+        the XZ plane, reusing two persistent scratch buffers so nothing new is
+        allocated per frame. Lights and portals are always retained, and anything
+        without a readable position is kept (fail-open). The caller passes the
+        results to ``_sort_objects`` only, leaving the original ``brushes`` /
+        ``things`` lists (used by the shadow and portal passes) untouched.
+        """
+        if camera_pos is None:
+            return brushes, things
+        cx, cz = _cull_camera_xz(camera_pos)
+        bbuf = getattr(self, "_cull_brush_buf", None)
+        if bbuf is None:
+            bbuf = self._cull_brush_buf = []
+        tbuf = getattr(self, "_cull_thing_buf", None)
+        if tbuf is None:
+            tbuf = self._cull_thing_buf = []
+        brushes = _cull_by_distance(brushes, cx, cz,
+                                    CAMERA_RENDER_CULL_DISTANCE_SQ, out=bbuf)
+        things = _cull_by_distance(things, cx, cz, CAMERA_RENDER_CULL_DISTANCE_SQ,
+                                   out=tbuf, keep=self._cull_keep_thing)
+        return brushes, things
+
     def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config, clear=True):
         current_mode = config.get('render_mode', RENDER_MODE_LIT)
         gl.glEnable(gl.GL_DEPTH_TEST)
@@ -441,8 +500,16 @@ class Renderer_F(BaseRenderer):
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         self.draw_grid(projection, view, self.grid_indices_count,
                       config.get('play_mode', False), config.get('grid_visible', True))
+        # Broad-phase distance cull (main camera pass only): feed _sort_objects a
+        # range-limited view of the scene, on top of the frustum cull it already
+        # applies downstream. The original brushes/things lists are left intact
+        # for the shadow and portal passes below. Enabled in play mode by
+        # default; a caller can force it on/off via 'camera_distance_cull'.
+        cull_brushes, cull_things = brushes, things
+        if config.get('camera_distance_cull', config.get('play_mode', False)):
+            cull_brushes, cull_things = self._camera_distance_cull(brushes, things, camera_pos)
         opaque_brushes, transparent_brushes, sprite_things, fog_volumes, water_brushes, glass_brushes, glow_brushes = \
-            self._sort_objects(brushes, things, config)
+            self._sort_objects(cull_brushes, cull_things, config)
         textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
         models_to_render, final_sprites = [], []
         for thing in sprite_things:
