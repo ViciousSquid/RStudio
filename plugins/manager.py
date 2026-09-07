@@ -64,6 +64,25 @@ class PluginManager:
         self._loading = False
         # (plugin, label, ThingClass) placement entries for the editor menu.
         self._menu_entries: List[Tuple[FioPlugin, str, type]] = []
+        # Built-in layers installed natively by the application bootstrap rather
+        # than discovered on disk. Unlike a plugin these are always on, never
+        # toggled, never api-version gated and never listed in the Plugins menu,
+        # but they still take part in the generic extension surface (entity /
+        # property / IO registration, runtime attach, host bind and the
+        # play-lifecycle and per-tick dispatch). This lets a branch ship a
+        # first-class layer without wearing the plugin machinery.
+        self._builtin_games: list = []
+        # Placement entries declared by a built-in layer, kept apart from the
+        # plugin entries above so they can surface under their own menu rather
+        # than the "Plugins" submenu.
+        self._builtin_menu_entries: List[Tuple[object, str, type]] = []
+        # Normalised entity-type -> creation wizard factory (see
+        # register_entity_wizard). Used by the editor to configure an entity that
+        # needs setup instead of dropping the user into raw properties.
+        self._entity_wizards: dict = {}
+        # Normalised entity-type names that may exist at most once per map.
+        # Placement paths consult this.
+        self._singleton_types: set = set()
         # Normalised entity-type name -> owning plugin (for package export).
         # Keyed the same way editor.things.from_dict matches: class name,
         # lowercased, underscores stripped.
@@ -248,9 +267,102 @@ class PluginManager:
         """Return the list of ``PropertySpec`` for *type_name*, or ``None``."""
         return self._property_schemas.get(self._normalise_type(type_name))
 
+    # -- built-in layer registration ----------------------------------------
+    def register_builtin_game(self, game) -> None:
+        """Install a built-in layer (see :attr:`_builtin_games`).
+
+        The *game* is any object exposing the same lifecycle surface a plugin
+        does (``register``/``register_runtime``/``connect``/``on_play_start``/
+        ``on_tick``/``on_play_stop``) plus ``name``/``version``/``category``
+        attributes, but it is **not** a :class:`FioPlugin`: it carries no
+        ``enabled``/``requires``/``api_version`` and is never discovered,
+        toggled or shown in the Plugins menu. Registration is idempotent.
+
+        Intended to be called once by an application bootstrap, after the editor
+        package is fully constructed.
+        """
+        for existing in self._builtin_games:
+            if existing is game or type(existing) is type(game):
+                return
+        # Mark it so the shared registries can route its menu entries to the
+        # built-in list instead of the plugin list.
+        try:
+            game.is_builtin_game = True
+        except Exception as exc:
+            self._log(f"could not tag built-in layer "
+                      f"'{getattr(game, 'name', '?')}': {exc}")
+        self._builtin_games.append(game)
+        try:
+            game.register(EditorAPI(self, game))
+        except Exception:
+            self._log(f"register() failed for built-in layer "
+                      f"'{getattr(game, 'name', '?')}':\n{traceback.format_exc()}")
+        # Pick up any property schemas the layer declares for its entities.
+        describe = getattr(game, "describe_properties", None)
+        if callable(describe):
+            try:
+                for entity_type, specs in (describe() or {}).items():
+                    self._record_property_schema(entity_type, specs)
+            except Exception:
+                self._log(f"describe_properties() failed for built-in layer "
+                          f"'{getattr(game, 'name', '?')}':\n{traceback.format_exc()}")
+        self._enabled_generation += 1
+
+    def builtin_games(self) -> list:
+        """The registered built-in layers."""
+        return list(self._builtin_games)
+
+    def builtin_menu_entries(self) -> List[Tuple[object, str, type]]:
+        """Placement entries a built-in layer declared, for its own menu."""
+        return list(self._builtin_menu_entries)
+
+    def register_entity_wizard(self, type_name: str, factory) -> None:
+        """Register a creation *wizard* for an entity type.
+
+        ``factory(parent) -> dict | None`` runs a dialog and returns the initial
+        properties for a new entity (or ``None`` if cancelled). When present, the
+        editor launches it instead of dropping the user straight into raw
+        properties for an entity that needs configuring.
+        """
+        self._entity_wizards[self._normalise_type(type_name)] = factory
+
+    def entity_wizard_for(self, type_name: str):
+        """The creation wizard registered for *type_name*, or None."""
+        return self._entity_wizards.get(self._normalise_type(type_name))
+
+    def register_singleton_entity(self, type_name: str) -> None:
+        """Mark an entity type as a per-map singleton (at most one instance).
+
+        Placement paths check :meth:`is_singleton_entity` and refuse a second
+        one, selecting the existing instance instead.
+        """
+        self._singleton_types.add(self._normalise_type(type_name))
+
+    def is_singleton_entity(self, type_name: str) -> bool:
+        return self._normalise_type(type_name) in self._singleton_types
+
+    def _participants(self, hook: str) -> list:
+        """Enabled plugins + built-in layers that implement *hook*.
+
+        Built-in layers are always active (no enable gate, no api gate); a
+        plugin must be enabled. Both must actually define the hook so an idle
+        one costs nothing on the per-tick path.
+        """
+        out = [p for p in self.plugins
+               if self.is_enabled(p) and self._overrides(p, hook)]
+        for game in self._builtin_games:
+            if getattr(type(game), hook, None) is not None:
+                out.append(game)
+        return out
+
     # -- editor menu --------------------------------------------------------
     def _add_menu_entry(self, plugin: FioPlugin, label: str, cls: type):
-        self._menu_entries.append((plugin, label, cls))
+        # A built-in layer's entities surface under their own menu, not the
+        # "Plugins" submenu, so keep them in a separate list.
+        if getattr(plugin, "is_builtin_game", False):
+            self._builtin_menu_entries.append((plugin, label, cls))
+        else:
+            self._menu_entries.append((plugin, label, cls))
 
     def menu_entries(self) -> List[Tuple[FioPlugin, str, type]]:
         """All placement entries as ``(plugin, label, ThingClass)`` tuples."""
@@ -420,7 +532,7 @@ class PluginManager:
         has working inputs without a re-attach. The logic thread is created
         once, before any level loads, so this is the only chance to attach.
         """
-        for plugin in self.plugins:
+        for plugin in self.plugins + self._builtin_games:
             try:
                 plugin.register_runtime(RuntimeAPI(self, logic, plugin))
             except Exception:
@@ -445,7 +557,7 @@ class PluginManager:
             self._hosts.clear()
         self._host_target = target
         self._host_kind = kind
-        for plugin in self.plugins:
+        for plugin in self.plugins + self._builtin_games:
             host = PluginHost(self, target, plugin, kind=kind)
             self._hosts[plugin] = host
             try:
@@ -543,8 +655,7 @@ class PluginManager:
             self._active_cache_gen = self._enabled_generation
         cached = self._active_cache.get(hook)
         if cached is None:
-            cached = [p for p in self.plugins
-                      if self.is_enabled(p) and self._overrides(p, hook)]
+            cached = self._participants(hook)
             self._active_cache[hook] = cached
         return cached
 

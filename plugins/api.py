@@ -218,6 +218,10 @@ class PropertySpec:
     max: Optional[float] = None
     choices: Optional[List[Any]] = None
     help: str = ""
+    #: Optional section name. When an editor renders a schema it may group
+    #: consecutive specs under a heading, turning a flat property list into an
+    #: organised, form-like panel. Empty means "no heading".
+    group: str = ""
 
     def apply_default(self, properties: dict) -> None:
         """Set this property's default on *properties* if it is missing."""
@@ -265,10 +269,12 @@ class PropertySpec:
 
 def prop(name: str, type: str = "string", label: str = "", default: Any = None,
          min: Optional[float] = None, max: Optional[float] = None,
-         choices: Optional[List[Any]] = None, help: str = "") -> PropertySpec:
+         choices: Optional[List[Any]] = None, help: str = "",
+         group: str = "") -> PropertySpec:
     """Terse constructor for a :class:`PropertySpec` (keyword-friendly)."""
     return PropertySpec(name=name, type=type, label=label, default=default,
-                        min=min, max=max, choices=choices, help=help)
+                        min=min, max=max, choices=choices, help=help,
+                        group=group)
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +442,24 @@ class EditorAPI:
         is given the tab appears only for that type, otherwise for every entity.
         """
         self._manager.register_property_tab(label, factory, entity_type)
+
+    def register_singleton_entity(self, entity_type: str) -> None:
+        """Mark *entity_type* as a per-map singleton (at most one instance).
+
+        Placement paths refuse to add a second one and select the existing
+        instance instead.
+        """
+        self._manager.register_singleton_entity(entity_type)
+
+    def register_entity_wizard(self, entity_type: str, factory) -> None:
+        """Register a creation wizard for *entity_type*.
+
+        ``factory(parent) -> dict | None`` runs a dialog and returns the initial
+        properties for the new entity, or None to cancel placement. Lets an
+        entity that needs configuring be authored properly instead of dropping
+        the user into raw properties.
+        """
+        self._manager.register_entity_wizard(entity_type, factory)
 
     def register_renderer(self, name: str, cls) -> bool:
         """Register a swappable renderer class under *name*.
